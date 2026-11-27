@@ -67,7 +67,8 @@ pub struct Chrome {
 enum Keyboard {
     /// The layout viewport ends at its top.
     #[default]
-    Resizes,
+    ResizesContent,
+    ResizesVisual,
     /// Nothing is laid out again.
     Overlays,
 }
@@ -77,10 +78,15 @@ enum Keyboard {
 pub(super) struct State {
     pub(super) status_bar: status_bar::State,
     window: Option<Window>,
+    feature: Option<folding::Feature>,
+    pub(super) has_hinge: bool,
     /// The page's frame in the window as last fitted.
     frame: Option<[f32; 4]>,
     /// The keyboard's overlap with the frame the page would have without it.
     pub(super) keyboard: f32,
+    /// The software keyboard's depth at the window's bottom as its inset animation shows it now, points, while one runs
+    /// (`Presenter::set_keyboard_progress`): what an owner's update reports (LLP 1123 D7); layout keeps the window's.
+    pub(super) keyboard_progress: Option<f32>,
     /// The field to keep in view once the page has been painted in the
     /// viewport a keyboard left it ([`Presenter::reveal_owed`]).
     reveal: Option<ViewId>,
@@ -91,6 +97,29 @@ pub(super) struct State {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// The software keyboard's depth at the window's bottom as its inset animation shows it, points, while one runs, or
+    /// `None` once it ends (LLP 1123 D7): each owner's update follows the keyboard as it moves, which the window's inset
+    /// tells only at its ends; the page's layout keeps the window's until activation.
+    pub fn set_keyboard_progress(&mut self, depth: Option<f32>) {
+        self.window.keyboard_progress = depth.filter(|d| d.is_finite() && *d >= 0.0);
+    }
+
+    /// The activity tells the feature and window together. After a real
+    /// hinge is seen, the cover display also gets its fold from the device.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn folding_feature(&mut self, state: i32, axis: i32, bounds: [f32; 2]) {
+        self.window.feature = (state != 0).then_some(folding::Feature {
+            posture: if state == 2 {
+                exact_runner::Posture::Folded
+            } else {
+                exact_runner::Posture::Continuous
+            },
+            axis,
+            bounds,
+        });
+        self.window.has_hinge |= self.window.feature.is_some();
+    }
+
     /// The shell's window and its insets, whenever either changes: the page
     /// is laid out in it again ([`Presenter::fit_window`]).
     pub fn set_window(&mut self, window: Window) -> Option<String> {
@@ -126,7 +155,8 @@ impl<D: DataSource> Presenter<D> {
             // `resizes-visual` (the page pans under a viewport that keeps
             // its size) needs a visual viewport this presenter does not
             // have: it resizes, which keeps the field in view the same.
-            _ => Keyboard::Resizes,
+            Some("resizes-visual") => Keyboard::ResizesVisual,
+            _ => Keyboard::ResizesContent,
         };
         (prop(PropId::ViewportFit) == Some("cover"), keyboard)
     }
@@ -179,7 +209,8 @@ impl<D: DataSource> Presenter<D> {
             true => (frame[1] + frame[3] - top).clamp(0.0, frame[3]),
             false => 0.0,
         };
-        if keyboard > 0.0 && policy == Keyboard::Resizes {
+        let unobscured_frame = frame;
+        if keyboard > 0.0 && policy != Keyboard::Overlays {
             frame[3] = (frame[3] - keyboard).max(1.0);
             // The keyboard's edge has no inset of its own (the web's reading).
             env[2] = 0.0;
@@ -191,7 +222,7 @@ impl<D: DataSource> Presenter<D> {
             false => [
                 safe[0],
                 safe[1],
-                match keyboard > 0.0 && policy == Keyboard::Resizes {
+                match keyboard > 0.0 && policy != Keyboard::Overlays {
                     true => 0.0,
                     false => safe[2],
                 },
@@ -210,7 +241,19 @@ impl<D: DataSource> Presenter<D> {
         // with the size before it.
         let size = (frame[2], frame[3]);
         let size = (size != self.viewport).then_some(size);
-        let mut error = self.fit_view(size, env, moved.then_some(keyboard));
+        let segments = self.window.has_hinge.then(|| {
+            self.window
+                .feature
+                .map(|feature| {
+                    feature.segments(
+                        unobscured_frame,
+                        frame[3],
+                        policy == Keyboard::ResizesVisual,
+                    )
+                })
+                .unwrap_or_default()
+        });
+        let mut error = self.fit_view(size, env, moved.then_some(keyboard), segments);
         // The shell's bars take their room of the page as it is now placed.
         error = error.or(self.fit_bars());
         // The field being edited stays above the keyboard, or the frame
@@ -239,20 +282,30 @@ impl<D: DataSource> Presenter<D> {
         size: Option<(f32, f32)>,
         insets: [f32; 4],
         keyboard: Option<f32>,
+        segments: Option<folding::Segments>,
     ) -> Option<String> {
         let env = self.host.kernel().env();
         let insets_moved = [env.top, env.right, env.bottom, env.left] != insets;
-        if size.is_none() && keyboard.is_none() && !insets_moved {
+        let segments = segments.filter(|s| {
+            s.fold != self.host.runner().viewport().fold
+                || s.rects.as_ref().map_or(&[][..], |r| &r[..]) != env.segments
+        });
+        if size.is_none() && keyboard.is_none() && !insets_moved && segments.is_none() {
             return None;
         }
-        match self.host.set_view(size, Some(insets), keyboard) {
+        let segments = segments.map(|s| (s.fold, s.rects.map(Vec::from).unwrap_or_default()));
+        match self
+            .host
+            .set_window_view(size, Some(insets), keyboard, segments)
+        {
             Ok(false) => return None,
             Ok(true) => {}
             Err(e) => return Some(e),
         }
+        // A cover can move content without changing the kernel's commit epoch.
+        self.dirty = true;
         if let Some(size) = size {
             self.field_reveal = true;
-            self.dirty = true;
             self.viewport = size;
             self.images.fit(self.viewport, self.brush.scale);
             self.collection.advance_all();
@@ -272,6 +325,12 @@ impl<D: DataSource> Presenter<D> {
         if let Some(field) = self.window.reveal.take() {
             self.keep_in_view(field, reveal::Cause::InsetAdjustment);
         }
+    }
+
+    /// A keyboard inset will move the field only after its new port is shown.
+    #[cfg(target_os = "linux")]
+    pub(super) fn reveal_waits_for_picture(&self) -> bool {
+        self.window.reveal.is_some()
     }
 
     /// The Android reader's iframe `id` took the platform's focus (a field
@@ -302,14 +361,9 @@ impl<D: DataSource> Presenter<D> {
             })
     }
 
-    /// What the shell draws around the page; on a host that told no window,
-    /// the viewport at the origin.
-    pub fn chrome(&self) -> Chrome {
-        let _roles = self.host.runner().bind_roles(); // Its session's (LLP 1121 stage 5).
-        let dark = self.dark();
+    pub(super) fn window_background(&self) -> [u8; 4] {
         let kernel = self.host.kernel();
-        let authored = self
-            .host
+        self.host
             .runner()
             .roots()
             .first()
@@ -321,15 +375,22 @@ impl<D: DataSource> Presenter<D> {
                     .background_color
                     .map(|c| crate::paint::rgba(c.resolve(self.dark_at(n.id))))
             })
-            .filter(|c| c[3] == 255);
+            .filter(|c| c[3] == 255)
+            .unwrap_or_else(|| crate::paint::page_color(self.dark()))
+    }
+
+    /// What the shell draws around the page; on a host that told no window,
+    /// the viewport at the origin.
+    pub fn chrome(&self) -> Chrome {
+        let _roles = self.host.runner().bind_roles(); // Its session's (LLP 1121 stage 5).
         let bars = self.status_bar();
         Chrome {
             frame: self
                 .window
                 .frame
                 .unwrap_or([0.0, 0.0, self.viewport.0, self.viewport.1]),
-            background: authored.unwrap_or_else(|| crate::paint::page_color(dark)),
-            dark,
+            background: self.window_background(),
+            dark: self.dark(),
             status_light_icons: bars.light_icons,
             navigation_light_icons: bars.navigation_light_icons,
             bars_hidden: bars.hidden,

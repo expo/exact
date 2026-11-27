@@ -205,6 +205,41 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// Ordered host→iframe string reply (`postMessage(text, iframeId)`),
+    /// available on Android for unpartitioned iframes (LLP 1020 §11; LLP 1156.008.001 B1).
+    pub(super) fn post_frame_message(&mut self, id: &str, text: &str) {
+        if !cfg!(any(target_os = "android", test)) {
+            self.host
+                .log("postMessage: iframe replies are unavailable on this host");
+            return;
+        }
+        let Some((view, key)) = self.frame_by_id(id) else {
+            self.host.log(format!(
+                "postMessage: no unique live iframe with id \"{id}\""
+            ));
+            return;
+        };
+        if self
+            .host
+            .kernel()
+            .node(view)
+            .is_some_and(|node| node.props.str(PropId::Partition).is_some())
+        {
+            self.host.log(format!(
+                "postMessage: iframe {id} has a partition; a partitioned frame has no message bridge"
+            ));
+            return;
+        }
+        let frames = self.brush.media.frames.entry(key).or_default();
+        frames.push(
+            "",
+            "postMessage",
+            &[serde_json::Value::String(text.to_owned())],
+        );
+        self.brush.media.asked.push(key);
+        self.dirty = true;
+    }
+
     /// A frame's record (host kind 58: the event's name, a newline, the
     /// record), to the frame's handler of that event if it has one.
     pub(crate) fn frame_event(&mut self, view: ViewId, event: &str, record: &str) {

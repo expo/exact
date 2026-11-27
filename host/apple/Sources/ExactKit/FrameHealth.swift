@@ -306,6 +306,14 @@ package final class FrameHealth {
         (publicationOwner ?? self).publish()
     }
 
+    /// Clear the measurements without changing the rate the app's frame clock requested.
+    func clear() {
+        let hertz = requestedHertz
+        reset()
+        requestedRate(hertz)
+        _ = setAgentCapture("clear")
+    }
+
     func reset() {
         guard enabled else { return }
         track = nil
@@ -323,6 +331,7 @@ package final class FrameHealth {
         nativeHealth?.clockChanged(virtual: virtual)
         exact_frame_health_reset(handle)
         chart?.reset()
+        splits.removeAll(keepingCapacity: true)
         pending = [Pending?](repeating: nil, count: 3)
         requestedPeriodNs = 0
         requestedHertz = 0

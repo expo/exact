@@ -13,7 +13,8 @@ export const opWords = (o: any): string =>
   : o?.op === 'add-token' ? `add ${o.name} = ${o.value}`
   : o?.op === 'rename-token' ? `rename ${o.from} → ${o.to}`
   : o?.op === 'remove-token' ? `remove ${o.name}`
-  : o?.op === 'add-axis' ? `add axis ${o.name ?? o.axis} = ${[].concat(o.values ?? []).join(' | ')}`
+  : o?.op === 'add-axis' ? `add axis ${o.name ?? o.axis} = ${[].concat(o.values ?? []).join(' | ')}${o.under ? ` under ${o.under}` : ''}${o.before ? ` before ${o.before}` : ''}${o.comment ? `  ${o.comment}` : ''}`
+  : o?.op === 'remove-axis' ? `remove axis ${o.name}`
   : o?.op === 'add-axis-value' ? `add ${o.value} to axis ${o.axis ?? o.name}`
   : o?.op === 'remove-axis-value' ? `remove ${o.value} from axis ${o.axis ?? o.name}`
   : o?.op === 'set-state' ? `set ${o.style} :${String(o.state).replace(/^:/, '')} ${o.row} = ${typeof o.value === 'string' ? JSON.stringify(o.value) : o.value}`

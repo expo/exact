@@ -74,14 +74,18 @@ impl Package for GlobalShortcuts {
                 reply.send(answer);
             }
             "checkGlobalShortcut" => reply.send(Self::answer(keys, host.check_hotkey(keys))),
-            "globalShortcutStatus" => reply.send(json!({ "available": true })),
+            "globalShortcutStatus" => {
+                reply.send(json!({ "available": true, "releaseEvents": false }))
+            }
             _ => reply.error("NotSupportedError", None),
         }
     }
 
     fn call(&mut self, name: &str, _args: &Json) -> Json {
         match (name, self.context.desktop()) {
-            ("globalShortcutStatusSync", Some(_)) => json!({ "available": true }),
+            ("globalShortcutStatusSync", Some(_)) => {
+                json!({ "available": true, "releaseEvents": false })
+            }
             _ => json!({ "error": "NotSupportedError" }),
         }
     }

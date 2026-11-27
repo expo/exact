@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,11 +9,10 @@ import { appleArtifacts } from '../host/apple/build.mjs';
 import { buildFirst, failureSummary, nativeBuild, planOverride } from './agent-build.mjs';
 import { oneScheme, webBuildFailure } from './app-cli.mjs';
 import { linkedBakeDir } from './linked-plan.mjs';
-import { resolveApp } from './app.mjs';
+import { bakeTarget, buildBake, pendingBuildInputs, resolveApp } from './app.mjs';
+import { pinned } from './test-workspace.mjs';
 import { webChanges, webInputDigests, webInputPresent } from './agent-launch.mjs';
 import { replaceBuild } from '../host/web/serve.mjs';
-let fallbackRoots = [];
-mock.module('../host/web/build.mjs', () => ({ webSourceRoots: () => fallbackRoots }));
 
 // A recorded input in a tree the build copies whole is still one only when no part of its path from the tree's root is a
 // link, as the copy requires; elsewhere the build reads through links.
@@ -178,14 +177,13 @@ test.each(['asset edit', 'asset deletion', 'Cargo alias', 'loop fallback', 'loop
       writeFileSync(included, 'edited Cargo read');
       expect(webChanges(dist, linked).all).toContain(realpathSync(included));
     } else {
-      fallbackRoots = inputRoots;
       const cargo = kind === 'loop deletion' ? cargoContractReads([{ file: included }]) : {};
       writeFileSync(marker, JSON.stringify({ target: 'js', inputsAt: 0, reads: { ...reads, cargo } }));
       if (kind === 'loop deletion') rmSync(included);
       else writeFileSync(included, 'edited Cargo read');
-      expect(webChanges(dist, app).all.some(path => path === included || path === inputRoots[0].file)).toBe(true);
+      expect(webChanges(dist, app, () => inputRoots).all.some(path => path === included || path === inputRoots[0].file)).toBe(true);
     }
-  } finally { fallbackRoots = []; rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test.each(['app.wasm', 'app.hbc', 'app.js'])('packaging retains %s after another bake replaces it', name => {
@@ -226,18 +224,59 @@ test('native verification owns its captures, products, bundle and receipt throug
   }
 });
 
+test.skipIf(process.platform !== 'darwin')('each Apple receipt stays fresh after Cargo builds the other install', () => {
+  const dir = pinned(realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-variant-receipt-'))));
+  const write = (file, text) => writeFileSync(resolve(dir, file), text);
+  const base = 'dev.exact.receipt', target = bakeTarget('macos');
+  try {
+    mkdirSync(resolve(dir, 'src'));
+    mkdirSync(resolve(dir, 'cargo-home'));
+    const configure = name => write('cargo-home/config.toml', `[build]\nbuild-dir=${JSON.stringify(resolve(dir, name))}\n`);
+    configure('intermediates');
+    const prepare = () => {
+      if (!existsSync(resolve(dir, 'Cargo.toml'))) write('Cargo.toml', '[workspace]\n[package]\nname="receipt-apple"\nversion="0.1.0"\nedition="2021"\n');
+    };
+    write('app.contract', 'component App\n  text "Receipt"\n');
+    write('src/lib.rs', 'pub const APP: &str = include_str!(concat!(env!("OUT_DIR"), "/logic.rs"));');
+    write('build.rs', `fn main() {
+      println!("cargo:rerun-if-env-changed=FIXTURE_APP");
+      let id = std::env::var("FIXTURE_APP").unwrap();
+      let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+      std::fs::write(out.join("logic.rs"), &id).unwrap();
+      std::fs::write(out.join("app.plan"), b"plan").unwrap();
+      std::fs::write(out.join("compat.json"), r#"${JSON.stringify({ target, inputs: { platform: 'macos', app: 'APP_ID', keys: [], store: { L: '0' } } })}"#.replace("APP_ID", &id)).unwrap();
+      std::fs::write(out.join("artifacts.json"), r#"{"version":1,"artifacts":[],"sources":{}}"#).unwrap();
+    }`);
+    const bake = id => {
+      const manifest = { app: { id, name: 'Receipt' }, rust: false, ...(id === base ? {} : { variant: { name: 'dev', base } }) };
+      const app = { dir, workspace: dir, target: resolve(dir, 'target'), name: 'receipt', id, manifest, prepare, crate: () => 'receipt-apple' };
+      return buildBake(app, 'macos', target, { profile: 'dev', output: resolve(dir, 'target/bakes', id),
+        env: { FIXTURE_APP: id, EXACT_UPDATE_TRUST: 'development', CARGO_HOME: resolve(dir, 'cargo-home') } });
+    };
+    const variant = bake(base + '.dev'), first = bake(base);
+    expect(pendingBuildInputs(variant)).toEqual([]);
+    bake(base + '.dev');
+    expect(pendingBuildInputs(first)).toEqual([]);
+    configure('moved');
+    const rebuilt = bake(base + '.dev');
+    const logic = rebuilt.binary.inputs.find(input => input.path.endsWith('/logic.rs'));
+    expect(logic.path.startsWith(resolve(dir, 'moved') + '/')).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build', async host => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-native-reuse-')), saved = { ...process.env };
   const sha256 = text => createHash('sha256').update(text).digest('hex');
-  let builds = 0, bakes = 0, signed, said = [];
-  const module = { appId: 'test.reuse', abi: 1, grants: '', surfaces: {}, bytecodeVersion: 96 };
+  let builds = 0, bakes = 0, said = [];
+  const receipts = new Map();
   const outputs = [];
   try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'reuse', app: { id: 'test.reuse', name: 'Reuse' } }));
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'reuse', app: { id: 'test.reuse', name: 'Reuse' }, variants: { dev: { idSuffix: '.dev', name: 'Reuse Dev' } } }));
     writeFileSync(resolve(dir, 'app.contract'), 'component App\n  text "Ready"\n');
     const source = resolve(dir, 'native.swift'); writeFileSync(source, 'native source');
-    const app = resolveApp(dir);
-    const drive = async (plan = false, exit = 0) => {
+    const base = resolveApp(dir);
+    const drive = async (plan = false, exit = 0, app = base) => {
+      const module = { appId: app.id, abi: 1, grants: '', surfaces: {}, bytecodeVersion: 96 };
       const owned = privateNativeBuild(app, 'agent'); outputs.push(owned);
       Object.assign(process.env, owned.env);
       await owned.seed?.(host);
@@ -256,9 +295,9 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
         mkdirSync(linked, { recursive: true });
         writeFileSync(resolve(linked, 'app.plan'), 'original plan'); writeFileSync(resolve(linked, 'app.module.json'), JSON.stringify(module));
         const receipt = { target: paths.target, started: new Date(Date.now() + 60_000).toISOString(), build: { trust: 'development',
-          compat: { inputs: { platform: host, linked: ['router', 'io', 'markdown'], rustMode: 'off' }, embedded: { plan: { sha256: sha256('original plan') } } }, graph: { uses: [] },
+          compat: { inputs: { app: app.id, platform: host, linked: ['router', 'io', 'markdown'], rustMode: 'off' }, embedded: { plan: { sha256: sha256('original plan') } } }, graph: { uses: [] },
           binary: { sha256: 'binary', inputs: [source, generated].map(path => ({ path, name: path, sha256: sha256(readFileSync(path)) })), missing: [], directories: [] } } };
-        signed = JSON.stringify(receipt);
+        receipts.set(app.id, JSON.stringify(receipt));
         for (const path of [resolve(paths.products, 'receipt.json'), host === 'ios' ? resolve(paths.bundle, 'receipt.json') : resolve(paths.bundle, 'Contents/Resources/receipt.json')]) {
           mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, JSON.stringify(receipt));
         }
@@ -270,12 +309,12 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
       if (plan) expect(planOverride(host, app, state)).not.toBeNull();
       else expect(state.changed).toEqual([]);
       const paths = appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
-      expect(readFileSync(host === 'ios' ? resolve(paths.bundle, 'receipt.json') : resolve(paths.bundle, 'Contents/Resources/receipt.json'), 'utf8')).toBe(signed);
+      expect(readFileSync(host === 'ios' ? resolve(paths.bundle, 'receipt.json') : resolve(paths.bundle, 'Contents/Resources/receipt.json'), 'utf8')).toBe(receipts.get(app.id));
       owned.close(exit);
       expect(existsSync(owned.env.EXACT_APPLE_OUTPUT)).toBe(false);
     };
-    const identity = createHash('sha256').update(resolve(app.dir)).digest('hex').slice(0, 16);
-    const cache = resolve(app.target, 'native-reuse', identity, host, 'development/current');
+    const identity = createHash('sha256').update(resolve(base.dir)).digest('hex').slice(0, 16);
+    const cache = resolve(base.target, 'native-reuse', identity, host, 'development/current');
     await drive();
     const firstArtifact = readFileSync(resolve(cache, 'artifact.json'), 'utf8');
     await drive();
@@ -304,14 +343,22 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
     writeFileSync(resolve(cache, 'files', executable), 'corrupt cached executable');
     await drive();
     expect(builds).toBe(4);
+    process.env.EXACT_VARIANT = 'dev';
+    const variant = resolveApp(dir);
+    const beforeSwitch = builds;
+    await drive(false, 0, variant);
+    delete process.env.EXACT_VARIANT;
+    await drive();
+    await drive(false, 0, variant);
+    expect(builds).toBe(beforeSwitch + 1);
     // A stale build baked for another backend than the drive selects is not kept: its check would refuse it.
     writeFileSync(resolve(dir, 'app.ts'), "export const origin = 'http://127.0.0.1:4400';\n");
     writeFileSync(source, 'native source for the selected backend');
     said = [];
-    const owned = privateNativeBuild(app, 'agent'); outputs.push(owned);
+    const owned = privateNativeBuild(base, 'agent'); outputs.push(owned);
     Object.assign(process.env, owned.env);
     await owned.seed(host);
-    expect(nativeBuild(host, app).missing).toBe(true);
+    expect(nativeBuild(host, base).missing).toBe(true);
   } finally {
     for (const owned of outputs) owned.close();
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
@@ -349,13 +396,13 @@ test.each(['contract', 'cargo'])('a JS loop keeps an unchanged %s read fresh aft
     mkdirSync(dist, { recursive: true }); writeFileSync(file, 'same bytes');
     const reads = { contract: {}, [kind]: cargoContractReads([{ file }]) };
     writeFileSync(resolve(dist, '.exact-build.json'), JSON.stringify({ target: 'js', reads }));
-    fallbackRoots = [{ file }];
+    const roots = () => [{ file }];
     writeFileSync(file, 'same bytes');
     const future = new Date(Date.now() + 1000); utimesSync(file, future, future);
-    expect(webChanges(dist, app).all).toEqual([]);
+    expect(webChanges(dist, app, roots).all).toEqual([]);
     rmSync(file);
-    expect(webChanges(dist, app).all).toContain(file);
-  } finally { fallbackRoots = []; rmSync(dir, { recursive: true, force: true }); }
+    expect(webChanges(dist, app, roots).all).toContain(file);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('Cargo includes changed at the build start or deleted remain uncertain reads', () => {
@@ -502,7 +549,7 @@ test.each([
       for (const dll of ['vcruntime140.dll', 'msvcp140.dll']) writeFileSync(resolve(crt, dll), arch);
       writeFileSync(resolve(crt, 'runtime.pdb'), 'symbols');
     }
-    const env = { process: { platform: 'win32', argv: [], env: { ...build.env, EXACT_UPDATE_TRUST: trust } }, guardFlags: () => args, resolveApp: () => app, prepareShaders() {},
+    const env = { process: { platform: 'win32', argv: [], env: { ...build.env, EXACT_UPDATE_TRUST: trust } }, guardFlags: () => args, resolveApp: () => app, noWindowsHost: () => null, prepareShaders() {},
       bakeTarget: () => 'x86_64-pc-windows-msvc', pickIcon: () => null, resolve, mkdirSync, developmentBuildEnv: () => build.env,
       copyFileSync, readFileSync, writeFileSync, createHash, windowsFile: (_app, path) => path.endsWith('.exe') ? 'fixture.exe' : basename(path), closeOpened() {}, syncStaticTree() {}, copyShaders() {},
       windowsRuntime: target => windowsRuntime(target, { VCToolsRedistDir: redist }), writePackagedReceipt, unclaimedNote: () => null, console: { log() {} },

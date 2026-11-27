@@ -50,7 +50,7 @@ pub(super) struct OwnedRow {
 pub(super) struct Want {
     /// Its `when` holds (true when it has none).
     pub(super) open: bool,
-    /// Its arguments.
+    /// Its arguments, read while open or to match a launch checkpoint.
     pub(super) args: Vec<Value>,
 }
 
@@ -156,16 +156,16 @@ impl<D: DataSource> Runner<D> {
                 .map(|q| (q.resource as usize, q.row))
                 .collect();
             for (k, (site, row)) in requests.into_iter().enumerate() {
-                let want = self.owned_want(site, &owner.frames)?;
                 let mine = row.filter(|&r| {
                     self.owned_row(r).is_some_and(|o| {
                         !o.gone && std::ptr::eq(o.storage.as_ptr(), Rc::as_ptr(&owner.storage))
                     })
                 });
+                let page_path = mine.is_none().then_some(owner.path.as_str());
+                let want = self.owned_want(site, &owner.frames, page_path)?;
                 let r = match mine {
                     Some(r) => {
-                        let resource = &mut self.resources[r];
-                        let o = resource.owned.as_mut().expect("owned");
+                        let o = self.resources[r].owned.as_mut().expect("owned");
                         if o.path != owner.path {
                             o.path.clone_from(&owner.path);
                         }
@@ -173,10 +173,8 @@ impl<D: DataSource> Runner<D> {
                         let same = o.want.open == want.open
                             && crate::compare::unchanged_arguments(&o.want.args, &want.args);
                         if !same {
-                            let asleep = !resource.pending
-                                && resource.state.as_ref().is_some_and(|state| state.asleep);
-                            // A settled sleeping row only uses its arguments on wake.
-                            changed |= !asleep || o.want.open || want.open;
+                            // Dropping the launch arguments needs no settlement.
+                            changed |= o.want.open || want.open;
                             o.want = want;
                         }
                         r
@@ -210,7 +208,12 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Resource `site`'s gate and arguments in an instance's `frames`.
-    fn owned_want(&self, site: usize, frames: &[Frame]) -> Result<Want, RunnerError> {
+    fn owned_want(
+        &self,
+        site: usize,
+        frames: &[Frame],
+        page_path: Option<&str>,
+    ) -> Result<Want, RunnerError> {
         let row = &self.plan.resources[site];
         let name = || self.plan.str(row.name).to_string();
         let open = match row.gate.iter().next() {
@@ -223,12 +226,34 @@ impl<D: DataSource> Runner<D> {
                 value == Value::Bool(true)
             }
         };
+        let page = self.resources[site].page_answers.as_deref();
+        if !open
+            && !page_path
+                .zip(page)
+                .is_some_and(|(path, page)| page.has_path(path))
+        {
+            return Ok(Want {
+                open,
+                args: Vec::new(),
+            });
+        }
         let mut args = Vec::with_capacity(row.args.len as usize);
         for (k, a) in row.args.iter().enumerate() {
             let code = self.plan.arg(a).expr;
-            let value = self
-                .eval(code, &[], frames)
-                .map_err(|e| e.evaluated(|| format!("resource {:?} argument {}", name(), k + 1)))?;
+            let value = match self.eval(code, &[], frames) {
+                Ok(value) => value,
+                // The checkpoint admits answers only at this row's arity.
+                // A trapping argument leaves it with no matching answer.
+                Err(_) if !open => {
+                    return Ok(Want {
+                        open,
+                        args: Vec::new(),
+                    });
+                }
+                Err(e) => {
+                    return Err(e.evaluated(|| format!("resource {:?} argument {}", name(), k + 1)));
+                }
+            };
             args.push(value);
         }
         Ok(Want { open, args })
@@ -355,7 +380,8 @@ impl<D: DataSource> Runner<D> {
             let Some(state) = row.state.as_ref().filter(|s| !s.placeholder) else {
                 continue;
             };
-            let skip = row.pending || row.entropy_reader || row.store_reader;
+            let (clock, entropy) = self.resource_ambient_taint(r);
+            let skip = row.pending || entropy || clock || row.store_reader;
             let id = exact_plan::ResourcesId(o.site as u32);
             if skip
                 || dated.get(o.site) == Some(&true)
@@ -399,6 +425,7 @@ fn merged(mut a: CommitReceipt, b: CommitReceipt) -> CommitReceipt {
     for (into, from) in [
         (&mut a.touched, b.touched),
         (&mut a.display_changed, b.display_changed),
+        (&mut a.reparented, b.reparented),
         (&mut a.timelines, b.timelines),
         (&mut a.renewed, b.renewed),
         (&mut a.revealed, b.revealed),
@@ -409,6 +436,7 @@ fn merged(mut a: CommitReceipt, b: CommitReceipt) -> CommitReceipt {
     }
     a.touched.retain(live);
     a.display_changed.retain(|k| !gone.contains(k));
+    a.reparented.retain(|k| !gone.contains(k));
     a.timelines.retain(|k| !gone.contains(k));
     a.renewed.retain(|k| !gone.contains(k));
     a.revealed.retain(|k| !gone.contains(k));

@@ -247,8 +247,23 @@ impl<D: DataSource> Presenter<D> {
             self.top.lift = None;
         }
         match action {
-            0 => self.pointer_down_at(x, y, now, at).map(|_| ()),
-            1 => self.pointer_up_at(x, y, now, at).map(|_| ()),
+            0 => {
+                if let Some(key) = self.reader.pending_height_end.take() {
+                    if let Some(port) = self.host.kernel().node_by_key(key).map(|n| n.id) {
+                        if let Some(error) = self.list_drag_ended(port, (0., 0.), None, false) {
+                            self.host.log(error);
+                        }
+                    }
+                }
+                self.pointer_down_at(x, y, now, at).map(|_| ())
+            }
+            1 => {
+                self.reader.lifting_touch = true;
+                self.reader.height_scroll_release = None;
+                let result = self.pointer_up_at(x, y, now, at);
+                self.reader.lifting_touch = false;
+                result.map(|_| ())
+            }
             // Drag-out hands the contact to the shell and closes its menu at presentation time.
             2 if self.lift_moved(x, y, now) => Ok(()),
             2 => self.pointer_move_at(x, y, now, at).map(|_| ()),
@@ -420,7 +435,7 @@ impl<D: DataSource> Presenter<D> {
                 ..exact_runner::time::Launch::NONE
             },
             || {
-                Host::boot_with(
+                Host::boot_candidate(
                     plan,
                     data,
                     Box::new(Measurer(candidate_text.clone())),
@@ -443,6 +458,7 @@ impl<D: DataSource> Presenter<D> {
             .commit_shaders(shaders)
             .map_err(HostError::Asset)?;
         let faults = self.host.runner().faults().clone();
+        host.install_presence();
         self.host = host;
         self.host.runner_mut().share_faults(&faults);
         // The old executor lets go of everything, then says which uploads had

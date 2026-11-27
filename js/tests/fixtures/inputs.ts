@@ -64,8 +64,8 @@ function answer(source: string, args: any[]): unknown {
     case "host": return exactHost();
     case "hostLater": return Promise.resolve().then(() => globalThis.exactHost());
     case "atInit": return atInit[args[0]];
-    case "ambient": return calls[args[0]]();
-    case "ambientLater": return fetch("https://fixture.exact.test/value").then(() => calls[args[0]]());
+    case "ambient": return String(calls[args[0]]());
+    case "ambientLater": return fetch("https://fixture.exact.test/value").then(() => String(calls[args[0]]()));
     case "explicit":
       console.log("explicit", args[0], args[1]);
       return explicit(args[0], args[1]);

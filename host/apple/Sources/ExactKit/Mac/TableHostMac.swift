@@ -307,24 +307,30 @@ package final class TableHost {
 
     /// After a batch's ops (`Presenter.apply`).
     func sync(_ batch: Batch) {
-        for op in batch.ops {
+        for op in batch.ops where op.op == .collections {
             guard let updates = op.sectionTables else { continue }
             for update in updates {
                 guard case .array(let fields) = update, let list = fields.first?.number.flatMap(UInt32.init(exactly:)) else { continue }
                 sectionTables[list] = WindowedTableSections(fields, previous: sectionTables[list])
             }
         }
-        if !painted || !feeds.isEmpty, batch.ops.contains(where: { Self.deciding.contains($0.op) }) { decide() }
+        let hasLists = presenter.map { !$0.listViews.isEmpty } ?? false
+        if (!painted || !feeds.isEmpty), (hasLists || !feeds.isEmpty || !said.isEmpty),
+           batch.ops.contains(where: { Self.deciding.contains($0.op) }) { decide() }
         // A separator follows its row's authored border, shadow and `aria-hidden`, and its neighbour.
-        let provenance = batch.ops.contains { Self.deciding.contains($0.op) && $0.op != .collections }
-        for feed in feeds.values { feed.sync(separators: provenance) }
-        syncPainted()
+        if !feeds.isEmpty {
+            let provenance = batch.ops.contains { Self.deciding.contains($0.op) && $0.op != .collections }
+            for feed in feeds.values { feed.sync(separators: provenance) }
+        }
+        if hasLists || !rowChildren.isEmpty || !lines.isEmpty { syncPainted() }
         if let pressContact, !pressContact.isLive { cancelPress() }
-        for op in batch.ops where op.op == .style {
-            var view: NSView? = op.nodeID.flatMap { presenter?.views[$0] }
-            while let next = view, !(next is NSTableView) {
-                if let cell = next as? TableRowCell { cell.syncSelectionPaint(); break }
-                view = next.superview
+        if !feeds.isEmpty {
+            for op in batch.ops where op.op == .style {
+                var view: NSView? = op.nodeID.flatMap { presenter?.views[$0] }
+                while let next = view, !(next is NSTableView) {
+                    if let cell = next as? TableRowCell { cell.syncSelectionPaint(); break }
+                    view = next.superview
+                }
             }
         }
     }

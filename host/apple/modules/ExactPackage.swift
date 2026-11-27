@@ -67,6 +67,16 @@ public final class ExactPackageEvents {
 public protocol ExactPackageView: AnyObject {
     /// The view the host puts in the node's box; it fills the box.
     var view: ExactPackagePlatformView { get }
+    #if os(iOS) || os(tvOS)
+    /// The controller whose view is `view`, or nil for a plain view. The
+    /// host makes it a child of the controller its node shows in (a
+    /// route's) once that controller exists, and moves it when the node
+    /// shows in another (a dialog's sheet), as for an app's
+    /// `ExactNativeScreen`. The package never adds it to a parent itself.
+    var controller: UIViewController? { get }
+    /// How the view takes part in its owner's safe area (LLP 1123 D15), or nil to keep to itself.
+    var safeArea: ExactPackageSafeArea? { get }
+    #endif
     /// Every prop, as strings, replaced on each change; throw to refuse them.
     func setProps(_ props: [String: String]) throws
     /// Last call: the node is gone.
@@ -74,8 +84,54 @@ public protocol ExactPackageView: AnyObject {
 }
 
 public extension ExactPackageView {
+    #if os(iOS) || os(tvOS)
+    var controller: UIViewController? { nil }
+    var safeArea: ExactPackageSafeArea? { nil }
+    #endif
     func destroy() {}
 }
+
+#if os(iOS) || os(tvOS)
+/// How a package's view takes part in its owner's safe area (LLP 1123 D15): what the host may write
+/// and what the view lends it, fixed while the view is attached.
+public final class ExactPackageSafeArea {
+    /// Whether the host clears the unsafe area still owed in the view through `controller`'s
+    /// `additionalSafeAreaInsets`, as its own tagged contribution beside the package's; a view with no
+    /// controller is the view of one the host makes and contains, kept with the view while it lives.
+    public let adjustsAdditionalSafeAreaInsets: Bool
+    /// The scroll views whose content inset, indicator insets and adjustment the view lends the host.
+    public let scrollViews: [ScrollView]
+    /// A SwiftUI host's `safeAreaRegions.rawValue` as its controller has them, nil where no SwiftUI
+    /// view is hosted.
+    public let safeAreaRegions: UInt?
+    /// Undoes the view's own changes after the host has given back what it wrote and borrowed.
+    public let release: () -> Void
+
+    public init(adjustsAdditionalSafeAreaInsets: Bool = false, scrollViews: [ScrollView] = [],
+                safeAreaRegions: UInt? = nil, release: @escaping () -> Void = {}) {
+        self.adjustsAdditionalSafeAreaInsets = adjustsAdditionalSafeAreaInsets
+        self.scrollViews = scrollViews
+        self.safeAreaRegions = safeAreaRegions
+        self.release = release
+    }
+
+    /// A scroll view lent to the host, which keeps its native parent.
+    public struct ScrollView {
+        public let view: UIScrollView
+        /// The `id` of the box whose scroll policy it takes, in the same owner; nil for the view's own box.
+        public let anchor: String?
+        /// Lays the view out clearing no more than the container clearance given, in its own
+        /// coordinates, and returns what it cleared; nil where its layout clears none.
+        public let layout: ((UIEdgeInsets) -> UIEdgeInsets)?
+
+        public init(_ view: UIScrollView, anchor: String? = nil, layout: ((UIEdgeInsets) -> UIEdgeInsets)? = nil) {
+            self.view = view
+            self.anchor = anchor
+            self.layout = layout
+        }
+    }
+}
+#endif
 
 /// A member's requests and result decoder for one credential ceremony
 /// (LLP 1133.014 D10 item 2). Platform objects cross this seam as NSObject.
@@ -241,6 +297,12 @@ public final class ExactPackageContext {
     /// production (`--bind`): an implementation that is its own substitute
     /// then opens no device and asks the OS for nothing (LLP 1133.006 D8).
     public let agent: Bool
+    /// The trust with which the host was built.
+    #if EXACT_DEVELOPMENT
+    public let development = true
+    #else
+    public let development = false
+    #endif
     /// The session's id, unique in the process: what a process object
     /// shared by sessions (a capture, a photo output) keys its consumers by.
     public let session: String
@@ -499,7 +561,9 @@ public struct ExactPresentation {
     /// The session's window and its scene.
     public let window: UIWindow
     public let scene: UIWindowScene
-    /// The window's root view controller, which a child view controller is added to.
+    /// The window's root view controller, to present over the app from. A
+    /// view's own controller is `ExactPackageView.controller`, never a child
+    /// of this one.
     public let rootViewController: UIViewController
     init?(_ view: UIView) {
         guard let window = view.window, let scene = window.windowScene, let root = window.rootViewController else { return nil }

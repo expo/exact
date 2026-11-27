@@ -623,6 +623,10 @@ extension NodeView {
         textMore.rasterCovered = result.covered; textMore.rasterBand = key.clip != nil; textMore.rasterInk = (result.ink, result.shadows)
         textMore.rasterRoom = key.room ?? key.box
         textRasterReady = true; textRasterFailed = false
+        if drewFallbackText {
+            drewFallbackText = false
+            setNeedsDisplay()
+        }
         if (coverage != nil) != (textRasterLayer?.delegate is CoverageImageView), let old = textRasterLayer {
             old.dropTextCast()
             if let view = old.delegate as? CoverageImageView { view.removeFromSuperview() } else { old.removeFromSuperlayer() }

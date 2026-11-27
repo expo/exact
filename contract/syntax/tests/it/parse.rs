@@ -1040,8 +1040,91 @@ fn test_preference_error_names_supported_facts_and_drive_only_forms() {
         "page fact",
         "module permission",
         "Quote numbers",
-        "Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now",
+        "Folds (`posture`, `segments`, `gap`) and mode pins require an agent drive",
     ] {
         assert!(e.message.contains(form), "{} lacks {form}", e.message);
+    }
+}
+
+#[test]
+fn mode_pins_name_the_drive_at_the_preference_name() {
+    let e = parse("test \"dense\"\n  prefer mode density=compact").unwrap_err();
+    assert_eq!(e.id, "syntax-drive-only-preference");
+    assert_eq!((e.span.line, e.span.col), (2, 10));
+    assert!(e.message.contains("in an agent drive"));
+}
+
+#[test]
+fn package_preferences_use_the_drive_key_and_lowercase_step_name() {
+    parse("test \"qualified\"\n  prefer extension sdk-2.status#@fixture/sdk-2/apple=clear")
+        .unwrap();
+    parse(
+        r#"test "JSON"
+  prefer extension pkg.doc={
+    "price":1.25e-5,
+    "text":"a\rb\f\/c\uD83D\uDE00"
+  }
+  clock settle"#,
+    )
+    .unwrap();
+    let error = parse("test \"qualified\"\n  prefer Extension sdk.status=clear").unwrap_err();
+    assert_eq!((error.span.line, error.span.col), (2, 10));
+    assert!(error.message.contains("prefer extension"));
+}
+
+#[test]
+fn a_state_path_reads_every_index_after_a_dot() {
+    let file = parse(
+        "test \"t\"\n  expect state rows.1.0 == 3\n  expect state rows.0.1 == 2\n  clock until state grid.2.10.ready == true within 10\n",
+    )
+    .unwrap();
+    let paths: Vec<&str> = file.tests[0]
+        .steps
+        .iter()
+        .map(|step| match step {
+            contract_syntax::Step::ExpectState { name, .. } => name.as_str(),
+            contract_syntax::Step::Clock { arg, .. } => arg.split(' ').nth(2).unwrap(),
+            other => panic!("unexpected step {other:?}"),
+        })
+        .collect();
+    assert_eq!(paths, ["rows.1.0", "rows.0.1", "grid.2.10.ready"]);
+    // An exponent is no index: `rows.1e1` is refused, not read as `rows.10`.
+    assert!(parse("test \"t\"\n  expect state rows.1e1 == 2\n").is_err());
+}
+
+#[test]
+fn data_attribute_names_keep_digits_and_hyphens_after_the_first_letter() {
+    for name in ["data-v-2", "data-v--2", "data-v-", "data-v--"] {
+        let source =
+            format!("component A\n  state data-v = 4\n  view\n    text data-v-2 {name}=\"x\"\n");
+        let file = parse(&source).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let Node::Element {
+            attrs, positional, ..
+        } = &file.components[0].view[0]
+        else {
+            panic!()
+        };
+        assert_eq!(attrs[0].name, name);
+        assert!(matches!(&positional[0], Expr::Binary(BinOp::Sub, ..)));
+    }
+}
+
+#[test]
+fn data_attribute_names_do_not_become_binding_names_or_assignment_targets() {
+    for name in ["data-v-2", "data-v--2", "data-v-", "data-v--"] {
+        for body in [
+            format!("  state {name} = 9\n  view\n    text \"word\"\n"),
+            format!(
+                "  state data-v = 4\n  action change\n    {name} = 5\n  view\n    text \"word\"\n"
+            ),
+            format!("  state data-v = 4\n  state {name} = 9\n  view\n    text `${{data-v-2}}`\n"),
+        ] {
+            let source = format!("component App\n{body}");
+            let error = parse(&source).expect_err(&source);
+            assert!(
+                error.id.starts_with("syntax-expected"),
+                "{source}: {error:?}"
+            );
+        }
     }
 }

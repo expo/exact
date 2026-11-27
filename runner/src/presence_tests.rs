@@ -274,6 +274,128 @@ fn reconciliation_keeps_the_newest_generation_and_forgets_a_changed_policy_unrea
 }
 
 #[test]
+fn preview_snapshot_matches_reconcile_without_mutating_vault() {
+    let cases: &[(&str, Presence, Box<dyn Fn(&mut MemoryVault)>)] = &[
+        ("absent", optional(), Box::new(|_| {})),
+        (
+            "optional-plain",
+            optional(),
+            Box::new(|v| {
+                v.put_plain("a", Some(b"open")).unwrap();
+            }),
+        ),
+        (
+            "mandatory-plain",
+            mandatory(),
+            Box::new(|v| {
+                v.put_plain("a", Some(b"open")).unwrap();
+            }),
+        ),
+        (
+            "pending-move",
+            optional(),
+            Box::new(|v| {
+                v.put_plain("a", Some(b"open")).unwrap();
+                v.put_record("a", Some(b"locked user-presence optional"))
+                    .unwrap();
+            }),
+        ),
+        (
+            "unprotect-step2",
+            optional(),
+            Box::new(|v| {
+                v.put_plain("a", Some(b"open")).unwrap();
+                v.add_locked("a", 1, &optional(), b"open").unwrap();
+                v.put_record("a", Some(b"plain")).unwrap();
+            }),
+        ),
+        (
+            "policy-changed-locked",
+            line("biometry-current-set optional"),
+            Box::new(|v| {
+                v.add_locked("a", 1, &optional(), b"open").unwrap();
+                v.put_record("a", Some(b"locked user-presence optional"))
+                    .unwrap();
+            }),
+        ),
+        (
+            "policy-changed-with-plain",
+            line("biometry-current-set optional"),
+            Box::new(|v| {
+                v.put_plain("a", Some(b"open")).unwrap();
+                v.add_locked("a", 1, &optional(), b"open").unwrap();
+                v.put_record("a", Some(b"locked user-presence optional"))
+                    .unwrap();
+            }),
+        ),
+    ];
+    for (label, policy, seed) in cases {
+        let mut vault = MemoryVault::default();
+        seed(&mut vault);
+        vault.0.lock().unwrap().calls.clear();
+        let lines = vec![("a".into(), Some(policy.clone()))];
+        let preview = Backend::preview_snapshot_entries(&vault, &lines, true);
+        assert!(
+            vault.memory().calls.is_empty(),
+            "{label}: preview mutated vault: {:?}",
+            vault.memory().calls
+        );
+        let reconciled = Backend::new(Box::new(vault), lines).snapshot_entries(true);
+        assert_eq!(preview, reconciled, "{label}");
+    }
+}
+
+#[test]
+fn policy_removed_reconcile_tears_down_without_reading_plain() {
+    struct DeniedPlain(MemoryVault);
+    impl Vault for DeniedPlain {
+        fn plain(&self, _: &str) -> Result<Option<Vec<u8>>, String> {
+            Err("denied".into())
+        }
+        fn put_plain(&mut self, name: &str, value: Option<&[u8]>) -> Result<(), String> {
+            self.0.put_plain(name, value)
+        }
+        fn record(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+            self.0.record(name)
+        }
+        fn put_record(&mut self, name: &str, record: Option<&[u8]>) -> Result<(), String> {
+            self.0.put_record(name, record)
+        }
+        fn generations(&self, name: &str) -> Result<Vec<u64>, String> {
+            self.0.generations(name)
+        }
+        fn add_locked(
+            &mut self,
+            name: &str,
+            generation: u64,
+            presence: &Presence,
+            value: &[u8],
+        ) -> Result<(), String> {
+            self.0.add_locked(name, generation, presence, value)
+        }
+        fn delete_locked(&mut self, name: &str, generation: u64) -> Result<(), String> {
+            self.0.delete_locked(name, generation)
+        }
+        fn read_locked(&mut self, name: &str, generation: u64) -> Result<Option<Vec<u8>>, String> {
+            self.0.read_locked(name, generation)
+        }
+    }
+    let mut inner = MemoryVault::default();
+    inner
+        .add_locked("orphan", 1, &optional(), b"secret")
+        .unwrap();
+    inner
+        .put_record("orphan", Some(b"locked user-presence optional"))
+        .unwrap();
+    let _ = Backend::new(
+        Box::new(DeniedPlain(inner.clone())),
+        vec![("orphan".into(), None)],
+    );
+    let m = inner.memory();
+    assert!(m.locked.is_empty() && m.records.is_empty(), "{m:?}");
+}
+
+#[test]
 fn one_queue_orders_a_write_behind_a_held_move_and_keeps_it_locked() {
     let vault = MemoryVault::default();
     vault.clone().put_plain("a", Some(b"old")).unwrap();
@@ -376,6 +498,43 @@ fn a_check_that_fails_or_finds_the_item_gone_moves_nothing_or_reads_absent() {
     backend.checked(4, Checked::Passed);
     let events = drive.pump(&mut backend);
     assert!(done(&events, 4).is_some() && done(&events, 5).is_none() && !asked(&events, 5));
+}
+
+#[test]
+fn a_call_let_go_during_its_check_keeps_its_generation_until_the_platform_answers() {
+    for answer in [Checked::Passed, Checked::Read(None)] {
+        let vault = MemoryVault::default();
+        let mut backend = boot(&vault, mandatory());
+        let mut drive = Drive::new();
+        backend.enqueue("a", Op::Write(Some(b"t1".to_vec())), None);
+        drive.pump(&mut backend);
+        backend.enqueue("a", Op::Unlock, Some(1));
+        assert!(asked(&drive.pump(&mut backend), 1));
+        vault.0.lock().unwrap().calls.clear();
+        // The platform is authenticating generation 1 when the call is let
+        // go: neither a queued write nor a refused one's retry replaces it.
+        backend.cancel(1);
+        backend.enqueue("a", Op::Write(Some(b"t2".to_vec())), None);
+        drive.now_ms = 5000.0;
+        assert!(drive.pump(&mut backend).is_empty());
+        assert!(
+            vault.memory().calls.is_empty(),
+            "{:?}",
+            vault.memory().calls
+        );
+        assert!(backend.checking());
+        // Its late answer is dropped: nothing is answered, read or forgotten,
+        // and the write behind it lands.
+        backend.checked(1, answer);
+        let events = drive.pump(&mut backend);
+        assert!(events.is_empty(), "{events:?}");
+        assert_eq!(
+            vault.memory().calls,
+            ["add_locked a#2", "delete_locked a#1"]
+        );
+        assert_eq!(backend.occupancy("a"), Some(Occupancy::Locked));
+        assert!(!backend.checking());
+    }
 }
 
 #[derive(Clone)]

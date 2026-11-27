@@ -27,6 +27,7 @@ shape Insets
 shape Observed
   safeArea: option<Insets>
   layoutMargins: option<Insets>
+  bar: option<Insets>
 shape Margins
   layoutMargins: option<Rect>
 shape Hero
@@ -141,6 +142,30 @@ fn a_layout_reaches_the_fact_in_a_later_commit() {
     );
     lay_out(&mut r);
     assert!(r.refresh_geometry().unwrap().is_none());
+}
+
+#[test]
+fn a_route_bar_reaches_a_geometry_reader_at_the_next_layout() {
+    use exact_kernel::{BlockAxis, HostBlock};
+    let mut r = hero("120", "");
+    let slot = r.kernel().find_by_id("hero")[0].index;
+    let view = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(120.0),
+        height: BlockAxis::Is(40.0),
+    };
+    r.kernel_mut().set_host_block(view, Some(block)).unwrap();
+    for width in [0.0, 69.0, 0.0] {
+        assert!(!r
+            .kernel_mut()
+            .set_route_bar_insets(view, [0.0, width])
+            .unwrap());
+        lay_out(&mut r);
+        assert!(r.refresh_geometry().unwrap().is_some());
+        let sides = some(&some(&fields(&r, "g")[3])[2]);
+        assert_eq!(sides, [0.0, width as f64, 0.0, 0.0].map(Value::Number));
+    }
 }
 
 #[test]
@@ -366,4 +391,353 @@ component Card
         r.refresh_geometry().unwrap().is_none(),
         "the instance's request ended"
     );
+}
+
+#[test]
+fn the_native_chain_answers_the_targets_its_holder_reported() {
+    // A box outside every owner reads the session view's targets: unavailable until they are
+    // reported, then, at the next layout, the chain by number and the relations by name, each
+    // with its kinds, identity, generation, frame in its window and raw insets, `none` while
+    // the target is unavailable
+    use exact_kernel::style::targets::{ChainEntry, Kind, NativeTarget, NativeTargets, Relation};
+    let mut r = boot(
+        "shape Target
+  number: option<number>
+  relation: option<string>
+  kinds: string[]
+  id: number
+  generation: number
+  frame: option<Rect>
+  insets: option<Insets>
+shape Chain
+  available: bool
+  generation: number
+  entries: option<Target[]>
+component App
+  resource c = exactNativeChain(\"hero\") as shape Chain
+  view
+    column id=\"hero\"
+",
+    )
+    .unwrap();
+    lay_out(&mut r);
+    assert_eq!(fields(&r, "c")[0], Value::Bool(false));
+    let controller = NativeTarget {
+        id: 4,
+        generation: 2,
+        insets: Some([62.0, 0.0, 34.0, 0.0]),
+        frame: Some([0.0, 0.0, 402.0, 874.0]),
+    };
+    let window = NativeTarget {
+        id: 5,
+        generation: 1,
+        insets: None,
+        frame: None,
+    };
+    let targets = NativeTargets {
+        chain: vec![ChainEntry {
+            target: controller,
+            kinds: Kind::Navigation.bit(),
+        }],
+        relations: vec![(Relation::Window, window)],
+    };
+    r.kernel_mut().set_session_targets(targets).unwrap();
+    lay_out(&mut r);
+    assert!(r.refresh_geometry().unwrap().is_some());
+    let c = fields(&r, "c");
+    assert_eq!(c[0], Value::Bool(true));
+    let Value::Option(Some(entries)) = &c[2] else {
+        panic!("entries: {:?}", c[2])
+    };
+    let Value::List(entries) = &**entries else {
+        panic!("a list: {entries:?}")
+    };
+    let entry = |i: usize| match &entries[i] {
+        Value::Record(fields) => fields.to_vec(),
+        other => panic!("a record: {other:?}"),
+    };
+    let (first, second) = (entry(0), entry(1));
+    assert_eq!(first[0], Value::some(Value::Number(1.0)));
+    assert_eq!(first[1], Value::Option(None));
+    assert_eq!(first[2], Value::list(vec![Value::str("navigation")]));
+    assert_eq!((number(&first[3]), number(&first[4])), (4.0, 2.0));
+    assert_eq!(number(&some(&first[5])[2]), 402.0);
+    assert_eq!(number(&some(&first[6])[0]), 62.0);
+    assert_eq!(second[0], Value::Option(None));
+    assert_eq!(second[1], Value::some(Value::str("window")));
+    assert_eq!(
+        (&second[5], &second[6]),
+        (&Value::Option(None), &Value::Option(None))
+    );
+}
+
+#[test]
+fn an_owners_chrome_reaches_its_boxes_geometry() {
+    // The chrome an owner's host reports reaches a box in the owner at the next layout, an
+    // auxiliary area placed in the box's space and each quantity the host does not have `none`;
+    // outside every owner there is none
+    use exact_kernel::{BlockAxis, HostBlock, OwnerChrome, OwnerUpdate, VerticalBarEdge};
+    let mut r = boot(
+        "shape Chrome
+  verticalBarEdge: option<string>
+  sidebarAvailable: option<bool>
+  overscan: option<string>
+  auxiliaryTopLeftArea: option<Rect>
+  auxiliaryTopRightArea: option<Rect>
+shape G
+  available: bool
+  chrome: option<Chrome>
+component App
+  resource g = exactGeometry(\"card\") as shape G
+  resource o = exactGeometry(\"outside\") as shape G
+  view
+    column
+      column id=\"outside\" height=10
+      column id=\"route\" width=120 height=40
+        column id=\"card\" height=10
+",
+    )
+    .unwrap();
+    let slot = r.kernel().find_by_id("route")[0].index;
+    let route = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(120.0),
+        height: BlockAxis::Is(40.0),
+    };
+    r.kernel_mut().set_host_block(route, Some(block)).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    assert_eq!(fields(&r, "g")[1], Value::Option(None));
+    let update = OwnerUpdate {
+        chrome: Some(OwnerChrome {
+            vertical_bar_edge: Some(VerticalBarEdge::Trailing),
+            sidebar_available: None,
+            auxiliary_top_left: Some([0.0, 0.0, 30.0, 20.0]),
+            auxiliary_top_right: None,
+        }),
+        ..OwnerUpdate::default()
+    };
+    assert!(!r.kernel_mut().update_owner(route, update).unwrap());
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    let chrome = some(&fields(&r, "g")[1]);
+    assert_eq!(chrome[0], Value::some(Value::str("trailing")));
+    let area = some(&chrome[3]);
+    assert_eq!(
+        (number(&area[2]), number(&area[3])),
+        (30.0, 20.0),
+        "the top left's area"
+    );
+    for none in [1, 2, 4] {
+        assert_eq!(chrome[none], Value::Option(None), "field {none}");
+    }
+    assert_eq!(fields(&r, "o")[1], Value::Option(None));
+}
+
+#[test]
+fn a_boxs_keyboard_reaches_its_geometry_in_the_space_it_names() {
+    // `none` until the owner's host reports the keyboard; then its guide and the owner's
+    // occupancy in the owner's space and in a node's, and whether it is docked
+    use exact_kernel::{BlockAxis, HostBlock, Keyboard};
+    let mut r = boot(
+        "shape Edges
+  top: bool
+  right: bool
+  bottom: bool
+  left: bool
+shape Keys
+  guide: option<Rect>
+  occupancy: option<Rect>
+  docked: option<bool>
+  near: option<Edges>
+  away: option<Edges>
+shape G
+  available: bool
+  keyboard: option<Keys>
+component App
+  resource g = exactGeometry(\"card\", \"owner\", \"card\") as shape G
+  resource n = exactGeometry(\"card\", \"node\", \"card\") as shape G
+  view
+    column
+      column id=\"route\" width=390 height=844
+        column height=100
+        column id=\"card\" height=10
+",
+    )
+    .unwrap();
+    let slot = r.kernel().find_by_id("route")[0].index;
+    let route = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(390.0),
+        height: BlockAxis::Is(844.0),
+    };
+    r.kernel_mut().set_host_block(route, Some(block)).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    assert_eq!(fields(&r, "g")[1], Value::Option(None));
+    let keyboard = Keyboard {
+        frame: [0.0, 516.0, 390.0, 328.0],
+        docked: true,
+    };
+    r.kernel_mut()
+        .set_owner_keyboard(route, Some(keyboard))
+        .unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    let keys = some(&fields(&r, "g")[1]);
+    let rect = |v: &Value| some(v).iter().map(number).collect::<Vec<_>>();
+    assert_eq!(rect(&keys[0]), [0.0, 516.0, 390.0, 328.0]);
+    assert_eq!(rect(&keys[1]), [0.0, 516.0, 390.0, 328.0]);
+    assert_eq!(keys[2], Value::some(Value::Bool(true)));
+    assert_eq!(
+        (&keys[3], &keys[4]),
+        (&Value::Option(None), &Value::Option(None))
+    );
+    // In the card's own space, 100 points down the owner
+    let node = some(&fields(&r, "n")[1]);
+    assert_eq!(rect(&node[0]), [0.0, 416.0, 390.0, 328.0]);
+}
+
+#[test]
+fn a_window_frame_follows_its_owners_map_into_the_window() {
+    // `none` until the owner's host reports its map; then the card's border box through it, as
+    // a sheet UIKit scales to 90% behind another, 20 in and 40 down, places it
+    use exact_kernel::{BlockAxis, HostBlock, OwnerUpdate, WindowMap};
+    let mut r = boot(
+        "component App
+  resource g = exactGeometry(\"card\", \"window\") as shape Hero
+  view
+    column
+      column id=\"route\" width=390 height=844
+        column height=100
+        column id=\"card\" height=50
+",
+    )
+    .unwrap();
+    let slot = r.kernel().find_by_id("route")[0].index;
+    let route = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(390.0),
+        height: BlockAxis::Is(844.0),
+    };
+    r.kernel_mut().set_host_block(route, Some(block)).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    assert_eq!(fields(&r, "g")[2], Value::Option(None));
+    let update = OwnerUpdate {
+        window_map: Some(WindowMap([0.9, 0.0, 0.0, 0.9, 20.0, 40.0])),
+        ..OwnerUpdate::default()
+    };
+    r.kernel_mut().update_owner(route, update).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    let frame: Vec<f64> = some(&fields(&r, "g")[2]).iter().map(number).collect();
+    let expected = [20.0, 130.0, 351.0, 45.0];
+    assert!(
+        frame
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| (a - b).abs() < 1e-3),
+        "{frame:?}"
+    );
+}
+
+#[test]
+fn a_boxs_regions_are_its_owners_in_the_space_it_names() {
+    // `none` until the owner's host reports its regions; then the active ones, in the owner's
+    // space and in the card's, the inactive ones too where asked, and an empty list where the
+    // host reserves none; `mirrored`, no option of UIKit's, is refused
+    use exact_kernel::{BlockAxis, HostBlock, OwnerUpdate, RegionKind, ReservedRegion};
+    let mut r = boot(
+        "shape Region
+  id: number
+  kind: string
+  frame: option<Rect>
+  margins: Insets
+  active: bool
+shape G
+  available: bool
+  regions: option<Region[]>
+component App
+  resource g = exactGeometry(\"card\", \"owner\", \"card\", \"\") as shape G
+  resource n = exactGeometry(\"card\", \"node\", \"card\", \"inactive\") as shape G
+  view
+    column
+      column id=\"route\" width=390 height=844
+        column height=100
+        column id=\"card\" height=10
+",
+    )
+    .unwrap();
+    let slot = r.kernel().find_by_id("route")[0].index;
+    let route = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(390.0),
+        height: BlockAxis::Is(844.0),
+    };
+    r.kernel_mut().set_host_block(route, Some(block)).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    assert_eq!(fields(&r, "g")[1], Value::Option(None));
+    let region = |id: u64, active: bool| ReservedRegion {
+        id,
+        kind: RegionKind::Division,
+        frame: [175.0, 0.0, 40.0, 844.0],
+        margins: [0.0, 10.0, 0.0, 10.0],
+        active,
+    };
+    let update = OwnerUpdate {
+        regions: Some(vec![region(1, true), region(2, false)]),
+        ..OwnerUpdate::default()
+    };
+    r.kernel_mut().update_owner(route, update).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    let list = |r: &Runner<NoData>, resource: &str| match &fields(r, resource)[1] {
+        Value::Option(Some(list)) => match &**list {
+            Value::List(items) => items
+                .iter()
+                .map(|item| match item {
+                    Value::Record(fields) => fields.to_vec(),
+                    other => panic!("a record: {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("a list: {other:?}"),
+        },
+        other => panic!("regions: {other:?}"),
+    };
+    let owner = list(&r, "g");
+    assert_eq!(owner.len(), 1, "the active one alone");
+    assert_eq!(
+        (number(&owner[0][0]), &owner[0][1]),
+        (1.0, &Value::str("division"))
+    );
+    let frame: Vec<f64> = some(&owner[0][2]).iter().map(number).collect();
+    assert_eq!(frame, [175.0, 0.0, 40.0, 844.0]);
+    let node = list(&r, "n");
+    assert_eq!(node.len(), 2, "the inactive one too");
+    let frame: Vec<f64> = some(&node[0][2]).iter().map(number).collect();
+    assert_eq!(frame, [175.0, -100.0, 40.0, 844.0]);
+    let none = OwnerUpdate {
+        regions: Some(Vec::new()),
+        ..OwnerUpdate::default()
+    };
+    r.kernel_mut().update_owner(route, none).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    assert!(list(&r, "g").is_empty(), "an empty list, not none");
+    let refused = exact_runner::native_geometry::query(
+        "exactGeometry",
+        &[
+            Value::str("card"),
+            Value::str("owner"),
+            Value::str("card"),
+            Value::str("mirrored"),
+        ],
+    );
+    assert!(refused.is_err());
 }

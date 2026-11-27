@@ -70,7 +70,11 @@ fn demand(
             generation,
             pixels: decode.pixels,
             variant: exact_raster::variant::SRGB8,
-            crop: decode.crop,
+            crop: if header.is_svg() {
+                svg_picture::scale_crop(1.0)
+            } else {
+                decode.crop
+            },
         },
         metadata: header.metadata,
         cost: decode.cost,
@@ -181,7 +185,7 @@ impl Read {
                     self.request = None;
                     return Err(e);
                 }
-                Some(RequestStatus::WaitingBudget) => backend.session.available_bytes(),
+                Some(RequestStatus::WaitingBudget) => backend.session.unheld_bytes(),
                 Some(_) => return Ok(None),
                 None => {
                     backend.forget(request);

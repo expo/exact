@@ -63,11 +63,15 @@ export function implementation({ changed }) {
     changed('serial.serialInput');
   }
 
-  /** `c` closed: its reader canceled, its queued writes ended, then its port. */
+  /** `c` closed: its reader canceled, its writes ended, then its port. */
   async function shut(c) {
     c.open = false;
     c.wake?.();
     try { await c.reader?.cancel(); } catch { /* the port went away */ }
+    // The write in flight is aborted, as Web Serial's close() aborts the writable: one held by flow control, or by a
+    // device that stopped reading, would otherwise never settle. Aborting signals the sink at once; the abort's own
+    // promise waits for that write, so it is not awaited here.
+    c.active?.abort(new DOMException('the connection closed', 'AbortError')).catch(() => {});
     await c.writer;
     try { await c.port.close(); } catch { /* already closed */ }
   }
@@ -118,7 +122,7 @@ export function implementation({ changed }) {
       }
       const handle = `serial-${++nextConnection}`;
       const bound = Math.min(MOST, Math.max(options.bufferSize, Math.floor(options.baudRate / 10 * 2)));
-      const c = { port, options, open: true, done: false, unplugged: false, pending: [], errors: [], position: 0, bound, reader: null, wake: null, writer: Promise.resolve() };
+      const c = { port, options, open: true, done: false, unplugged: false, pending: [], errors: [], position: 0, bound, reader: null, wake: null, writer: Promise.resolve(), active: null };
       connections.set(handle, c);
       pump(c);
       announce();
@@ -157,13 +161,14 @@ export function implementation({ changed }) {
     async write(args) {
       const { c, error } = live(args);
       if (error) return error;
-      // Writes go out in order: each waits for the one before it. One still waiting when the connection closes is
-      // aborted, as closing a port aborts its writable's queued chunks (Web Serial's close()).
+      // Writes go out in order: each waits for the one before it. Closing the connection aborts the one in flight and
+      // those still waiting, as closing a port aborts its writable (Web Serial's close()).
       const bytes = unb64(args.data ?? '');
       const done = c.writer.then(async () => {
         if (!c.open) throw new DOMException('the connection closed', 'AbortError');
         const writer = c.port.writable.getWriter();
-        try { await writer.write(bytes); } finally { writer.releaseLock(); }
+        c.active = writer;
+        try { await writer.write(bytes); } finally { c.active = null; writer.releaseLock(); }
       });
       c.writer = done.catch(() => {});
       try { await done; return null; } catch (e) { return failure(e); }

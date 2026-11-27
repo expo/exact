@@ -58,7 +58,9 @@ impl<D: DataSource> Host<D> {
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
         self.native_retire_removed_owner(&mut batch);
         self.native_note_receipts(receipts);
-        self.route_overflow.dirty |= !receipts.is_empty();
+        // A commit that changed no node cannot move a route's overflow; marking
+        // it would wake a reply pump after every firing of an idle timer.
+        self.route_overflow.dirty |= receipts.iter().any(|t| !unchanged(&t.receipt));
         let bulk_handlers = (receipts
             .iter()
             .map(|t| t.receipt.created.len())
@@ -120,6 +122,13 @@ impl<D: DataSource> Host<D> {
                     let id = node.id;
                     self.update(id, &mut batch);
                 }
+            }
+            if let Some(node) = r
+                .reconcile_field
+                .and_then(|k| self.runner.kernel().node_by_key(k))
+            {
+                let value = exact_kernel::control::bound_field_value(node.props);
+                batch.props(node.id, &[("value", value.into_owned())], &[]);
             }
         }
         self.withdraw_flat_hits(&omitted_gone, &mut batch);
@@ -213,7 +222,14 @@ impl<D: DataSource> Host<D> {
         } else if inert {
             self.inert_layout(&mut batch, !receipts.is_empty()).err()
         } else {
-            self.layout(&mut batch).err()
+            // The flag ends with this layout, even when a panic unwinds
+            // through it to a caller that keeps the host
+            self.presence.committed = !receipts.is_empty();
+            let laid =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.layout(&mut batch)));
+            self.presence.committed = false;
+            laid.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                .err()
         };
         if layout_error.is_some() && !receipts.is_empty() {
             self.emit_ranks(&mut batch);

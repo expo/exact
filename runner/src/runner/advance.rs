@@ -319,10 +319,10 @@ impl<D: DataSource> Runner<D> {
             let action = self.timer_row(i).action;
             let was_poisoned = self.poisoned;
             match self.scheduled(at, |r| r.task_action(i)) {
-                Ok(receipt) => a.receipts.push(Timed {
+                Ok(receipt) => a.receipts.extend(receipt.map(|receipt| Timed {
                     at_ms: self.now_ms,
                     receipt,
-                }),
+                })),
                 Err(e) => {
                     let what = format!(
                         "frame {} ({})",
@@ -501,6 +501,8 @@ impl<D: DataSource> Runner<D> {
         // their virtual frames are timers (LLP 1073 D3).
         let frames = !self.clock.presenting;
         let mut receipts = Vec::new();
+        // Timer firings that committed nothing: they count toward the limit.
+        let mut idle = 0;
         if !now_ms.is_finite() {
             return Advanced {
                 receipts,
@@ -544,6 +546,10 @@ impl<D: DataSource> Runner<D> {
         }
         let mut work_spent = None;
         loop {
+            let modules = self.seams.modules;
+            let show = modules.next_list_show(self).filter(|at| *at <= now_ms);
+            // Finish what is already due through the presentation instant before its handler runs.
+            let now_ms = show.map_or(now_ms, |at| at.max(self.now_ms));
             // Ties follow declaration order, then instance creation order.
             let due = self
                 .timers
@@ -954,6 +960,43 @@ impl<D: DataSource> Runner<D> {
                     audio.transport_wake(self, now);
                     continue;
                 }
+                if let Some(at) = show {
+                    if receipts.len() == TIMER_FIRE_LIMIT {
+                        return Advanced {
+                            receipts,
+                            now_ms: self.now_ms,
+                            error: Some(RunnerError::TimerFireLimit {
+                                limit: TIMER_FIRE_LIMIT,
+                            }),
+                            stopped_on_request: false,
+                            needs_apply: false,
+                        };
+                    }
+                    self.now_ms = self.now_ms.max(at);
+                    let ticket = self.next_ticket;
+                    match modules.show_listed(self) {
+                        Ok(Some(receipt)) => receipts.push(Timed {
+                            at_ms: self.now_ms,
+                            receipt,
+                        }),
+                        Ok(None) => (),
+                        Err(error) => {
+                            return Advanced {
+                                receipts,
+                                now_ms: self.now_ms,
+                                error: Some(error),
+                                stopped_on_request: false,
+                                needs_apply: false,
+                            }
+                        }
+                    }
+                    if until_request && self.next_ticket != ticket {
+                        landed = self.now_ms;
+                        stopped_on_request = true;
+                        break;
+                    }
+                    continue;
+                }
                 break;
             };
             // A change action may read the host's layout or issue commands.
@@ -969,7 +1012,7 @@ impl<D: DataSource> Runner<D> {
                     needs_apply: true,
                 };
             }
-            if receipts.len() == TIMER_FIRE_LIMIT {
+            if receipts.len() + idle >= TIMER_FIRE_LIMIT {
                 return Advanced {
                     receipts,
                     now_ms: self.now_ms,
@@ -986,10 +1029,11 @@ impl<D: DataSource> Runner<D> {
             let action = self.timer_row(i).action;
             let result = self.fire_timer(i, nominal, at, if live { now_ms } else { at }, false);
             match result {
-                Ok(receipt) => receipts.push(Timed {
+                Ok(Some(receipt)) => receipts.push(Timed {
                     at_ms: self.now_ms,
                     receipt,
                 }),
+                Ok(None) => idle += 1,
                 Err(e) => {
                     let what = format!(
                         "timer {} ({})",
@@ -1086,7 +1130,7 @@ impl<D: DataSource> Runner<D> {
         }
         if !receipts.is_empty() {
             let line = super::lines::advanced(
-                receipts.len(),
+                receipts.len() + idle,
                 receipts.last().map_or(0, |t| t.receipt.epoch),
             );
             self.log(line);

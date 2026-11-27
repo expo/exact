@@ -61,6 +61,65 @@ fn panel_copy_preserves_every_texel_at_all_four_rotations() {
     }
 }
 
+/// A frame's passes are one submit, each drawing its own instances, and a pass that
+/// samples a texture draws the pixels written before it and none written after.
+#[test]
+fn a_frame_s_passes_submit_together_and_sample_what_was_written_before_them() {
+    let Some(mut d) = open() else {
+        return;
+    };
+    let colors = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
+    // Past the target's edges, which a fill antialiases.
+    const COVER: [f32; 4] = [-4., -4., 12., 12.];
+    let targets = colors.map(|_| d.create_target(4, 4).unwrap());
+    let mut last = Submission(0);
+    for (color, target) in colors.iter().zip(targets) {
+        let mut encoder = Encoder::new(4, 4);
+        let fill = Instance::rounded(COVER, [0.; 4], color.map(|c| f32::from(c) / 255.));
+        encoder.push(fill, Bindings::default()).unwrap();
+        let pass = d.render(&encoder.finish(), target, Some([0.; 4])).unwrap();
+        assert!(pass > last, "each call has its own number");
+        last = pass;
+    }
+    // A write to a texture no pass samples is submitted with them.
+    let image = d.create_texture(TextureDesc::rgba(1, 1)).unwrap();
+    d.upload_texture(image, [0, 0], [1, 1], &colors[0]).unwrap();
+    assert_eq!(d.submits, 0);
+    assert!(
+        d.completed().unwrap() < last,
+        "nothing is complete unsubmitted"
+    );
+    d.wait(last).unwrap();
+    assert_eq!(d.submits, 1);
+    for (color, target) in colors.iter().zip(targets) {
+        for pixel in d.readback(target).unwrap().as_chunks::<4>().0 {
+            near(*pixel, *color, 0);
+        }
+    }
+
+    let mut encoder = Encoder::new(4, 4);
+    let sampled = Instance::new(Kind::Layer, Brush::Image, COVER);
+    let bindings = Bindings {
+        image,
+        ..Default::default()
+    };
+    encoder.push(sampled, bindings).unwrap();
+    let frame = encoder.finish();
+    d.render(&frame, targets[0], Some([0.; 4])).unwrap();
+    let submits = d.submits;
+    d.upload_texture(image, [0, 0], [1, 1], &colors[2]).unwrap();
+    d.render(&frame, targets[1], Some([0.; 4])).unwrap();
+    assert_eq!(
+        d.submits, submits,
+        "the write is a command between the two passes"
+    );
+    for (color, target) in [(colors[0], targets[0]), (colors[2], targets[1])] {
+        for pixel in d.readback(target).unwrap().as_chunks::<4>().0 {
+            near(*pixel, color, 0);
+        }
+    }
+}
+
 #[test]
 fn rounded_rectangles_ring_and_gaussian_shadow_at_two_times_scale() {
     let Some(mut device) = open() else {

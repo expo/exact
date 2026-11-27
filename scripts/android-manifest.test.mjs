@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fragmentPermissions, manifestFragment } from './android-manifest.mjs';
 import { androidImplementations, appleImplementations, webImplementations } from '../js/bake/src/typescript.mjs';
+import { composedModule } from '../host/apple/compose.mjs';
 import { packageConfig } from '../js/bake/src/package-config.mjs';
 
 test('package implementation filters use the supplied identities and ignore unused source text', () => {
@@ -66,6 +67,26 @@ test('only the selected interface supplies an implementation and configuration w
   } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
+test('geofencing and background declare start=load for Android and Apple composition', () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-start-at-load-'));
+  try {
+    mkdirSync(resolve(app, 'node_modules/@exact'), { recursive: true });
+    symlinkSync(resolve(import.meta.dir, '../packages/geofencing'), resolve(app, 'node_modules/@exact/geofencing'), 'dir');
+    symlinkSync(resolve(import.meta.dir, '../packages/background'), resolve(app, 'node_modules/@exact/background'), 'dir');
+    writeFileSync(resolve(app, 'app.contract'), 'component App\n  view\n    text "plain"\n');
+    const extensions = { geofencing: '@exact/geofencing', background: '@exact/background' };
+    const android = androidImplementations(app, extensions);
+    assert.deepEqual(android.filter(b => b.start).map(b => b.extension).sort(), ['background', 'geofencing']);
+    for (const target of ['ios', 'macos']) {
+      const apple = appleImplementations(app, target, extensions);
+      assert.deepEqual(apple.filter(b => b.start).map(b => b.extension).sort(), ['background', 'geofencing']);
+      const swift = composedModule(apple, false);
+      assert.match(swift, /let exactStartAtLoad: \[String\] = \[[^\]]*"background"/);
+      assert.match(swift, /let exactStartAtLoad: \[String\] = \[[^\]]*"geofencing"/);
+    }
+  } finally { rmSync(app, { recursive: true, force: true }); }
+});
+
 const impl = (manifest) => [{ extension: 'alarms', className: 'exact.alarms.AlarmsModule', manifest }];
 
 test("alarms' fragment is allowed, unexported, and nothing beyond what it names", () => {
@@ -77,6 +98,41 @@ test("alarms' fragment is allowed, unexported, and nothing beyond what it names"
   assert.match(xml, /<action android:name="android\.intent\.action\.LOCKED_BOOT_COMPLETED" \/>/);
   // The alarm's own receiver has no filter: its intent is explicit.
   assert.match(xml, /<receiver android:name="exact\.alarms\.AlarmReceiver" android:exported="false" android:directBootAware="true" \/>/);
+});
+
+test("one package can declare its own POI car service and map templates", () => {
+  const name = 'uz.voltai.car.VoltaiCarAppService', permission = 'androidx.car.app.MAP_TEMPLATES';
+  const carAppService = { name, category: 'POI', minCarApiLevel: 1 };
+  const impl = manifest => ({ extension: 'voltai', className: 'uz.voltai.car.CarModule', manifest });
+  const bound = [impl({ carAppService, permissions: [permission] })];
+  const xml = manifestFragment(bound);
+  assert.equal((xml.match(/<service /g) ?? []).length, 1);
+  assert.ok(xml.includes(`<service android:name="${name}" android:exported="true" tools:node="replace">`));
+  assert.match(xml, /<action android:name="androidx\.car\.app\.CarAppService" \/>\s*<category android:name="androidx\.car\.app\.category\.POI" \/>/);
+  assert.match(xml, /com\.google\.android\.gms\.car\.application" android:resource="@xml\/automotive_app_desc"/);
+  assert.match(xml, /androidx\.car\.app\.minCarApiLevel" android:value="1"/);
+  assert.deepEqual(fragmentPermissions(bound), [permission]);
+  assert.throws(() => fragmentPermissions(bound, [permission]), /app.json host\.android\.permissions.*MAP_TEMPLATES.*only the package/i);
+  assert.deepEqual(fragmentPermissions([impl({ carAppService })]), []);
+  assert.throws(() => fragmentPermissions([impl({ permissions: [permission] }), ...bound]), /MAP_TEMPLATES without its own carAppService/);
+  assert.throws(() => manifestFragment([...bound, impl({ carAppService: { ...carAppService, name: name + '2' } })]), /second car service.*VoltaiCarAppService2/);
+  assert.throws(() => manifestFragment([impl({ carAppService, services: [{ name }] })]), /declares .* twice/);
+  const fragment = row => manifestFragment([impl({ carAppService: row })]);
+  assert.match(fragment({ ...carAppService, minCarApiLevel: 8 }), /minCarApiLevel" android:value="8"/);
+  for (const category of ['CHARGING', 'PARKING', 'NAVIGATION']) {
+    assert.throws(() => fragment({ ...carAppService, category }), new RegExp(category));
+  }
+  for (const level of [0, 9, 2.5, '1', null]) assert.throws(() => fragment({ ...carAppService, minCarApiLevel: level }), /minCarApiLevel/);
+  assert.throws(() => fragment([carAppService, { ...carAppService, name: name + '2' }]), /second car service.*VoltaiCarAppService2/);
+  for (const row of [null, [carAppService]]) assert.throws(() => fragment(row), /one service object/);
+  assert.throws(() => fragment({ ...carAppService, name: 'other.Car' }), /other.Car.*uz.voltai.car/);
+  assert.throws(() => fragment({ ...carAppService, validator: 'ALLOW_ALL_HOSTS_VALIDATOR' }), /validator.*ALLOW_ALL_HOSTS_VALIDATOR/);
+});
+
+test('only the translation graph defers ML Kit initialization to its first client', () => {
+  const pkg = name => ({ maven: [`com.google.mlkit:${name}`] });
+  assert.doesNotMatch(manifestFragment([pkg('barcode-scanning:17.3.0')]), /MlKitInitProvider/);
+  assert.match(manifestFragment([pkg('translate:17.0.3')]), /MlKitInitProvider" tools:node="remove"/);
 });
 
 test('an implementation with no fragment adds nothing', () => {
@@ -98,6 +154,21 @@ test('speech action queries and package queries share one element and deduplicat
     '        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>',
     '    </queries>',
   ].join('\n'));
+});
+
+test("an app's Kotlin shares the package query allow-list and merged entries", () => {
+  const tts = { action: 'android.intent.action.TTS_SERVICE' };
+  const mail = { action: 'android.intent.action.SENDTO', scheme: 'mailto' };
+  const health = { package: 'com.google.android.apps.healthdata' };
+  const xml = manifestFragment(impl({ queries: [tts, mail] }), { appQueries: [tts, health] });
+  assert.equal(xml, manifestFragment(impl({ queries: [tts, health, mail] })));
+  assert.match(manifestFragment([], { appQueries: [mail] }), /<intent><action android:name="android\.intent\.action\.SENDTO" \/><data android:scheme="mailto" \/><\/intent>/);
+  for (const invalid of [null, {}, [null], [{}], [{ ...health, ...tts }], [{ ...tts, mimeType: '*/*' }],
+    [{ package: 'com.example' }], [{ action: 'android.intent.action.MAIN' }],
+    [{ ...mail, scheme: 'https' }], [{ ...mail, action: 'constructor' }], [{ ...mail, action: [mail.action] }]]) {
+    assert.throws(() => manifestFragment([], { appQueries: invalid }), /app.json host\.android\.queries/);
+    assert.throws(() => manifestFragment(impl({ queries: invalid })), /alarms's Android implementation/);
+  }
 });
 
 test('an unlisted query action is refused with the package and action named', () => {
@@ -179,6 +250,57 @@ test("device's normal permission is declared, and a runtime one refused", () => 
   assert.equal(manifestFragment(bound), '', 'a permission adds no component');
   assert.deepEqual(fragmentPermissions(impl(undefined)), []);
   assert.throws(() => fragmentPermissions(impl({ permissions: ['android.permission.ACCESS_FINE_LOCATION'] })), (e) => e.message.includes('ACCESS_FINE_LOCATION') && e.message.includes('normal permissions only'));
+});
+
+test("an app and its packages declare install-time permissions on one allow-list", () => {
+  const capture = 'android.permission.DETECT_SCREEN_CAPTURE', network = 'android.permission.ACCESS_NETWORK_STATE';
+  const bound = impl({ permissions: [capture, network] });
+  assert.deepEqual(fragmentPermissions(bound, [capture, capture]), [capture, network]);
+  assert.deepEqual(fragmentPermissions([], [capture]), [capture]);
+  assert.deepEqual(fragmentPermissions(bound), [capture, network]);
+  for (const [entry, grant, option] of [
+    ['unlisted', undefined],
+    ['android.permission.RECORD_AUDIO', 'device.microphone'],
+    ['android.permission.ACCESS_COARSE_LOCATION', 'device.geolocation-approximate'],
+    ['android.permission.WRITE_CALENDAR', 'device.calendar-write-only'],
+    ['android.permission.CAMERA', 'device.camera'],
+    ['android.permission.health.READ_HEALTH_DATA_HISTORY', 'device.health-read', 'android.readHealthDataHistory'],
+    ['android.permission.READ_EXTERNAL_STORAGE', 'device.photos'],
+    ['android.permission.SEND_SMS', undefined],
+  ]) {
+    assert.throws(() => fragmentPermissions([], [entry]), error =>
+      [entry, 'app.json host.android.permissions', capture, network, 'grant line'].every(part => error.message.includes(part))
+      && (grant ? error.message.includes(`\`${grant} purpose.<key>\``) : !error.message.includes('Use `'))
+      && (!option || error.message.includes(`using ${option}`)));
+    assert.throws(() => fragmentPermissions(impl({ permissions: [entry] })), {
+      message: `alarms's Android implementation: its manifest fragment asks for "${entry}", which is not on the list (LLP 1133.031 D12 item 1: normal permissions only; a runtime permission comes from a grant line)`,
+    });
+  }
+  assert.throws(() => fragmentPermissions([], ['first-unlisted', 'second-unlisted']), /first-unlisted[\s\S]*second-unlisted/);
+  for (const invalid of [null, capture, {}, [42]]) {
+    assert.throws(() => fragmentPermissions([], invalid), /app.json host\.android\.permissions/);
+  }
+});
+
+test("a permission refusal names the app-local package call and its grant line", () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-permission-grant-'));
+  const pkg = resolve(app, 'node_modules/@fixture/video');
+  const permission = 'android.permission.READ_MEDIA_VIDEO';
+  try {
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: '@fixture/video', exports: './exact.json' }));
+    writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/video', grants: ['device.photos'],
+      names: [{ source: 'videos', derives: { android: [permission] } }] }));
+    assert.throws(() => fragmentPermissions([], [permission], app), /Use `device\.photos purpose\.<key>` with videos from @fixture\/video\.$/);
+    mkdirSync(resolve(pkg, 'android'));
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: '@fixture/video', exports: { '.': './exact.json', './android': './android/exact.json' } }));
+    writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/video' }));
+    writeFileSync(resolve(pkg, 'android/exact.json'), JSON.stringify({ kind: 'implementation', implements: '@fixture/video@^1.0', targets: ['android'], grants: ['device.photos'],
+      names: [{ source: 'clips', derives: { android: [permission] } }] }));
+    assert.throws(() => fragmentPermissions([], [permission], app), /Use `device\.photos purpose\.<key>` with clips from @fixture\/video\.$/);
+    writeFileSync(resolve(pkg, 'exact.json'), '{');
+    assert.throws(() => fragmentPermissions([], [permission], app), /READ_MEDIA_VIDEO.*allow-list.*DETECT_SCREEN_CAPTURE/);
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
 test('a query with a data scheme: SENDTO mailto: and smsto: only (LLP 1133.024 D22 item 6)', () => {
@@ -347,8 +469,13 @@ test('Android registers each custom protocol_handlers scheme on the one activity
   // Never the web's pair; a packaged-only scheme only in a production build; schemes lowercased, as Android matches them.
   assert.deepEqual(androidProtocolHandlers(manifest), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
   assert.deepEqual(androidProtocolHandlers(manifest, true).map((h) => h.protocol), ['sscontrol', 'packaged']);
-  assert.equal(withProtocolHandlers('unchanged', []), 'unchanged');
-  const xml = withProtocolHandlers('', androidProtocolHandlers(manifest));
+  assert.equal(withProtocolHandlers('unchanged', {}), 'unchanged');
+  const xml = withProtocolHandlers('', { ...manifest, host: { android: { urlSchemes: ['Notes', 'notes'] } } });
+  assert.equal((xml.match(/android:scheme="notes"/g) ?? []).length, 1);
+  assert.match(xml, /android:scheme="Notes"/);
+  const direct = withProtocolHandlers('', { host: { android: { urlSchemes: ['notes'] } } });
+  assert.match(direct, /android:scheme="notes"/);
+  assert.doesNotMatch(direct, /dev.exact.protocol_handlers/);
   assert.equal((xml.match(/<activity /g) ?? []).length, 1);
   assert.match(xml, /android:launchMode="singleTask"/);
   assert.match(xml, /<category android:name="android.intent.category.BROWSABLE" \/>\n\s*<data android:scheme="sscontrol" \/>/);
@@ -357,7 +484,7 @@ test('Android registers each custom protocol_handlers scheme on the one activity
   assert.deepEqual(JSON.parse(handlers?.[1].replaceAll('&quot;', '"')), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
   // A share target, a handler and an auth callback of the same scheme: one activity, the scheme filtered once.
   const { androidShareActivity } = await import('./share-target.mjs');
-  const all = withAuthCallbacks(withProtocolHandlers(withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } })), [{ protocol: 'app.test', url: '/open?u=%s' }]), ['app.test:/cb', 'other.test:/cb']);
+  const all = withAuthCallbacks(withProtocolHandlers(withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } })), { protocol_handlers: [{ protocol: 'app.test', url: '/open?u=%s' }] }), ['app.test:/cb', 'other.test:/cb']);
   assert.equal((all.match(/<activity /g) ?? []).length, 1);
   assert.equal((all.match(/android:scheme="app.test"/g) ?? []).length, 1);
   assert.match(all, /android:scheme="other.test"/);
@@ -404,4 +531,114 @@ test('background transfers export only their imported Android implementation', (
     assert.match(fragment, /android.intent.action.BOOT_COMPLETED/);
     assert.match(fragment, /android.intent.action.MY_PACKAGE_REPLACED/);
   } finally { rmSync(app, { recursive: true, force: true }); }
+});
+
+test('NORMAL_PERMISSIONS admits MODIFY_AUDIO_SETTINGS', () => {
+  const impl = { extension: 'audio', className: 'exact.audio.Module', manifest: { permissions: ['android.permission.MODIFY_AUDIO_SETTINGS'] } };
+  expect(fragmentPermissions([impl])).toEqual(['android.permission.MODIFY_AUDIO_SETTINGS']);
+  expect(manifestFragment([impl])).toBe('');
+});
+
+test('package-private unexported activities emit fixed translucent/opaque entries and stay isolated from rationale/aliases (LLP 1133.030 D9)', () => {
+  const checkout = (manifest, opts) => manifestFragment([{ extension: 'checkout', className: 'com.acme.checkout.CheckoutModule', manifest }], opts);
+  // Default theme is translucent (`@style/ExactTranslucent`), unexported, no intent filter, tools:node="replace".
+  assert.equal(checkout({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }] }, { privacyPolicy: 'https://example.com/privacy' }), [
+    '    <application>',
+    '        <activity android:name="com.acme.checkout.SheetActivity" android:exported="false" android:theme="@style/ExactTranslucent" tools:node="replace" />',
+    '    </application>',
+  ].join('\n'));
+  // Explicit translucent and opaque themes.
+  const both = checkout({
+    activities: [
+      { name: 'com.acme.checkout.SheetActivity', private: true, theme: 'translucent' },
+      { name: 'com.acme.checkout.ScreenActivity', private: true, theme: 'opaque' },
+    ],
+  }, { privacyPolicy: 'https://example.com/privacy' });
+  assert.match(both, /<activity android:name="com\.acme\.checkout\.SheetActivity" android:exported="false" android:theme="@style\/ExactTranslucent" tools:node="replace" \/>/);
+  assert.match(both, /<activity android:name="com\.acme\.checkout\.ScreenActivity" android:exported="false" android:theme="@style\/ExactLaunch" tools:node="replace" \/>/);
+  assert.doesNotMatch(both, /exact\.privacy_policy|exported="true"|<intent-filter/);
+
+  // Coexistence with a rationale activity: only the rationale activity triggers `exact.privacy_policy` and can be an alias target.
+  const mixed = checkout({
+    activities: [
+      { name: 'com.acme.checkout.SheetActivity', private: true },
+      { name: 'com.acme.checkout.RationaleActivity', actions: ['androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE'] },
+    ],
+    aliases: [{
+      name: 'com.acme.checkout.UsageAlias',
+      targetActivity: 'com.acme.checkout.RationaleActivity',
+      action: 'android.intent.action.VIEW_PERMISSION_USAGE',
+      category: 'android.intent.category.HEALTH_PERMISSIONS',
+    }],
+  }, { privacyPolicy: 'https://example.com/privacy' });
+  assert.match(mixed, /<meta-data android:name="exact\.privacy_policy" android:value="https:\/\/example\.com\/privacy" \/>/);
+  assert.match(mixed, /<activity android:name="com\.acme\.checkout\.SheetActivity" android:exported="false" android:theme="@style\/ExactTranslucent" tools:node="replace" \/>/);
+  assert.match(mixed, /<activity android:name="com\.acme\.checkout\.RationaleActivity" android:exported="true" android:theme="@android:style\/Theme\.NoDisplay">/);
+
+  const refuses = (manifest, what) => assert.throws(() => checkout(manifest), (e) => e.message.includes(what) && e.message.includes("checkout's Android implementation"));
+  // Bare activity without `actions` or `private: true` stays refused.
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity' }] }, 'no actions');
+  // Non-true `private` values are refused.
+  for (const bad of [false, 'true', 1, null]) {
+    refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: bad }] }, 'private=');
+  }
+  // Private activity forbids `actions` (even empty).
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, actions: [] }] }, 'takes no intent filter');
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, actions: ['androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE'] }] }, 'takes no intent filter');
+  // Theme allow-list enforcement and refusal on rationale activities.
+  for (const theme of ['dark', '@style/AppCompat', '', null, 1, '__proto__']) {
+    refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, theme }] }, 'not on the list');
+  }
+  refuses({ activities: [{ name: 'com.acme.checkout.RationaleActivity', actions: ['androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE'], theme: 'translucent' }] }, 'only a private activity names a theme');
+  // Disallowed attributes on private activities.
+  for (const extra of [
+    { exported: true }, { exported: false }, { process: ':sheet' }, { launchMode: 'singleTask' },
+    { taskAffinity: '' }, { configChanges: 'orientation' }, { directBootAware: true }, { permission: 'x' },
+  ]) {
+    const key = Object.keys(extra)[0];
+    refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, ...extra }] }, `"${key}"`);
+  }
+  // Namespace (exact package, rejecting subpackages and lookalike prefixes) and duplicate enforcement.
+  refuses({ activities: [{ name: 'other.pkg.SheetActivity', private: true }] }, 'not a class in com.acme.checkout');
+  refuses({ activities: [{ name: 'com.acme.checkout.sub.SheetActivity', private: true }] }, 'not a class in com.acme.checkout');
+  refuses({ activities: [{ name: 'com.acme.checkout2.SheetActivity', private: true }] }, 'not a class in com.acme.checkout');
+  assert.throws(() => checkout({ carAppService: { name: 'com.acme.checkout.sub.Car', category: 'POI', minCarApiLevel: 1 } }), /must name a class in com\.acme\.checkout/);
+  assert.throws(() => checkout({ carAppService: { name: 'com.acme.checkout2.Car', category: 'POI', minCarApiLevel: 1 } }), /must name a class in com\.acme\.checkout/);
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }, { name: 'com.acme.checkout.SheetActivity', private: true }] }, 'twice');
+  refuses({ activities: [{ name: 'com.acme.checkout.Same', private: true }], services: [{ name: 'com.acme.checkout.Same' }] }, 'twice');
+  // Inherited prototype keys are refused as fragment kinds and ignored on activity entries.
+  refuses({ constructor: [] }, 'names "constructor"');
+  const inheritedPrivate = Object.assign(Object.create({ private: true }), { name: 'com.acme.checkout.SheetActivity' });
+  refuses({ activities: [inheritedPrivate] }, 'no actions');
+  // WorkManager's deduplication exception never hides a collision with a non-service component in either order.
+  const wm = 'androidx.work.impl.foreground.SystemForegroundService';
+  const wmActivity = { extension: 'wm-act', className: 'androidx.work.impl.foreground.Module', manifest: { activities: [{ name: wm, private: true }] } };
+  const wmService = { extension: 'wm-svc', className: 'exact.transfer.Module', manifest: { services: [{ name: wm, foregroundServiceType: 'dataSync' }] } };
+  assert.throws(() => manifestFragment([wmActivity, wmService]), /twice/);
+  assert.throws(() => manifestFragment([wmService, wmActivity]), /twice/);
+  assert.equal((manifestFragment([wmService, wmService]).match(/SystemForegroundService/g) ?? []).length, 1);
+  // An exported `<activity-alias>` cannot target a private activity.
+  refuses({
+    activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }],
+    aliases: [{
+      name: 'com.acme.checkout.UsageAlias',
+      targetActivity: 'com.acme.checkout.SheetActivity',
+      action: 'android.intent.action.VIEW_PERMISSION_USAGE',
+      category: 'android.intent.category.HEALTH_PERMISSIONS',
+    }],
+  }, 'not an activity it declares');
+  // Non-object entry in activities list.
+  refuses({ activities: [null] }, 'not an object');
+});
+
+test('HTTPS auth callbacks containing $\' compose literally beside a private activity', async () => {
+  const { withAuthCallbacks } = await import('./android-manifest.mjs');
+  const fragment = manifestFragment([{
+    extension: 'checkout', className: 'com.acme.checkout.CheckoutModule',
+    manifest: { activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }] },
+  }]);
+  const xml = withAuthCallbacks(fragment, ["https://app.test/cb/$'/done"]);
+  assert.equal((xml.match(/<\/application>/g) ?? []).length, 1);
+  assert.ok(xml.includes(`android:path="/cb/$'/done"`));
+  assert.ok(xml.includes('android:name="com.acme.checkout.SheetActivity"'));
 });

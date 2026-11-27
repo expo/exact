@@ -221,8 +221,10 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
     /// The first line of the last save's error, until a generation is taken
     /// (LLP 1159.001 D1): the app on screen is older than the source.
     private(set) var refused: String? { didSet { tellNotice() } }
+    /// The last connection failure to the dev server, cleared on reconnect (LLP 1156.008.000 D6.7).
+    private(set) var connectionError: String? { didSet { tellNotice() } }
     /// What the window's dev pill says (`DevNotice`).
-    var notice: DevNotice? { devStatus.map(DevNotice.loop) ?? (terminal != nil ? .stale : refused.map(DevNotice.refused)) }
+    var notice: DevNotice? { devStatus.map(DevNotice.loop) ?? (terminal != nil ? .stale : refused.map(DevNotice.refused) ?? connectionError.map(DevNotice.disconnected)) }
     /// Told each change of `notice`; nil when nothing is left to say.
     var onDevNotice: ((DevNotice?) -> Void)?
     private var told: DevNotice?
@@ -299,6 +301,13 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
 
     // MARK: discovery and immutable generation fetches (LLP 1023 D1–D3)
 
+    private static func failureDetail(_ result: Result<(Data, HTTPURLResponse), BoundedFetch.Failure>) -> String {
+        switch result {
+        case let .success((_, http)): return "HTTP \(http.statusCode)"
+        case let .failure(failure): return failure.message
+        }
+    }
+
     private func resolveAndBoot(now: Bool = false) {
         guard !closed else { return }
         stream?.cancel()
@@ -317,7 +326,7 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
                 return
             }
             guard case let .success((data, http)) = result, http.statusCode == 200 else {
-                self.failed("cannot reach \(self.page)", generation: generation)
+                self.failed("cannot reach \(self.page): \(PlanURL.failureDetail(result))", generation: generation)
                 return
             }
             let base = http.url ?? self.page
@@ -342,7 +351,7 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
             guard case let .success((data, response)) = result, response.statusCode == 200 else {
                 // Immutable snapshots are bounded on the server. Discovery
                 // supplies the latest snapshot if this URL has expired.
-                self.failed("cannot fetch the envelope at \(url)", generation: generation)
+                self.failed("cannot fetch the envelope at \(url): \(PlanURL.failureDetail(result))", generation: generation)
                 return
             }
             self.takeEnvelope(data, base: response.url ?? url, subscribe: subscribe, generation: generation, expected: expected)
@@ -456,6 +465,7 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
 
     private func takeEnvelope(_ data: Data, base: URL, subscribe shouldSubscribe: Bool, generation: UInt64, expected: Revision?) {
         loopDone()
+        connectionError = nil
         guard data.count <= PlanURL.envelopeLimit, PlanURL.sameOrigin(base, page),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], PlanURL.count(json["exact"]) == 1,
               let planRow = json["plan"] as? [String: Any], let plan = card(planRow, name: "", base: base) else {
@@ -791,6 +801,7 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
     /// `Retry-After` (1 to 10 s; 2 s preparing, 5 s failed when it names
     /// none), with no backing off: the loop answers at once.
     private func loopSaid(_ said: DevLoopStatus, retry: Double?, generation: UInt64) {
+        connectionError = nil
         if devStatus != said {
             devStatus = said
             switch said {
@@ -815,6 +826,8 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
 
     private func failed(_ message: String, generation: UInt64) {
         loopDone()
+        connectionError = PlanURL.brief(message)
+        ExactEvents.journal("dev.url.failed", ["url": page.absoluteString, "message": message])
         status(message)
         pending = nil
         let delay = retrySeconds

@@ -3,14 +3,15 @@
 // source is gone (a changed source's load begins with one). An opening seek still holds until it finishes. The
 // DOM and the glue's install are stand-ins.
 import { afterAll, test, expect } from 'bun:test';
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { localImports } from '../../web-js/glue.mjs';
 
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-media-hold-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-copyFileSync(resolve(fileURLToPath(new URL('../../web-js/media.js', import.meta.url))), resolve(dir, 'media.js'));
+writeFileSync(resolve(dir, 'media.js'), localImports(readFileSync(new URL('../../web-js/media.js', import.meta.url), 'utf8')));
+copyFileSync(new URL('../load-once.js', import.meta.url), resolve(dir, 'load-once.js'));
 writeFileSync(resolve(dir, 'rt.js'), 'export const { onEnd, inflight, journal, data, clock } = globalThis.rtStandIn;\n');
 writeFileSync(resolve(dir, 'navigation.js'), 'export const liveById = id => document.getElementById(id);\n'); // host/web/navigation.js in a build
 // The glue's own hold (`mediaHold`), its install a stand-in.

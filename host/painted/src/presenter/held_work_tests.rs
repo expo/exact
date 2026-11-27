@@ -193,8 +193,10 @@ fn a_held_request_the_runner_let_go_is_not_kept() {
     assert!(p.parked.is_empty(), "a request released runs");
 }
 
+#[cfg(unix)]
 struct Oversized;
 
+#[cfg(unix)]
 impl DataSource for Oversized {
     fn grants(&self) -> &str {
         "net.fetch https://held.test"
@@ -216,7 +218,7 @@ impl DataSource for Oversized {
     ) -> Result<Answer, DataError> {
         assert!(matches!(outcome, Outcome::Failed {
             kind: exact_runner::FailureKind::Refused, ref message,
-        } if message.starts_with("native request exceeds 4 MiB (URL, headers and body together)")));
+        } if message.contains("request bytes (maximum 4194304, including URL, headers and body)")));
         Ok(Answer::Now(Value::Bool(true)))
     }
 }

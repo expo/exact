@@ -61,6 +61,9 @@ impl<D: DataSource> Presenter<D> {
     /// The grip's list's non-empty `reorderGroup`.
     pub(super) fn group_of(&self, binding: &ReorderBinding) -> Option<String> {
         let list = self.host.kernel().node_by_key(binding.list)?;
+        if list.props.str(PropId::ListStyle).is_some() {
+            return Some(String::new());
+        }
         list.props
             .str(PropId::ReorderGroup)
             .filter(|g| !g.is_empty())
@@ -243,7 +246,15 @@ impl<D: DataSource> Presenter<D> {
         if !self.reorder_facts_current(&g) {
             return Ok(false);
         }
-        let y = (centre.1 - port.1) as f64 + g.scroll_top;
+        let scroll = if s.group.is_empty() {
+            let Some(node) = self.host.kernel().node_by_key(target) else {
+                return Ok(false);
+            };
+            self.scroll_of(node.id).1 as f64
+        } else {
+            g.scroll_top
+        };
+        let y = (centre.1 - port.1) as f64 + scroll;
         let accepted = self.host.group_into(token, target, g, y)?;
         self.dirty = true;
         Ok(accepted)
@@ -251,6 +262,9 @@ impl<D: DataSource> Presenter<D> {
 
     /// The mounted lists sharing `group`.
     fn group_lists(&self, group: &str) -> Vec<NodeKey> {
+        if group.is_empty() {
+            return self.group.iter().map(|s| s.binding.list).collect();
+        }
         let kernel = self.host.kernel();
         self.host
             .collections()

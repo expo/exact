@@ -1,10 +1,11 @@
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createApp, applyPattern } from '../game/new.mjs';
 import { chromium } from './agent-launch.mjs';
-import { draftFields, savedChanges } from './verify.mjs';
+import { draftFields, refusalsOf, report, savedChanges, selectVerifyFiles } from './verify.mjs';
+import { linuxDevStaleChanges } from './agent-stdio.mjs';
 
 test('an invalid field is a draft even when another record holds its value', () => {
   const field = (testId, value, accessibilityInvalid) => ({ type: 'TextInput', props: { testId, value, accessibilityInvalid } });
@@ -54,3 +55,52 @@ test.skipIf(!!chromium().unavailable)('verify reload keeps a refused duplicate d
     expect(result.relaunch.shows).toContain('Milk');
   } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 240_000);
+
+test('refusalsOf ignores app-authored console logs without exact: while keeping exact: console refusals (LLP 1156.008.000 D8.1)', () => {
+  expect(refusalsOf({
+    lines: ['t=12 saveFile: refused: missing'],
+    host: [
+      'console.log: API refused booking',
+      'console.warn: payment refusal from server',
+      'console.error: request refused by backend',
+      'console.error: exact: showModal confirm refused: no dialog or popover has that id',
+      'app: exact: media refused: denied',
+    ],
+  })).toEqual([
+    'saveFile: refused: missing',
+    'showModal confirm refused: no dialog or popover has that id',
+    'media refused: denied',
+  ]);
+});
+
+test('selectVerifyFiles and partial report mark filtered verify runs distinctly (LLP 1156.008.000 D8.2)', () => {
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/verify-partial-'));
+  try {
+    writeFileSync(resolve(dir, 'app.test.contract'), 'test "a"\n  expect tree has "x"\n');
+    writeFileSync(resolve(dir, 'billing.test.contract'), 'test "b"\n  expect tree has "x"\n');
+    const picked = selectVerifyFiles(dir, ['billing.test.contract']);
+    expect(picked.files).toEqual([resolve(dir, 'billing.test.contract')]);
+    expect(picked.partial).toEqual({ selected: 1, total: 2 });
+    const summary = report({ host: 'web', tested: { passed: 1, failed: 0, results: [] }, checks: [], shots: [], ms: 1200, partial: picked.partial });
+    expect(summary.lines.at(-1)).toBe('verify (partial: 1/2 test files): clean in 1.2 s');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const testsOnly = mkdtempSync(resolve(import.meta.dir, '../target/verify-tests-dir-'));
+  try {
+    mkdirSync(resolve(testsOnly, 'tests'));
+    mkdirSync(resolve(testsOnly, 'other'));
+    writeFileSync(resolve(testsOnly, 'tests/greeting.test.contract'), 'test "a"\n  expect tree has "x"\n');
+    writeFileSync(resolve(testsOnly, 'other/extra.test.contract'), 'test "b"\n  expect tree has "x"\n');
+    expect(selectVerifyFiles(testsOnly, [])).toEqual({
+      files: [resolve(testsOnly, 'tests/greeting.test.contract')],
+      partial: null,
+    });
+    expect(selectVerifyFiles(testsOnly, ['tests/greeting.test.contract']).partial).toEqual({ selected: 1, total: 1 });
+    expect(selectVerifyFiles(testsOnly, ['other/extra.test.contract']).partial).toEqual({ selected: 1, total: 2 });
+  } finally { rmSync(testsOnly, { recursive: true, force: true }); }
+});
+
+test('linuxDevStaleChanges exempts Contract and TypeScript files only when --url is set (LLP 1156.008.000 D9.4)', () => {
+  const inputs = ['app.contract', 'app.ts', 'helper.tsx', 'host/painted/src/lib.rs'];
+  expect(linuxDevStaleChanges(inputs, true)).toEqual(['host/painted/src/lib.rs']);
+  expect(linuxDevStaleChanges(inputs, false)).toEqual(inputs);
+});

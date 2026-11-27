@@ -71,7 +71,11 @@ class ComposeModule(context: ExtensionContext) : ExactExtension(context) {
         val line = { action: String -> "$kind $action, ${to.size + cc.size + bcc.size} recipients, ${files.size} attachments" + if (types.isEmpty()) "" else " (${types.joinToString()})" }
         if (!(if (kind == "email") mail || context.agent else sms || context.agent)) return reply(error("NotSupportedError", "no app on this device composes a $kind; check composeStatus()"))
         if (context.agent) {
-            val action = tap ?: "opened"
+            val action = when (tap) {
+                null -> "opened"
+                "cancel" -> "cancelled"
+                else -> tap
+            }
             say(line(action))
             return reply(JSONObject().put("action", action))
         }

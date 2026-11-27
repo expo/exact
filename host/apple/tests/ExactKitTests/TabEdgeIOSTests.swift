@@ -335,16 +335,15 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertEqual(owner.additionalSafeAreaInsets, inset)
     }
 
-    /// Rows above and below the panels while the native bars show (LLP 1083.000 D4). The row above is beside the
-    /// routes: it paints over the container, its content clears the status bar, and the container's top safe area
-    /// reaches where the routes begin, so the navigation bar, and the route's content and cover, start below it. The
-    /// row below is not beside them while the tab bar shows: it stays under the bar, which keeps its touches.
-    func testARowAboveThePanelsTakesTheBarsBelowItAndARowBelowStaysUnderTheTabBar() throws {
+    /// A row above the panels while the native bars show (LLP 1083.000 D4) is beside the routes: it paints over the
+    /// container, its content clears the status bar, and the container's top safe area reaches where the routes
+    /// begin, so the navigation bar, and the route's content and cover, start below it; the tab bar keeps its touches.
+    func testARowAboveThePanelsTakesTheBarsBelowIt() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
         try tap("tab-grid", route: "grid")
         try press("show-rows", route: "grid")
-        let top = try node("top-row"), mini = try node("mini-player"), win = try XCTUnwrap(window)
+        let top = try node("top-row"), win = try XCTUnwrap(window)
         waitFor("the row above the panels is lifted over the container") { navigation.siblings.holds(top) && top.bounds.height > 0 }
         let nav = try XCTUnwrap(navigation.primaryNavigation)
         waitFor("the navigation bar starts below the row") { abs(self.box(nav.navigationBar).minY - self.box(top).maxY) < 0.5 }
@@ -356,8 +355,6 @@ final class TabEdgeIOSTests: XCTestCase {
         if case .edges(let edges)? = navigation.covers[route.id] {
             XCTAssertLessThanOrEqual(edges.top, bar.maxY - box(route).minY + 0.5, "the route's cover reaches no further than the bar")
         }
-        navigation.reportCovers()
-        XCTAssertFalse(navigation.siblings.holds(mini), "the row below the panels stays in its column")
         let aim = Agent(session: session).aim(["id": Int(try node("tab-grid").id), "aim": ["press": true]])
         XCTAssertNil(aim["error"], "a tab keeps its touches: \(aim)")
         let tabBar = try XCTUnwrap(navigation.tabController).tabBar
@@ -366,6 +363,77 @@ final class TabEdgeIOSTests: XCTestCase {
             let point = tabBar.convert(CGPoint(x: tabBar.bounds.midX, y: tabBar.bounds.midY), to: win)
             XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: tabBar) == true, "the tab bar keeps its touches")
         }
+    }
+
+    /// A row written between the panels and the root tablist sits on the shown tab bar, where the web lays it out above
+    /// the tablist: the tablist keeps the bar's room, so CSS ends the column, and the routes in it, at the row's top, and
+    /// the row paints over the container and takes its touches. While the bar hides, by select mode's hidden tablist or
+    /// an app's hatch, the tablist takes no room again, and the room comes back with the bar (LLP 1083.000 D4).
+    func testARowBelowThePanelsSitsOnTheShownTabBar() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("isTabBarHidden is iOS 18") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("show-rows", route: "grid")
+        let tabs = try XCTUnwrap(navigation.tabController), list = try node("tabs"), win = try XCTUnwrap(window)
+        let along = box(tabs.tabBar)
+        guard along.width > along.height, abs(along.maxY - win.bounds.maxY) < 1 else { throw XCTSkip("the bar is not along the page's bottom: \(along)") }
+        let area = try node("player-area"), mini = try node("mini-player"), route = try node("route-grid")
+        func onBar() -> Bool {
+            guard case .room(let room)? = navigation.covers[list.id] else { return false }
+            let bar = box(tabs.tabBar)
+            return abs(room - (win.bounds.maxY - bar.minY)) < 0.5 && abs(box(area).maxY - bar.minY) < 0.5 && navigation.siblings.holds(area)
+        }
+        let facts = { "row \(self.box(area)) bar \(self.box(tabs.tabBar)) cover \(String(describing: navigation.covers[list.id])) lifted \(navigation.siblings.holds(area)) rows \(String(describing: navigation.rowsAbove(list))) room \(String(describing: navigation.barRoom(for: list)))" }
+        waitFor("the tablist keeps the bar's room and the row sits on the bar, over the container", facts: facts, onBar)
+        if case .room(let room)? = navigation.covers[list.id] { XCTAssertEqual(list.bounds.height, room, accuracy: 0.5, "the tablist's box is the room") }
+        let row = box(mini)
+        XCTAssertEqual(try pixel(at: CGPoint(x: row.minX + 8, y: row.midY)), [101, 67, 33], "the row paints over the container")
+        let play = try node("mini-play"), point = play.convert(CGPoint(x: play.bounds.midX, y: play.bounds.midY), to: win)
+        let hit = try XCTUnwrap(win.hitTest(point, with: nil))
+        XCTAssertTrue(hit === play || hit.isDescendant(of: play), "the row's button takes its touches, not \(hit)")
+        let item = tabs.tabBar.convert(CGPoint(x: tabs.tabBar.bounds.midX, y: tabs.tabBar.bounds.minY + 20), to: win)
+        XCTAssertTrue(win.hitTest(item, with: nil)?.isDescendant(of: tabs.tabBar) == true, "and the bar keeps its own")
+        // UIKit holds the route over the page; its stack's safe area, and so its scroller's content, ends at the row
+        let nav = try XCTUnwrap(navigation.primaryNavigation)
+        XCTAssertEqual(box(nav.view).maxY - nav.view.safeAreaInsets.bottom, box(area).minY, accuracy: 0.5, "the stack is clear of the row")
+        func scroller(_ view: UIView) -> UIScrollView? { (view as? UIScrollView) ?? view.subviews.lazy.compactMap(scroller).first }
+        let sv = try XCTUnwrap(scroller(route), "the route's scroller")
+        waitFor("its content rests at the row's top", facts: { "\(self.box(sv)) \(sv.adjustedContentInset)" }) {
+            abs(self.box(sv).maxY - sv.adjustedContentInset.bottom - self.box(area).minY) < 0.5
+        }
+        // Select mode hides the bar: the tablist takes no room, and the room comes back with the bar
+        let id = ContributionsIOS.Identity(node: try XCTUnwrap(navigation.container).id, operation: .containerClearance)
+        let held = { ContributionsIOS.existing(on: nav)?.insets(of: id).bottom ?? 0 }
+        try press("select-grid", route: "grid")
+        waitFor("the bar hides, the tablist is covered whole and the stack holds nothing", facts: facts) {
+            tabs.isTabBarHidden && navigation.covers[list.id] == .whole && held() == 0
+        }
+        waitFor("the row lifts and the container clears the stack of it", facts: facts) {
+            navigation.siblings.holds(area) && abs(self.box(nav.view).maxY - nav.view.safeAreaInsets.bottom - self.box(area).minY) < 0.5
+        }
+        try press("select-grid", route: "grid")
+        waitFor("the bar shows again with the row on it", facts: facts) { !tabs.isTabBarHidden && onBar() }
+        // An app's `tabs` hatch hides the bar itself, the tablist still shown: the room goes with the bar, and the
+        // stack gives its clearance back
+        XCTAssertGreaterThan(held(), 0, "the stack holds the row's clearance")
+        // What an app's hatch adds to the stack's own bottom inset already clears part of the row
+        let alone = held()
+        nav.additionalSafeAreaInsets.bottom += 20
+        navigation.reportCovers()
+        waitFor("Exact's part shrinks by the app's", facts: { "held \(held()) of \(alone)" }) { abs(held() - (alone - 20)) < 0.5 }
+        XCTAssertEqual(box(nav.view).maxY - nav.view.safeAreaInsets.bottom, box(area).minY, accuracy: 0.5, "the stack still ends at the row")
+        nav.additionalSafeAreaInsets.bottom -= 20
+        navigation.reportCovers()
+        waitFor("and grows back without it", facts: { "held \(held()) of \(alone)" }) { abs(held() - alone) < 0.5 }
+        tabs.setTabBarHidden(true, animated: false)
+        waitFor("the room goes with the bar the hatch hides", facts: facts) { navigation.covers[list.id] == .whole && held() == 0 }
+        tabs.setTabBarHidden(false, animated: false)
+        waitFor("and comes back with it", facts: facts, onBar)
+        // A stack the retiring tabs release keeps none of Exact's clearance
+        XCTAssertGreaterThan(held(), 0, "before the tabs retire, the stack holds it")
+        navigation.retireTabs()
+        XCTAssertEqual(held(), 0, "the retired stack gives its clearance back")
     }
 
     /// The mini player the tablist names (`navigationTabAccessory`) as UIKit's tab bar accessory (LLP 1075.003 §9.17).
@@ -1270,6 +1338,8 @@ final class TabEdgeIOSTests: XCTestCase {
         tabs.view.layoutIfNeeded()
         XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, added, accuracy: 0.5)
 
+        // An app's own inset on the route stays through the search's
+        route.additionalSafeAreaInsets.bottom += 7
         let search = try XCTUnwrap(route.navigationItem.searchController)
         search.isActive = true
         let field = search.searchBar.searchTextField
@@ -1290,7 +1360,26 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, added, accuracy: 0.5)
         setKeyboard(p, top: nil)
         field.resignFirstResponder()
+        waitFor("the search's part goes, the app's staying") { abs(route.additionalSafeAreaInsets.bottom - 7) < 0.5 }
+        route.additionalSafeAreaInsets.bottom -= 7
         waitFor("dismissing the keyboard restores the row's inset") { abs(scroll.adjustedContentInset.bottom - obstruction) < 0.5 }
+    }
+
+    /// A route's reactions to its safe area's change and to its layout are held apart through a change in steps: one laid
+    /// out within the steps still reports its covers once they end (LLP 1123 D11).
+    func testARouteLaidOutWithinAChangeInStepsStillReportsItsCovers() throws {
+        let navigation = try fixture().presenter.navigationHost
+        let route = try XCTUnwrap(navigation.activeRoute)
+        for laidOut in [false, true] {
+            let reported = navigation.coversReported, cover = navigation.covers[route.node.id]
+            SafeAreaSteps.stepping {
+                route.additionalSafeAreaInsets.bottom += 30
+                if laidOut { route.view.setNeedsLayout(); route.view.layoutIfNeeded() }
+            }
+            XCTAssertGreaterThan(navigation.coversReported, reported, "laid out \(laidOut): the change is reported at the end of the steps")
+            XCTAssertNotEqual(navigation.covers[route.node.id], cover)
+            waitForMainQueue()
+        }
     }
 
     func testRouteWaitIncludesDelayedPressDelivery() throws {

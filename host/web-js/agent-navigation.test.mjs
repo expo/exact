@@ -197,3 +197,32 @@ for (const [name, bar, kept, nested] of [['the root tab bar', '', false], ['an a
   expect(large.lines.some(l => /tab-/.test(l)), large.lines.join('\n')).toBe(kept);
   expect(large.lines.some(l => l.includes('body-home'))).toBe(true);
 }), 120_000);
+
+test('a route bottom toolbar uses ordinary row layout', async () => {
+  async function frames(placement, size) {
+    let rects;
+    await onPhone(`component App
+  view
+    main navigationKey="home"
+      column navigationKey="home" width=300 height=400
+        scroll ${size} testId="body"
+          box height=800
+        row role="toolbar" ${placement} height=48 testId="tools"
+          spacer
+          button "Add"
+`, async browser => {
+      rects = await browser.carrier.evaluate(`['body','tools'].map(name => {
+        const {x,y,width,height} = document.querySelector('[data-testid="'+name+'"]').getBoundingClientRect();
+        return {x,y,width,height};
+      })`);
+    });
+    return rects;
+  }
+  for (const [size, height] of [['flex=1 min-height=0', 352], ['height=90', 90]]) {
+    const placed = await frames('toolbarPlacement="bottom"', size);
+    expect(placed).toEqual(await frames('', size));
+    expect(placed[0].height).toBe(height);
+    expect(placed[1].y - placed[0].y).toBe(height);
+    expect(placed[1].height).toBe(48);
+  }
+}, 120_000);

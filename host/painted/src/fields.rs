@@ -136,7 +136,9 @@ pub(crate) fn face(
         } else {
             0.0
         },
-        line: style.line_height.map_or(0.0, |h| (h * scale).max(0.0)),
+        line: style
+            .used_line_height()
+            .map_or(0.0, |h| (h * scale).max(0.0)),
         family: family(engine, style, italic),
         axes: axes(style),
         features: Run::from_style("", *style)
@@ -200,7 +202,7 @@ fn family(engine: &mut TextEngine, style: &exact_kernel::TextStyle, italic: bool
     // One glyph shaped in the face: the catalog names the file it came from.
     let probe = exact_kernel::TextStyle {
         font_size: 16.0,
-        line_height: None,
+        line_height: exact_kernel::LineHeight::Normal,
         letter_spacing: 0.0,
         ..*style
     };

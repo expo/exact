@@ -3,7 +3,51 @@ import ExactKit
 import UIKit
 
 /// A grouped list's collection view, by type, for the agent's wheel.
-final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsumer {
+final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsumer, SafeIndicators {
+    #if os(iOS)
+    weak var reorderList: GroupedListView?
+    private var contact: GroupedReorderContact?
+    private var interactive = false
+
+    func offerReorder(_ offered: Bool) {
+        if offered && contact == nil {
+            let contact = GroupedReorderContact()
+            contact.cancelsTouchesInView = false
+            contact.delaysTouchesEnded = false
+            addGestureRecognizer(contact)
+            self.contact = contact
+        } else if !offered, let contact {
+            removeGestureRecognizer(contact)
+            self.contact = nil
+        }
+    }
+    override func beginInteractiveMovementForItem(at path: IndexPath) -> Bool {
+        guard reorderList?.lift(at: path) == true else { return false }
+        interactive = super.beginInteractiveMovementForItem(at: path)
+        if !interactive { reorderList?.movement?.cancel() }
+        return interactive
+    }
+    override func updateInteractiveMovementTargetPosition(_ position: CGPoint) {
+        if contact?.following == false { contact?.target(position) }
+        if interactive { super.updateInteractiveMovementTargetPosition(position) }
+    }
+    override func cancelInteractiveMovement() {
+        guard interactive, contact?.continueContact() != true else { return }
+        abortMovement()
+    }
+    func abortMovement() {
+        guard interactive else { return }
+        interactive = false
+        super.cancelInteractiveMovement()
+        reorderList?.movement?.cancel()
+    }
+    override func endInteractiveMovement() {
+        guard interactive else { return }
+        interactive = false
+        super.endInteractiveMovement()
+        if let list = reorderList, !list.proposedMove { list.drop(in: list.source.snapshot()) }
+    }
+    #endif
     /// The offset, which UIKit itself also sets (keeping the list at its
     /// start as a safe area reaches it and insets it): inside an animation
     /// UIKit has open it moves only if the last frame showed the list's node,
@@ -11,12 +55,20 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     override var bounds: CGRect {
         get { super.bounds }
         set {
-            guard UIView.inheritedAnimationDuration > 0, let node = owner, let presenter = node.presenter else { return super.bounds = newValue }
+            guard Presenter.animationMayBeOpen, let node = owner, let presenter = node.presenter else { return super.bounds = newValue }
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
     }
     /// The list's node, which the collection is the scroll view of.
     private var owner: NodeView? { superview as? NodeView }
+    /// Its indicators take its safe area while UIKit's adjustment is off, as a plain scroller's do (`SafeIndicatorTerm`).
+    private var safeIndicators = SafeIndicatorTerm()
+    var writtenWhole = false { didSet { safeIndicators.sync(self) } }
+    override var automaticallyAdjustsScrollIndicatorInsets: Bool { didSet { safeIndicators.sync(self) } }
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        safeIndicators.sync(self)
+    }
     /// An inset UIKit moves outside a layout of the list reaches the arrangement, as a plain scroller's does
     /// (`ScrollView.adjustedContentInsetDidChange`).
     override func adjustedContentInsetDidChange() {
@@ -25,24 +77,33 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
     /// The safe area at the sides the collection reaches over: the kernel's
     /// side reach once it has given one (LLP 1123 D13), else the list's own
-    /// (`sideReach`), the window's or a fold's half band. UIKit insets the
-    /// cards from it or its own safe area, whichever is deeper, as in a
-    /// hand-built list.
+    /// (`sideReach`), the window's or a fold's half band. UIKit gives the
+    /// collection none of it, as it lies past its node's box, so each section
+    /// takes what it adds to UIKit's own as inset (`sideBand`), which places
+    /// the cards as UIKit places a hand-built list's under that safe area.
+    /// UIKit's own stays its own: a reported one it did not give lays the
+    /// whole list out again on each frame its bars move, against a person's pan.
     var sideSafeArea: (left: CGFloat, right: CGFloat) = (0, 0) {
         didSet {
             guard sideSafeArea != oldValue else { return }
-            safeAreaInsetsDidChange()
+            safeIndicators.sync(self)
             collectionViewLayout.invalidateLayout()
         }
     }
-    /// The depth the cards are inset from on each side, the side safe area the layout uses (`safeAreaInsets`: UIKit's
-    /// or `sideSafeArea`, whichever is deeper), top right bottom left, which D14's writer leaves to the layout.
-    package var consumedBand: [CGFloat] { [0, safeAreaInsets.right, 0, safeAreaInsets.left] }
-    override var safeAreaInsets: UIEdgeInsets {
-        var insets = super.safeAreaInsets
-        insets.left = max(insets.left, sideSafeArea.left)
-        insets.right = max(insets.right, sideSafeArea.right)
+    /// Its indicators keep within the sides it reaches over too (`SafeIndicatorTerm`).
+    var indicatorSafeArea: UIEdgeInsets {
+        var insets = safeAreaInsets
+        (insets.left, insets.right) = (max(insets.left, sideSafeArea.left), max(insets.right, sideSafeArea.right))
         return insets
+    }
+    /// What `sideSafeArea` adds on each side to the safe area UIKit gives the collection, which the sections take.
+    var sideBand: (left: CGFloat, right: CGFloat) {
+        (max(0, sideSafeArea.left - safeAreaInsets.left), max(0, sideSafeArea.right - safeAreaInsets.right))
+    }
+    /// The depth the cards are inset from on each side, UIKit's safe area or `sideSafeArea`, whichever is deeper, top
+    /// right bottom left, which D14's writer leaves to the layout.
+    package var consumedBand: [CGFloat] {
+        [0, max(safeAreaInsets.right, sideSafeArea.right), 0, max(safeAreaInsets.left, sideSafeArea.left)]
     }
 
     /// UIKit changed the margins it gives the list's cells, or showed the
@@ -70,6 +131,8 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     var card: (Int) -> NodeView? = { _ in nil }
     /// Each section's outer-shadow reach as the layout last decorated it.
     private var decorated: [Int: CGFloat] = [:]
+    /// The sections' inset regions as the layout last took them (`insetsReferences`).
+    private var referred: [UIContentInsetsReference?] = [nil, nil, nil]
     private var insets: [(clip: CALayer, caster: InsetShadowCaster)] = []
 
     override func layoutSubviews() {
@@ -88,6 +151,8 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     /// cells and supplementary views of every section, at whatever index
     /// reuse leaves each view.
     func decorate(_ layout: NSCollectionLayoutSection, at section: Int) {
+        referred = insetsReferences
+        referInsets(of: layout, referred)
         decorated[section] = outerReach(section)
         guard let reach = decorated[section] else { return }
         let item = NSCollectionLayoutDecorationItem.background(elementKind: CardShadowView.kind)
@@ -99,9 +164,11 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
 
     /// After a commit: lays the list out again where a card's outer shadow
-    /// came, went or changed its reach, then casts every card's shadows.
+    /// came, went or changed its reach, or the regions the list's insets
+    /// are measured from changed, then casts every card's shadows.
     func castCardShadows() {
-        if (0..<numberOfSections).contains(where: { outerReach($0) != decorated[$0] }) {
+        let references = insetsReferences
+        if referLayoutInsets(references[0]) || references != referred || (0..<numberOfSections).contains(where: { outerReach($0) != decorated[$0] }) {
             collectionViewLayout.invalidateLayout()
             layoutIfNeeded()
         }

@@ -396,3 +396,187 @@ fn a_component_that_uses_itself_is_refused_at_once() {
     let nested = "component App\n  view\n    Card()\n      Card()\n        text \"inner\"\n\ncomponent Card\n  slot\n  view\n    column\n      children\n";
     contract::compile(nested).expect("a component in its own fill is not recursion");
 }
+
+#[test]
+fn child_derive_dags_and_long_derive_chains_fit_a_small_stack() {
+    let mut conditional = String::from(
+        "component App\n  view\n    Child(flag=true)\ncomponent Child\n  props\n    flag: bool\n  derive d0 = flag ? 1 : 0\n",
+    );
+    for i in 1..=25 {
+        let p = i - 1;
+        conditional.push_str(&format!(
+            "  derive d{i} = (flag ? d{p} : 0) + (flag ? d{p} : 0)\n"
+        ));
+    }
+    conditional.push_str("  view\n    text `${d25}`\n");
+
+    let linear_child = |n: usize, reverse: bool| {
+        let mut lines: Vec<String> = (0..n)
+            .map(|i| {
+                if i == 0 {
+                    "  derive d0 = 1\n".to_owned()
+                } else {
+                    format!("  derive d{i} = d{} + 1\n", i - 1)
+                }
+            })
+            .collect();
+        if reverse {
+            lines.reverse();
+        }
+        format!(
+            "component App\n  view\n    Child()\ncomponent Child\n{}  view\n    text `${{d{}}}`\n",
+            lines.concat(),
+            n - 1
+        )
+    };
+    let linear_root = |n: usize, reverse: bool| {
+        let mut lines: Vec<String> = (0..n)
+            .map(|i| {
+                if i == 0 {
+                    "  derive d0 = 1\n".to_owned()
+                } else {
+                    format!("  derive d{i} = d{} + 1\n", i - 1)
+                }
+            })
+            .collect();
+        if reverse {
+            lines.reverse();
+        }
+        format!(
+            "component App\n{}  view\n    text `${{d{}}}`\n",
+            lines.concat(),
+            n - 1
+        )
+    };
+    let started = std::time::Instant::now();
+    assert_small_stack(vec![
+        (conditional, Some("syntax-derive-size")),
+        (linear_child(3_000, false), Some("syntax-derive-depth")),
+        (linear_child(3_000, true), Some("syntax-derive-depth")),
+        (linear_root(3_000, false), None),
+        (linear_root(3_000, true), None),
+    ]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[test]
+fn deep_types_statements_and_test_json_fit_a_small_stack() {
+    let deep_lists = format!(
+        "shape S\n  x: string{}\ncomponent App\n  view\n    text \"x\"\n",
+        "[]".repeat(20_000)
+    );
+    let deep_options = format!(
+        "shape S\n  x: {}string{}\ncomponent App\n  view\n    text \"x\"\n",
+        "option<".repeat(3_000),
+        ">".repeat(3_000)
+    );
+    let deep_retired_lists = format!(
+        "shape S\n  x: {}string{}\ncomponent App\n  view\n    text \"x\"\n",
+        "list<".repeat(3_000),
+        ">".repeat(3_000)
+    );
+    let combined_type = format!(
+        "shape S\n  x: option<string{}>{}\ncomponent App\n  view\n    text \"x\"\n",
+        "[]".repeat(65),
+        "[]".repeat(65)
+    );
+    let else_if_chain = |branches: usize| {
+        let mut s = String::from(
+            "component App\n  state n = 0\n  action run\n    if n == 0\n      n = 1\n",
+        );
+        for i in 1..branches {
+            s.push_str(&format!("    else if n == {i}\n      n = {}\n", i + 1));
+        }
+        s.push_str("  view\n    text `${n}`\n");
+        s
+    };
+    let nested_ifs = |depth: usize| {
+        let mut s = String::from("component App\n  state n = 0\n  action run\n");
+        for level in 0..depth {
+            s.push_str(&" ".repeat(4 + level * 2));
+            s.push_str("if n >= 0\n");
+        }
+        s.push_str(&" ".repeat(4 + depth * 2));
+        s.push_str("n = 1\n  view\n    text `${n}`\n");
+        s
+    };
+    let nested_matches = |depth: usize| {
+        let mut s = String::from("component App\n  state n = 0\n  action run\n");
+        for level in 0..depth {
+            let indent = " ".repeat(4 + level * 4);
+            s.push_str(&format!("{indent}match some(1)\n{indent}  case some(v)\n"));
+        }
+        s.push_str(&" ".repeat(4 + depth * 4));
+        s.push_str("n = 1\n");
+        for level in (0..depth).rev() {
+            let indent = " ".repeat(4 + level * 4);
+            s.push_str(&format!("{indent}  case none\n{indent}    n = 0\n"));
+        }
+        s.push_str("  view\n    text `${n}`\n");
+        s
+    };
+    let max_type_lists = format!(
+        "shape S\n  x: string{}\ncomponent App\n  view\n    text \"x\"\n",
+        "[]".repeat(128)
+    );
+    let over_type_lists = format!(
+        "shape S\n  x: string{}\ncomponent App\n  view\n    text \"x\"\n",
+        "[]".repeat(129)
+    );
+    assert_small_stack(vec![
+        (max_type_lists, Some("type-too-deep")),
+        (over_type_lists, Some("syntax-type-depth")),
+        (deep_lists, Some("syntax-type-depth")),
+        (deep_options, Some("syntax-type-depth")),
+        (deep_retired_lists, Some("syntax-type-depth")),
+        (combined_type, Some("syntax-type-depth")),
+        (else_if_chain(63), None),
+        (else_if_chain(64), Some("syntax-statement-depth")),
+        (else_if_chain(3_000), Some("syntax-statement-depth")),
+        (nested_ifs(63), None),
+        (nested_ifs(64), Some("syntax-statement-depth")),
+        (nested_ifs(3_000), Some("syntax-statement-depth")),
+        (nested_matches(63), None),
+        (nested_matches(64), Some("syntax-statement-depth")),
+        (nested_matches(3_000), Some("syntax-statement-depth")),
+    ]);
+
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(|| {
+            let max_json = format!(
+                "test \"max\"\n  answer source s with {}{}\n",
+                "[".repeat(128),
+                "]".repeat(128)
+            );
+            contract_syntax::parse(&max_json).unwrap();
+            let over_json = format!(
+                "test \"over\"\n  answer source s with {}{}\n",
+                "[".repeat(129),
+                "]".repeat(129)
+            );
+            assert_eq!(
+                contract_syntax::parse(&over_json).unwrap_err().id,
+                "syntax-json-depth"
+            );
+            let nested_json = format!("{}{}", "[".repeat(3_000), "]".repeat(3_000));
+            for step in [
+                format!("answer source s with {nested_json}"),
+                format!("request POST \"/x\" {nested_json}"),
+            ] {
+                let src = format!("test \"deep\"\n  {step}\n");
+                let err = contract_syntax::parse(&src).unwrap_err();
+                assert_eq!(err.id, "syntax-json-depth", "{err}");
+            }
+            let ok =
+                "test \"nested\"\n  answer source s with [[1, 2], {\"a\": [true, null, -3]}]\n";
+            let file = contract_syntax::parse(ok).unwrap();
+            let contract_syntax::Step::AnswerSource { value, .. } = &file.tests[0].steps[0] else {
+                panic!("expected AnswerSource");
+            };
+            assert_eq!(value, "[[1,2],{\"a\":[true,null,-3]}]");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

@@ -173,3 +173,74 @@ fn the_window_options_are_checked() {
         assert!(error.contains("type-media-command"), "{statement}: {error}");
     }
 }
+
+#[test]
+fn a_video_accepts_the_events_and_refuses_each_image_option_by_name() {
+    let app = include_str!("../../../../scripts/fixtures/video-picture-in-picture.contract");
+    let app = format!("{app}      image \"poster.png\" id=`poster-${{status}}`\n");
+    contract::compile(&app).unwrap();
+    for option in [
+        "presentation=\"window\"",
+        "title=\"Preview\"",
+        "width=480",
+        "height=320",
+    ] {
+        let source = app.replace("(\"clip\")", &format!("(\"clip\", {option})"));
+        let error = contract::compile(&source).unwrap_err().to_string();
+        assert!(
+            error.contains("type-media-command")
+                && error.contains(option.split('=').next().unwrap()),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn a_removed_video_delivers_leave_in_its_original_scope() {
+    let app = include_str!("../../../../scripts/fixtures/video-picture-in-picture.contract");
+    for source in [
+        app.to_owned(),
+        app.replace(" enterpictureinpicture=entered", ""),
+    ] {
+        let mut runner = Runner::boot(
+            contract::compile(&format!(
+                "{source}      video \"other.mp4\" testId=\"other\" leavepictureinpicture=left\n"
+            ))
+            .unwrap(),
+            boxed(NoData),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let key = runner.kernel().find_first_by_test_id("clip").unwrap();
+        let view = runner.kernel().node_by_key(key).unwrap().id;
+        runner
+            .dispatch(
+                view,
+                Event::media_payload("enterpictureinpicture\n").unwrap(),
+            )
+            .unwrap();
+        assert!(runner.expects_video_leave(view, key));
+        runner.act("remove", vec![]).unwrap();
+        assert!(runner.kernel().node_by_key(key).is_none());
+        let next_key = runner.kernel().find_first_by_test_id("other").unwrap();
+        let next = runner.kernel().node_by_key(next_key).unwrap().id;
+        assert_ne!(view, next);
+        runner
+            .dispatch(
+                next,
+                Event::media_payload("enterpictureinpicture\n").unwrap(),
+            )
+            .unwrap();
+        runner
+            .dispatch(
+                view,
+                Event::media_payload("leavepictureinpicture\n").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(runner.slot("leaves"), Some(&Value::Number(1.0)));
+        assert!(!runner.expects_video_leave(view, key));
+        assert!(runner.expects_video_leave(next, next_key));
+    }
+}

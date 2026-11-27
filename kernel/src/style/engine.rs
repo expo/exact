@@ -2,9 +2,14 @@
 use super::StyleProps;
 use crate::generated::{GridAutoFlow, Overflow};
 
-/// The live slot's engine style in the containing block its host supplied.
+/// The live slot's engine style in the containing block its host supplied, or for a root the window's
+/// aspect-fit guide fills (LLP 1123 D16), that guide.
 pub fn taffy_style(arena: &crate::arena::NodeArena, slot: u32) -> taffy::style::Style {
-    super::style_in_block(arena, slot, arena.blocks.get(slot))
+    let block = arena
+        .blocks
+        .get(slot)
+        .or_else(|| arena.blocks.root_fits().block(arena.key(slot)));
+    super::style_in_block(arena, slot, block)
 }
 
 pub(super) fn rare(style: &StyleProps, env: &crate::Env) -> taffy::style::Rare {

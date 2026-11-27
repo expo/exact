@@ -16,13 +16,15 @@ impl Shapes {
         }
     }
 
-    fn action_in(&self, t: &TypeExpr) -> Option<Span> {
-        match t {
-            TypeExpr::Named(n, span) => {
-                (n == "action" && !self.map.contains_key(n)).then_some(*span)
+    fn action_in(&self, mut t: &TypeExpr) -> Option<Span> {
+        loop {
+            match t {
+                TypeExpr::Named(n, span) => {
+                    return (n == "action" && !self.map.contains_key(n)).then_some(*span);
+                }
+                TypeExpr::Option(inner, _) | TypeExpr::List(inner, _) => t = inner,
+                TypeExpr::Enum(..) => return None,
             }
-            TypeExpr::Option(inner, _) | TypeExpr::List(inner, _) => self.action_in(inner),
-            TypeExpr::Enum(..) => None,
         }
     }
 }

@@ -97,6 +97,20 @@ struct CaptureTests {
         precondition(capture(args:["directory":"app:/tmp/linked"])["error"] as? String == "NotAllowedError")
         let outsideFiles = try FileManager.default.contentsOfDirectory(atPath: outside.path)
         precondition(outsideFiles.isEmpty)
+        let one = capture(args:["screen":screens[0]])["captures"] as! [[String: Any]]
+        precondition(one.count == 1 && one[0]["width"] as? Int == 80 && one[0]["frame"] == nil)
+        let region = ["x":4.0,"y":2.0,"width":16.0,"height":8.0]
+        let crop = capture(args:["screen":screens[0], "rect":region, "cursor":"always"])["captures"] as! [[String: Any]]
+        precondition(crop.count == 1 && crop[0]["width"] as? Int == 20 && crop[0]["height"] as? Int == 10)
+        precondition(capture(args:["rect":region])["error"] as? String == "TypeError")
+        precondition(capture(args:["screen":screens[0],"window":"unknown"])["error"] as? String == "TypeError")
+        precondition(capture(args:["window":"unknown"])["error"] as? String == "NotFoundError")
+        var window: [String: Any] = [:]
+        module.later("getWindowAtPoint", ["x":-5.0, "y":0.0], preferred:nil) { window = $0 }
+        let handle = window["handle"] as! String
+        module.later("getFrontmostWindow", [:], preferred:nil) { precondition($0["handle"] as? String == handle) }
+        let shot = capture(args:["window":handle])["captures"] as! [[String: Any]]
+        precondition(shot.count == 1 && (shot[0]["frame"] as? [String:Double])?["x"] == -80)
         let real = ScreenCaptureModule(context: ExactPackageContext(agent: false, session: "status", changed: { _ in }, log: { _ in }, now: { 0 }))
         real.later("screenRecordingStatus", [:], preferred: nil) { status in
             precondition(status["available"] as? Bool == true)

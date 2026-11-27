@@ -1,9 +1,12 @@
 //! One native primary contact; property-specific policy stays in its helper.
 use super::*;
+mod candidate;
 mod hold;
 mod mouse;
+mod pinch;
 mod time;
 use crate::host::press::Edge;
+pub(super) use candidate::Candidate;
 use exact_kernel::{NodeKey, TransformDragBinding};
 use exact_motion::{HoldEnd, HoldStart, Value, VelocityTracker};
 pub(super) use hold::Hold;
@@ -11,43 +14,12 @@ pub(super) use hold::Hold;
 pub(crate) use time::InputClock;
 
 #[derive(Clone, Copy)]
-pub(super) enum Candidate {
-    Arrange(exact_runner::ReorderBinding),
-    /// A grip in a list with a `reorderGroup` (LLP 1094 D6).
-    Group(exact_runner::ReorderBinding),
-    Swipe(NodeKey),
-    Pan(NodeKey),
-    Transform(TransformDragBinding),
-    Height {
-        handle: NodeKey,
-        target: NodeKey,
-    },
-}
-impl Candidate {
-    fn node(&self) -> NodeKey {
-        match *self {
-            Candidate::Arrange(b) | Candidate::Group(b) => b.handle,
-            Candidate::Transform(b) => b.handle,
-            Candidate::Height { handle, .. } => handle,
-            Candidate::Swipe(key) | Candidate::Pan(key) => key,
-        }
-    }
-    /// The candidate's own axis rule, at the slop (LLP 1057.001 §1).
-    fn accepts(&self, dx: f64, dy: f64) -> bool {
-        match self {
-            Candidate::Arrange(_) | Candidate::Height { .. } => dy.abs() > dx.abs(),
-            Candidate::Swipe(_) => dx.abs() > dy.abs(),
-            // A grouped row lifts in any direction (LLP 1094 D6).
-            Candidate::Transform(_) | Candidate::Pan(_) | Candidate::Group(_) => true,
-        }
-    }
-}
-#[derive(Clone, Copy)]
 pub(super) enum HeldKind {
     Arrange(exact_runner::ReorderToken),
     Transform {
         binding: TransformDragBinding,
         pair: exact_motion::TransformHold,
+        time_offset: f64,
         revision: u64,
     },
     Swipe {
@@ -57,6 +29,7 @@ pub(super) enum HeldKind {
     Height {
         handle: NodeKey,
         target: NodeKey,
+        list: Option<height_drag::ListDrag>,
     },
 }
 pub(super) struct Contact {
@@ -73,6 +46,7 @@ pub(super) struct Contact {
     last_ms: f64,
     event_ms: f64,
     pub(super) hold: Option<Hold>,
+    pinch: Option<pinch::Pinch>,
     /// A grouped row lifted: its ghost follows (`group.rs`).
     group: bool,
     panning: bool,
@@ -97,17 +71,19 @@ pub(super) struct Contact {
     kept: Option<bool>,
 }
 impl<D: DataSource> Presenter<D> {
-    pub(super) fn input_live(&self, key: NodeKey) -> bool {
+    pub(super) fn input_allowed(&self, key: NodeKey) -> bool {
         let Some(node) = self.host.kernel().node_by_key(key) else {
             return false;
         };
-        if !self.alert_allows(node.id)
-            || self.host.route_visibility(node.id).1
-            || self.brush.region_blocks_action(node.id)
-        {
+        self.alert_allows(node.id)
+            && !self.host.route_visibility(node.id).1
+            && !self.brush.region_blocks_action(node.id)
+    }
+    pub(super) fn input_live(&self, key: NodeKey) -> bool {
+        if !self.input_allowed(key) {
             return false;
         }
-        let mut at = Some(node.id);
+        let mut at = self.host.kernel().node_by_key(key).map(|n| n.id);
         while let Some(id) = at {
             let Some(node) = self.host.kernel().node(id) else {
                 return false;
@@ -140,22 +116,23 @@ impl<D: DataSource> Presenter<D> {
                 && contact
                     .hold
                     .as_ref()
-                    .is_none_or(|h| self.host.has_hold(h.primary.token));
+                    .is_none_or(|h| self.host.has_hold(h.motion().token));
         }
         match &contact.hold {
             Some(held) => {
-                self.host.has_hold(held.primary.token)
+                held.primary.is_none_or(|m| self.host.has_hold(m.token))
                     && match held.kind {
                         HeldKind::Arrange(token) => self.arrange_live(token),
                         HeldKind::Transform {
                             binding,
                             pair,
                             revision,
+                            ..
                         } => {
                             self.host.transform_hold_live(pair, binding)
                                 && self.transform_revision(binding) == Some(revision)
                         }
-                        HeldKind::Height { handle, target } => {
+                        HeldKind::Height { handle, target, .. } => {
                             self.input_live(handle)
                                 && self.host.height_drag_target(handle) == Some(target)
                         }
@@ -257,7 +234,7 @@ impl<D: DataSource> Presenter<D> {
         if stale {
             let contact = self.contact.take().unwrap();
             if let Some(held) = contact.hold {
-                match self.host.snap_retained_motion(held.primary.token) {
+                match self.host.snap_retained_motion(held.motion().token) {
                     Ok(changed) => self.dirty |= changed,
                     Err(error) => self.host.log(error),
                 }
@@ -332,58 +309,6 @@ impl<D: DataSource> Presenter<D> {
             let _ = self.end_contact(contact.hold.as_ref().unwrap(), HoldEnd::Cancel, now_ms);
         }
         result
-    }
-
-    /// Every candidate of a contact on `hit`: innermost first, then reorder >
-    /// transform > height > pan > swipe on one node (LLP 1057.001 §1).
-    pub(super) fn candidates(&self, hit: NodeKey) -> Vec<Candidate> {
-        let ranked = [
-            self.arrange_candidate(hit),
-            self.transform_candidate(hit),
-            self.height_candidate(hit),
-            self.pan_candidate(hit),
-            self.swipe_candidate(hit).map(Candidate::Swipe),
-        ];
-        let mut found: Vec<_> = ranked
-            .into_iter()
-            .enumerate()
-            .filter_map(|(rank, c)| Some((self.depth(hit, c?.node())?, rank, c?)))
-            .collect();
-        found.sort_by_key(|&(depth, rank, _)| (depth, rank));
-        found.into_iter().map(|(_, _, c)| c).collect()
-    }
-    pub(super) fn depth(&self, hit: NodeKey, candidate: NodeKey) -> Option<usize> {
-        let kernel = self.host.kernel();
-        let mut at = kernel.node_by_key(hit);
-        let mut steps = 0;
-        while let Some(node) = at {
-            if node.key == candidate {
-                return Some(steps);
-            }
-            at = node.parent.and_then(|id| kernel.node(id));
-            steps += 1;
-        }
-        None
-    }
-    // @ref LLP 1043.000 §3 D8 — ordinary commits move layout, not a motion hold.
-    // Nearest explicit pan handler owns one contact; an editor boundary stops
-    // it. A press between keeps the contact only within the slop (the pan
-    // that begins takes the press), as a draggable element hears a drag that
-    // starts on a button inside it (LLP 1057.001 rule 3; kanban F6).
-    fn pan_candidate(&self, hit: NodeKey) -> Option<Candidate> {
-        let mut at = self.host.kernel().node_by_key(hit).map(|n| n.id);
-        while let Some(id) = at {
-            let n = self.host.kernel().node(id)?;
-            let handlers = self.host.runner().handlers_of(id);
-            if self.input_live(n.key) && handlers.contains(&EventKind::Pan) {
-                return Some(Candidate::Pan(n.key));
-            }
-            if n.node_type == NodeType::TextInput {
-                return None;
-            }
-            at = n.parent;
-        }
-        None
     }
 
     /// Record the pointer before any handler can move focus. Android also
@@ -517,7 +442,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let mark = self.hatch_pointer_mark(crate::hatches::Phase::Down, x, y);
         // The presenter's double-tap deadline runs on the session clock.
-        self.zoom_contact_down((x, y), now_ms);
+        self.zoom_contact_down((x, y), now_ms, event_ms);
         let result = match self.contact_down(x, y, now_ms, event_ms) {
             Ok(taken) => {
                 // Keep the down target's identity before its handler can remove it.
@@ -638,6 +563,7 @@ impl<D: DataSource> Presenter<D> {
                     last_ms: now_ms,
                     event_ms,
                     hold: None,
+                    pinch: None,
                     group: false,
                     retained: Some(retained),
                     feedback: None,
@@ -670,8 +596,42 @@ impl<D: DataSource> Presenter<D> {
             self.queue_collections();
             return Ok(false);
         }
-        if hit.is_some_and(|hit| !self.input_live(hit)) {
-            return Ok(false);
+        if let Some(hit_key) = hit.filter(|hit| !self.input_live(*hit)) {
+            // A disabled target cannot press or focus, but a drag starting on it
+            // can still reach a live ancestor `pan` (LLP 1133.008 D8 item 6).
+            if !self.input_allowed(hit_key) {
+                return Ok(false);
+            }
+            let Some(pan) = self.pan_candidate(hit_key) else {
+                return Ok(false);
+            };
+            let mut pan_velocity = VelocityTracker::new();
+            pan_velocity.push(event_ms / 1000., Value::new(x as f64, y as f64));
+            self.contact = Some(Contact {
+                hit: None,
+                activation: None,
+                candidate: Some(pan),
+                rest: Vec::new(),
+                origin: (x, y),
+                position: (x, y),
+                last_ms: now_ms,
+                event_ms,
+                hold: None,
+                pinch: None,
+                group: false,
+                panning: false,
+                pan_velocity,
+                retained: None,
+                feedback: None,
+                press_activates: false,
+                focus_before_down: None,
+                focus_blocked: false,
+                canvas: None,
+                touch: (false, false),
+                kept: None,
+            });
+            self.set_collection_interaction(view);
+            return Ok(true);
         }
         let mut rest = hit.map_or_else(Vec::new, |hit| self.candidates(hit));
         // A swipe yields the edge the system's own gesture starts from.
@@ -707,6 +667,7 @@ impl<D: DataSource> Presenter<D> {
                 last_ms: now_ms,
                 event_ms,
                 hold: None,
+                pinch: None,
                 group: false,
                 panning: false,
                 pan_velocity: VelocityTracker::new(),
@@ -763,6 +724,7 @@ impl<D: DataSource> Presenter<D> {
             last_ms: now_ms,
             event_ms,
             hold: None,
+            pinch: None,
             group: false,
             panning: false,
             pan_velocity,
@@ -807,6 +769,7 @@ impl<D: DataSource> Presenter<D> {
         now_ms: f64,
         event_ms: f64,
     ) -> Result<bool, String> {
+        self.handler_tap_moved((x, y), event_ms);
         if self.brush.winui_focus {
             self.brush.pointer_modality = true;
         }
@@ -901,14 +864,26 @@ impl<D: DataSource> Presenter<D> {
         {
             // The first candidate whose axis rule accepts begins; the ones
             // before it fall away (LLP 1057.001 §1).
-            let rest = std::mem::take(&mut contact.rest);
-            if let Some(next) = contact
-                .candidate
-                .into_iter()
-                .chain(rest)
-                .find(|c| c.accepts(dx, dy))
+            let mut rest = std::mem::take(&mut contact.rest);
+            if self.separate_surface_windows() && self.contact_is_direct() && !contact.touch.1 {
+                let takes_move = |c: &Candidate| !matches!(c, Candidate::Arrange(_));
+                contact.candidate = contact.candidate.filter(takes_move);
+                rest.retain(takes_move);
+            }
+            let mut queue = contact.candidate.into_iter().chain(rest);
+            while let Some(next) = queue
+                .find(|c| c.accepts(dx, dy) && self.starts_toward(c, contact.retained.as_ref(), dx))
             {
                 contact.candidate = Some(next);
+                if !matches!(next, Candidate::Lift { .. }) {
+                    break;
+                }
+                // The host takes the drag and the contact ends, or declines it
+                // and the candidates after it go on with this move
+                let Some(back) = self.lift_contact(contact, now_ms) else {
+                    return Ok(true);
+                };
+                contact = back;
             }
         }
         if let Some(Candidate::Pan(key)) = contact.candidate {
@@ -1052,7 +1027,7 @@ impl<D: DataSource> Presenter<D> {
             match begin {
                 Ok(Some(held)) => {
                     if let Some(target) = contact.retained.as_ref().and_then(|c| c.swipe_target()) {
-                        if !self.begin_retained_motion(target, held.primary.token) {
+                        if !self.begin_retained_motion(target, held.motion().token) {
                             self.end_contact(&held, HoldEnd::Cancel, self.host.now())?;
                             self.set_collection_interaction(None);
                             return Ok(false);
@@ -1087,12 +1062,16 @@ impl<D: DataSource> Presenter<D> {
                     y: y as f64 - contact.origin.1 as f64,
                     ..Value::ZERO
                 },
+                contact.pinch.map(|pinch| pinch.position()),
                 now_ms,
                 event_ms,
             ),
-            HeldKind::Height { .. } => {
-                self.move_height_drag(held, contact.origin.1 as f64 - y as f64, now_ms, event_ms)
-            }
+            HeldKind::Height { .. } => self.move_height_drag(
+                held,
+                Value::new((contact.origin.0 - x) as f64, (contact.origin.1 - y) as f64),
+                now_ms,
+                event_ms,
+            ),
             HeldKind::Swipe { .. } => {
                 self.move_swipe(held, x as f64 - contact.origin.0 as f64, now_ms, event_ms)
             }
@@ -1187,24 +1166,26 @@ impl<D: DataSource> Presenter<D> {
                         self.end_arrange(token, Some(&held.velocity), now_ms)
                     }
                     HeldKind::Height { .. } => self.finish_height_drag(&held, now_ms),
-                    HeldKind::Transform { .. } => self.finish_transform_drag(&held, now_ms),
+                    HeldKind::Transform { .. } => {
+                        self.finish_transform_drag(&held, contact.pinch.is_some(), now_ms)
+                    }
                     HeldKind::Swipe { ways, .. } => {
                         let current = self
                             .host
                             .engine()
-                            .value(held.primary.token.node(), held.primary.token.property())
+                            .value(held.motion().token.node(), held.motion().token.property())
                             .unwrap_or(Value::ZERO)
                             .x;
                         let mut error = None;
                         if let Some(kind) = ways
                             .completes(current)
-                            .filter(|_| self.host.has_hold(held.primary.token))
+                            .filter(|_| self.host.has_hold(held.motion().token))
                         {
                             if let Some(retained) = &contact.retained {
                                 let delivered = match retained.swipe_for(kind) {
                                     Some(target) => self.retained_swipe_dispatch(
                                         target,
-                                        held.primary.token,
+                                        held.motion().token,
                                         now_ms,
                                     ),
                                     None => Ok(false),
@@ -1226,7 +1207,7 @@ impl<D: DataSource> Presenter<D> {
                             } else {
                                 error = self
                                     .host
-                                    .dispatch_held(held.primary.token, kind, now_ms)
+                                    .dispatch_held(held.motion().token, kind, now_ms)
                                     .err();
                                 error = error.or(self.after_commit());
                             }
@@ -1266,7 +1247,7 @@ impl<D: DataSource> Presenter<D> {
             self.hold_press(container, contact, (x, y), now_ms);
             Ok(false)
         } else {
-            self.press_lifted(contact, x, y, now_ms)
+            self.press_and_double_tap(contact, x, y, now_ms, event_ms)
         };
         // Resolve the lift and its caret before the quick tap can change paint geometry.
         if let Some(key) = feedback {
@@ -1361,7 +1342,7 @@ impl<D: DataSource> Presenter<D> {
             let at = self
                 .hit(x, y)
                 .and_then(|id| self.host.kernel().node(id).map(|n| n.key));
-            if at == contact.hit {
+            if contact.hit.is_some() && at == contact.hit {
                 if let Some(retained) = &contact.retained {
                     if let Some(target) = &retained.press {
                         self.retained_press_target(target, now_ms);
@@ -1378,7 +1359,7 @@ impl<D: DataSource> Presenter<D> {
         match held.kind {
             HeldKind::Arrange(token) => self.end_arrange(token, None, now_ms).map(|_| ()),
             HeldKind::Transform { pair, .. } => self.end_transform_drag(pair, None, now_ms),
-            HeldKind::Height { .. } => self.height_end(held.primary.token, end, now_ms).map(|_| ()),
+            HeldKind::Height { .. } => self.cancel_height_drag(held, end, now_ms),
             HeldKind::Swipe { .. } => self.end_swipe(held, end, now_ms),
         }
     }

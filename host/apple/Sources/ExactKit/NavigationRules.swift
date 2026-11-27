@@ -36,11 +36,19 @@ package enum NavigationRules {
         shown.last { key in declared.contains { $0.contains(key) } }
     }
 
+    /// @ref LLP 1123 D7 — whether `kind`, a route's `navigationPresentation`, presents it: as a
+    /// sheet, a popover or over the whole screen.
+    package static func presents(_ kind: String?) -> Bool { kind == "modal" || kind == "popover" || kind == "fullscreen" }
+
+    /// Whether `kind` presents a route as a sheet where the host has no popovers: a sheet, or a
+    /// popover, which macOS shows as a window sheet until it presents an `NSPopover` (stage 4).
+    package static func sheetLike(_ kind: String?) -> Bool { kind == "modal" || kind == "popover" }
+
     /// D4: presentation boundaries split the selected prefix into retained
     /// owners. A later push stays in the most recent presentation's stack.
     package static func segments(presentations: [String?]) -> [Range<Int>] {
         var starts = [0]
-        for (index, kind) in presentations.enumerated() where kind == "modal" || kind == "fullscreen" {
+        for (index, kind) in presentations.enumerated() where presents(kind) {
             starts.append(index)
         }
         return zip(starts, starts.dropFirst() + [presentations.count]).map { $0..<$1 }

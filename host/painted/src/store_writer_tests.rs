@@ -457,7 +457,7 @@ fn a_boot_forgets_the_kept_answers_past_its_read_budget() {
         .collect();
     assert!(submit(app, kept).is_empty());
     assert!(drain(Duration::from_secs(10)));
-    let (snapshot, unread) = super::super::system::store_read(app, false);
+    let (snapshot, unread) = super::super::system::store_read(app, "", false).unwrap();
     assert_eq!((snapshot.len(), unread.len()), (1, 2), "one fits");
     // The boot's writes go with its first commit.
     let mut host = boot_session(app, "secret.keep token");

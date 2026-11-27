@@ -166,6 +166,11 @@ pub(crate) fn style_json_rows(
             RowValue::SafeAreaProperties(_) => false,
             // Layout only (LLP 1053 G1): the kernel sizes the box.
             RowValue::AspectRatio(_) => false,
+            // The host claims the window's guide at it (LLP 1123 D16)
+            RowValue::AspectFit(v) => {
+                let _ = write!(out, "\"{}\"", v.css());
+                true
+            }
             RowValue::PositionTryFallbacks(v) => {
                 let _ = write!(out, "\"{}\"", v.css());
                 true
@@ -828,6 +833,8 @@ pub struct Shown {
     paint: [Option<exact_motion::Value>; Property::PAINT.len()],
     /// The presented `filter`.
     pub filter: Option<exact_kernel::svg::filter::FilterList>,
+    /// The presented `clip-path` the engine samples (LLP 1003.003 D7).
+    pub clip: Option<exact_kernel::clip::ClipPath>,
 }
 
 impl Shown {
@@ -839,7 +846,7 @@ impl Shown {
 
     /// Whether anything is presented over the rows.
     pub fn moving(&self) -> bool {
-        self.paint.iter().any(Option::is_some) || self.filter.is_some()
+        self.paint.iter().any(Option::is_some) || self.filter.is_some() || self.clip.is_some()
     }
 
     /// Set one paint property's presented value.
@@ -866,6 +873,10 @@ fn paint_over(computed: &mut StyleProps, shown: &Shown) {
     if let Some(f) = &shown.filter {
         computed.filter = f.clone();
         computed.mask.set(StyleId::Filter);
+    }
+    if let Some(c) = &shown.clip {
+        computed.rare.clip_path = c.clone();
+        computed.mask.set(StyleId::ClipPath);
     }
     if let Some(c) = shown.get(Property::Color) {
         computed.text_color = fixed(c);
@@ -1068,7 +1079,25 @@ fn style_json_shown(
             // it (LLP 1034 §8).
             .union(StyleMask::of(StyleId::ColorScheme))
     };
-    let mut computed = node.computed_style(rows.union(node.style.written));
+    // AppKit draws the selected segment in the group's computed accent.
+    #[cfg(target_os = "macos")]
+    let rows = match node.props.str(PropId::AccessibilityRole) {
+        Some("tablist" | "radiogroup") => rows.union(StyleMask::of(StyleId::AccentColor)),
+        _ => rows,
+    };
+    // A platform text style the author wrote on this node owns the style's
+    // weight (LLP 1115.000 D12.2): include `font_weight` in `"written"` so
+    // hosts merging authored typography over a platform font apply it.
+    let authored_text_style_weight = node.style.written.has(StyleId::FontSize)
+        && node.style_source_of(StyleId::FontWeight) == Some(node.id);
+    let mut ask = rows.union(node.style.written);
+    if authored_text_style_weight {
+        ask.set(StyleId::FontWeight);
+    }
+    let mut computed = node.computed_style(ask);
+    if authored_text_style_weight {
+        computed.written.set(StyleId::FontWeight);
+    }
     if node.node_type == NodeType::Video {
         computed.object_fit = exact_kernel::object::video_fit(
             computed.object_fit,

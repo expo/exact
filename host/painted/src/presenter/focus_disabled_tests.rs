@@ -415,3 +415,134 @@ fn a_hover_that_disables_the_focused_control_blurs_it_before_the_next_hover() {
     );
     assert_eq!(p.focus(), None);
 }
+
+#[test]
+fn css_hidden_focus_blurs_blocks_ghost_input_and_preserves_tab() {
+    for attached in [false, true] {
+        for (mode, prop, hidden_val, ancestor) in [
+            ("display-self", "display", "none", false),
+            ("display-ancestor", "display", "none", true),
+            ("visibility-hidden-self", "visibility", "hidden", false),
+            ("visibility-hidden-ancestor", "visibility", "hidden", true),
+            ("visibility-collapse-self", "visibility", "collapse", false),
+        ] {
+            let shown_val = if prop == "display" {
+                "block"
+            } else {
+                "visible"
+            };
+            let box_attr = if ancestor {
+                format!("{prop}=(hide ? \"{hidden_val}\" : \"{shown_val}\")")
+            } else {
+                String::new()
+            };
+            let btn_attr = if ancestor {
+                String::new()
+            } else {
+                format!("{prop}=(hide ? \"{hidden_val}\" : \"{shown_val}\")")
+            };
+            let source = format!(
+                r#"component App
+  state hide = false
+  state clicks = 0
+  state text = ""
+  state log = ""
+  action conceal
+    hide = true
+  action activate
+    clicks = clicks + 1
+  action edit(value: string)
+    text = value
+  action changed(value: string)
+    log = `${{log}}c`
+  action keyed(key: string)
+    log = `${{log}}k`
+  action note(s: string)
+    log = `${{log}}${{s}}`
+  view
+    column focusout=note("o")
+      column {box_attr}
+        button "Target" press=activate blur=note("b") key=keyed testId="target" {btn_attr}
+        input value=text input=edit change=changed blur=note("B") testId="field" {btn_attr}
+      button "Hide" press=conceal testId="hide"
+      button "Next" testId="next"
+"#
+            );
+            let mut p = boot(&source);
+            let sync = |p: &mut Presenter<NoData>| {
+                if attached {
+                    let frame = p.display_frame().unwrap();
+                    assert!(p.display_complete(&frame));
+                } else {
+                    p.frame();
+                }
+            };
+            sync(&mut p);
+
+            let target = named(&p, "target");
+            let hide = named(&p, "hide");
+            assert!(p.set_focus(Some(target), 0.).is_none());
+            assert!(p.host.dispatch_at(hide, Event::Press, 1.).is_none());
+            assert!(p.after_commit().is_none());
+            assert_eq!(p.focus(), None, "{mode} attached={attached}");
+            assert_eq!(log(&p), "bo", "{mode} attached={attached}");
+
+            // Ghost Enter/Space before or after display sync must not activate the hidden button.
+            p.key_down("Enter", 2.);
+            p.key_down(" ", 3.);
+            assert_eq!(
+                p.host.runner().slot("clicks"),
+                Some(&Value::Number(0.0)),
+                "{mode} attached={attached}"
+            );
+            assert_eq!(log(&p), "bo", "{mode} attached={attached}");
+
+            // Tab must not deadlock: moves to the first remaining visible stop.
+            sync(&mut p);
+            p.key_down("Tab", 4.);
+            assert_eq!(p.focus(), Some(hide), "{mode} attached={attached}");
+
+            // Also verify edited text field commits change then blurs, and rejects ghost typing.
+            let mut p2 = boot(&source);
+            sync(&mut p2);
+            let field = named(&p2, "field");
+            let hide2 = named(&p2, "hide");
+            p2.type_text(field, "ab").unwrap();
+            assert!(p2.host.dispatch_at(hide2, Event::Press, 5.).is_none());
+            assert!(p2.after_commit().is_none());
+            assert_eq!(p2.focus(), None, "field {mode} attached={attached}");
+            assert_eq!(log(&p2), "cBo", "field {mode} attached={attached}");
+            p2.key_down("z", 6.);
+            assert_eq!(
+                p2.field_text(field),
+                "ab",
+                "field ghost key {mode} attached={attached}"
+            );
+        }
+    }
+
+    // A visibility:visible child inside a visibility:hidden ancestor keeps focus.
+    let mut p = boot(
+        r#"component App
+  state hide = false
+  state clicks = 0
+  action conceal
+    hide = true
+  action activate
+    clicks = clicks + 1
+  view
+    column
+      column visibility=(hide ? "hidden" : "visible")
+        button "Kept" press=activate visibility="visible" testId="kept"
+      button "Hide" press=conceal testId="hide"
+"#,
+    );
+    let kept = named(&p, "kept");
+    let hide = named(&p, "hide");
+    assert!(p.set_focus(Some(kept), 0.).is_none());
+    assert!(p.host.dispatch_at(hide, Event::Press, 1.).is_none());
+    assert!(p.after_commit().is_none());
+    assert_eq!(p.focus(), Some(kept));
+    p.key_down("Enter", 2.);
+    assert_eq!(p.host.runner().slot("clicks"), Some(&Value::Number(1.0)));
+}

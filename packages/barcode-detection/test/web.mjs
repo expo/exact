@@ -11,7 +11,7 @@
 //
 // `agent.mjs` drives the fixture under the agent, on the web and Apple.
 //
-// usage: bun packages/barcode-detection/test/web.mjs [chromium] [firefox] [webkit]
+// usage: bun packages/barcode-detection/test/web.mjs [chromium] [firefox] [webkit] [chromium-face]
 //   (every engine by default; `bunx playwright@1.65.1 install firefox webkit` first)
 import { extname, join, resolve } from 'node:path';
 import { STILLS, boxOf, checker, discard, images, makeFixture, near, root, run } from './fixture.mjs';
@@ -28,13 +28,14 @@ const server = Bun.serve({ port: 0, async fetch(req) {
   if (path === '/') path = '/index.html';
   const file = Bun.file(join(dist, path));
   if (!(await file.exists())) return new Response('not found', { status: 404 });
-  return new Response(file, { headers: { 'content-type': types[extname(path)] ?? 'application/octet-stream' } });
+  return new Response(file, { headers: { 'content-security-policy': "img-src 'self'", 'content-type': types[extname(path)] ?? 'application/octet-stream' } });
 } });
 // 127.0.0.1 is a secure context, which `BarcodeDetector` needs.
 const origin = `http://127.0.0.1:${server.port}`;
 const { chromium, firefox, webkit } = await import(resolve(root, 'node_modules/playwright-core/index.mjs'));
 for (const engine of engines) {
-  const browser = await { chromium, firefox, webkit }[engine].launch();
+  const browser = engine === 'chromium-face' ? await chromium.launch({ args: ['--enable-experimental-web-platform-features'] }) :
+    await { chromium, firefox, webkit }[engine].launch();
   const texts = (page, id) => page.getByTestId(id).allInnerTexts().catch(() => []);
   const text = async (page, id) => (await texts(page, id))[0] ?? '';
   const until = async (page, id, want) => {
@@ -82,6 +83,46 @@ for (const engine of engines) {
       check(engine, 'a path outside the grants: NotAllowedError', await until(page, 'found-error', t => t === 'NotAllowedError') === 'NotAllowedError', await text(page, 'found-error'));
       await page.getByTestId('detect-missing').click();
       check(engine, 'a missing file: NotFoundError', await until(page, 'found-error', t => t === 'NotFoundError') === 'NotFoundError', await text(page, 'found-error'));
+    }
+    const hasFaces = await page.evaluate(() => typeof FaceDetector === 'function');
+    if (engine === 'chromium-face') check(engine, 'experimental FaceDetector is enabled', hasFaces);
+    if (hasFaces) {
+      let frontalBox;
+      for (const name of ['frontal', 'exif6']) {
+        if (name === 'exif6') await page.reload();
+        const previous = await text(page, 'path');
+        const portrait = resolve(root, 'packages/face-detection/fixture', name + '.jpg');
+        await page.getByTestId('image').setInputFiles(portrait);
+        await until(page, 'path', t => t.startsWith('app:/tmp/picked/') && t !== previous);
+        const expected = await page.evaluate(async bytes => {
+          const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)]));
+          try {
+            const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+            canvas.getContext('2d').drawImage(bitmap, 0, 0);
+            const faces = await new FaceDetector({ maxDetectedFaces: 65535 }).detect(canvas);
+            return `${bitmap.width}x${bitmap.height} ${faces.length}`;
+          } catch (e) {
+            if (e.name === 'NotSupportedError') return e.name;
+            throw e;
+          } finally { bitmap.close(); }
+        }, Array.from(await Bun.file(portrait).bytes()));
+        await page.getByTestId('detect-faces').click();
+        const result = await until(page, 'faces', t => t !== '' && t !== 'waiting');
+        check(engine, name + ' under img-src self', result === expected && (engine !== 'chromium-face' || result === '400x480 1'), result);
+        if (result === '400x480 1') {
+          const box = (await text(page, 'face-box')).split(' ').map(Number);
+          if (name === 'frontal') frontalBox = box;
+          else check(engine, 'EXIF preserves the upright face box', box.length === 4 &&
+            box.every((v, i) => Math.abs(v - frontalBox?.[i]) < 12), box);
+        }
+      }
+      await page.reload();
+      await page.getByTestId('detect-faces-missing').click();
+      check(engine, 'missing face image', await until(page, 'faces', t => t === 'NotFoundError') === 'NotFoundError', await text(page, 'faces'));
+    } else {
+      await page.getByTestId('detect-faces-missing').click();
+      const result = await until(page, 'faces', t => t === 'NotSupportedError');
+      check(engine, 'face detection unavailable', result === 'NotSupportedError', result);
     }
     await page.getByTestId('read-missing').click();
     const r = await until(page, 'read-error', t => t !== '');

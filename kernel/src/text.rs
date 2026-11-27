@@ -110,8 +110,8 @@ pub struct TextStyle {
     pub font_optical_sizing: crate::FontOpticalSizing,
     /// Index into the host's font registry (0 = system default).
     pub font_family: u16,
-    /// Resolved logical length, or natural metrics. Zero remains explicit.
-    pub line_height: Option<f32>,
+    /// Line-height kind, resolved against the size the host draws the run at.
+    pub line_height: crate::LineHeight,
     /// Additional advance per glyph, in points.
     pub letter_spacing: f32,
     /// OpenType numeric-feature bitmask.
@@ -161,11 +161,18 @@ impl TextStyle {
         s.style()
     }
 
-    /// This style drawn at `scale` of its size: its font size, a resolved
-    /// line height and its letter spacing (LLP 1116.001 D1.4, a fitted text).
+    /// The used line height in points. `None` uses natural font metrics.
+    pub fn used_line_height(&self) -> Option<f32> {
+        self.line_height.resolve(self.font_size)
+    }
+
+    /// Fit the font size, explicit line-height lengths and letter spacing
+    /// (LLP 1116.001 D1.4).
     pub fn scaled(mut self, scale: f32) -> Self {
         self.font_size *= scale;
-        self.line_height = self.line_height.map(|h| h * scale);
+        if let crate::LineHeight::Length(height) = self.line_height {
+            self.line_height = crate::LineHeight::Length(height * scale);
+        }
         self.letter_spacing *= scale;
         self
     }
@@ -180,7 +187,7 @@ impl TextStyle {
             font_variations: s.font_variation_settings,
             font_optical_sizing: s.font_optical_sizing,
             font_family: s.font_family,
-            line_height: s.line_height.resolve(s.font_size),
+            line_height: s.line_height,
             letter_spacing: s.letter_spacing,
             font_variant_numeric: s.font_variant_numeric,
             font_variant_ligatures: s.font_variant_ligatures,
@@ -738,7 +745,7 @@ impl Default for MonospaceMeasurer {
 impl MonospaceMeasurer {
     fn line_height(&self, style: &TextStyle) -> f32 {
         style
-            .line_height
+            .used_line_height()
             .unwrap_or(style.font_size * self.line_height_em)
     }
 
@@ -1265,7 +1272,7 @@ impl TextRows {
             font_variations: self.font_variations,
             font_optical_sizing: self.font_optical_sizing,
             font_family: self.font_family,
-            line_height: self.line_height.resolve(self.font_size),
+            line_height: self.line_height,
             letter_spacing: self.letter_spacing,
             font_variant_numeric: self.font_variant_numeric,
             font_variant_ligatures: self.font_variant_ligatures,

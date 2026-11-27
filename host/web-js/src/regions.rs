@@ -55,15 +55,14 @@ impl Em<'_> {
             return Ok(String::new());
         }
         if owner.is_some() {
-            let depth = scope.frames.len();
+            let arm_depth = self.mount_templates.scope_depth + 1;
             let names = std::rc::Rc::make_mut(&mut scope.local_derives);
             for (ordinal, &(i, _)) in rows.iter().enumerate() {
-                let name = if scope.capture {
-                    format!("d_L{depth}_{ordinal}")
+                if scope.capture {
+                    names.insert(i, (format!("_{ordinal}"), arm_depth));
                 } else {
-                    format!("d_{i}")
-                };
-                names.insert(i, (name, self.mount_templates.scope_depth + 1));
+                    names.insert(i, (format!("d_{i}"), 0));
+                }
             }
         }
         let mut inner = scope.clone();
@@ -84,11 +83,11 @@ impl Em<'_> {
                 0,
                 &mut self.uses,
             )?;
-            let name = scope
-                .local_derives
-                .get(&i)
-                .map(|(name, _)| name.clone())
-                .unwrap_or_else(|| format!("d_{i}"));
+            let name = match scope.local_derives.get(&i) {
+                Some((suffix, depth)) if *depth > 0 => code::binder_decl(*depth, "d_L", suffix),
+                Some((name, _)) => name.clone(),
+                None => format!("d_{i}"),
+            };
             let getter = if inner.capture {
                 // Resolve captures when the value is read. Its resource or another
                 // getter may be declared after this one in the same scope.
@@ -111,10 +110,26 @@ impl Em<'_> {
             RegionKind::When | RegionKind::Match => {
                 let subject = self.region_subject(r, parent, scope)?;
                 let depth = scope.frames.len();
-                let bound = (row.kind == RegionKind::Match).then(|| format!("b{depth}"));
+                let capture = !self.site_attrs && !self.dev_reload;
+                let arm_scope_depth = self.mount_templates.scope_depth + 1;
+                let bound = (row.kind == RegionKind::Match).then(|| {
+                    if capture {
+                        "b".to_string()
+                    } else {
+                        format!("b{depth}")
+                    }
+                });
+                let bound_param = (row.kind == RegionKind::Match).then(|| {
+                    if capture {
+                        code::binder_decl(arm_scope_depth, "b", "")
+                    } else {
+                        format!("b{depth}")
+                    }
+                });
                 let mut inner = scope.clone();
                 inner.frames.push(Frame {
                     bound: bound.clone(),
+                    depth: if capture { arm_scope_depth } else { 0 },
                     ..Frame::default()
                 });
                 let mut bodies = Vec::new();
@@ -128,7 +143,7 @@ impl Em<'_> {
                         s.frames.push(Frame::default());
                         s
                     };
-                    sc.capture = !self.site_attrs && !self.dev_reload;
+                    sc.capture = capture;
                     // The arm's own slots, started from their initializers
                     // each time it shows, dropped when it hides (LLP 1017 P4c).
                     // A tab panel's one arm (LLP 1075.003 §9.14): the dev
@@ -138,16 +153,17 @@ impl Em<'_> {
                             .parent
                             .is_some_and(|p| self.panels.binary_search(&p).is_ok());
                     let carry = panel.then(|| format!("{parent}.getAttribute(\"id\")"));
-                    let path = self.instance_path(&mut sc, format!("\"/{r}:{k}\""), arm);
+                    let seg = sc.operand(format!("\"/{r}:{k}\""));
+                    let path = self.instance_path(&mut sc, seg, arm);
                     self.out.push_str(&path);
                     let decl = self.owned(arm, &format!("$a{arm}"), &mut sc, carry.as_deref())?;
                     self.out.push_str(&decl);
                     let outer_names = self.next_local_element;
-                    self.next_local_element = (!self.site_attrs && !self.dev_reload).then_some(0);
+                    self.next_local_element = capture.then_some(0);
                     let binds = !path.is_empty() || !decl.is_empty() || (k == 0 && bound.is_some());
-                    if binds && sc.capture && path.is_empty() && (k != 0 || bound.is_none()) {
-                        // This arm binds only getters and the row state object. A mount shared
-                        // outside the arm takes either binding from the instance that calls it.
+                    if binds && sc.capture {
+                        // This arm's bindings (getters, row state, match payload, path) are lexical
+                        // operands so mounts shared outside the arm receive them from the caller.
                         self.mount_templates.scope_depth += 1;
                         let children = self.children(self.sites.of_arm(arm), "p", &sc);
                         self.mount_templates.scope_depth -= 1;
@@ -159,7 +175,7 @@ impl Em<'_> {
                     }
                     self.next_local_element = outer_names;
                     let built = std::mem::replace(&mut self.out, saved);
-                    let params = match (&bound, k) {
+                    let params = match (&bound_param, k) {
                         (Some(b), 0) => format!("p,{b}"),
                         _ => "p".into(),
                     };
@@ -208,7 +224,7 @@ impl Em<'_> {
         let Some(owners) = self.answers.status_region(r) else {
             return Ok(subject);
         };
-        let owners = super::answers::status_owners(owners);
+        let owners = super::answers::status_owners(owners, &scope);
         let guard = self.uses.rt("statusSubject");
         Ok(format!(
             "(globalThis.__exactRender?{guard}({parent},{subject},{owners}):{subject})"
@@ -228,7 +244,10 @@ impl Em<'_> {
         carry: Option<&str>,
     ) -> Result<String, String> {
         let plan = self.plan;
-        let local_name = scope.capture.then(|| format!("$a{}", scope.frames.len()));
+        let arm_depth = self.mount_templates.scope_depth + 1;
+        let local_name = scope
+            .capture
+            .then(|| code::binder_decl(arm_depth, "$a", ""));
         let name = local_name.as_deref().unwrap_or(name);
         // A child's resources this arm's instances own (LLP 1035.005.004 D1).
         let requests: Vec<usize> = (plan.resources.iter().enumerate())
@@ -259,10 +278,11 @@ impl Em<'_> {
             None => format!("const {name}={{}};"),
         };
         scope.rows = Some(if scope.capture {
-            code::lexical_operand(name, self.mount_templates.scope_depth + 1)
+            code::binder_ref(arm_depth, "$a", "")
         } else {
             name.to_string()
         });
+        scope.owned_arms.insert(arm);
         scope
             .row_slots
             .extend(self.answers.slots(arm).iter().copied());
@@ -333,8 +353,18 @@ impl Em<'_> {
             return String::new();
         }
         let outer = scope.path.clone().unwrap_or_else(|| "\"\"".into());
-        scope.path = Some(format!("$q{arm}"));
-        format!("const $q{arm}={outer}+{segment};")
+        let arm_depth = self.mount_templates.scope_depth + 1;
+        let name = if scope.capture {
+            code::binder_decl(arm_depth, "$q", "")
+        } else {
+            format!("$q{arm}")
+        };
+        scope.path = Some(if scope.capture {
+            code::binder_ref(arm_depth, "$q", "")
+        } else {
+            name.clone()
+        });
+        format!("const {name}={outer}+{segment};")
     }
 
     /// A `for`, or a virtualized list's rows when `list` carries the
@@ -351,12 +381,23 @@ impl Em<'_> {
         let subject = self.region_subject(r, parent, scope)?;
         let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
         let depth = scope.frames.len();
-        let (item, index) = (format!("i{depth}"), format!("x{depth}"));
+        let capture = !self.site_attrs && !self.dev_reload;
+        let row_depth = self.mount_templates.scope_depth + 1;
+        let (item, index) = if capture {
+            (
+                code::binder_decl(row_depth, "i", ""),
+                code::binder_decl(row_depth, "x", ""),
+            )
+        } else {
+            (format!("i{depth}"), format!("x{depth}"))
+        };
         let mut inner = scope.clone();
+        inner.capture = capture;
         inner.frames.push(Frame {
-            item: Some(item.clone()),
-            index: Some(index.clone()),
+            item: Some(if capture { "i".into() } else { item.clone() }),
+            index: Some(if capture { "x".into() } else { index.clone() }),
             bound: None,
+            depth: if capture { row_depth } else { 0 },
         });
         let before = self.uses.metered;
         let key = code::function(
@@ -370,7 +411,13 @@ impl Em<'_> {
             &mut self.uses,
         )
         .map_err(|x| format!("region {r} key: {x}"))?;
-        let pure = crate::reads::pure_key(&key, &item, &index);
+        let pure = if capture {
+            let expanded = self.mount_templates.expand_inline(&key);
+            let idx = row_depth - self.mount_templates.declaration_depth() - 1;
+            crate::reads::pure_key(&expanded, &format!("i{idx}"), &format!("x{idx}"))
+        } else {
+            crate::reads::pure_key(&key, &item, &index)
+        };
         let key = code::called_expression(code::evaluated(
             key,
             &self.site_evaluation(&inner, region_site(plan, r), "each key".into(), true),
@@ -382,23 +429,43 @@ impl Em<'_> {
         // The row's identity (`$k`, rows.js `rowKey`) names its instances.
         let path = if self.path_arms[arms[0] as usize] && list.is_none() {
             let row_path = self.uses.rt("rowPath");
-            self.instance_path(&mut inner, format!("\"/{r}=\"+{row_path}($k)"), arms[0])
+            let seg = inner.operand(format!("\"/{r}=\""));
+            self.instance_path(&mut inner, format!("{seg}+{row_path}($k)"), arms[0])
         } else {
             String::new()
         };
         let row_key = if path.is_empty() { "" } else { ",$k" };
         let rows_decl = self.owned(arms[0], &format!("$r{r}"), &mut inner, None)?;
         let saved = std::mem::take(&mut self.out);
+        let outer_names = self.next_local_element;
+        if list.is_none() {
+            self.next_local_element = (!self.site_attrs && !self.dev_reload).then_some(0);
+        }
         self.out.push_str(&path);
         self.out.push_str(&rows_decl);
-        self.template_scope(true, |em| {
-            em.children(em.sites.of_arm(arms[0]), "p", &inner)
-        })?;
+        if inner.capture {
+            self.mount_templates.scope_depth += 1;
+            let children = self.children(self.sites.of_arm(arms[0]), "p", &inner);
+            self.mount_templates.scope_depth -= 1;
+            children?;
+        } else {
+            self.template_scope(true, |em| {
+                em.children(em.sites.of_arm(arms[0]), "p", &inner)
+            })?;
+        }
+        self.next_local_element = outer_names;
         let built = std::mem::replace(&mut self.out, saved);
         match list {
             Some(opts) => {
                 let inputs = self.row_inputs(r, scope)?;
-                let text = self.logical_children(self.sites.of_arm(arms[0]), &inner)?;
+                let text = if inner.capture {
+                    self.mount_templates.scope_depth += 1;
+                    let text = self.logical_children(self.sites.of_arm(arms[0]), &inner);
+                    self.mount_templates.scope_depth -= 1;
+                    text?
+                } else {
+                    self.logical_children(self.sites.of_arm(arms[0]), &inner)?
+                };
                 let _ = write!(
                     self.out,
                     "$vl({parent},{subject},({item},{index})=>{key},(p,{item},{index})=>{{{}}},{{...{opts},{inputs},text:({item},{index})=>{{{}}}}});",
@@ -417,7 +484,7 @@ impl Em<'_> {
                     (false, p) => p.to_string(),
                 };
                 let params = format!("p,{item},{index}{row_key}");
-                let row = if inner.capture && self.next_local_element.is_some() {
+                let row = if inner.capture {
                     self.mount_templates
                         .mount(&params, built, None, Some(region_site(plan, r)))
                 } else {

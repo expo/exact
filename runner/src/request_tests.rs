@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn http_is_ordered_until_the_source_explicitly_opts_in() {
+    for request in [
+        Request::get("https://example.test"),
+        Request::post_json("https://example.test", "{}"),
+        Request::continuation::<crate::host_work::TestWork>(1),
+        Request::storage(vec![]),
+    ] {
+        assert_eq!(request.http, HttpScheduling::Ordered);
+    }
+    let request = Request::get("https://example.test").independent_http(4096);
+    assert_eq!(
+        request.http,
+        HttpScheduling::Independent {
+            max_response_bytes: 4096
+        }
+    );
+}
+
+#[test]
 fn surface_scope_must_be_admitted_and_name_the_operation() {
     let admitted = "surface.read world\nsurface.write world\nsurface.read map";
     assert!(Request::capture_surface("world")

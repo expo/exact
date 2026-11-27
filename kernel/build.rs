@@ -162,7 +162,7 @@ fn digest(canonical: &str, codecs: &[(&str, String)]) -> u64 {
         // Tests do not define wire bytes, so exclude them and the snapshot itself.
         hasher.update(
             source
-                .split_once("\n#[cfg(test)]\n")
+                .split_once("\n#[cfg(test)]")
                 .map_or(source.as_str(), |(production, _)| production)
                 .as_bytes(),
         );
@@ -638,7 +638,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     // ---- StyleId / StyleCodec --------------------------------------------
     writeln!(w, "/// Wire codec of a style row.").unwrap();
     writeln!(w, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]").unwrap();
-    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, AutoI32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, Paint, DashArray, Transform, TransformOrigin, ObjectPosition, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, SafeAreaProperties, TimelineName, ViewTimelineInset, PositionTryFallbacks, Enum }}").unwrap();
+    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, AutoI32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, AspectFit, Paint, DashArray, Transform, TransformOrigin, ObjectPosition, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, SafeAreaProperties, TimelineName, ViewTimelineInset, PositionTryFallbacks, Enum }}").unwrap();
     writeln!(w, "/// One style row; the discriminant is the mask bit.").unwrap();
     writeln!(w, "#[repr(u16)]").unwrap();
     writeln!(
@@ -1097,7 +1097,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     .unwrap();
     writeln!(
         w,
-        "            let relative = (self.relative.get(id), patch.relative.get(id));"
+        "            let relative = (self.relative.get_spec(id), patch.relative.get_spec(id));"
     )
     .unwrap();
     // A row written the same relative way is unchanged, whatever pixels

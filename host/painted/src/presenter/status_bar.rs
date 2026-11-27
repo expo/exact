@@ -2,6 +2,7 @@
 //! covering scope, using iOS's declaration order and the winner's scheme;
 //! `system-bars-hidden` by the same rule, apart from the style.
 use super::*;
+use exact_kernel::props::Presentation;
 use std::cell::Cell;
 
 #[derive(Clone, Copy)]
@@ -19,6 +20,9 @@ pub(super) struct Choice {
 struct Generation {
     host: u64,
     epoch: u64,
+    roles: u64,
+    bar_root: Option<ViewId>,
+    sheet_open: bool,
     dark: bool,
     viewport: exact_runner::Viewport,
     split: Option<(ViewId, bool)>,
@@ -43,7 +47,11 @@ impl<D: DataSource> Presenter<D> {
         // synchronizes route visibility from that same tree before chrome is read.
         // Schemes, viewport preferences and split visibility can change without
         // a kernel commit. Scroll offsets cannot change the winning declaration.
+        let _roles = self.host.runner().bind_roles();
         let generation = Generation {
+            roles: exact_kernel::style::roles::generation(),
+            bar_root: self.host.bars().root,
+            sheet_open: self.sheet_open(),
             host: self.hosts,
             epoch: self.host.kernel().epoch(),
             dark: self.dark(),
@@ -74,11 +82,12 @@ impl<D: DataSource> Presenter<D> {
             .resolutions
             .set(self.window.status_bar.resolutions.get() + 1);
         let kernel = self.host.kernel();
+        let [status, navigation] = self.bar_icon_appearance();
         let mut choice = Choice {
             style: "default",
             source: None,
-            light_icons: self.dark(),
-            navigation_light_icons: self.dark(),
+            light_icons: status.unwrap_or_else(|| self.dark()),
+            navigation_light_icons: navigation.unwrap_or_else(|| self.dark()),
             hidden: false,
             hidden_source: None,
         };
@@ -119,13 +128,14 @@ impl<D: DataSource> Presenter<D> {
             .into_iter()
             .filter_map(|stack| stack.last().copied())
             .filter(|id| {
-                kernel.node(*id).is_some_and(|n| {
-                    match n.props.str(PropId::NavigationPresentation) {
-                        Some("fullscreen") => true,
-                        Some("modal") => !sheets,
-                        _ => false,
-                    }
-                }) && !self.host.navigation.visibility_of(kernel, *id, false).0
+                kernel
+                    .node(*id)
+                    .is_some_and(|n| match n.props.presentation() {
+                        Some(Presentation::FullScreen) => true,
+                        Some(_) => !sheets,
+                        None => false,
+                    })
+                    && !self.host.navigation.visibility_of(kernel, *id, false).0
                     && self.status_bar_in_page(*id)
             })
             .collect();

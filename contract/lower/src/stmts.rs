@@ -131,8 +131,15 @@ impl Lowerer<'_> {
                         self.push(e);
                     }
                 }
+                if name == "requestPictureInPicture" && args.len() > 1 {
+                    self.picture_ids
+                        .get_or_init(|| PictureIds::in_view(&self.root.view))
+                        .video_window_options(args)?;
+                }
                 if name == "share" {
-                    share_pictures(&self.root.view, args)?;
+                    self.picture_ids
+                        .get_or_init(|| PictureIds::in_view(&self.root.view))
+                        .share_pictures(args)?;
                 }
                 crate::frames::check_command(&self.root.view, name, args)?;
                 let iframe = name == "postMessage"
@@ -203,72 +210,117 @@ impl Lowerer<'_> {
     }
 }
 
-/// `share(files=["#id"])` (LLP 1125 D12): a literal `#id` that no element of
-/// the whole expanded view carries is refused here. Where some element's id
-/// is computed, or a node is not expanded or draws elements of its own
-/// (Markdown's headings), any id may exist, and the runner refuses a
-/// missing one into the journal when the share runs.
-fn share_pictures(view: &[Node], args: &[Expr]) -> Result<(), LowerError> {
-    let wanted: Vec<(&str, Span)> = args
-        .iter()
-        .filter_map(|a| match a {
-            Expr::NamedArg(n, value, _) if n == "files" => match value.as_ref() {
-                Expr::List(items, _) => Some(items),
-                _ => None,
-            },
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|item| match item {
-            Expr::Str(s, at) => s.strip_prefix('#').map(|id| (id, *at)),
-            _ => None,
-        })
-        .collect();
-    if wanted.is_empty() {
-        return Ok(());
-    }
-    let mut ids = BTreeSet::new();
-    let mut stack: Vec<&Node> = view.iter().collect();
-    while let Some(node) = stack.pop() {
-        match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                if tag == "markdown" {
-                    return Ok(());
-                }
-                match attrs
-                    .iter()
-                    .rev()
-                    .find(|a| a.name == "id")
-                    .map(|a| &a.value)
-                {
-                    Some(Expr::Str(id, _)) => {
-                        ids.insert(id.as_str());
+#[derive(Default)]
+pub(crate) struct PictureIds<'a> {
+    elements: BTreeSet<&'a str>,
+    videos: BTreeSet<&'a str>,
+    images: Vec<&'a Expr>,
+    may_generate_ids: bool,
+}
+
+impl<'a> PictureIds<'a> {
+    fn in_view(view: &'a [Node]) -> Self {
+        let mut ids = Self::default();
+        for node in Node::walk(view) {
+            match node {
+                Node::Element { tag, attrs, .. } => {
+                    ids.may_generate_ids |= tag == "markdown";
+                    let Some(id) = attrs.iter().rev().find(|a| a.name == "id") else {
+                        continue;
+                    };
+                    if tag == "image" {
+                        ids.images.push(&id.value);
                     }
-                    Some(_) => return Ok(()),
-                    None => {}
+                    if let Expr::Str(name, _) = &id.value {
+                        ids.elements.insert(name);
+                        if tag == "video" {
+                            ids.videos.insert(name);
+                        }
+                    } else {
+                        ids.may_generate_ids = true;
+                    }
                 }
-                stack.extend(children);
+                Node::Use { .. } | Node::Children { .. } => ids.may_generate_ids = true,
+                _ => {}
             }
-            Node::When {
-                then, otherwise, ..
-            } => stack.extend(then.iter().chain(otherwise)),
-            Node::Each { body, .. } => stack.extend(body),
-            Node::Match { some, none, .. } => stack.extend(some.1.iter().chain(none)),
-            Node::Use { .. } | Node::Children { .. } => return Ok(()),
         }
+        ids
     }
-    match wanted.into_iter().find(|(id, _)| !ids.contains(id)) {
+
+    /// `share(files=["#id"])` (LLP 1125 D12): a literal `#id` that no element of
+    /// the whole expanded view carries is refused here. Where some element's id
+    /// is computed, or a node is not expanded or draws elements of its own
+    /// (Markdown's headings), any id may exist, and the runner refuses a
+    /// missing one into the journal when the share runs.
+    fn share_pictures(&self, args: &[Expr]) -> Result<(), LowerError> {
+        let wanted: Vec<(&str, Span)> = args
+            .iter()
+            .filter_map(|a| match a {
+                Expr::NamedArg(n, value, _) if n == "files" => match value.as_ref() {
+                    Expr::List(items, _) => Some(items),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|item| match item {
+                Expr::Str(s, at) => s.strip_prefix('#').map(|id| (id, *at)),
+                _ => None,
+            })
+            .collect();
+        if self.may_generate_ids {
+            return Ok(());
+        }
+        match wanted.into_iter().find(|(id, _)| !self.elements.contains(id)) {
         Some((id, at)) => crate::err(
             "lower-share-picture",
             format!("`files=[\"#{id}\"]` names no element: nothing in the view has `id=\"{id}\"`, so there is no element to draw. Give the element to share `id=\"{id}\"`"),
             at,
         ),
         None => Ok(()),
+    }
+    }
+
+    /// A computed target is checked by the live host. A literal video target can be checked
+    /// here, after component expansion has supplied its attributes.
+    fn video_window_options(&self, args: &[Expr]) -> Result<(), LowerError> {
+        let Some(Expr::Str(target, _)) = args.iter().find(|a| !matches!(a, Expr::NamedArg(..)))
+        else {
+            return Ok(());
+        };
+        if self.videos.contains(target.as_str())
+            && !self.images.iter().any(|id| could_name(id, target))
+        {
+            if let Some(Expr::NamedArg(name, _, at)) =
+                args.iter().find(|arg| matches!(arg, Expr::NamedArg(..)))
+            {
+                return crate::err(
+                    "type-media-command",
+                    format!("`{name}` is an image window option and \"{target}\" is a video"),
+                    *at,
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+fn could_name(id: &Expr, target: &str) -> bool {
+    use contract_syntax::TemplatePart::Text;
+    match id {
+        Expr::Str(value, _) => value == target,
+        Expr::Template(parts, _) => {
+            let mut rest = target;
+            parts.iter().all(|part| match part {
+                Text(text) => rest.split_once(text.as_str()).is_some_and(|(_, after)| {
+                    rest = after;
+                    true
+                }),
+                _ => true,
+            }) && !matches!(parts.first(), Some(Text(prefix)) if !target.starts_with(prefix))
+                && !matches!(parts.last(), Some(Text(suffix)) if !target.ends_with(suffix))
+        }
+        _ => true,
     }
 }
 

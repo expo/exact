@@ -260,6 +260,14 @@ fn start_in_trails_the_pickers_and_save_file() {
     showSaveFilePicker("x", "a.png")
   action h
     saveFile("x", "app:/data/a.png", "a.png")
+  action openMessage
+    showOpenFilePicker("x", apple.message="Open a project")
+  action directoryMessage
+    showDirectoryPicker("x", apple.message=folder, startIn="downloads")
+  action project
+    showDirectoryPicker("x", apple.message=folder)
+  action saveMessage
+    showSaveFilePicker("x", "a.png", apple.message="Save a copy")
   view
     input id="x" display="none"
 "#;
@@ -269,6 +277,7 @@ fn start_in_trails_the_pickers_and_save_file() {
         ("a", vec![s("x"), none.clone(), s("pictures")]),
         ("b", vec![s("x"), Value::Bool(true), s("doc:/4/notes")]),
         ("c", vec![s("x"), s("downloads")]),
+        ("project", vec![s("x"), none.clone(), s("doc:/4/notes")]),
         ("d", vec![s("x"), s("a.png"), s("screenshots")]),
         (
             "e",
@@ -286,11 +295,27 @@ fn start_in_trails_the_pickers_and_save_file() {
         ),
         ("g", vec![s("x"), s("a.png")]),
         ("h", vec![s("x"), s("app:/data/a.png"), s("a.png")]),
+        (
+            "openMessage",
+            vec![s("x"), none.clone(), none.clone(), s("Open a project")],
+        ),
+        (
+            "directoryMessage",
+            vec![s("x"), s("downloads"), s("doc:/4/notes")],
+        ),
+        (
+            "saveMessage",
+            vec![s("x"), s("a.png"), none.clone(), s("Save a copy")],
+        ),
     ];
     for (action, args) in cases {
         r.act(action, vec![]).unwrap();
         let commands = r.take_commands();
         assert_eq!(commands.len(), 1, "{action}");
+        if let Some(kind) = exact_runner::file_pickers::Kind::of(&commands[0].name) {
+            // The painted hosts read this tuple directly, including its absent startIn slot.
+            exact_runner::file_pickers::Picker::from_args(kind, &commands[0].args).unwrap();
+        }
         let got: Vec<_> = (commands[0].args.iter())
             .map(|v| match v {
                 Value::Option(Some(v)) => (**v).clone(),
@@ -298,5 +323,27 @@ fn start_in_trails_the_pickers_and_save_file() {
             })
             .collect();
         assert_eq!(got, args, "{action}");
+    }
+}
+
+#[test]
+fn document_picker_option_errors_name_the_argument() {
+    for (args, reason) in [
+        ("apple.message=1", "`apple.message=` is a string"),
+        (
+            r#"apple.message="a", apple.message="b""#,
+            "`apple.message=` is given twice",
+        ),
+        (r#"message="a""#, "does not take `message=`"),
+        (r#"prompt="a""#, "does not take `prompt=`"),
+        (r#"apple.prompt="a""#, "does not take `apple.prompt=`"),
+    ] {
+        let src = format!("component App\n  action pick\n    showDirectoryPicker(\"x\", {args})\n  view\n    input id=\"x\"\n");
+        let e = contract::compile(&src).unwrap_err();
+        assert_eq!(e.id, "type-file-picker-argument");
+        assert!(e.message.contains(reason), "{}", e.message);
+        if reason.starts_with("does not take") {
+            assert!(e.message.contains("`startIn=` and `apple.message=`"));
+        }
     }
 }

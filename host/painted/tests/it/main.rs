@@ -6,6 +6,7 @@ mod accent;
 mod animation;
 mod arrange;
 mod box_filter;
+mod clip_motion;
 mod colors;
 mod focus;
 mod font_stack;

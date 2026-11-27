@@ -69,17 +69,18 @@ impl Taken {
         }
     }
 
-    /// How far an extended box's scroll origin, its padding box's start,
-    /// moved out, across and down: the engine measures its content from
-    /// where its parent places it (Taffy patch 80), and its own extent
-    /// counts from its extended box.
-    pub(crate) fn origin(&self, arena: &NodeArena, slot: u32) -> (f32, f32) {
-        let [top, right, _, left] = self.by;
-        match (self.offset, super::owner::rtl(arena, slot)) {
-            (Some(_), _) => (0.0, 0.0),
-            (None, false) => (left, top),
-            (None, true) => (right, top),
+    /// How far an extended box's scroll origin moved out, across and down:
+    /// the engine measures its content from where its parent places it (Taffy
+    /// patch 80), and its own extent counts from its extended box.
+    pub(crate) fn origin(&self, reversed: taffy::geometry::Point<bool>) -> (f32, f32) {
+        let [top, right, bottom, left] = self.by;
+        if self.offset.is_some() {
+            return (0.0, 0.0);
         }
+        (
+            if reversed.x { right } else { left },
+            if reversed.y { bottom } else { top },
+        )
     }
 }
 
@@ -444,12 +445,13 @@ pub(crate) fn place(
     slot: u32,
     frame: crate::Frame,
     content: (f32, f32),
+    reversed: taffy::geometry::Point<bool>,
 ) -> (crate::Frame, (f32, f32), (f32, f32)) {
     let Some(taken) = arena.observations.taken(slot) else {
         return (frame, (0.0, 0.0), content);
     };
     let [x, y, width, height] = taken.frame();
-    let (across, down) = taken.origin(arena, slot);
+    let (across, down) = taken.origin(reversed);
     let frame = crate::Frame {
         x: frame.x + x,
         y: frame.y + y,

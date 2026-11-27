@@ -15,6 +15,8 @@
 //! in the box. Glyphs are rasterized by swash once per (glyph, color) into
 //! small premultiplied pixmaps.
 
+#[cfg(target_os = "android")]
+pub(crate) mod android_advances;
 #[cfg(test)]
 mod background_tests;
 pub(crate) mod backgrounds;
@@ -27,6 +29,8 @@ mod edges_tests;
 mod fallback;
 pub(crate) mod field;
 use field::WidthUse;
+#[cfg(any(target_os = "android", test))]
+mod android_symbols;
 #[cfg(test)]
 pub(crate) mod fixtures;
 mod flow;
@@ -57,8 +61,9 @@ pub use lines::{Face, LayoutGlyph, LayoutLine, LayoutRoom, Lines, RoomKind};
 pub use shaping::LayoutRun;
 
 use crate::image::Assets;
+use exact_kernel::text::Markup;
 use exact_kernel::{
-    AxisOffer, ParagraphStamp, TextAlign, TextMeasureRequest, TextMeasurer, TextMetrics,
+    AxisOffer, ParagraphStamp, TextAlign, TextMeasureRequest, TextMeasurer, TextMetrics, TextRun,
 };
 use exact_plan::{Plan, StackMemberKind};
 use std::cell::RefCell;
@@ -171,7 +176,7 @@ impl Run {
             stretch: style.font_stretch,
             variations: style.font_variations,
             optical_sizing: style.font_optical_sizing == exact_kernel::FontOpticalSizing::Auto,
-            line_height: style.line_height,
+            line_height: style.used_line_height(),
             letter_spacing: style.letter_spacing,
             font_variant_numeric: style.font_variant_numeric,
             font_variant_ligatures: style.font_variant_ligatures,
@@ -243,22 +248,22 @@ impl Spec {
         self
     }
 
-    /// The runs as the paragraph shows them: Markdown expanded ([`Self::markdown`]),
-    /// anything else collapsed ([`Self::collapse_white_space`]).
-    pub fn shown(self, markdown: bool) -> Self {
-        if markdown {
-            self.markdown()
-        } else {
-            self.collapse_white_space()
+    /// Take the kernel's runs and prepare them for shaping.
+    pub(crate) fn shown(mut self, runs: &[TextRun<'_>], markup: Markup) -> Self {
+        self.runs = runs.iter().map(Run::from_kernel).collect();
+        match (markup, runs) {
+            (Markup::Markdown, [run]) => self.markdown(run.style.line_height),
+            (Markup::Markdown, _) => self,
+            _ => self.collapse_white_space(),
         }
     }
 
     /// A `markup="markdown"` paragraph's: its one run of source expanded
     /// into pieces (LLP 1045 D3), which keep their own lines — the source
     /// is never collapsed, as on Apple.
-    pub fn markdown(mut self) -> Self {
+    fn markdown(mut self, line_height: exact_kernel::LineHeight) -> Self {
         if let [source] = self.runs.as_slice() {
-            self.runs = markup::expand(source);
+            self.runs = markup::expand(source, line_height);
         }
         self
     }
@@ -270,11 +275,11 @@ impl Spec {
         // host does not carry (LLP 1001).
         static AUTO: std::sync::Once = std::sync::Once::new();
         if request.paragraph.hyphens == exact_kernel::Hyphens::Auto {
-            AUTO.call_once(|| eprintln!("[Text] hyphens-auto: Linux has no hyphenation dictionary; `hyphens: auto` breaks only at soft hyphens, as `manual` (LLP 1001)"));
+            AUTO.call_once(|| eprintln!("[Text] hyphens-auto: {} has no hyphenation dictionary; `hyphens: auto` breaks only at soft hyphens, as `manual` (LLP 1001)", crate::agent::HOST_NAME));
         }
         let spec = Spec {
             strut: Run::from_style("", request.paragraph.strut),
-            runs: request.runs.iter().map(Run::from_kernel).collect(),
+            runs: Vec::new(),
             align: request.paragraph.text_align,
             line_clamp: request.paragraph.line_clamp,
             overflow_wrap: request.paragraph.overflow_wrap,
@@ -285,7 +290,7 @@ impl Spec {
             text_box_trim: request.paragraph.text_box_trim,
             text_box_edge: request.paragraph.text_box_edge,
         };
-        spec.shown(request.paragraph.markup == exact_kernel::Markup::Markdown)
+        spec.shown(request.runs, request.paragraph.markup)
     }
 
     /// Whether there is nothing to shape.

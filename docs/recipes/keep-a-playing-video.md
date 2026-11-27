@@ -68,3 +68,6 @@ test "the counter keeps its count through Open and Back"
 
 Each host: [the reference's table](../reference.md#a-portal-element-on-each-host).
 Linux and Windows decode no video.
+
+A custom PiP button can target the same video by its `id`. Gate the button on
+`exactPage().pictureInPictureEnabled`. [Video picture in picture](../reference.md#video-picture-in-picture)

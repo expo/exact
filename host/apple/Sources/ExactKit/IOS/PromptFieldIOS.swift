@@ -175,7 +175,7 @@ final class PromptField: NSObject, UITextFieldDelegate {
         guard let node = live(), let field else { return }
         node.typedText(field.text ?? "")
         // The page's value written while text was marked waited (`writeValue`).
-        if field.markedTextRange == nil, let held = node.pendingValue { node.writeValue(held, into: field) }
+        if field.markedTextRange == nil, let held = node.pendingValue { node.writeValue(held, into: field, heldFilter: node.pendingFiltered) }
         node.applyFieldDirection() // a `direction` that came while it composed (LLP 1001 §1)
     }
 

@@ -623,3 +623,146 @@ fn delayed_drops_landing_in_one_update_anchor_a_row_neither_moved() {
     // Row 12, 33 px into the port before, stays there.
     assert_eq!(r.reorder_geometry(b.list).unwrap().scroll_top, 167.);
 }
+
+/// Rebinding a retiring wrapper that grouped reorder settling hid must restore
+/// kernel `visibility: visible` so the newly bound row is shown.
+#[test]
+fn rebinding_a_hidden_settled_row_restores_wrapper_visibility() {
+    struct TwoLists {
+        left: Vec<String>,
+        right: Vec<String>,
+    }
+    impl DataSource for TwoLists {
+        fn query(&mut self, name: &str, args: &[Value]) -> Result<Value, DataError> {
+            if name == "transfer" {
+                let item = args[0].as_str().unwrap().to_string();
+                self.left.retain(|k| k != &item);
+                let before = match &args[1] {
+                    Value::Option(Some(v)) => v.as_str(),
+                    _ => None,
+                };
+                let to = self
+                    .right
+                    .iter()
+                    .position(|k| Some(k.as_str()) == before)
+                    .unwrap_or(self.right.len());
+                self.right.insert(to, item);
+            }
+            let list = |xs: &[String]| Value::list(xs.iter().map(|k| Value::str(k)).collect());
+            Ok(Value::record(vec![list(&self.left), list(&self.right)]))
+        }
+    }
+    let source = r#"shape Pair
+  left: string[]
+  right: string[]
+
+component App
+  resource initial = lists() as shape Pair
+  mutation moved as shape Pair
+  derive pair = match moved { case some(v) => v, case none => initial }
+  action drop_right(item: string, before: option<string>)
+    send moved = transfer(item, before)
+  view
+    column
+      list id="source" testId="source" virtualized=true estimated-item-height=20 height=100 reorderGroup="cards" reorderdrop=drop_right
+        for x in pair.left key=x
+          column reorderFor="source" testId=`grip-${x}` height=20
+            text x
+      list id="target" testId="target" virtualized=true estimated-item-height=20 height=100 reorderGroup="cards" reorderdrop=drop_right
+        for x in pair.right key=x
+          column reorderFor="target" testId=`target-${x}` height=20
+            text x
+"#;
+    let mut r = Runner::boot(
+        contract::compile(source).unwrap(),
+        TwoLists {
+            left: (0..10).map(|i| format!("a{i}")).collect(),
+            right: (0..30).map(|i| format!("b{i}")).collect(),
+        },
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.set_row_reuse(true);
+    let feed = |r: &mut Runner<TwoLists>, right_offset: f64, pin: Option<NodeKey>| {
+        let collections = r.collections();
+        let source_view = collections[0].view;
+        for c in collections {
+            let is_source = c.view == source_view;
+            r.collection_feedback(CollectionFeedback {
+                view: c.view,
+                revision: c.revision,
+                scroll_sequence: c.scroll_sequence + 1,
+                offset: if is_source { 0. } else { right_offset },
+                port_cross: 320.,
+                port_main: 100.,
+                cross: 320.,
+                padding: [0.; 2],
+                focus_view: None,
+                interaction_view: pin
+                    .filter(|_| is_source)
+                    .map(|k| r.kernel().node_by_key(k).unwrap().id),
+                measurements: c
+                    .rows
+                    .iter()
+                    .map(|row| RowMeasurement {
+                        view: row.view,
+                        epoch: row.epoch,
+                        size: 20.,
+                    })
+                    .collect(),
+            })
+            .unwrap();
+        }
+    };
+    for _ in 0..3 {
+        feed(&mut r, 0., None);
+    }
+    let grip = r.kernel().find_by_test_id("grip-a0")[0];
+    feed(&mut r, 0., Some(grip));
+    let b = r.reorder_binding(grip).unwrap();
+    let g = r.reorder_geometry(b.list).unwrap();
+    let token = r.begin_group_reorder(b, g, true).unwrap().unwrap().token;
+    let target = r.kernel().find_by_test_id("target")[0];
+    let tg = r.reorder_geometry(target).unwrap();
+    assert!(matches!(
+        r.preview_reorder_into(token, target, tg.clone(), 0.)
+            .unwrap(),
+        ReorderProgress::Accepted { .. }
+    ));
+    r.drop_reorder(token, tg).unwrap().unwrap();
+    assert_eq!(
+        r.reorder_frame(token).unwrap().phase,
+        crate::ReorderPhase::Settling
+    );
+    let hidden_wrapper = r.collections()[1]
+        .rows
+        .iter()
+        .find(|row| row.index == 0)
+        .unwrap()
+        .view;
+    assert_eq!(
+        r.kernel().node(hidden_wrapper).unwrap().style.visibility,
+        exact_kernel::Visibility::Hidden
+    );
+    // Scroll the target list while settling so `a0` leaves the window and its
+    // hidden wrapper is rebound to a newly realized row.
+    feed(&mut r, 500., None);
+    let reused_index = r.collections()[1]
+        .rows
+        .iter()
+        .find(|row| row.view == hidden_wrapper)
+        .expect("settling wrapper should be reused by Collection::rebind")
+        .index;
+    assert_ne!(reused_index, 0);
+    assert_eq!(
+        r.kernel().node(hidden_wrapper).unwrap().style.visibility,
+        exact_kernel::Visibility::Visible
+    );
+    r.finish_reorder(token).unwrap();
+    assert_eq!(
+        r.kernel().node(hidden_wrapper).unwrap().style.visibility,
+        exact_kernel::Visibility::Visible
+    );
+}

@@ -625,11 +625,19 @@ fn a_driven_key_is_the_chord_it_names() {
         "driven-keys",
         r#"component App
   state heard = ""
+  state opened = ""
   action keyed(k: string, e: KeyboardEvent)
     heard = `${heard}${e.ctrlKey ? "C" : ""}${e.altKey ? "A" : ""}${e.shiftKey ? "S" : ""}${e.metaKey ? "M" : ""} ${k};`
+  action plain
+    opened = "plain"
+  action shifted
+    opened = "shifted"
   view
     column key=keyed
       text `heard [${heard}]`
+      text `opened [${opened}]`
+      button "Plain" aria-keyshortcuts="Meta+O" press=plain
+      button "Shifted" aria-keyshortcuts="Meta+Shift+O" press=shifted
 "#,
     );
     let drive = |keys: &[&str]| {
@@ -656,15 +664,85 @@ fn a_driven_key_is_the_chord_it_names() {
         "Meta+s",
         "Space",
         "Shift+n",
+        "Meta+Shift+O",
+        "Alt+Shift+b",
+        "Control+Shift+x",
         "/",
     ]);
     assert!(ok, "{err}");
     assert!(
-        out.contains("heard [C ArrowUp;C Enter;CS Enter;C x;A b;S Tab;M s; Space;S N; /;]"),
+        out.contains(
+            "heard [C ArrowUp;C Enter;CS Enter;C x;A b;S Tab;M s; Space;S N;SM O;AS b;CS x; /;]"
+        ),
         "{out}"
     );
+    assert!(out.contains("opened [shifted]"), "{out}");
     for name in ["F99", "Control+Nope", "Super+a"] {
         let (ok, _, err) = drive(&[name]);
         assert!(!ok && err.contains(name), "{name}: {err}");
     }
+}
+
+#[test]
+fn rejected_keys_and_a_filtered_paste_keep_the_terminal_cursor_at_the_edit() {
+    use exact_terminal::host::{Host, Key, Mode};
+    let source = r#"component Stock
+  state digits = "40"
+  state heard = ""
+  action edit(v: string)
+    heard = v
+    digits = v.split("").filter(c => "0123456789".includes(c)).join("")
+  view
+    column
+      input value=digits input=edit autofocus=true
+      text heard
+"#;
+    let mut host = Host::boot(
+        contract::compile_terminal(source).unwrap(),
+        (),
+        Mode::Fullscreen,
+        30,
+        4,
+    )
+    .unwrap();
+    host.arm = false;
+    let end = host.frame().grid.cursor.unwrap();
+    host.key(Key::Char('a'));
+    assert_eq!(
+        host.frame().grid.text().lines().next().unwrap().trim(),
+        "40"
+    );
+    assert_eq!(host.frame().grid.cursor, Some(end));
+    host.key(Key::Named("ArrowLeft"));
+    let middle = host.frame().grid.cursor.unwrap();
+    assert_ne!(middle, end);
+    host.key(Key::Char('a'));
+    assert_eq!(host.frame().grid.cursor, Some(middle));
+    host.paste("7x");
+    let frame = host.frame().grid.text();
+    let rows: Vec<_> = frame.lines().take(2).map(str::trim).collect();
+    assert_eq!(rows, ["470", "47x0"]);
+    assert_eq!(host.frame().grid.cursor, Some(end));
+}
+
+#[test]
+fn a_filtered_caret_uses_the_nearest_grapheme_stop() {
+    use exact_terminal::host::{Host, Key, Mode};
+    let plan = contract::compile_terminal(
+        r#"component App
+  state text = "acZ"
+  action edit(v: string)
+    text = "é̂Z"
+  view
+    input value=text input=edit autofocus=true
+"#,
+    )
+    .unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 30, 4).unwrap();
+    host.arm = false;
+    host.key(Key::Named("Home"));
+    host.key(Key::Named("ArrowRight"));
+    let first = host.frame().grid.cursor;
+    host.key(Key::Char('b'));
+    assert_eq!(host.frame().grid.cursor, first);
 }

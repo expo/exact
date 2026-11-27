@@ -13,7 +13,69 @@ import { dragTarget } from './drag-target.js';
 // The runner's journal line (rt.js `say`).
 const say = line => journal.push(`t=${clock.now} ${line}`);
 
-export function install({ internals: { Collection, Lists, Views, find, minEpoch, settled, controller } }, hooks, After) {
+export function install({ internals: { Collection, SizeIndex, Lists: windowed, Views, viewId, noise, find, minEpoch, settled, controller } }, hooks, After) {
+  const sections = new WeakMap();
+  let candidate = null;
+  const local = view => [ReorderOwner, candidate].find(c => c?.card && c.view === view && c.card.isConnected);
+  const Lists = {
+    get: view => windowed.get(view) ?? local(view),
+    has: view => windowed.has(view) || !!local(view),
+    values: () => windowed.values(),
+  };
+
+  function mountedSection(el, list) {
+    if (!list?.hasAttribute('data-liststyle')) return null;
+    let section = el.closest('section');
+    while (section) {
+      const parent = section.parentElement;
+      if (parent === list || parent?.hasAttribute('data-exact-list-item') && parent.parentElement === list) break;
+      section = parent?.closest('section');
+    }
+    if (!section) return null;
+    let row = el;
+    while (row && row.parentElement?.parentElement !== section) row = row.parentElement;
+    if (!row) return null;
+    const card = row.parentElement;
+    if (card.localName === 'header' || card.localName === 'footer') return null;
+    let c = sections.get(card);
+    if (!c) {
+      c = Object.assign(Object.create(Collection.prototype), {
+        card, el: list, view: viewId(list), index: new SizeIndex(1), mounted: [], revision: 0,
+        pin(handle) { return this.mounted.find(m => m.wrapper.contains(Views.get(handle)))?.key; },
+        releasePins() {}, rememberDrop() {},
+      });
+      sections.set(card, c);
+    }
+    return refreshSection(c, viewId(el), row);
+  }
+  function refreshSection(c, handle, row) {
+    const { card, el: list } = c;
+    const old = new Map(c.mounted.map(m => [m.wrapper, m]));
+    const rows = [], keys = [], ranges = [];
+    for (const child of card.childNodes) {
+      if (child === ranges.at(-1)?.$rowEnd) ranges.pop();
+      if (child.$rowEnd) ranges.push(child);
+      if (child.nodeType !== 1 || !child.getClientRects().length) continue;
+      const key = child.$rowKey ?? ranges.at(-1)?.$rowKey;
+      if (key?.startsWith('d') && /^d\d+:string:/.test(key)) return null;
+      if (!key?.startsWith('string:')) continue;
+      rows.push(child);
+      keys.push('s:' + key.slice(7));
+    }
+    if (row && !rows.includes(row)) return null;
+    if (new Set(keys).size !== keys.length) return null;
+    c.index.replace(keys);
+    c.mounted = rows.map((wrapper, position) => {
+      const id = viewId(wrapper), key = keys[position];
+      const h = wrapper.getBoundingClientRect().height;
+      if (!noise(c.index, key, position, h)) c.index.setMeasured(key, c.index.token(key), h);
+      return Object.assign(old.get(wrapper) ?? { wrapper, view: id, root: id, epoch: 0, previewTarget: 0 }, { key, position });
+    });
+    const box = card.getBoundingClientRect(), port = list.getBoundingClientRect();
+    c.geometry = { offset: port.top - box.top, port_cross: list.clientWidth, port_main: list.clientHeight,
+      cross: card.clientWidth, interaction_view: handle, scroll_sequence: 0 };
+    return c;
+  }
   const num = n => { const f = Math.fround(n); if (Number.isInteger(f) && Math.abs(f) < 1e9) return String(f); for (let p = 1; p < 10; p++) { const s = Number(f.toPrecision(p)); if (Math.fround(s) === f) return String(s); } return String(f); };
   /** The measured gap nearest content offset `y`, the source row collapsed
    * (gaps.rs `certified_gap_excluding`); null while a row it rests on, or
@@ -193,12 +255,17 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
         const offset = at ? at(m.position) : 0;
         if (m.previewTarget !== offset) {
           m.previewTarget = offset;
-          const translate = `0px ${num(offset)}px`;
+          if (this.card && (m.authoredTranslate === undefined || m.wrapper.style.translate !== m.previewTranslate)) {
+            m.authoredTranslate = m.wrapper.style.translate;
+          }
+          const translate = this.card && offset === 0 ? m.authoredTranslate : `0px ${num(offset)}px`;
+          if (offset === 0) delete m.authoredTranslate;
           if (!hooks.style?.(m.wrapper, "translate", translate)) m.wrapper.style.translate = translate;
+          if (this.card) m.previewTranslate = m.wrapper.style.translate;
           hooks.observe?.(m.view, [translate, 1, 0, 1, transition]);
         }
         const hide = hidden === m.position;
-        if (!!m.previewHidden !== hide) {
+        if (!this.card && !!m.previewHidden !== hide) {
           m.previewHidden = hide;
           const v = hide ? "hidden" : "visible";
           if (!hooks.style?.(m.wrapper, "visibility", v)) m.wrapper.style.visibility = v;
@@ -254,7 +321,18 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       if (p) this.pendingDrops?.delete(p.token);
       const was = this.instant; this.instant = instant; this.emitPreview(); this.instant = was;
     },
-    setHidden(ident) { this.hidden = ident; this.emitPreview(); if (ident == null) delete this.hidden; },
+    setHidden(ident) {
+      if (this.card) {
+        // A mounted row owns its inline visibility, including writes from the drop action.
+        this.hiddenRow?.removeAttribute('data-exact-reorder-hidden');
+        this.hiddenRow = this.mounted.find(m => m.key === ident)?.wrapper;
+        this.hiddenRow?.setAttribute('data-exact-reorder-hidden', '');
+        return;
+      }
+      this.hidden = ident;
+      this.emitPreview();
+      if (ident == null) delete this.hidden;
+    },
     placeOf(ident) { const at = this.index.pos.get(ident); return at === undefined ? null : [this.index.order[at - 1] ?? null, this.index.order[at + 1] ?? null]; },
     wrapperOf(ident) { const at = this.index.pos.get(ident); return this.mounted.find(m => m.position === at)?.view ?? null; },
     stepSlot() {
@@ -305,8 +383,9 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   /** A grip's binding: its unique named ancestor with a `reorderdrop`,
    * every box on the way live. */
   function reorderBinding(handle) {
-    const el = Views.get(handle), list = dragTarget(el, 'reorderfor'), c = list?.$list;
+    const el = Views.get(handle), list = dragTarget(el, 'reorderfor'), c = list?.$list ?? mountedSection(el, list);
     if (!c || !list.$reorderdrop || !el.isConnected || inertAncestor(el) || el.closest("[disabled]") || !el.getClientRects().length) return null;
+    if (c.card && !ReorderOwner) candidate = c;
     return c.reorderBinding(handle);
   }
   const sameBinding = (a, b) => !!a && !!b && ["handle", "list", "wrapper", "root", "rowEpoch"].every(k => a[k] === b[k]);
@@ -328,8 +407,8 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       });
     }
   }
-  const groupOf = c => c?.el?.dataset.reordergroup || null;
-  const groupLists = group => [...Lists.values()].filter(c => groupOf(c) === group && c.el.isConnected)
+  const groupOf = c => c?.card ?? (c?.el?.dataset.reordergroup || null);
+  const groupLists = group => typeof group !== "string" ? [sections.get(group)].filter(Boolean) : [...Lists.values()].filter(c => groupOf(c) === group && c.el.isConnected)
     .sort((a, b) => a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
   const listId = c => c?.el?.id ?? "";
   const grouped = token => Session && Session.token === token && Session.group ? Session : null;
@@ -360,8 +439,18 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   }
   /** The session's commit-end check, before the controller hears its state. */
   function reconcileGroup() {
+    if (ReorderOwner?.card?.isConnected && ReorderOwner.preview) {
+      refreshSection(ReorderOwner, ReorderOwner.preview.handle);
+    }
     const s = Session;
     if (!s || !s.group) return;
+    if (s.source.card && !s.source.card.isConnected) {
+      s.source.endHold(true);
+      s.source.setHidden(null);
+      s.phase = "cancelling";
+      syncTarget();
+      return;
+    }
     if (!Lists.has(s.source.view)) { Session = null; syncTarget(); return; }
     if (s.phase === "holding") { const ending = holdOutcome(s); if (ending) endSession(s, ending, true); return; }
     if (s.phase !== "active") return;
@@ -379,7 +468,9 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
     binding: reorderBinding,
     geometry: view => Lists.get(view)?.reorderGeometry() ?? null,
     begin(binding, geometry) {
-      const c = Lists.get(binding.list);
+      const handle = Views.get(binding.handle);
+      const c = Lists.get(binding.list)?.card ? mountedSection(handle, dragTarget(handle, 'reorderfor')) : Lists.get(binding.list);
+      if (c?.card) candidate = c;
       if (ReorderOwner || !c || !sameBinding(reorderBinding(binding.handle), binding) || !sameGeometry(c.reorderGeometry(), geometry)) return null;
       const token = ++ReorderSerial;
       if (!c.beginPreview(binding, token, binding.handle)) return null;
@@ -444,10 +535,21 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
     },
     grouped: token => !!grouped(token),
     /** `preview_reorder_into`: the gap in whichever grouped list the page names. */
-    into(token, view, geometry, y) {
+    into(token, view, geometry, y, beforeView) {
       const s = grouped(token), t = Lists.get(view);
       if (!s || s.phase !== "active" || !hasReorder(token) || !t || !sameGeometry(t.reorderGeometry(), geometry)) return "stale";
       if (!isFinite(y)) throw new Error("invalid reorder coordinate");
+      if (t.card && beforeView !== undefined) {
+        let before = beforeView == null ? null : Views.get(Number(beforeView));
+        if (beforeView != null && before?.parentElement !== t.card) return "stale";
+        const byElement = new Map(t.mounted.map(m => [m.wrapper, m.key]));
+        while (before && (!byElement.has(before) || byElement.get(before) === s.item)) before = before.nextElementSibling;
+        t.preview.before = byElement.get(before) ?? null;
+        t.preview.certified = geometry;
+        t.preview.stepped = false;
+        t.emitPreview();
+        return "accepted";
+      }
       if (t !== s.source) {
         if (groupOf(t) !== s.group) return "stale";
         if (t.index.pos.has(s.item)) {
@@ -489,7 +591,8 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       }
       // The gap kept in view, `nearest` (scrollIntoView, list.js).
       const near = t.stepNeighbour();
-      if (near) globalThis.exact?.lists?.into(t.view, near.slice(2), "nearest", "nearest");
+      if (near && t.card) t.mounted.find(m => m.key === near)?.wrapper.scrollIntoView({ block: "nearest" });
+      else if (near) globalThis.exact?.lists?.into(t.view, near.slice(2), "nearest", "nearest");
       return true;
     },
     /** A grouped drop (D2, D8): the target's `reorderdrop` once, with its `ReorderEvent`; the hold armed first. */
@@ -524,7 +627,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   };
   // A preview whose binding is gone ends (runner reconcile_reorder).
   After.push(() => {
-    if (ReorderOwner && !Lists.has(ReorderOwner.view)) { ReorderOwner = null; Session = null; syncTarget(); return; }
+    if (ReorderOwner && !ReorderOwner.card && !Lists.has(ReorderOwner.view)) { ReorderOwner = null; Session = null; syncTarget(); return; }
     if (Session?.group) return; // the motion piece's flush asks first (`reconcileGroup`)
     const p = ReorderOwner?.preview;
     if (p && !p.terminal && p.pinOwned && !hasReorder(p.token)) ReorderOwner.endPreview();

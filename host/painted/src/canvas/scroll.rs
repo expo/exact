@@ -172,6 +172,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
             .reader_snaps_around(id, vertical, release, projected, self.scale)
     }
 
+    /// The position the reader selected for a snap, before clamping to a resized range.
+    pub fn snap_target(&mut self, id: u32, vertical: bool, target: f32, landing: f32) {
+        self.p
+            .reader_snap_target(id, vertical, target, landing, self.scale);
+    }
+
     /// The native drag's sheet position and release velocity, in window pixels.
     pub fn sheet_drag(&mut self, index: u32, generation: u32, top: f32, release: Option<f32>) {
         let now = self.now();
@@ -412,6 +418,50 @@ mod tests {
         assert_eq!(after["clip"], before["clip"]);
     }
 
+    /// LLP 1123 D14: a claimed scroller's statement carries its claim's record, as its recording is displaced: a
+    /// 100-point port 50 down, reaching 20 above and 30 below with insets of 50 and 30, paints its content 30 short of
+    /// its offset, so it is recorded at -30, and its reached port is 30 down and 150 tall. Released, its statement is
+    /// nine words again, recorded at its offset.
+    #[test]
+    fn a_claimed_scrollers_statement_carries_its_claims_record() {
+        let mut p = boot(&crate::test_plan(
+            r#"component App
+  view
+    box padding-top=50
+      scroll testId="port" width=200 height=100
+        box width=200 height=1000 background-color="red"
+"#,
+        ));
+        paint(&mut p);
+        let port = named(&p, "port");
+        p.reader_under(50., 80., 1.);
+        assert!(p.set_scroll_claim(port, Some(([20., 0., 30., 0.], [50., 0., 30., 0.]))));
+        paint(&mut p);
+        let painted = Painted::capture(&p).unwrap();
+        let words = p.reader_scrollers(&painted.groups, 1.).unwrap();
+        let f = |i: usize| f32::from_bits(words[i] as u32);
+        assert_eq!(words.len(), 16);
+        assert_eq!(words[0] as ViewId, port);
+        assert_ne!(words[1] & 1024, 0, "claimed");
+        assert_eq!((f(3), f(4)), (0., 0.), "its offset");
+        assert_eq!(f(6), -30., "recorded where it is painted");
+        assert_eq!(f(9), 0., "min x");
+        assert_eq!((f(10), f(11)), (0., -30.), "the displacement");
+        assert_eq!(
+            [f(12), f(13), f(14), f(15)],
+            [0., 30., 200., 150.],
+            "the reached port"
+        );
+        assert!(p.reader_places_group(port, 1.));
+        assert!(p.set_scroll_claim(port, None));
+        paint(&mut p);
+        let painted = Painted::capture(&p).unwrap();
+        let words = p.reader_scrollers(&painted.groups, 1.).unwrap();
+        assert_eq!(words.len(), 10);
+        assert_eq!(words[1] & 1024, 0);
+        assert_eq!(f32::from_bits(words[6] as u32), 0.);
+    }
+
     #[test]
     fn a_zoomed_pan_paints_the_ungrouped_child_at_its_new_offset() {
         let mut p = boot(&crate::test_plan(
@@ -505,6 +555,29 @@ component App
             at = super::super::stream::end(&ops, at).unwrap();
         }
         panic!("module view was not painted");
+    }
+
+    #[test]
+    fn a_shrink_to_fit_parent_offers_a_module_room_for_its_first_measurement() {
+        for (parents, expected) in [
+            ("row width=240\n      column padding=10", 215.),
+            ("column width=0\n      column min-width=240", 235.),
+        ] {
+            let source = format!("component App\n  view\n    {parents}\n        wrap-text margin-left=5 testId=\"module\"\n");
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&source),
+                (),
+                (400., 400.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            let offer = props(&mut p);
+            assert_eq!(offer["autoWidth"], expected, "{parents}");
+            assert_eq!(offer["autoHeight"], true);
+        }
     }
 
     #[test]

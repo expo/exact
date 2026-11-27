@@ -426,8 +426,10 @@ pub(super) fn decode_pixels<R: Read + Seek>(
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod windows;
+#[cfg(all(windows, test))]
+pub(super) use windows::observed;
 #[cfg(windows)]
-pub(super) use windows::decode;
+pub(super) use windows::{decode, Worker};
 
 /// ImageIO decodes and orients the thumbnail on the raster worker.
 #[cfg(target_os = "macos")]

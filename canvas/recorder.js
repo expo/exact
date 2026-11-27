@@ -69,17 +69,20 @@ function hexColor(hex) {
   if (hex.length === 6 || hex.length === 8) return [p(0), p(2), p(4), (hex.length === 8 ? p(6) : 255) / 255];
   return null;
 }
-function component(t) {
+// A component; an angle, in degrees, only where it is a hue (Chrome drops
+// `rgb(90deg 0 0)`; color/src/lib.rs `component`).
+function component(t, hue = false) {
   if (t === "none") return { num: 0 };
   if (t.endsWith("%")) { const v = number(t.slice(0, -1)); return v === null ? null : { pct: v }; }
   for (const [unit, per] of [["deg", 1], ["grad", 0.9], ["rad", 180 / Math.PI], ["turn", 360]]) {
-    if (t.endsWith(unit)) { const v = number(t.slice(0, -unit.length)); return v === null ? null : { num: v * per }; }
+    if (t.endsWith(unit)) { const v = hue ? number(t.slice(0, -unit.length)) : null; return v === null ? null : { num: v * per }; }
   }
   const v = number(t);
   return v === null ? null : { num: v };
 }
+// A number as CSS Syntax 3 reads one (§4.3.13): not `5.`, `1e` or `1.2.3`.
 function number(t) {
-  if (!t || !/^[0-9.eE+-]+$/.test(t)) return null;
+  if (!t || !/^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(t)) return null;
   const v = Number(t);
   return Number.isFinite(v) ? v : null;
 }
@@ -100,7 +103,8 @@ function functional(name, body) {
   let parts, alpha;
   if (legacy) {
     parts = body.split(",").map((p) => p.trim());
-    if (parts.some((p) => !p || p.includes(" ") || p.includes("/"))) return null;
+    // `none` is the space-separated syntax's alone (CSS Color 4 §4.1.2).
+    if (parts.some((p) => !p || p.includes(" ") || p.includes("/") || p === "none")) return null;
     if (parts.length === 4) alpha = parts.pop(); else if (parts.length !== 3) return null;
   } else {
     const [main, a] = body.includes("/") ? body.split("/") : [body, undefined];
@@ -109,7 +113,7 @@ function functional(name, body) {
     parts = main.trim().split(/\s+/);
     if (parts.length !== 3) return null;
   }
-  const c = parts.map(component);
+  const c = parts.map((p, i) => component(p, i === 0 && name !== "rgb" && name !== "rgba"));
   if (c.some((x) => !x)) return null;
   const a = alphaOf(alpha);
   if (a === null) return null;
@@ -174,7 +178,7 @@ function wide(name, body) {
   if (a !== undefined && !a.trim()) return undefined;
   const parts = main.trim().split(/\s+/);
   if (parts.length !== 3) return undefined;
-  const c = parts.map(component);
+  const c = parts.map((p, i) => component(p, i === 2 && (kind === 1 || kind === 3)));
   if (c.some((x) => !x)) return undefined;
   const pct = [[100, 125, 125], [100, 150, 0], [1, 0.4, 0.4], [1, 0.4, 0], [1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]][kind] ?? [1, 1, 1];
   const v = [];
@@ -203,7 +207,7 @@ function wide(name, body) {
   // A component written `none` is missing (CSS Color 4 §4.4): 0 in the pixels, `none` in the text.
   const shown = (t, n) => (t.trim() === "none" ? "none" : jsNumber(n));
   const alphaText = a !== undefined && a.trim() === "none" ? " / none" : alpha < 1 ? ` / ${jsNumber(alpha)}` : "";
-  out.text = `${space ? `color(${space} ` : `${name}(`}${v.map((n, i) => shown(parts[i], n)).join(" ")}${alphaText})`;
+  out.text = `${space ? `color(${space === "xyz" ? "xyz-d65" : space} ` : `${name}(`}${v.map((n, i) => shown(parts[i], n)).join(" ")}${alphaText})`;
   return out;
 }
 // A `display-p3` canvas's colours (LLP 1100 D12a; color/src/lib.rs
@@ -224,7 +228,8 @@ export function parseColor(input) {
   if (s.startsWith("#")) return hexColor(s.slice(1));
   const open = s.indexOf("(");
   if (open >= 0) {
-    if (!s.endsWith(")")) return null;
+    // No white space before a function's `(` (CSS Syntax 3 §4.3.4).
+    if (!s.endsWith(")") || /\s$/.test(s.slice(0, open))) return null;
     const w = wide(s.slice(0, open).trim(), s.slice(open + 1, -1));
     if (w !== null) return w ?? null;
     return functional(s.slice(0, open).trim(), s.slice(open + 1, -1));
@@ -259,7 +264,8 @@ const DIRECTION = ["ltr", "rtl", "inherit"];
 const GENERIC = ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji", "fangsong"];
 const BASE_SIZE = 10;
 const defaultFont = () => ({ style: 0, weight: 400, stretch: 100, caps: 0, size: 10, families: ["sans-serif"] });
-function fnum(t) { return /^[0-9.eE+-]+$/.test(t) && /[0-9]/.test(t) && Number.isFinite(Number(t)) ? Number(t) : null; }
+// A number as CSS Syntax 3 reads one (canvas/src/font.rs `num`): not `1.` or `1e`.
+function fnum(t) { return /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(t) && Number.isFinite(Number(t)) ? Number(t) : null; }
 function lengthPx(t, pct) {
   t = t.toLowerCase();
   if (pct && t.endsWith("%")) { const v = fnum(t.slice(0, -1)); return v === null ? null : v * BASE_SIZE / 100; }
@@ -272,7 +278,15 @@ function fontTokens(s) {
   const out = []; let cur = "";
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
-    if (c === '"' || c === "'") { const end = s.indexOf(c, i + 1); if (end < 0) return null; cur += s.slice(i, end + 1); i = end; }
+    if (c === '"' || c === "'") {
+      // A string is a token of its own; the input's end closes it; an escape keeps its backslash (canvas/src/font.rs `tokens`).
+      if (cur) return null;
+      let j = i + 1;
+      for (; j < s.length && s[j] !== c; j++) if (s[j] === "\\") j++;
+      cur = s.slice(i, Math.min(j, s.length)) + c; i = j;
+      if (i + 1 < s.length && !/[\s,/]/.test(s[i + 1])) return null;
+      out.push(cur); cur = "";
+    }
     else if (/\s/.test(c)) { if (cur) { out.push(cur); cur = ""; } }
     else if (c === "/" || c === ",") { if (cur) { out.push(cur); cur = ""; } out.push(c); }
     else cur += c;
@@ -280,18 +294,31 @@ function fontTokens(s) {
   if (cur) out.push(cur);
   return out;
 }
+// Escapes resolved (canvas/src/font.rs `unescape`).
+const unescapeCss = (t) => t.replace(/\\(?:([0-9a-fA-F]{1,6})\s?|([^]?))/g, (_, hex, ch) => {
+  if (hex === undefined) return ch === "\n" ? "" : ch;
+  const v = parseInt(hex, 16);
+  return v === 0 || v > 0x10ffff || (v >= 0xd800 && v < 0xe000) ? "\ufffd" : String.fromCodePoint(v);
+});
+// One word of an unquoted name: an identifier (canvas/src/font.rs `ident`).
+const identWord = (w) => (/^(-[^0-9]|[^0-9-])/.test(w) && /^(?:[A-Za-z0-9_\u0080-\u{10ffff}-]|\\[^])*$/u.test(w) ? unescapeCss(w) : null);
 function fontFamilies(toks) {
   const out = []; let cur = [], quoted = null;
   const finish = () => {
     if (quoted !== null) { if (cur.length) return false; out.push(quoted); quoted = null; return true; }
     if (!cur.length) return false;
-    for (const w of cur) if (/^[0-9]/.test(w) || ["inherit", "initial", "unset", "default", "revert"].includes(w.toLowerCase())) return false;
-    const name = cur.join(" "), lower = name.toLowerCase();
+    const words = cur.map(identWord);
+    if (words.includes(null)) return false;
+    // A CSS-wide keyword or `default` is no name alone, and a generic keyword cannot start one.
+    const first = words[0].toLowerCase();
+    if ((words.length === 1 && ["inherit", "initial", "unset", "revert", "revert-layer", "default"].includes(first))
+      || (words.length > 1 && ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "math"].includes(first))) return false;
+    const name = words.join(" "), lower = name.toLowerCase();
     out.push(GENERIC.includes(lower) ? lower : name); cur = []; return true;
   };
   for (const t of toks) {
     if (t === ",") { if (!finish()) return null; continue; }
-    if (t[0] === '"' || t[0] === "'") { if (cur.length || quoted !== null || t.length < 2) return null; quoted = t.slice(1, -1); continue; }
+    if (t[0] === '"' || t[0] === "'") { if (cur.length || quoted !== null || t.length < 2) return null; quoted = unescapeCss(t.slice(1, -1)); continue; }
     if (quoted !== null || t === "/") return null;
     cur.push(t);
   }
@@ -314,7 +341,7 @@ export function parseFont(input) {
     if (!variant && t === "small-caps") { variant = true; f.caps = 1; i++; continue; }
     if (!weight) {
       let w = t === "bold" || t === "bolder" ? 700 : t === "lighter" ? 100 : null;
-      if (w === null) { const v = fnum(t); if (v !== null && v >= 1 && v <= 1000 && !/[eE]/.test(t)) w = Math.round(v); }
+      if (w === null) { const v = fnum(t); if (v !== null && v >= 1 && v <= 1000) w = Math.trunc(v); }
       if (w !== null) { weight = true; f.weight = w; i++; continue; }
     }
     if (!stretch) { const k = STRETCH.find(([n]) => n === t); if (k) { stretch = true; f.stretch = k[1]; i++; continue; } }
@@ -322,9 +349,10 @@ export function parseFont(input) {
   }
   const st = toks[i]; if (st === undefined) return null;
   const KW = { "xx-small": 9, "x-small": 10, small: 13, medium: 16, large: 18, "x-large": 24, "xx-large": 32, "xxx-large": 48, larger: BASE_SIZE * 1.2, smaller: BASE_SIZE / 1.2 };
-  const size = KW[st.toLowerCase()] ?? lengthPx(st, true);
+  // A length needs a unit, except zero (CSS Values 4 §6.1).
+  const size = KW[st.toLowerCase()] ?? (fnum(st) === 0 ? 0 : lengthPx(st, true));
   if (size === null || size < 0) return null;
-  f.size = size; i++;
+  f.size = Math.min(size, 10000); i++; // Chrome's largest font size (canvas/src/font.rs MAX_SIZE)
   if (toks[i] === "/") {
     const lh = toks[i + 1]; if (lh === undefined) return null;
     const l = lh.toLowerCase();
@@ -336,14 +364,22 @@ export function parseFont(input) {
   f.families = fam;
   return f;
 }
-const quoteFamily = (f) => (f && !/^[0-9]/.test(f) && [...f].every((c) => /[A-Za-z0-9_-]/.test(c) || c.charCodeAt(0) > 127) ? f : `"${f.replace(/"/g, '\\"')}"`);
+// Bare when one identifier that is no keyword of the property, as Chrome writes it (canvas/src/font.rs `quote_family`).
+const FAMILY_KEYWORDS = ["inherit", "initial", "unset", "revert", "revert-layer", "default"], GENERIC_KEYWORDS = ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "math"];
+const quoteFamily = (f) => {
+  const ascii = f.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const keyword = FAMILY_KEYWORDS.includes(ascii) || (GENERIC_KEYWORDS.includes(ascii) && f !== ascii);
+  const start = /^(-[A-Za-z_\u0080-\u{10ffff}]|[^0-9-])/u.test(f);
+  return !keyword && start && [...f].every((c) => /[A-Za-z0-9_-]/.test(c) || c.codePointAt(0) > 127) ? f : `"${f.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+};
 /** Chrome's serialisation of a canvas font. */
 export function serializeFont(f) {
   let s = "";
   if (f.style === 1) s += "italic ";
   if (f.weight === 700) s += "bold "; else if (f.weight !== 400) s += `${f.weight} `;
   if (f.caps === 1) s += "small-caps ";
-  return `${s}${jsNumber(f.size)}px ${f.families.map(quoteFamily).join(", ")}`;
+  // At most six significant digits, as Chrome writes a CSS number (canvas/src/font.rs `serialize`).
+  return `${s}${jsNumber(Number(f.size.toPrecision(6)))}px ${f.families.map(quoteFamily).join(", ")}`;
 }
 const prepareText = (t) => String(t).replace(/[\t\n\f\r]/g, " ");
 /** A run's metrics at left/alphabetic when no host engine is given (canvas/src/font.rs `Estimate`). */
@@ -412,7 +448,15 @@ function ellipseSegs(cx, cy, rx, ry, rotation, start, end, anticlockwise) {
   const at = (t) => { const x = rx * Math.cos(t), y = ry * Math.sin(t); return [cx + x * cosR - y * sinR, cy + x * sinR + y * cosR]; };
   const tangent = (t) => { const x = -rx * Math.sin(t), y = ry * Math.cos(t); return [x * cosR - y * sinR, x * sinR + y * cosR]; };
   const first = at(s), out = [];
-  if (rx === 0 || ry === 0) { const last = at(e); out.push(["L", last[0], last[1]]); return [first, out]; }
+  if (rx === 0 || ry === 0) {
+    // Blink's `DegenerateEllipse`: lines through each quarter turn the sweep
+    // crosses (geom.rs `quarter_turns`), so the flat ellipse reaches its ends.
+    if (rx !== ry && e !== s) {
+      const step = e > s ? 1 : -1, k0 = e > s ? Math.floor(s / HALF_PI) + 1 : Math.ceil(s / HALF_PI) - 1;
+      for (let k = k0; e > s ? k * HALF_PI < e : k * HALF_PI > e; k += step) { const p = at(k * HALF_PI); out.push(["L", p[0], p[1]]); }
+    }
+    const last = at(e); out.push(["L", last[0], last[1]]); return [first, out];
+  }
   const sweep = e - s;
   if (sweep === 0) return [first, out];
   const n = Math.max(1, Math.ceil(Math.abs(sweep) / HALF_PI - 1e-9));

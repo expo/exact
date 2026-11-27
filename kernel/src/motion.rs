@@ -132,6 +132,10 @@ pub struct MotionSync {
     /// or booted): a node it already knew that has no filter kept moves from
     /// `none`. `None` for a list that never interpolates.
     pub filters: Vec<(u64, Option<exact_motion::FilterValue>, bool)>,
+    /// Each synced box's `path()` clip (LLP 1003.003 D6): `None` for any
+    /// other clip, for an SVG element (its scene reads the authored clip), and
+    /// for a box that is not rendered, which forgets what moved it.
+    pub clips: Vec<(u64, Option<exact_motion::ClipValue>)>,
 }
 
 impl MotionSync {
@@ -167,6 +171,7 @@ impl MotionSync {
                     f.as_ref().filter(|f| !f.0.is_empty()).map(|_| *node)
                 }),
             )
+            .chain((self.clips.iter()).filter_map(|(node, clip)| clip.as_ref().map(|_| *node)))
             .collect();
         moving.sort_unstable();
         moving
@@ -228,6 +233,9 @@ impl MotionSync {
         }
         for (node, filter, new) in &self.filters {
             engine.observe_filter(*node, filter.clone(), *new);
+        }
+        for (node, clip) in &self.clips {
+            engine.observe_clip(*node, clip.clone());
         }
         for (node, clock) in &self.clocks {
             engine.set_animation_clock(*node, clock.as_deref());
@@ -504,7 +512,9 @@ impl Kernel {
     /// placed in. That is its parent, except for the root of a virtualized
     /// list's row: its wrapper (the node carrying `listItemKey`) exists only
     /// to position it, so the row is placed in the list content and a wrapper
-    /// moving is the row moving. `None` too while it or an ancestor is
+    /// moving is the row moving. A native button's is its centre with no size:
+    /// the platform draws its chrome at its laid-out size, so only its place
+    /// moves (LLP 1069.011 D6). `None` too while it or an ancestor is
     /// `display: none`: it has no box, and one shown again is first seen, as
     /// CSS starts no transition from `display: none`.
     pub fn layout_box(&self, key: NodeKey) -> Option<Value> {
@@ -532,12 +542,13 @@ impl Kernel {
         let parent = parent.filter(|_| self.host_block(node.id).is_none());
         let (px, py) = parent.map_or((0.0, 0.0), |p| (p.frame.x, p.frame.y));
         let f = node.frame;
-        Some(Value::four(
-            (f.x - px) as f64,
-            (f.y - py) as f64,
-            f.width as f64,
-            f.height as f64,
-        ))
+        let (x, y) = ((f.x - px) as f64, (f.y - py) as f64);
+        let (w, h) = (f.width as f64, f.height as f64);
+        Some(if arena.is_native_button(key.index) {
+            Value::four(x + w / 2.0, y + h / 2.0, 0.0, 0.0)
+        } else {
+            Value::four(x, y, w, h)
+        })
     }
 
     /// The border sides a node paints in `currentcolor` (CSS's initial
@@ -841,6 +852,27 @@ impl Kernel {
                     };
                     sync.animations.push((motion_node(d.key), row));
                 }
+                if d.style.rare.clip_path.motion().is_some() {
+                    sync.clips.push((motion_node(d.key), self.clip_value(&d)));
+                }
+                stack.extend(d.children());
+            }
+        }
+        // @ref LLP 1003.003 D6 — a subtree detached, attached or moved: each
+        // clip below it is observed as it is rendered now, so one no root
+        // reaches stops, and one attached again takes its clip at once.
+        for key in &receipt.reparented {
+            let Some(node) = self.node_by_key(*key) else {
+                continue;
+            };
+            let mut stack = vec![node.id];
+            while let Some(id) = stack.pop() {
+                let Some(d) = self.node(id) else {
+                    continue;
+                };
+                if d.style.rare.clip_path.motion().is_some() {
+                    sync.clips.push((motion_node(d.key), self.clip_value(&d)));
+                }
                 stack.extend(d.children());
             }
         }
@@ -872,18 +904,9 @@ impl Kernel {
     /// waits for the row to show (`-exact-animation-trigger: view`, LLP 1055 D13).
     /// Until [`Kernel::reveal`] those are held at their start.
     pub fn await_view(&mut self, row: crate::ViewId) -> bool {
-        // Rows destroyed before they showed are forgotten here.
-        if self.awaiting.len() >= 256 {
-            let gone: Vec<crate::ViewId> = self
-                .awaiting
-                .iter()
-                .copied()
-                .filter(|v| self.node(*v).is_none())
-                .collect();
-            for v in gone {
-                self.awaiting.remove(&v);
-            }
-        }
+        let Some(key) = self.arena().key_of(row) else {
+            return false;
+        };
         let mut stack = vec![row];
         while let Some(id) = stack.pop() {
             let Some(d) = self.node(id) else {
@@ -892,25 +915,29 @@ impl Kernel {
             if !d.style.animation.0.is_empty()
                 && d.style.rare.animation_trigger == crate::AnimationTrigger::View
             {
-                self.awaiting.insert(row);
+                self.awaiting.insert(key);
                 return true;
             }
             stack.extend(d.children());
         }
-        self.awaiting.remove(&row);
+        self.awaiting.remove(&key);
         false
     }
 
     /// Whether animations wait on `row` ([`Kernel::await_view`]).
     pub fn is_awaiting(&self, row: crate::ViewId) -> bool {
-        self.awaiting.contains(&row)
+        self.arena()
+            .key_of(row)
+            .is_some_and(|key| self.awaiting.contains(&key))
     }
 
     /// The row shows (or is bound again where it shows): whether animations
     /// waited on it. The commit that says so names it in
     /// [`CommitReceipt::revealed`].
     pub fn reveal(&mut self, row: crate::ViewId) -> bool {
-        self.awaiting.remove(&row)
+        self.arena()
+            .key_of(row)
+            .is_some_and(|key| self.awaiting.remove(&key))
     }
 
     /// Whether the node's animations wait for a list row above it to show.
@@ -920,12 +947,12 @@ impl Kernel {
         {
             return false;
         }
-        let mut cur = Some(node.id);
-        while let Some(id) = cur {
-            if self.awaiting.contains(&id) {
+        let mut cur = Some((node.key, node.parent));
+        while let Some((key, parent)) = cur {
+            if self.awaiting.contains(&key) {
                 return true;
             }
-            cur = self.node(id).and_then(|n| n.parent);
+            cur = parent.and_then(|id| self.node(id).map(|n| (n.key, n.parent)));
         }
         false
     }
@@ -940,6 +967,29 @@ impl Kernel {
             }
         }
         row
+    }
+
+    /// A box's clip as a transition moves it (LLP 1003.003 D6): its `path()`
+    /// while it is rendered, `None` otherwise and for an SVG element, whose
+    /// scene reads its authored clip (D1). Rendered: no `display: none` on
+    /// it or an ancestor, and a root above it (CSS Transitions 2 §3).
+    fn clip_value(&self, node: &crate::kernel::NodeRef<'_>) -> Option<exact_motion::ClipValue> {
+        if node.node_type.is_svg_element() || node.node_type == NodeType::Svg {
+            return None;
+        }
+        let clip = node.style.rare.clip_path.motion()?;
+        let arena = self.arena();
+        let mut slot = node.key.index;
+        loop {
+            if arena.style(slot).display == Display::None {
+                return None;
+            }
+            match arena.parent(slot) {
+                Some(parent) => slot = parent,
+                None => break,
+            }
+        }
+        arena.is_root(slot).then_some(clip)
     }
 
     /// Whether the node or an ancestor is `display: none`: CSS runs no
@@ -1008,6 +1058,7 @@ impl Kernel {
             // with no row. The engine keeps nothing for a settled `none`.
             let filter = filter_value(&node.style.filter);
             sync.filters.push((id, filter, new));
+            sync.clips.push((id, self.clip_value(&node)));
             if node.node_type.is_svg_shape() {
                 let targets = self.svg_targets(*key);
                 // A geometry row that is not a length now (a percentage)

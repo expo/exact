@@ -286,7 +286,7 @@ fn rtl_select_uses_its_final_width_for_the_options_labels() {
     let labels = open.layout.texts();
     assert_eq!(labels.len(), 3);
     for (index, (_, rect)) in labels.iter().enumerate() {
-        let end = if index == 0 { 252. } else { 288. };
+        let end = 252.;
         assert!(
             (rect.0 + rect.2 - end).abs() < 1.,
             "option {index}: {rect:?}"

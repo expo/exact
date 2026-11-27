@@ -8,10 +8,7 @@
 use super::super::env::{self, EnvRefusal};
 use super::super::{Dimension, ViewportUnit};
 use super::{EnvTerm, Node, Unit, MAX_DEPTH, MAX_VALUES};
-use cssparser::{
-    match_ignore_ascii_case, BasicParseErrorKind, Delimiter, ParseError, ParseErrorKind, Parser,
-    ParserInput, Token,
-};
+use cssparser::{match_ignore_ascii_case, Delimiter, ParseError, ParseErrorKind, Parser, Token};
 
 /// Why a length text that names a math function is not one the kernel
 /// holds.
@@ -82,8 +79,7 @@ const FUNCTIONS: [&str; 4] = ["calc", "min", "max", "clamp"];
 
 /// The function a text opens with, by its first token, lowercased.
 fn top_function(text: &str) -> Option<String> {
-    let mut input = ParserInput::new(text);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(text);
     match p.next() {
         Ok(Token::Function(name)) => Some(name.to_ascii_lowercase()),
         _ => None,
@@ -105,8 +101,7 @@ pub(crate) fn is_env(text: &str) -> bool {
 /// Whether `text` is the keyword `word` alone, white space and comments
 /// around it, ASCII case-insensitively, as CSS reads a keyword.
 pub(super) fn is_keyword(text: &str, word: &str) -> bool {
-    let mut input = ParserInput::new(text);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(text);
     p.expect_ident_matching(word).is_ok() && p.is_exhausted()
 }
 
@@ -114,8 +109,7 @@ pub(super) fn is_keyword(text: &str, word: &str) -> bool {
 /// of a text that is no math function itself (`max(…) + 4px`, `(max(…))`),
 /// so its refusal says where one goes. One level only: the work is bounded.
 fn misplaced(text: &str) -> bool {
-    let mut input = ParserInput::new(text);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(text);
     while let Ok(token) = p.next() {
         match token {
             Token::Function(name) if FUNCTIONS.iter().any(|f| name.eq_ignore_ascii_case(f)) => {
@@ -148,8 +142,7 @@ pub(crate) fn parse(text: &str) -> Result<Option<Dimension>, Refused> {
 
 /// A CSS length-percentage, including a unitless zero outside math functions.
 pub(crate) fn length_percentage(text: &str) -> Option<Dimension> {
-    let mut input = ParserInput::new(text);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(text);
     if matches!(p.next(), Ok(Token::Number { value, .. }) if *value == 0.0) && p.is_exhausted() {
         return Some(Dimension::Points(0.0));
     }
@@ -182,8 +175,7 @@ pub(super) fn tree(text: &str) -> Option<Node> {
 
 /// One math function or `env()`, the whole of `text`, as a length's tree.
 fn calculation(text: &str, limited: bool, grid: bool) -> Result<Node, Fail> {
-    let mut input = ParserInput::new(text);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(text);
     let mut calc = Calc {
         values: 0,
         limited,
@@ -202,22 +194,29 @@ fn calculation(text: &str, limited: bool, grid: bool) -> Result<Node, Fail> {
     Ok(node)
 }
 
-type Parsed<'i, T> = Result<T, ParseError<'i, Fail>>;
+type Parsed<T> = Result<T, ParseError<Fail>>;
 
 /// The reason in a parse error: the grammar's own, or a token out of place.
-fn fail(e: ParseError<'_, Fail>) -> Fail {
+fn fail(e: ParseError<Fail>) -> Fail {
     match e.kind {
         ParseErrorKind::Custom(fail) => fail,
-        ParseErrorKind::Basic(BasicParseErrorKind::UnexpectedToken(Token::Delim('+' | '-'))) => {
-            Fail::Why(refusal::SPACING)
-        }
         ParseErrorKind::Basic(_) => Fail::Why(refusal::SYNTAX),
     }
 }
 
-/// A refusal at `p`.
-fn why<'i, T>(p: &Parser<'i, '_>, why: &'static str) -> Parsed<'i, T> {
-    Err(p.new_custom_error(Fail::Why(why)))
+/// A refusal.
+fn why<T>(why: &'static str) -> Parsed<T> {
+    Err(ParseError::custom(Fail::Why(why)))
+}
+
+/// Require the end of a block, naming missing operator spacing when a bare `+`
+/// or `-` follows.
+fn expect_end(p: &mut Parser<'_>) -> Parsed<()> {
+    match p.next() {
+        Err(_) => Ok(()),
+        Ok(Token::Delim('+' | '-')) => why(refusal::SPACING),
+        Ok(_) => why(refusal::SYNTAX),
+    }
 }
 
 /// What a parse counts as it goes: the values written, against §10.8's
@@ -232,7 +231,7 @@ struct Calc {
 }
 
 impl Calc {
-    fn count<'i>(&mut self, p: &Parser<'i, '_>) -> Parsed<'i, ()> {
+    fn count(&mut self) -> Parsed<()> {
         self.values += 1;
         let limit = if self.limited {
             MAX_VALUES
@@ -240,27 +239,27 @@ impl Calc {
             super::wire::MAX_NODES
         };
         if self.values > limit {
-            return why(p, refusal::SIZE);
+            return why(refusal::SIZE);
         }
         Ok(())
     }
 
     /// A level deeper: a function or parentheses.
-    fn deeper<'i>(&self, p: &Parser<'i, '_>, depth: usize) -> Parsed<'i, usize> {
+    fn deeper(&self, depth: usize) -> Parsed<usize> {
         let limit = if self.limited {
             MAX_DEPTH
         } else {
             super::wire::MAX_LEVELS
         };
         if depth >= limit {
-            return why(p, refusal::DEPTH);
+            return why(refusal::DEPTH);
         }
         Ok(depth + 1)
     }
 
     /// `<calc-sum>`: products joined by `+` and `-`, which take white space
     /// on both sides (§10.8); a `-` negates what follows it.
-    fn sum<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
+    fn sum(&mut self, p: &mut Parser<'_>, depth: usize) -> Parsed<(Node, Ty)> {
         let (first, ty) = self.product(p, depth)?;
         let mut items = vec![first];
         loop {
@@ -274,18 +273,18 @@ impl Calc {
                     Token::Number { has_sign: true, .. }
                     | Token::Dimension { has_sign: true, .. }
                     | Token::Percentage { has_sign: true, .. },
-                ) => return why(p, refusal::SPACING),
+                ) => return why(refusal::SPACING),
                 _ => {
                     p.reset(&before);
                     break;
                 }
             };
             if !spaced || !space(p) {
-                return why(p, refusal::SPACING);
+                return why(refusal::SPACING);
             }
             let (rhs, rty) = self.product(p, depth)?;
             if rty != ty {
-                return why(p, refusal::UNITLESS);
+                return why(refusal::UNITLESS);
             }
             items.push(if minus {
                 Node::Negate(Box::new(rhs))
@@ -298,7 +297,7 @@ impl Calc {
 
     /// `<calc-product>`: values joined by `*` and `/`; `/` inverts what
     /// follows it. One length at most, and a divisor is a number.
-    fn product<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
+    fn product(&mut self, p: &mut Parser<'_>, depth: usize) -> Parsed<(Node, Ty)> {
         let (first, mut ty) = self.value(p, depth)?;
         let mut items = vec![first];
         loop {
@@ -315,7 +314,7 @@ impl Calc {
             match (ty, rty, divide) {
                 (_, Ty::Number, _) => {}
                 (Ty::Number, Ty::Length, false) => ty = Ty::Length,
-                _ => return why(p, refusal::PRODUCT),
+                _ => return why(refusal::PRODUCT),
             }
             items.push(if divide {
                 Node::Invert(Box::new(rhs))
@@ -328,7 +327,7 @@ impl Calc {
 
     /// `<calc-value>`: a number, a dimension, a percentage, a keyword, a
     /// parenthesised sum, a math function or `env()`.
-    fn value<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
+    fn value(&mut self, p: &mut Parser<'_>, depth: usize) -> Parsed<(Node, Ty)> {
         // The token's own text, after any white space and comments
         p.skip_whitespace();
         let start = p.position();
@@ -338,7 +337,7 @@ impl Calc {
             && matches!(&token, Token::Dimension { unit, .. }
                 if !unit.eq_ignore_ascii_case("px") && !unit.eq_ignore_ascii_case("rem"))
         {
-            return why(p, "grid calculations take only px, rem and %");
+            return why("grid calculations take only px, rem and %");
         }
         match token {
             Token::Function(name) => {
@@ -348,33 +347,33 @@ impl Calc {
                     "env" if !self.grid => p.parse_nested_block(|p| self.env(p, depth)),
                     "var" if !self.grid => p.parse_nested_block(|p| self.var(p, depth)),
                     "calc" => {
-                        let depth = self.deeper(p, depth)?;
+                        let depth = self.deeper(depth)?;
                         p.parse_nested_block(|p| self.whole(p, depth))
                     }
                     "min" | "max" | "clamp" => {
-                        let depth = self.deeper(p, depth)?;
+                        let depth = self.deeper(depth)?;
                         self.comparisons += 1;
                         let v = p.parse_nested_block(|p| self.function(p, &name, depth));
                         self.comparisons -= 1;
                         v
                     }
-                    _ => why(p, refusal::FUNCTION),
+                    _ => why(refusal::FUNCTION),
                 }
             }
             Token::ParenthesisBlock => {
-                let depth = self.deeper(p, depth)?;
+                let depth = self.deeper(depth)?;
                 p.parse_nested_block(|p| self.whole(p, depth))
             }
             Token::Number { .. } => {
-                self.count(p)?;
+                self.count()?;
                 Ok((Node::Value(number_of(text), Unit::Number), Ty::Number))
             }
             Token::Percentage { .. } => {
-                self.count(p)?;
+                self.count()?;
                 Ok((Node::Value(number_of(text), Unit::Percent), Ty::Length))
             }
             Token::Dimension { unit, .. } => {
-                self.count(p)?;
+                self.count()?;
                 let n = number_of(text);
                 let lower = unit.to_ascii_lowercase();
                 let px_per = match lower.as_str() {
@@ -397,53 +396,45 @@ impl Calc {
                 } else if lower == "rem" {
                     Ok((Node::Value(n, Unit::Rem), Ty::Length))
                 } else if lower == "em" {
-                    why(p, refusal::RELATIVE)
+                    why(refusal::RELATIVE)
                 } else {
-                    why(p, refusal::NOT_A_LENGTH)
+                    why(refusal::NOT_A_LENGTH)
                 }
             }
             Token::Ident(word) => {
-                self.count(p)?;
+                self.count()?;
                 let constant = match_ignore_ascii_case! { &word,
                     "e" => std::f64::consts::E,
                     "pi" => std::f64::consts::PI,
                     "infinity" => f64::INFINITY,
                     "-infinity" => f64::NEG_INFINITY,
                     "nan" => f64::NAN,
-                    "none" => return why(p, refusal::NONE),
-                    _ => return why(p, refusal::NOT_A_LENGTH),
+                    "none" => return why(refusal::NONE),
+                    _ => return why(refusal::NOT_A_LENGTH),
                 };
                 Ok((Node::Value(constant, Unit::Number), Ty::Number))
             }
-            _ => why(p, refusal::NOT_A_LENGTH),
+            _ => why(refusal::NOT_A_LENGTH),
         }
     }
 
     /// A sum that is the whole of a block: `calc()`'s or parentheses'.
-    fn whole<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
+    fn whole(&mut self, p: &mut Parser<'_>, depth: usize) -> Parsed<(Node, Ty)> {
         let v = self.sum(p, depth)?;
-        p.expect_exhausted()?;
+        expect_end(p)?;
         Ok(v)
     }
 
     /// The arguments of `min(`, `max(` or `clamp(`, all of one type; `none`
     /// stands for `clamp()`'s first or third.
-    fn function<'i>(
-        &mut self,
-        p: &mut Parser<'i, '_>,
-        name: &str,
-        depth: usize,
-    ) -> Parsed<'i, (Node, Ty)> {
+    fn function(&mut self, p: &mut Parser<'_>, name: &str, depth: usize) -> Parsed<(Node, Ty)> {
         let clamp = name == "clamp";
         if p.is_exhausted() {
-            return why(
-                p,
-                if clamp {
-                    refusal::CLAMP_ARITY
-                } else {
-                    refusal::EMPTY
-                },
-            );
+            return why(if clamp {
+                refusal::CLAMP_ARITY
+            } else {
+                refusal::EMPTY
+            });
         }
         let mut args: Vec<Option<Node>> = Vec::new();
         let mut ty = None;
@@ -451,13 +442,13 @@ impl Calc {
             let none = p.try_parse(|p| p.expect_ident_matching("none")).is_ok();
             if none {
                 if !clamp || args.len() == 1 {
-                    return why(p, refusal::NONE);
+                    return why(refusal::NONE);
                 }
                 args.push(None);
             } else {
                 let (arg, aty) = self.sum(p, depth)?;
                 if ty.is_some_and(|t| t != aty) {
-                    return why(p, refusal::UNITLESS);
+                    return why(refusal::UNITLESS);
                 }
                 ty = Some(aty);
                 args.push(Some(arg));
@@ -465,14 +456,14 @@ impl Calc {
             match p.next() {
                 Ok(Token::Comma) => {}
                 Err(_) => break,
-                Ok(_) => return why(p, refusal::SYNTAX),
+                Ok(_) => return why(refusal::SYNTAX),
             }
         }
         if clamp && args.len() != 3 {
-            return why(p, refusal::CLAMP_ARITY);
+            return why(refusal::CLAMP_ARITY);
         }
         let Some(ty) = ty else {
-            return why(p, refusal::NONE);
+            return why(refusal::NONE);
         };
         let node = match name {
             "min" => Node::Min(args.into_iter().flatten().collect()),
@@ -497,18 +488,18 @@ impl Calc {
     /// the owner's segment, `var(--exact-viewport-segment-<field>-<x>-<y>)`
     /// (D16); or `var(--name)`, an author's custom property (D5). A name is
     /// matched as written, as a custom property's is.
-    fn var<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
-        self.count(p)?;
+    fn var(&mut self, p: &mut Parser<'_>, depth: usize) -> Parsed<(Node, Ty)> {
+        self.count()?;
         let name = match p.expect_ident_cloned() {
             Ok(name) => name,
-            Err(_) => return why(p, refusal::VAR),
+            Err(_) => return why(refusal::VAR),
         };
         if let Some(edge) = name
             .strip_prefix(env::LOCAL_PREFIX)
             .and_then(env::Edge::from_name)
         {
             if !p.is_exhausted() {
-                return why(p, refusal::VAR_FALLBACK);
+                return why(refusal::VAR_FALLBACK);
             }
             return Ok((Node::Env(EnvTerm::Local(edge)), Ty::Length));
         }
@@ -519,7 +510,7 @@ impl Calc {
         let segment = super::SegmentRead::named(&name);
         let author = crate::style::safe_area_properties::is_author_name(&name);
         if observed.is_none() && segment.is_none() && !author {
-            return why(p, refusal::VAR);
+            return why(refusal::VAR);
         }
         let fallback = match p.is_exhausted() {
             true => None,
@@ -528,9 +519,9 @@ impl Calc {
                 // One value, a tree's operand wherever the call stands: CSS substitutes a
                 // fallback's tokens, so a sum written bare would group differently
                 let (fallback, ty) = self.value(p, depth)?;
-                p.expect_exhausted()?;
+                expect_end(p)?;
                 if ty != Ty::Length {
-                    return why(p, refusal::VAR_LENGTH);
+                    return why(refusal::VAR_LENGTH);
                 }
                 Some(Box::new(fallback))
             }
@@ -562,17 +553,17 @@ impl Calc {
     /// `env(<name> <index>*)`: the variable. One with a fallback makes the
     /// whole value a substitution, which a row holds as written and reads
     /// only once substituted ([`substitutes`]), never a tree.
-    fn env<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
-        self.count(p)?;
+    fn env(&mut self, p: &mut Parser<'_>, depth: usize) -> Parsed<(Node, Ty)> {
+        self.count()?;
         let (term, fallback) = env_parts(p, depth).map_err(|fail| match fail {
             // Inside a comparison, or unlinked, as the comparison's refusal
             Fail::Env(e) if self.comparisons > 0 && e != EnvRefusal::Unlinked => {
-                p.new_custom_error(Fail::Why(e.reason()))
+                ParseError::custom(Fail::Why(e.reason()))
             }
-            fail => p.new_custom_error(fail),
+            fail => ParseError::custom(fail),
         })?;
         if fallback.is_some() {
-            return why(p, refusal::FALLBACK);
+            return why(refusal::FALLBACK);
         }
         Ok((Node::Env(term), Ty::Length))
     }
@@ -584,15 +575,13 @@ impl Calc {
 /// `env()` names a variable, each fallback is a `<declaration-value>`, and
 /// the whole is one too), nested at most [`MAX_DEPTH`] deep.
 pub(crate) fn substitutes(text: &str) -> Result<bool, Refused> {
-    fn walk(p: &mut Parser<'_, '_>, depth: usize, top: bool, found: &mut bool) -> Result<(), Fail> {
+    fn walk(p: &mut Parser<'_>, depth: usize, top: bool, found: &mut bool) -> Result<(), Fail> {
         let syntax = || Fail::Why(refusal::SYNTAX);
         while let Ok(token) = p.next_including_whitespace_and_comments() {
             match token.clone() {
                 Token::Function(name) if name.eq_ignore_ascii_case("env") => {
                     let (_, fallback) = p
-                        .parse_nested_block(|p| {
-                            env_parts(p, depth).map_err(|f| p.new_custom_error(f))
-                        })
+                        .parse_nested_block(|p| env_parts(p, depth).map_err(ParseError::custom))
                         .map_err(fail)?;
                     *found |= fallback.is_some();
                 }
@@ -610,7 +599,7 @@ pub(crate) fn substitutes(text: &str) -> Result<bool, Refused> {
                         return Err(Fail::Why(refusal::DEPTH));
                     }
                     p.parse_nested_block(|p| {
-                        walk(p, depth + 1, false, found).map_err(|f| p.new_custom_error(f))
+                        walk(p, depth + 1, false, found).map_err(ParseError::custom)
                     })
                     .map_err(fail)?;
                 }
@@ -619,9 +608,8 @@ pub(crate) fn substitutes(text: &str) -> Result<bool, Refused> {
         }
         Ok(())
     }
-    let mut input = ParserInput::new(text);
     let mut found = false;
-    match walk(&mut Parser::new(&mut input), 0, true, &mut found) {
+    match walk(&mut Parser::new(text), 0, true, &mut found) {
         Ok(()) => Ok(found),
         // A fallback's `rem` or `em` is refused as itself; syntax nothing
         // substitutes is the parse's to refuse, with its reason
@@ -635,7 +623,7 @@ pub(crate) fn substitutes(text: &str) -> Result<bool, Refused> {
 /// An `env()` block's variable and its fallback's tokens, as written; the
 /// block's contents, after `env(`.
 pub(super) fn env_parts(
-    p: &mut Parser<'_, '_>,
+    p: &mut Parser<'_>,
     depth: usize,
 ) -> Result<(EnvTerm, Option<String>), Fail> {
     // The variable's name, as CSS decodes it, and its indices, from their
@@ -669,7 +657,7 @@ pub(super) fn env_parts(
                     Some(_) => indices.push(word),
                 }
             }
-            Ok::<_, ParseError<'_, ()>>((name, indices))
+            Ok::<_, ParseError<()>>((name, indices))
         })
         .map_err(|_| Fail::Why(refusal::SYNTAX))?;
     let name = name.ok_or(EnvRefusal::UnknownVariable)?;
@@ -703,7 +691,7 @@ pub(super) fn env_parts(
 /// at the top no `;` or `!`; nested at most [`MAX_DEPTH`] deep, so the work
 /// is bounded. Empty is one too. A `rem` or `em` length is refused: a
 /// fallback is read where no font size is known.
-fn declaration_value(p: &mut Parser<'_, '_>, depth: usize, top: bool) -> Result<(), Fail> {
+fn declaration_value(p: &mut Parser<'_>, depth: usize, top: bool) -> Result<(), Fail> {
     let syntax = || Fail::Why(refusal::SYNTAX);
     while let Ok(token) = p.next_including_whitespace_and_comments() {
         match token {
@@ -726,7 +714,7 @@ fn declaration_value(p: &mut Parser<'_, '_>, depth: usize, top: bool) -> Result<
                 p.parse_nested_block(|p| {
                     env_parts(p, depth + 1)
                         .map(|_| ())
-                        .map_err(|f| p.new_custom_error(f))
+                        .map_err(ParseError::custom)
                 })
                 .map_err(fail)?;
             }
@@ -738,7 +726,7 @@ fn declaration_value(p: &mut Parser<'_, '_>, depth: usize, top: bool) -> Result<
                     return Err(syntax());
                 }
                 p.parse_nested_block(|p| {
-                    declaration_value(p, depth + 1, false).map_err(|f| p.new_custom_error(f))
+                    declaration_value(p, depth + 1, false).map_err(ParseError::custom)
                 })
                 .map_err(fail)?;
             }
@@ -750,7 +738,7 @@ fn declaration_value(p: &mut Parser<'_, '_>, depth: usize, top: bool) -> Result<
 
 /// Skip white space, comments among it; whether there was white space,
 /// which a comment is not.
-fn space(p: &mut Parser<'_, '_>) -> bool {
+fn space(p: &mut Parser<'_>) -> bool {
     let mut white = false;
     loop {
         let before = p.state();

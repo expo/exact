@@ -33,9 +33,17 @@ pub struct Dirty {
     renewed: Vec<NodeKey>,
     /// When the latest commit landed, ms (where a numeric roll starts).
     committed: Option<f64>,
+    /// A list a transition moves (a `d`, a `filter`, a clip) presented a
+    /// new value: a retained region's picture of it is stale.
+    moving: bool,
 }
 
 impl Dirty {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn restore_commit(&mut self, at: Option<f64>) {
+        self.committed = self.committed.into_iter().chain(at).reduce(f64::max);
+    }
+
     #[cfg(test)]
     pub(crate) fn pending_nodes(&self) -> usize {
         self.hard.len() + self.moved.len() + self.renewed.len()
@@ -46,6 +54,12 @@ impl Dirty {
         let changes = std::mem::take(self);
         self.committed = changes.committed;
         changes
+    }
+
+    /// The changed nodes when the damage is known and none has lost its ancestry.
+    pub(crate) fn known_nodes(&self) -> Option<impl Iterator<Item = NodeKey> + '_> {
+        let nodes = self.hard.iter().chain(&self.moved).chain(&self.renewed);
+        (!self.destroyed && nodes.clone().next().is_some()).then(|| nodes.copied())
     }
 
     /// A commit's nodes, and when it landed (ms).
@@ -71,6 +85,13 @@ impl Dirty {
     /// A node whose presentation changed.
     pub fn node(&mut self, key: NodeKey) {
         self.hard.push(key);
+    }
+
+    /// A node whose list value a transition moves presented a new one
+    /// (LLP 1003.003 D7): its row, and a retained region's picture, redraw.
+    pub fn moving(&mut self, key: NodeKey) {
+        self.hard.push(key);
+        self.moving = true;
     }
 }
 
@@ -226,6 +247,8 @@ pub(super) struct Rows {
     /// [`sticky_parents`] and the walk it was found for.
     sections: Option<(u64, Rc<IdSet<ViewId>>)>,
     sticky_scrollers: Option<IdSet<ViewId>>,
+    /// Nodes that are, or contain, a vertical scroller eligible for its own group.
+    pub(super) scroller_ancestors: Option<(u64, Rc<IdSet<ViewId>>)>,
     /// The environment the kept rows resolved `env()` against.
     env: Option<exact_kernel::Env>,
     /// The controls' own states and choices the kept rows drew
@@ -253,8 +276,9 @@ pub(super) struct Rows {
     /// `EXACT_ROWS=0` turns rows off, for comparison.
     off: Option<bool>,
     /// This walk's scrollers with rows: each one's id and the range of the
-    /// walk's boxes its rows pushed.
+    /// walk's boxes its rows pushed, with indices of open groups stacked for nesting.
     groups: Vec<(ViewId, usize, usize)>,
+    open_groups: Vec<usize>,
     /// The container whose children are its scroller's rows, while it is
     /// walked (see [`Painter::wraps_rows`]).
     wrapper: Option<NodeKey>,
@@ -378,6 +402,7 @@ impl Painter {
 
     /// Invalidate the rows reached by the host's changes.
     pub(crate) fn rows_dirty(&mut self, kernel: &Kernel, dirty: Dirty) {
+        self.region_motion += u64::from(dirty.moving);
         if dirty.destroyed {
             self.canvases
                 .readbacks
@@ -542,6 +567,7 @@ impl Painter {
             .get_or_insert_with(|| std::env::var("EXACT_ROWS").is_ok_and(|v| v == "0"));
         self.rows.frame += 1;
         self.rows.groups.clear();
+        self.rows.open_groups.clear();
         self.rows.sticky_scrollers = None;
         self.rows.active = !off
             && (self.backend.rows() || self.backend.geometry_rows())
@@ -613,9 +639,11 @@ impl Painter {
         }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
         self.backend.group_begin(id, scroll);
+        let at = self.rows.groups.len();
         self.rows
             .groups
             .push((id, walk.boxes.len(), walk.boxes.len()));
+        self.rows.open_groups.push(at);
     }
 
     /// A sticky box moves with its constraint, independently of the group.
@@ -639,8 +667,8 @@ impl Painter {
             return;
         }
         self.backend.group_end();
-        if let Some(g) = self.rows.groups.last_mut() {
-            g.2 = walk.boxes.len();
+        if let Some(at) = self.rows.open_groups.pop() {
+            self.rows.groups[at].2 = walk.boxes.len();
         }
     }
 
@@ -785,6 +813,8 @@ impl Painter {
                 }
             }
             c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
+            // A reaching box paints past its row's recorded bounds: painted again each frame (LLP 1123 D13)
+            c.refused |= shown.claimed();
         }
     }
 
@@ -1046,6 +1076,10 @@ impl Painter {
             || ts.ky != 0.0
             || (walk.scene.hidden)(id)
             || (split_sections && node.layout_position() == exact_kernel::PositionType::Sticky)
+            || (!split_sections
+                && self.backend.rows()
+                && self.backend.can_group()
+                && self.holds_nested_group(walk.scene.kernel, id))
         {
             // A backend that splits sections keeps one row group, the outer
             // scroller's, and none opens inside a layer capture. Another

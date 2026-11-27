@@ -1,0 +1,42 @@
+component App
+  state number = 1
+  state awake = false
+  action sleep
+    awake = false
+  action put(n: number)
+    number = n
+  action wake
+    awake = true
+  view
+    column
+      if true
+        Child(awake=awake, number=number)
+      button "Sleep" press=sleep testId="sleep"
+      button "Invalid" press=put(-1) testId="invalid"
+      button "Valid" press=put(3) testId="valid"
+      button "Wake" press=wake testId="wake"
+
+component Child
+  props
+    awake: bool
+    number: number
+  resource answer = lookup(range(number).length) when awake as shape number
+  view
+    text `${answer}:${current(answer)}` testId="answer"
+
+test "a sleeping owned resource skips arguments and wakes on the latest value"
+  expect text "answer" == "0:false"
+  answer source lookup with 7
+  tap "wake"
+  expect text "answer" == "7:true"
+  tap "sleep"
+  expect text "answer" == "7:false"
+  tap "invalid"
+  expect state number == -1
+  expect text "answer" == "7:false"
+  tap "valid"
+  expect state number == 3
+  answer source lookup with 9
+  expect text "answer" == "7:false"
+  tap "wake"
+  expect text "answer" == "9:true"

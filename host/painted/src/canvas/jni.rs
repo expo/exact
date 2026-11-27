@@ -20,6 +20,8 @@ pub use byte_arrays::{bytes, utf8};
 
 #[path = "jni_frames.rs"]
 mod frames;
+#[path = "jni_drop.rs"]
+mod jni_drop;
 #[path = "jni_extensions.rs"]
 pub mod jni_extensions;
 #[path = "jni_keys.rs"]
@@ -102,13 +104,9 @@ macro_rules! canvas_jni {
 
             thread_local! {
                 static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
-                /// The op stream the last `frame` returned; the reader reads it in place.
-                static LAST: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-                /// A move of the last stream (op 22), read at once; LAST stays drawn.
-                static MOVE: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-                /// What the reader draws: the last stream's drawing, without its
-                /// definitions (`None` after a move, or unknown).
-                static DRAWN: RefCell<Option<Vec<u32>>> = const { RefCell::new(None) };
+                /// Op streams handed to the reader in place (`StreamDedup`).
+                static STREAM: RefCell<$crate::canvas::StreamDedup> =
+                    const { RefCell::new($crate::canvas::StreamDedup::new()) };
             }
 
             fn with<T>(f: impl FnOnce(&mut Host) -> T) -> Option<T> {
@@ -156,9 +154,7 @@ macro_rules! canvas_jni {
                 if with(|h| h.adopt(size, scale)).is_none() {
                     return false;
                 }
-                LAST.with(|l| l.borrow_mut().clear());
-                MOVE.with(|m| m.borrow_mut().clear());
-                DRAWN.with(|d| *d.borrow_mut() = None);
+                STREAM.with(|s| s.borrow_mut().clear());
                 PRIMED.with(|p| *p.borrow_mut() = None);
                 true
             }
@@ -187,10 +183,12 @@ macro_rules! canvas_jni {
                 dates: jstring,
                 format_locale: jstring,
                 screen_reader: jint,
+                orientation: jint,
             ) {
                 let device = $crate::presenter::Device {
                     night: night == JNI_TRUE,
                     font_scale,
+                    orientation: $crate::presenter::ScreenOrientation::from_code(orientation as u32),
                     screen_reader: $crate::presenter::ScreenReader::from_bits(screen_reader as u32),
                     locale: string(env, locale),
                     rtl: rtl == JNI_TRUE,
@@ -230,23 +228,35 @@ macro_rules! canvas_jni {
                 let mut told = $crate::canvas::Told {
                     size: (width.max(0) as u32, height.max(0) as u32),
                     scale,
-                    insets: [0; 16],
+                    geometry: [0; 20],
                 };
-                let n = ((**env).GetArrayLength.expect("jni"))(env, insets).clamp(0, 16);
+                let n = ((**env).GetArrayLength.expect("jni"))(env, insets).clamp(0, 20);
                 ((**env).GetIntArrayRegion.expect("jni"))(
                     env,
                     insets,
                     0,
                     n,
-                    told.insets.as_mut_ptr(),
+                    told.geometry.as_mut_ptr(),
                 );
                 $crate::canvas::window(told);
                 with(|h| h.set_window(told));
             }
 
+            /// The software keyboard's bottom inset in pixels as its inset
+            /// animation shows it, each frame while one runs, and a negative
+            /// depth once it ends (LLP 1123 D7), on the host's thread.
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_keyboardProgress(
+                _env: *mut JNIEnv,
+                _class: jclass,
+                depth: jint,
+            ) {
+                with(|h| h.set_keyboard_progress(depth));
+            }
+
             /// The device's colours (LLP 1115.001 D4): Material 3's colour
-            /// roles as the reader resolved them, twelve light and then the
-            /// same twelve dark, ARGB, in `presenter::Material`'s order.
+            /// roles, light then dark in `presenter::Material`'s order, followed
+            /// by the contrast level and available device accent swatches.
             /// Before `start`, from any thread, so the host boots resolving
             /// every role by them, and on the host's thread again whenever
             /// one changes. Any other count of colours is ignored.
@@ -259,7 +269,7 @@ macro_rules! canvas_jni {
                 let n = ((**env).GetArrayLength.expect("jni"))(env, roles).max(0);
                 let mut words = vec![0i32; n as usize];
                 ((**env).GetIntArrayRegion.expect("jni"))(env, roles, 0, n, words.as_mut_ptr());
-                let Some(palette) = $crate::presenter::Palette::from_words(&words) else {
+                let Some(palette) = $crate::presenter::ReaderPalette::from_words(&words) else {
                     return;
                 };
                 $crate::canvas::colors(palette);
@@ -294,6 +304,20 @@ macro_rules! canvas_jni {
             ) {
                 let answer = (!answer.is_null()).then(|| string(env, answer));
                 with(|h| h.answer(id as u32, answer.as_deref()));
+            }
+
+            /// The reader refused module request `id`.
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_refuseModule(
+                env: *mut JNIEnv,
+                _class: jclass,
+                id: jint,
+                error: jstring,
+                message: jstring,
+            ) {
+                let error = string(env, error);
+                let message = (!message.is_null()).then(|| string(env, message));
+                with(|h| h.refuse_module(id as u32, &error, message.as_deref()));
             }
 
             /// What the reader draws around the page, when that is not what
@@ -341,34 +365,12 @@ macro_rules! canvas_jni {
                     return std::ptr::null_mut();
                 };
                 let new = (**env).NewDirectByteBuffer.expect("jni");
-                if ops.first() == Some(&22) {
-                    DRAWN.with(|d| *d.borrow_mut() = None);
-                    return MOVE.with(|m| {
-                        let mut m = m.borrow_mut();
-                        *m = ops;
-                        new(env, m.as_mut_ptr().cast(), (m.len() * 4) as i64)
-                    });
-                }
-                LAST.with(|last| {
-                    let mut last = last.borrow_mut();
-                    // The same stream draws the same pixels: no new frame for Android.
-                    if *last == ops {
-                        return std::ptr::null_mut();
+                STREAM.with(|s| {
+                    let mut s = s.borrow_mut();
+                    match s.emit(ops) {
+                        Some(buf) => new(env, buf.as_mut_ptr().cast(), (buf.len() * 4) as i64),
+                        None => std::ptr::null_mut(),
                     }
-                    // What the reader draws already, with nothing to define (a
-                    // touch down after a stream that defined rows): no frame.
-                    let now = $crate::canvas::drawing(&ops);
-                    let same = DRAWN.with(|d| {
-                        let mut d = d.borrow_mut();
-                        let same = matches!((&now, &*d), (Some((n, false)), Some(o)) if n == o);
-                        *d = now.map(|(n, _)| n);
-                        same
-                    });
-                    if same {
-                        return std::ptr::null_mut();
-                    }
-                    *last = ops;
-                    new(env, last.as_mut_ptr().cast(), (last.len() * 4) as i64)
                 })
             }
 
@@ -470,6 +472,7 @@ macro_rules! canvas_jni {
                 let mut fds = with(|h| h.fds()).unwrap_or([-1, -1]).to_vec();
                 fds.push(with(|h| h.acquire_fd()).unwrap_or(-1));
                 fds.push(with(|h| h.update_fd()).unwrap_or(-1));
+                fds.push(with(|h| h.surface_wake_fd()).unwrap_or(-1));
                 let arr = ((**env).NewIntArray.expect("jni"))(env, fds.len() as i32);
                 ((**env).SetIntArrayRegion.expect("jni"))(env, arr, 0, fds.len() as i32, fds.as_ptr());
                 arr
@@ -684,7 +687,7 @@ macro_rules! canvas_jni {
                 with(|h| h.media(id as u32, key, session as u64, &event, &payload, &state));
             }
 
-            $crate::canvas_jni_scroll!();
+            $crate::canvas_jni_scroll!(); $crate::canvas_jni_drop!();
 
             /// The producer's scale and its scroller statement
             /// (`CanvasHost::scrollers`), or null when unchanged.
@@ -700,22 +703,19 @@ macro_rules! canvas_jni {
             }
 
             /// A touch (0 down, 1 up, 2 move, 3 cancel) at the view's
-            /// pixels, and what touched: Android's tool type (1 a finger,
-            /// 2 a stylus, 3 a mouse, 4 an eraser; LLP 1115.001 D7.4).
-            /// Action 4: the touch that is down was held for the system's
-            /// long-press time (a context menu opens, D10). `at`: the
-            /// event's time in uptime ns, or -1 for a reader action.
+            /// pixels and its Android tool type (LLP 1115.001 D7.4).
+            /// Action 4 is a long press. `at` is uptime ns or -1 for a reader action.
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_touch(
-                _env: *mut JNIEnv,
+                env: *mut JNIEnv,
                 _class: jclass,
                 action: jint,
                 x: jfloat,
                 y: jfloat,
                 tool: jint,
                 at: jlong,
-            ) {
-                with(|h| h.touch(action, x, y, tool, at));
+            ) -> jintArray {
+                with(|h| h.touch(action, x, y, tool, at)).flatten().map_or(std::ptr::null_mut(), |words| ints(env, &words))
             }
 
             /// Whether a touch is down on the view, before the reader routes
@@ -739,8 +739,11 @@ macro_rules! canvas_jni {
                 id: jint,
                 x: jfloat,
                 y: jfloat,
+                tool: jint,
+                at: jlong,
+                primary_x: jfloat, primary_y: jfloat,
             ) {
-                with(|h| h.finger(action, id, x, y));
+                with(|h| h.finger(action, id, x, y, tool, at, (primary_x,primary_y)));
             }
 
             /// What happened in the window the reader made for surface
@@ -819,8 +822,12 @@ macro_rules! canvas_jni {
                 id: jint,
                 action: jint,
                 value: jfloat,
+                target: jint,
             ) -> jboolean {
-                flag(with(|h| h.access_act(id, action, value)).unwrap_or(false))
+                flag(with(|h| {
+                    if target == 0 { h.access_act(id, action, value) }
+                    else { h.access_custom_action(id, target as u32) }
+                }).unwrap_or(false))
             }
 
             /// What the reader's hatches ask for node `node`, 0 for their

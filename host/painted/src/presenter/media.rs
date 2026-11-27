@@ -39,8 +39,13 @@ impl<D: DataSource> Presenter<D> {
         state: &str,
         now_ms: f64,
     ) -> bool {
-        let valid = session == self.brush.native_session
-            && self
+        if session != self.brush.native_session {
+            return false;
+        }
+        let leave =
+            event == "leavepictureinpicture" && self.host.runner().expects_video_leave(id, key);
+        let valid = leave
+            || self
                 .host
                 .kernel()
                 .node(id)
@@ -51,12 +56,15 @@ impl<D: DataSource> Presenter<D> {
         if event.is_empty() {
             return self.media_state(id, key, state);
         }
-        if !self
-            .host
-            .runner()
-            .handlers_of(id)
-            .iter()
-            .any(|k| k.name() == event)
+        if event == "pictureinpictureerror" {
+            self.host
+                .log(format!("requestPictureInPicture refused: {payload}"));
+        }
+        let handlers = self.host.runner().handlers_of(id);
+        if !leave
+            && !handlers.iter().any(|k| k.name() == event)
+            && !(event == "enterpictureinpicture"
+                && handlers.contains(&EventKind::Leavepictureinpicture))
         {
             return false;
         }
@@ -73,7 +81,7 @@ impl<D: DataSource> Presenter<D> {
         true
     }
 
-    /// Props of a mounted audio element whose player has no reader.
+    /// Props of a mounted media element whose player has no reader.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn background_audio(
         &self,
@@ -86,7 +94,6 @@ impl<D: DataSource> Presenter<D> {
         if session != self.brush.native_session
             || node.key != key
             || node.node_type != NodeType::Video
-            || node.props.str(PropId::SemanticTag) != Some("audio")
         {
             return None;
         }
@@ -256,6 +263,17 @@ impl<D: DataSource> Presenter<D> {
         }
         self.brush.media.asked.push(key);
         self.dirty = true;
+    }
+
+    pub(crate) fn video_in_picture(&self, id: ViewId) -> bool {
+        self.media.rows.get(&id).is_some_and(|row| {
+            row.state["pictureInPicture"] == true
+                && self
+                    .host
+                    .kernel()
+                    .node(id)
+                    .is_some_and(|node| node.key == row.key)
+        })
     }
 
     /// `state.media`: each mounted media node's row, as its player last

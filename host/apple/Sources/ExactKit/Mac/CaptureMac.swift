@@ -241,7 +241,7 @@ extension Capture {
             for (id, image) in session.webviews.snapshots().merging(session.natives.snapshots(), uniquingKeysWith: { web, _ in web }) {
                 if let node = views[id] { web[ObjectIdentifier(node)] = image }
             }
-            hidden += (views.values.compactMap(\.web) + session.natives.snapshotViews).map { ($0, $0.isHidden) }
+            hidden += (views.values.compactMap(\.web) + session.natives.snapshotViews.values).map { ($0, $0.isHidden) }
         }
         hidden.forEach { $0.0.isHidden = true }
         defer { hidden.forEach { $0.0.isHidden = $0.1 }; web = [:] }

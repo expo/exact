@@ -22,14 +22,22 @@ pub fn parse_values(text: &str) -> Result<Vec<Value>, String> {
 }
 
 pub(crate) fn parse_bindings(text: &str) -> Result<(Option<Vec<String>>, Vec<Value>), String> {
-    if !text.trim_start().starts_with('{') {
-        return parse_values(text).map(|v| (None, v));
-    }
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
     };
     p.ws();
+    if p.s.get(p.i) == Some(&b'[') {
+        let values = p.array(Parser::argument)?;
+        p.ws();
+        if p.i != p.s.len() {
+            return Err("trailing input".into());
+        }
+        return Ok((None, values));
+    }
+    if p.s.get(p.i) != Some(&b'{') {
+        return parse_values(text).map(|v| (None, v));
+    }
     p.i += 1;
     p.ws();
     let mut names = Vec::new();
@@ -52,7 +60,7 @@ pub(crate) fn parse_bindings(text: &str) -> Result<(Option<Vec<String>>, Vec<Val
             }
             p.i += 1;
             p.ws();
-            let value = p.value().map_err(|e| format!("{name}: {e}"))?;
+            let value = p.argument().map_err(|e| format!("{name}: {e}"))?;
             names.push(name.to_string());
             values.push(value);
             p.ws();
@@ -86,31 +94,64 @@ impl Parser<'_> {
         }
     }
 
+    fn array(
+        &mut self,
+        item: fn(&mut Self) -> Result<Value, String>,
+    ) -> Result<Vec<Value>, String> {
+        self.i += 1;
+        let mut items = Vec::new();
+        loop {
+            self.ws();
+            if self.s.get(self.i) == Some(&b']') {
+                self.i += 1;
+                break;
+            }
+            items.push(item(self)?);
+            self.ws();
+            match self.s.get(self.i) {
+                Some(b',') => self.i += 1,
+                Some(b']') => {
+                    self.i += 1;
+                    break;
+                }
+                _ => return Err(format!("expected , or ] at {}", self.i)),
+            }
+        }
+        Ok(items)
+    }
+
+    fn argument(&mut self) -> Result<Value, String> {
+        if self.s.get(self.i) != Some(&b'{') {
+            return self.value();
+        }
+        self.i += 1;
+        self.ws();
+        if self.value()?.as_str() != Some("color") {
+            return Err("expected a colour argument".into());
+        }
+        self.ws();
+        if self.s.get(self.i) != Some(&b':') {
+            return Err("color: expected :".into());
+        }
+        self.i += 1;
+        self.ws();
+        let Value::List(rgba) = self.value()? else {
+            return Err("color: expected RGBA".into());
+        };
+        self.ws();
+        if self.s.get(self.i) != Some(&b'}') {
+            return Err("color: expected }".into());
+        }
+        self.i += 1;
+        let value = Value::Record(rgba);
+        color(&value, "color").map_err(|e| e.0)?;
+        Ok(value)
+    }
+
     fn value(&mut self) -> Result<Value, String> {
         match self.s.get(self.i) {
             None => Err("unexpected end".into()),
-            Some(b'[') => {
-                self.i += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.ws();
-                    if self.s.get(self.i) == Some(&b']') {
-                        self.i += 1;
-                        break;
-                    }
-                    items.push(self.value()?);
-                    self.ws();
-                    match self.s.get(self.i) {
-                        Some(b',') => self.i += 1,
-                        Some(b']') => {
-                            self.i += 1;
-                            break;
-                        }
-                        _ => return Err(format!("expected , or ] at {}", self.i)),
-                    }
-                }
-                Ok(Value::List(items.into()))
-            }
+            Some(b'[') => Ok(Value::list(self.array(Self::value)?)),
             Some(b'"') => {
                 self.i += 1;
                 let mut out = String::new();
@@ -251,6 +292,26 @@ pub fn number(v: &Value, what: &str) -> Result<f64, crate::SurfaceError> {
         Value::Number(n) => Ok(*n),
         _ => Err(crate::SurfaceError(format!("{what}: expected a number"))),
     }
+}
+
+/// A colour input's straight red, green, blue and alpha in extended linear sRGB.
+pub fn color(v: &Value, what: &str) -> Result<[f32; 4], crate::SurfaceError> {
+    color_components(v)
+        .ok_or_else(|| crate::SurfaceError(format!("{what}: expected a colour input")))
+}
+
+pub(crate) fn color_components(v: &Value) -> Option<[f32; 4]> {
+    if let Value::Record(fields) = v {
+        if let [Value::Number(r), Value::Number(g), Value::Number(b), Value::Number(a)] =
+            fields.as_ref()
+        {
+            let rgba = [*r as f32, *g as f32, *b as f32, *a as f32];
+            if rgba.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(a) {
+                return Some(rgba);
+            }
+        }
+    }
+    None
 }
 
 /// A string, or an error naming the input.
@@ -498,4 +559,31 @@ pub fn strings(values: &[String]) -> String {
     }
     out.push(']');
     out
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_tagged_argument_is_a_colour() {
+        let (_, v) =
+            parse_bindings(r#"[{"color":[1.2,-0.1,0,0.5]},[1,0,0,1],[[1,0,0,1]],"ink"]"#).unwrap();
+        assert_eq!(color(&v[0], "ink").unwrap(), [1.2, -0.1, 0.0, 0.5]);
+        for other in &v[1..] {
+            assert!(color(other, "ink").is_err());
+        }
+        let (keys, v) =
+            parse_bindings(r#"{"color":[1,0,0,1],"fill":{"color":[0,1,0,1]}}"#).unwrap();
+        assert_eq!(keys.unwrap(), ["color", "fill"]);
+        assert!(color(&v[0], "color").is_err());
+        assert_eq!(color(&v[1], "fill").unwrap(), [0., 1., 0., 1.]);
+        for bad in [
+            r#"[{"color":[0,0,0,2]}]"#,
+            r#"[{"color":[0,0,0]}]"#,
+            r#"[{"color":[0,0,0,1],"extra":0}]"#,
+        ] {
+            assert!(parse_bindings(bad).is_err(), "{bad}");
+        }
+    }
 }

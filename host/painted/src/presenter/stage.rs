@@ -4,7 +4,7 @@
 //! **Sheets.** Where a shell shows bars (Android's reader), a `modal`
 //! route is Material 3's modal bottom sheet: as wide as the window up to
 //! 640, rounded 28 at its top, `surfaceContainerLow` under a route that
-//! says no background, a 32 by 4 drag handle 22 below its top edge, over a
+//! says no background, an optional 32 by 4 drag handle 22 below its top edge, over a
 //! scrim of 32 % black that dims the page and its bars. It rests at its
 //! `navigationDetent` heights (`medium` half the tallest, `large` the
 //! window below the status bar, a point height or a percentage of the
@@ -58,10 +58,23 @@ use exact_kernel::StyleId;
 /// The room a sheet's drag handle takes at its top, points: Material's
 /// handle, 4 tall with 22 above and below.
 pub const SHEET_HANDLE: f32 = 48.0;
+pub(crate) fn sheet_handle(route: &exact_kernel::NodeRef<'_>) -> f32 {
+    if route.props.str(PropId::NavigationGrabber) == Some("hidden") {
+        0.0
+    } else {
+        SHEET_HANDLE
+    }
+}
 /// Material 3's sheet: its widest, its top corners, and its scrim.
 const SHEET_MAX_WIDTH: f32 = 640.0;
 const SHEET_CORNER: f32 = 28.0;
 const SCRIM: f32 = 0.32;
+/// A centered Material sheet's left margin and width in the page.
+pub(crate) fn sheet_span(page_width: f32) -> (f32, f32) {
+    let width = page_width.min(SHEET_MAX_WIDTH);
+    ((page_width - width) / 2.0, width)
+}
+
 /// Material's motion: a sheet's entrance (emphasized decelerate), its exit
 /// (emphasized accelerate), a settle between detents, and the shared axis.
 const ENTER_MS: f64 = 350.0;
@@ -186,15 +199,19 @@ struct Sheet {
     /// beneath that route, as it was, and takes no touch.
     covered: bool,
     reader_dragging: bool,
+    handle: f32,
     /// Its route's scheme (LLP 1034 §8), which it keeps from the
     /// ancestors it is lifted out of, and keeps as it slides out; `None`
     /// follows the session's.
     scheme: Option<bool>,
+    /// The sheet route's projected top app bar picture, kept for `Closing`.
+    bar: Option<Rc<Tape>>,
 }
 
 /// A sheet whose route has gone, sliding out of the window.
 struct Closing {
     shown: NodeKey,
+    handle: f32,
     /// Its left edge and width.
     x: f32,
     width: f32,
@@ -204,6 +221,7 @@ struct Closing {
     /// What a predictive Back had shrunk it to.
     scale: f32,
     scheme: Option<bool>,
+    bar: Option<Rc<Tape>>,
 }
 
 /// A route crossing.
@@ -392,9 +410,14 @@ impl<D: DataSource> Presenter<D> {
 
     /// A sheet's left edge and width.
     fn sheet_span(&self) -> (f32, f32) {
-        let w = self.viewport.0;
-        let width = w.min(SHEET_MAX_WIDTH);
-        ((w - width) / 2.0, width)
+        sheet_span(self.viewport.0)
+    }
+
+    /// Where the stage shows the sheet `modal` opened, its left edge and top
+    /// in the page, points, while it shows one.
+    pub(super) fn sheet_origin(&self, modal: NodeKey) -> Option<(f32, f32)> {
+        let sheet = self.stage.sheets.iter().find(|s| s.modal == modal)?;
+        Some((self.sheet_span().0, self.sheet_top_now(sheet)))
     }
 
     fn sheet_top_now(&self, sheet: &Sheet) -> f32 {
@@ -468,12 +491,14 @@ impl<D: DataSource> Presenter<D> {
             if !still && presents && self.brush.kept(sheet.shown) {
                 self.stage.closing.push(Closing {
                     shown: sheet.shown,
+                    handle: sheet.handle,
                     x,
                     width,
                     top: Glide::new(from, h, now, EXIT_MS, Curve::Accelerate),
                     from,
                     scale,
                     scheme: sheet.scheme,
+                    bar: sheet.bar,
                 });
             }
             if matches!(&self.stage.gesture, Some(touch::Gesture::Drag { modal, .. }) if *modal == sheet.modal)
@@ -494,6 +519,7 @@ impl<D: DataSource> Presenter<D> {
         for (i, last) in wanted {
             let kernel = self.host.kernel();
             let node = kernel.node(stack[i]).expect("a live route");
+            let handle = sheet_handle(&node);
             let detent = node.props.str(PropId::NavigationDetent).map(str::to_owned);
             let initial = node
                 .props
@@ -540,6 +566,7 @@ impl<D: DataSource> Presenter<D> {
             match self.stage.sheets.iter_mut().find(|s| s.modal == keys[i]) {
                 Some(sheet) => {
                     sheet.scheme = scheme;
+                    sheet.handle = handle;
                     sheet.shown = keys[last];
                     sheet.covered = covered;
                     sheet.measured = measured;
@@ -578,8 +605,10 @@ impl<D: DataSource> Presenter<D> {
                         said,
                         measured,
                         reader_dragging: false,
+                        handle,
                         covered,
                         scheme,
+                        bar: None,
                     });
                 }
             }
@@ -592,6 +621,7 @@ impl<D: DataSource> Presenter<D> {
         if (self.stage.shift.as_ref()).is_some_and(|s| !s.progress.moving(now)) {
             self.stage.shift = None;
         }
+        self.update_hosted_back();
         self.hold_arriving();
         self.place_sheets(&stack, &kinds);
         self.dirty |= self.stage_moving();
@@ -771,9 +801,18 @@ impl<D: DataSource> Presenter<D> {
         if still {
             return;
         }
-        let bar = (self.stage.bar.as_ref())
-            .filter(|(route, ..)| route == old && sheet.is_none())
-            .map(|(_, tape, frame)| (tape.clone(), *frame));
+        let bar = match sheet {
+            None => (self.stage.bar.as_ref())
+                .filter(|(route, ..)| route == old)
+                .map(|(_, tape, frame)| (tape.clone(), *frame)),
+            Some(modal) => self
+                .stage
+                .sheets
+                .iter()
+                .find(|s| s.modal == modal)
+                .and_then(|s| s.bar.clone())
+                .map(|tape| (tape, (0.0, 0.0, 0.0, 0.0))),
+        };
         self.stage.shift = Some(Shift {
             forward,
             outgoing: *old,
@@ -836,9 +875,65 @@ impl<D: DataSource> Presenter<D> {
         self.stage.sheets.iter().filter(|s| !s.covered)
     }
 
+    /// Sheets keep their callback positions while another route covers them. Only a sheet
+    /// that is itself the selected route can take the route's Back.
+    pub(super) fn back_sheets(&self) -> (Vec<ViewId>, Option<ViewId>) {
+        let mut sheets = Vec::new();
+        let mut selected = None;
+        if self.stage_presents() {
+            for sheet in &self.stage.sheets {
+                if let Some(n) = self.host.kernel().node_by_key(sheet.modal) {
+                    sheets.push(n.id);
+                    if self.stage.seen.last() == Some(&sheet.modal) {
+                        selected = Some(n.id);
+                    }
+                }
+            }
+        }
+        (sheets, selected)
+    }
+
     /// Whether a sheet is open in front.
     pub(crate) fn sheet_open(&self) -> bool {
         self.stage_presents() && self.front_sheets().next().is_some()
+    }
+
+    pub(super) fn sheet_bar_slots(
+        &self,
+    ) -> (f32, Option<NodeKey>, Vec<(NodeKey, NodeKey)>, Vec<NodeKey>) {
+        let (_, width) = self.sheet_span();
+        let top_modal = self.front_sheets().last().map(|s| s.modal);
+        let sheets = self
+            .stage
+            .sheets
+            .iter()
+            .map(|s| (s.modal, s.shown))
+            .collect();
+        let crossing = (self.stage.shift.as_ref())
+            .filter(|s| s.sheet.is_some())
+            .map(|s| [s.outgoing, s.incoming])
+            .into_iter()
+            .flatten()
+            .chain(
+                self.stage
+                    .preview
+                    .as_ref()
+                    .and_then(|p| p.pair())
+                    .into_iter()
+                    .flat_map(|(o, i)| [o, i]),
+            )
+            .collect();
+        (width, top_modal, sheets, crossing)
+    }
+
+    pub(super) fn set_sheet_bar(&mut self, modal: NodeKey, bar: Option<Rc<Tape>>) {
+        if let Some(sheet) = self.stage.sheets.iter_mut().find(|s| s.modal == modal) {
+            sheet.bar = bar;
+        }
+    }
+
+    pub(super) fn top_sheet_handle(&self) -> f32 {
+        self.front_sheets().last().map_or(0.0, |s| s.handle)
     }
 
     /// The route the top sheet shows, and its frame (x, top, width, the
@@ -1001,7 +1096,8 @@ impl<D: DataSource> Presenter<D> {
                 .items
                 .push(Item::Picture(tape.clone(), self.window_to_page(*frame)));
         }
-        self.stage_sheets(&mut stage, now);
+        let crossing_bars = self.prepare_sheet_bars();
+        self.stage_sheets(&mut stage, now, &crossing_bars);
         stage
     }
 
@@ -1098,7 +1194,12 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Each open sheet over its scrim, then the sheets sliding out.
-    fn stage_sheets(&self, stage: &mut Stage, now: f64) {
+    fn stage_sheets(
+        &self,
+        stage: &mut Stage,
+        now: f64,
+        crossing_bars: &std::collections::BTreeMap<NodeKey, Rc<Tape>>,
+    ) {
         let kernel = self.host.kernel();
         let (w, h) = self.viewport;
         let page = self.chrome().frame;
@@ -1117,9 +1218,10 @@ impl<D: DataSource> Presenter<D> {
                 false => Role::SurfaceContainerLow.color(dark),
             }
         };
-        let handle = |dark| {
+        let grip = |width: f32, dark, ts| {
             let [r, g, b, _] = Role::OnSurfaceVariant.color(dark);
-            [r, g, b, (0.4 * 255.0) as u8]
+            let shape = Shape::new(((width - 32.0) / 2.0, 22.0, 32.0, 4.0), [2.0; 4]);
+            Item::Fill(shape, [r, g, b, (0.4 * 255.0) as u8], ts)
         };
         let (x, width) = self.sheet_span();
         for sheet in &self.stage.sheets {
@@ -1179,6 +1281,13 @@ impl<D: DataSource> Presenter<D> {
                     for (key, pose) in order {
                         let ts = ts.pre_concat(pose.transform((0.0, 0.0)));
                         items.push(Item::Opacity(pose.opacity));
+                        let route_bar = crossing_bars.get(&key).cloned().or_else(|| {
+                            self.stage
+                                .shift
+                                .as_ref()
+                                .filter(|s| s.sheet == Some(sheet.modal) && s.outgoing == key)
+                                .and_then(|s| s.bar.as_ref().map(|(t, _)| t.clone()))
+                        });
                         match kernel.node_by_key(key) {
                             Some(n) => {
                                 stage.skip.push(n.id);
@@ -1190,6 +1299,9 @@ impl<D: DataSource> Presenter<D> {
                                 });
                             }
                             None => items.push(Item::Taped(key, ts)),
+                        }
+                        if let Some(tape) = route_bar {
+                            items.push(Item::Picture(tape, ts.pre_translate(0.0, sheet.handle)));
                         }
                         items.push(Item::PopOpacity);
                     }
@@ -1203,10 +1315,17 @@ impl<D: DataSource> Presenter<D> {
                         ts,
                         tape,
                     });
+                    if let Some(tape) = &sheet.bar {
+                        items.push(Item::Picture(
+                            tape.clone(),
+                            ts.pre_translate(0.0, sheet.handle),
+                        ));
+                    }
                 }
             }
-            let grip = Shape::new(((width - 32.0) / 2.0, 22.0, 32.0, 4.0), [2.0; 4]);
-            items.push(Item::Fill(grip, handle(dark), ts));
+            if sheet.handle > 0.0 {
+                items.push(grip(width, dark, ts));
+            }
             items.push(Item::PopClip);
             match sheet.covered {
                 true => stage.beneath.push((shown.id, items)),
@@ -1235,8 +1354,15 @@ impl<D: DataSource> Presenter<D> {
                 .sheets
                 .push(Item::Fill(shape, container(None, dark), ts));
             stage.sheets.push(Item::Taped(closing.shown, ts));
-            let grip = Shape::new(((closing.width - 32.0) / 2.0, 22.0, 32.0, 4.0), [2.0; 4]);
-            stage.sheets.push(Item::Fill(grip, handle(dark), ts));
+            if let Some(tape) = &closing.bar {
+                stage.sheets.push(Item::Picture(
+                    tape.clone(),
+                    ts.pre_translate(0.0, closing.handle),
+                ));
+            }
+            if closing.handle > 0.0 {
+                stage.sheets.push(grip(closing.width, dark, ts));
+            }
             stage.sheets.push(Item::PopClip);
         }
     }

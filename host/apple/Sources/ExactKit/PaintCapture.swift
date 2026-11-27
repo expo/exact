@@ -85,6 +85,7 @@ extension Capture {
                     if let animation = source.animation(forKey: key) { overlay(animation, from: presentation, onto: layer) }
                 }
             }
+            if layer.isHidden { return layer }
             #if os(macOS)
             let scale = owners[ObjectIdentifier(source)]?.pixelScale ?? inheritedScale
             // A node's own drawing, its backing store and the content layers

@@ -503,3 +503,37 @@ fn size_keywords_compile_and_their_neighbours_are_refused_by_name() {
         "{e}"
     );
 }
+
+#[test]
+fn a_misspelled_enum_member_is_named_with_the_member_it_meant() {
+    let app = |state: &str, body: &str| {
+        format!(
+            "component App\n  state drag: enum<\"idle\", \"move\"> = {state}\n  action set(mode: enum<\"idle\", \"move\">)\n    drag = mode\n  action go\n    {body}\n  view\n    column\n      button \"Go\" press=go\n      Pane(mode=drag)\ncomponent Pane\n  props\n    mode: enum<\"idle\", \"move\">\n  view\n    text mode\n"
+        )
+    };
+    for (src, id) in [
+        (app("\"moev\"", "drag = \"idle\""), "type-state-initializer"),
+        (app("\"idle\"", "drag = \"moev\""), "type-assign"),
+        (app("\"idle\"", "set(\"moev\")"), "type-argument"),
+        (
+            app("\"idle\"", "drag = \"idle\"").replace("Pane(mode=drag)", "Pane(mode=\"moev\")"),
+            "type-prop",
+        ),
+    ] {
+        let e = refused(&src);
+        assert_eq!(e.id, id, "{src}\n{e}");
+        assert!(
+            e.message
+                .contains(r#""moev" is not a declared member; did you mean "move"?"#),
+            "{src}\n{e}"
+        );
+    }
+    // Two members one edit away: the refusal does not guess
+    let e = refused(
+        "component App\n  state drag: enum<\"node\", \"move\"> = \"node\"\n  action go\n    drag = \"mode\"\n  view\n    button \"Go\" press=go\n",
+    );
+    assert!(
+        e.message.ends_with(r#""mode" is not a declared member"#),
+        "{e}"
+    );
+}

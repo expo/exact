@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test';
-import { bindingChanges, packagedKinds, repack, repackedBuild, versionsOf } from './repack.mjs';
+import { createHash } from 'node:crypto';
+import { bindingChanges, copyBakedEntryTrees, packagedKinds, repack, repackedBuild, unrebuiltEntry, versionsOf } from './repack.mjs';
 import { frameworkInfo, plistFile } from './assets.mjs';
 import { EXTENSION_KINDS } from './extensions.mjs';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { repackBase, reservedPlan } from './native-extras.mjs';
+import { nativeExtras, repackBase, reservedPlan } from './native-extras.mjs';
 
 // A template base's compat.json (`exact new`, the placeholder icon) and an app's bake from it.
 const compat = (inputs, rest = {}) => ({ id: 'c', target: 'aarch64-apple-ios', inputs: { platform: 'ios', executors: ['hermes'], trust: 'development', minimumOS: '17.0', ...inputs }, embedded: { trust: 'development', plan: 'p1', assets: 'a1' }, ...rest });
@@ -34,6 +35,17 @@ test('what the binary was built to provide still refuses a repack, by name', () 
   expect(bindingChanges(template, compat({ app: 'dev.exact.template', icons: ['icon.png'] }, { embedded: { trust: 'production', plan: 'p1', assets: 'a1' } }))).toEqual(['embedded']);
 });
 
+// A TypeScript app's full build embeds its module pair in typescript/ with or without widgets (bake widgets.rs), and a
+// repack writes that tree again from its own bake: a base holding it repacks. What repack cannot rebuild still refuses.
+test("a base's entry trees repack with or without widgets; an entry repack does not write refuses by name", () => {
+  const native = new Set(['Frameworks', 'PrivacyInfo.xcprivacy']), withWidgets = new Set([...native, 'PlugIns']);
+  const plain = ['Hello', 'Frameworks', 'Info.plist', 'PrivacyInfo.xcprivacy', 'receipt.json', '_CodeSignature', 'assets', 'AppIcon60x60@2x.png'];
+  expect(unrebuiltEntry([...plain, 'typescript'], 'Hello', native)).toBeNull();
+  expect(unrebuiltEntry([...plain, 'typescript', 'plans', 'activities', 'PlugIns'], 'Hello', withWidgets)).toBeNull();
+  expect(unrebuiltEntry([...plain, 'PlugIns'], 'Hello', native)).toBe('PlugIns');
+  expect(unrebuiltEntry([...plain, 'typescript', 'Watch'], 'Hello', native)).toBe('Watch');
+});
+
 test("a widget's plan edit moves embedded.plans and repacks; the packaged kinds are the full build's", () => {
   const withPlans = (counter) => compat({ app: 'dev.exact.template', icons: ['icon.png'] }, { embedded: { trust: 'development', plan: 'p2', assets: 'a2', plans: { counter } } });
   expect(bindingChanges(withPlans('fbc65f8d'), withPlans('367c3460'))).toEqual([]);
@@ -41,6 +53,36 @@ test("a widget's plan edit moves embedded.plans and repacks; the packaged kinds 
   try {
     expect([...packagedKinds([], { id: 'dev.exact.widgety', dir, manifest: {} })].sort()).toEqual(EXTENSION_KINDS.filter(k => k !== 'notifications').sort());
     expect([...packagedKinds(['--extensions', 'widgets'], { id: 'dev.exact.widgety', dir, manifest: {} })]).toEqual(['widgets']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('copyBakedEntryTrees copies verified entry assets from baked, clears stale trees, and rejects tampering', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-repack-entries-'));
+  try {
+    const baked = resolve(dir, 'baked'), dest = resolve(dir, 'bundle');
+    const write = (root, rel, bytes) => {
+      const full = resolve(root, rel);
+      mkdirSync(resolve(full, '..'), { recursive: true });
+      writeFileSync(full, bytes);
+      return { name: rel, bytes: Buffer.byteLength(bytes), sha256: createHash('sha256').update(bytes).digest('hex') };
+    };
+    const hbc = write(baked, 'typescript/app.hbc', Buffer.from('hbc-v2'));
+    const mod = write(baked, 'typescript/app.module.json', Buffer.from('{"module":"ok"}'));
+    const plan = write(baked, 'plans/card.plan', Buffer.from('plan-v2'));
+    const asset = write(baked, 'assets/logo.png', Buffer.from('png'));
+    write(dest, 'typescript/stale.hbc', Buffer.from('stale'));
+    write(dest, 'activities/old.d.ts', Buffer.from('stale'));
+    const bakedCompat = { embedded: { assets: [hbc, mod, plan, asset] } };
+    copyBakedEntryTrees(baked, bakedCompat, dest);
+    expect(readFileSync(resolve(dest, 'typescript/app.hbc')).toString()).toBe('hbc-v2');
+    expect(readFileSync(resolve(dest, 'typescript/app.module.json')).toString()).toBe('{"module":"ok"}');
+    expect(readFileSync(resolve(dest, 'plans/card.plan')).toString()).toBe('plan-v2');
+    expect(() => readFileSync(resolve(dest, 'typescript/stale.hbc'))).toThrow();
+    expect(() => readFileSync(resolve(dest, 'activities/old.d.ts'))).toThrow();
+    expect(() => readFileSync(resolve(dest, 'assets/logo.png'))).toThrow();
+    writeFileSync(resolve(baked, 'typescript/app.hbc'), Buffer.from('tampered'));
+    expect(() => copyBakedEntryTrees(baked, bakedCompat, dest)).toThrow('baked entry differs from compat.json: typescript/app.hbc');
+    expect(() => copyBakedEntryTrees(baked, { embedded: { assets: [{ name: 'typescript/../escape', bytes: 1, sha256: '0' }] } }, dest)).toThrow('unsafe baked entry path');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -62,6 +104,35 @@ test('a development archive is a repack base, and repack runs, only with EXACT_E
   } finally {
     if (was === undefined) delete process.env.EXACT_EXPERIMENTAL; else process.env.EXACT_EXPERIMENTAL = was;
   }
+});
+
+// An installed Apple implementation's record names its package root, a directory: the digest a repack base records
+// names a Swift package shipped there by its files, wherever the checkout is.
+test('a repack base names an installed implementation, and the Swift package it ships by its files', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-native-extras-'));
+  const at = (where) => {
+    const app = { dir: resolve(dir, where, 'app'), manifest: {}, modulesFor: () => ({}) }, root = resolve(app.dir, 'node_modules/probe');
+    const write = (name, text) => { mkdirSync(resolve(root, name, '..'), { recursive: true }); writeFileSync(resolve(root, name), text); };
+    write('package.json', JSON.stringify({ name: 'probe', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+    write('exact.json', JSON.stringify({ kind: 'interface', name: 'probe' }));
+    write('apple/Bridge.swift', 'final class Bridge {}\n');
+    writeFileSync(resolve(app.dir, 'app.ts'), '');
+    return { app, write, digest: () => nativeExtras(app, 'ios', { probe: 'probe' }) };
+  };
+  const implementation = (swiftPackages) => JSON.stringify({ kind: 'implementation', implements: 'probe', platform: 'apple', targets: ['ios'], class: 'Bridge', sources: { swift: ['Bridge.swift'] }, ...(swiftPackages ? { swiftPackages } : {}) });
+  try {
+    const one = at('one');
+    one.write('apple/exact.json', implementation());
+    expect(one.digest()).toMatch(/^[0-9a-f]{64}$/);
+    one.write('apple/exact.json', implementation([{ path: 'Kit', products: ['Kit'] }]));
+    one.write('apple/Kit/Package.swift', '// swift-tools-version:5.9\n');
+    one.write('apple/Kit/Sources/Kit/Value.swift', 'public let value = 1\n');
+    const shipped = one.digest(), two = at('two');
+    for (const name of ['apple/exact.json', 'apple/Kit/Package.swift', 'apple/Kit/Sources/Kit/Value.swift']) two.write(name, readFileSync(resolve(one.app.dir, 'node_modules/probe', name), 'utf8'));
+    expect(two.digest()).toBe(shipped);
+    one.write('apple/Kit/Sources/Kit/Value.swift', 'public let value = 2\n');
+    expect(one.digest()).not.toBe(shipped);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a repack's receipt names what its own bake read and selected, not its base's", () => {
@@ -128,5 +199,59 @@ test.skipIf(process.platform !== 'darwin')('a repack stamps a new version and bu
     // Every signature still verifies over what was rewritten.
     for (const signed of [bundle, resolve(bundle, 'PlugIns/ExactWidgets.appex'), ...frameworks.map(framework => resolve(bundle, 'Frameworks', framework))]) expect(spawnSync('codesign', ['--verify', '--strict', signed]).status).toBe(0);
     expect(existsSync(resolve(bundle, 'receipt.json'))).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 3_600_000);
+
+// Regression for cached-bake entry-tree resilience: repack reads entry trees from the validated
+// baked directory rather than a separate .entries side directory, and preserves valid signatures.
+test.skipIf(process.platform !== 'darwin')('a non-widget TypeScript app repacks its typescript entry tree even after deleting .entries', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { readdirSync, readFileSync, existsSync } = await import('node:fs');
+  const { createApp } = await import('../../game/new.mjs');
+  const { readLinkedSections } = await import('./sections.mjs');
+  const { bakeOutput, resolveApp, verifyBakeFiles } = await import('../../scripts/app.mjs');
+  const { listAssets } = await import('../web/serve.mjs');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-repack-ts-'));
+  try {
+    const app = resolve(dir, 'plain-ts');
+    createApp(app, { with: ['ios'] });
+    (await import('../../scripts/app-shells.mjs')).ensureShells(app);
+    const env = (build, version) => ({ ...process.env, EXACT_EXPERIMENTAL: '1', EXACT_APP_DIR: app, EXACT_FEEDBACK: '0', EXACT_BUILD_NUMBER: build, EXACT_VERSION: version });
+    const run = (script, args, build, version) => spawnSync(process.execPath, [resolve(root, script), ...args], { cwd: root, env: env(build, version), encoding: 'utf8', timeout: 1_800_000 });
+    const base = resolve(dir, 'base.ipa'), out = resolve(dir, 'repacked.ipa');
+    const built = run('host/apple/build.mjs', ['--device', '--archive', base, '--unsigned', '--development', '--no-install', app], '1', '0.1.0');
+    expect(built.status, built.stderr.slice(-4000)).toBe(0);
+    const baseDir = resolve(dir, 'base-out');
+    expect(spawnSync('unzip', ['-q', base, '-d', baseDir]).status).toBe(0);
+    const baseBundle = resolve(baseDir, 'Payload', readdirSync(resolve(baseDir, 'Payload'))[0]);
+    const baseHbc = readFileSync(resolve(baseBundle, 'typescript/app.hbc'));
+    expect(existsSync(resolve(baseBundle, 'typescript/app.module.json'))).toBe(true);
+    const beforeTs = readFileSync(resolve(app, 'app.ts'), 'utf8');
+    const afterTs = beforeTs.replace('Hello from ', 'Repacked from ');
+    expect(afterTs).not.toBe(beforeTs);
+    writeFileSync(resolve(app, 'app.ts'), afterTs);
+    const repacked = run('host/apple/repack.mjs', ['--base', base, '--archive', out, app], '2', '0.1.1');
+    expect(repacked.status, repacked.stderr.slice(-4000)).toBe(0);
+    expect(repacked.stdout).toContain('repacked from the base');
+    const outDir = resolve(dir, 'out');
+    expect(spawnSync('unzip', ['-q', out, '-d', outDir]).status).toBe(0);
+    const bundle = resolve(outDir, 'Payload', readdirSync(resolve(outDir, 'Payload'))[0]);
+    const newHbc = readFileSync(resolve(bundle, 'typescript/app.hbc'));
+    expect(existsSync(resolve(bundle, 'typescript/app.module.json'))).toBe(true);
+    expect(newHbc.equals(baseHbc)).toBe(false);
+    const execName = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(readFileSync(resolve(bundle, 'Info.plist'), 'utf8'))[1];
+    const sections = readLinkedSections(resolve(bundle, execName));
+    const compat = JSON.parse(sections.compat.toString('utf8'));
+    verifyBakeFiles(compat, sections.plan, listAssets(bundle, true, ['typescript']));
+    expect(spawnSync('codesign', ['--verify', '--strict', bundle]).status).toBe(0);
+    rmSync(resolve(bakeOutput(resolveApp(app), 'ios'), 'ios-aarch64-apple-ios.entries'), { recursive: true, force: true });
+    const out2 = resolve(dir, 'repacked-cached.ipa');
+    const repacked2 = run('host/apple/repack.mjs', ['--base', base, '--archive', out2, app], '3', '0.1.2');
+    expect(repacked2.status, repacked2.stderr.slice(-4000)).toBe(0);
+    const outDir2 = resolve(dir, 'out2');
+    expect(spawnSync('unzip', ['-q', out2, '-d', outDir2]).status).toBe(0);
+    const bundle2 = resolve(outDir2, 'Payload', readdirSync(resolve(outDir2, 'Payload'))[0]);
+    expect(readFileSync(resolve(bundle2, 'typescript/app.hbc')).equals(newHbc)).toBe(true);
+    expect(spawnSync('codesign', ['--verify', '--strict', bundle2]).status).toBe(0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 3_600_000);

@@ -297,11 +297,11 @@ pub fn main_with<D: DataSource + 'static>(
             Ok((rendered, page))
         });
         match rendered {
-            // @ref LLP 1048.000 D7 — refuse a page made at build whose render drew randomness, which every reader would share
+            // @ref LLP 1048.000 D7 / LLP 1195.000 D2.4 — refuse a render=build page whose render drew randomness or read the ambient clock
             Ok((rendered, _)) if build && rendered.drew => {
                 failed = true;
                 let route = route.map_or("", |r| decoded.str(r.name));
-                let error = format!("route `{route}` is render=build, but its render drew randomness, and a page made at build would give every reader the same random values (LLP 1069.005 D2). Declare the route render=request, rendered for each request, or render=client, rendered in the browser");
+                let error = format!("route `{route}` is render=build, but its render drew randomness or read the ambient clock, and a page made at build would bake a build-time value for every reader (LLP 1069.005 D2, LLP 1195.000 D2.4). Declare the route render=request, rendered for each request, or render=client, rendered in the browser");
                 let _ = write!(line, ",\"error\":{}", json(&error));
             }
             Ok((rendered, page)) => {

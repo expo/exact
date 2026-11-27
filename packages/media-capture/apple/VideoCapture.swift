@@ -453,19 +453,29 @@ final class VideoCapture: NSObject, ExactVideoSource {
     #endif
     private static var captures: [String: VideoCapture] = [:]
 
-    let session = AVCaptureSession()
+    let session: AVCaptureSession
     private(set) var interruption: String?
-    private(set) var device: AVCaptureDevice
+    private let deviceLock = NSLock()
+    private var _device: AVCaptureDevice
+    var device: AVCaptureDevice {
+        get { deviceLock.withLock { _device } }
+        set { deviceLock.withLock { _device = newValue } }
+    }
     private let queue = DispatchQueue(label: "dev.exact.media-capture.camera")
     private let onQueue = DispatchSpecificKey<Bool>()
-    private var input: AVCaptureDeviceInput?
+    private let makeInput: (AVCaptureDevice) -> AVCaptureInput?
+    /// Accessed exclusively on `queue`.
+    private var input: AVCaptureInput?
     private(set) var holders: [ObjectIdentifier: () -> VideoTrack?] = [:]
     private var objects: [String: AnyObject] = [:]
     private var observers: [NSObjectProtocol] = []
     private var log: (String) -> Void = { _ in }
 
-    private init(device: AVCaptureDevice) {
-        self.device = device
+    init(device: AVCaptureDevice, session: AVCaptureSession = AVCaptureSession(),
+         makeInput: @escaping (AVCaptureDevice) -> AVCaptureInput? = { try? AVCaptureDeviceInput(device: $0) }) {
+        self._device = device
+        self.session = session
+        self.makeInput = makeInput
         super.init()
         queue.setSpecific(key: onQueue, value: true)
         #if os(iOS)
@@ -522,17 +532,18 @@ final class VideoCapture: NSObject, ExactVideoSource {
         }
     }
 
-    private func start(_ device: AVCaptureDevice) {
+    func start(_ device: AVCaptureDevice) {
         self.device = device
-        let session = session, hatch = MediaCaptureModule.sessionHatch
+        let session = session, hatch = MediaCaptureModule.sessionHatch, makeInput = makeInput
         listen()
         queue.async { [weak self] in
+            guard let self else { return }
             session.beginConfiguration()
             // The preset a photo app sets (D2), not the API's `.high`.
             if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }
-            if let input = try? AVCaptureDeviceInput(device: device), session.canAddInput(input) {
+            if let input = makeInput(device), session.canAddInput(input) {
                 session.addInput(input)
-                self?.input = input
+                self.input = input
             }
             hatch?(session)
             session.commitConfiguration()
@@ -542,14 +553,18 @@ final class VideoCapture: NSObject, ExactVideoSource {
 
     /// Another camera for the process's capture (iOS): the session's input replaced.
     func switchTo(_ next: AVCaptureDevice) {
-        let session = session, old = input, hatch = MediaCaptureModule.sessionHatch
+        let session = session, hatch = MediaCaptureModule.sessionHatch, makeInput = makeInput
         device = next
         queue.async { [weak self] in
+            guard let self else { return }
             session.beginConfiguration()
-            if let old { session.removeInput(old) }
-            if let input = try? AVCaptureDeviceInput(device: next), session.canAddInput(input) {
+            if let old = self.input {
+                session.removeInput(old)
+                self.input = nil
+            }
+            if let input = makeInput(next), session.canAddInput(input) {
                 session.addInput(input)
-                self?.input = input
+                self.input = input
             }
             hatch?(session)
             session.commitConfiguration()
@@ -557,16 +572,16 @@ final class VideoCapture: NSObject, ExactVideoSource {
         log("camera: the capture moved to \(next.localizedName)")
     }
 
-    private func stop() {
+    func stop() {
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers = []
-        let session = session, input = input
-        self.input = nil
+        let session = session
         objects = [:]
-        queue.async {
+        queue.async { [weak self] in
             session.stopRunning()
             session.beginConfiguration()
-            if let input { session.removeInput(input) }
+            for input in session.inputs { session.removeInput(input) }
+            self?.input = nil
             for output in session.outputs { session.removeOutput(output) }
             session.commitConfiguration()
         }

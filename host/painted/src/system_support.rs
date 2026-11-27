@@ -26,29 +26,34 @@ use exact_data::storage::PERSISTED_SCOPE as STATE;
 /// said at boot and again by the activation. Beside it, the kept answers
 /// past the read budget, by name, for the runner to forget what it would
 /// had it read them (`Runner::forget_unread_kept`).
-pub(crate) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>, Vec<String>) {
+pub(crate) fn store_read(
+    app_id: &str,
+    grants: &str,
+    carried: bool,
+) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), exact_runner::DataError> {
     // What an earlier host in this process committed is on disk before it is read back.
     super::store_writer::settle();
     if carried {
-        return Default::default();
+        return Ok(Default::default());
     }
     // A tree that could not be emptied is not read: a fresh drive starts
     // with nothing, never with what the last one left (b6 review C1).
-    if let Err(e) = crate::picker::empty_fresh_tree(app_id) {
+    // Seed validation errors (`stored:`) fail boot closed (LLP 1018.000 D2).
+    if let Err(e) = crate::picker::empty_fresh_tree(app_id, grants) {
+        if matches!(&e, exact_runner::DataError::Unavailable(s) if s.starts_with("stored: ")) {
+            return Err(e);
+        }
         eprintln!("exact: {e:?}");
-        return Default::default();
+        return Ok(Default::default());
     }
     let Ok(Some(root)) = crate::picker::store_root(app_id) else {
-        return Default::default();
+        return Ok(Default::default());
     };
     let kv = ibex2::kv::FileStore::new(root.join("kv"));
     let mut out = exact_data::storage::take_window_seed(&root);
     if let Ok(Some(secret_root)) = crate::picker::secret_root(app_id) {
         let secrets = secret_backend(&secret_root);
-        #[cfg(target_os = "android")]
-        let names = secret_files::names(&secret_root);
-        #[cfg(not(target_os = "android"))]
-        let names = {
+        let list_plain = || {
             let mut names = Vec::new();
             if let Ok(entries) = std::fs::read_dir(secret_root.join("secrets")) {
                 for entry in entries.flatten() {
@@ -63,6 +68,14 @@ pub(crate) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>
             names.sort();
             names
         };
+        #[cfg(target_os = "android")]
+        let names = if use_headless_agent_secrets() {
+            list_plain()
+        } else {
+            secret_files::names(&secret_root)
+        };
+        #[cfg(not(target_os = "android"))]
+        let names = list_plain();
         for name in names {
             match secrets.read(&name) {
                 Ok(Some(value)) => out.push((name, value.into_bytes())),
@@ -93,13 +106,13 @@ pub(crate) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>
             }
         }
     }
-    (out, unread)
+    Ok((out, unread))
 }
 
 /// [`store_read`]'s snapshot alone.
 #[cfg(test)]
 pub(super) fn store_snapshot(app_id: &str, carried: bool) -> Vec<(String, Vec<u8>)> {
-    store_read(app_id, carried).0
+    store_read(app_id, "", carried).unwrap_or_default().0
 }
 
 pub(super) fn secret_namespace(roots: &StoreRoots) -> Option<exact_data::secrets::Namespace> {
@@ -133,9 +146,16 @@ pub(super) fn write_stamps(
         .collect()
 }
 
-#[cfg(not(target_os = "android"))]
+/// Whether an Android headless agent drive (no JVM/reader Keystore attached) uses scratch
+/// `FileStore` under `<scratch>/secrets` instead of `EncryptedFiles` (LLP 1018.000 D3).
+#[cfg(target_os = "android")]
+pub(crate) fn use_headless_agent_secrets() -> bool {
+    exact_runner::agent::carried()
+        && std::env::var("EXACT_STORE").as_deref() != Ok("real")
+        && !crate::canvas::secrets::is_attached()
+}
+
 struct SecretFiles(ibex2::secrets::FileStore, PathBuf);
-#[cfg(not(target_os = "android"))]
 impl exact_data::secrets::Backend for SecretFiles {
     fn read(&self, name: &str) -> Result<Option<String>, String> {
         ibex2::secrets::SecretStore::get(&self.0, name).map_err(|error| error.to_string())
@@ -153,6 +173,12 @@ impl exact_data::secrets::Backend for SecretFiles {
 pub(crate) fn secret_backend(root: &std::path::Path) -> Arc<dyn exact_data::secrets::Backend> {
     #[cfg(target_os = "android")]
     {
+        if use_headless_agent_secrets() {
+            return Arc::new(SecretFiles(
+                ibex2::secrets::FileStore::new(root.join("secrets")),
+                root.join("secrets"),
+            ));
+        }
         Arc::new(secret_files::EncryptedFiles::new(
             root.to_owned(),
             crate::canvas::secrets::crypt,

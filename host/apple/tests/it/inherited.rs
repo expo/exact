@@ -770,7 +770,7 @@ fn a_reloaded_plan_resolves_line_height_kinds_against_the_new_receiving_font() {
             .node(view(&host, "child"))
             .unwrap()
             .text_style()
-            .line_height,
+            .used_line_height(),
         Some(30.0)
     );
     let carry = host.carry();
@@ -797,7 +797,7 @@ fn a_reloaded_plan_resolves_line_height_kinds_against_the_new_receiving_font() {
                 .node(view(&reloaded, "child"))
                 .unwrap()
                 .text_style()
-                .line_height,
+                .used_line_height(),
             expected
         );
     }

@@ -40,9 +40,10 @@ internal data class Device(
     val formatLocale: String,
     /** Touch exploration is a proxy for a screen reader: 0 unknown, 1 off, 2 on (LLP 1039 D10). */
     val screenReader: Int,
+    val orientation: Int,
 ) {
     /** Tell exact2: on the thread that holds the host, or on any before it boots. */
-    fun tell() = Native.configure(night, fontScale, locale, rtl, hour24, noAnimations, boldText, highContrast, touch, tv, touchSlop, dates, formatLocale, screenReader)
+    fun tell() = Native.configure(night, fontScale, locale, rtl, hour24, noAnimations, boldText, highContrast, touch, tv, touchSlop, dates, formatLocale, screenReader, orientation)
 
     companion object {
         fun read(context: Context): Device {
@@ -66,8 +67,27 @@ internal data class Device(
                 touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop / scale(context),
                 dates = dates(config.locales[0], hour24),
                 formatLocale = formatLocale(config.locales[0], hour24),
+                orientation = orientation(context),
                 screenReader = context.getSystemService(AccessibilityManager::class.java)?.let { if (it.isTouchExplorationEnabled) 2 else 1 } ?: 0,
             )
+        }
+
+        /** Chrome derives the natural orientation from the rotated display bounds, including a logical size override. */
+        @Suppress("DEPRECATION")
+        fun orientation(context: Context): Int {
+            val associated = if (Build.VERSION.SDK_INT >= 30) {
+                try { context.display } catch (_: UnsupportedOperationException) { null }
+            } else {
+                context.getSystemService(android.view.WindowManager::class.java)?.defaultDisplay
+            }
+            val display = associated ?: context.getSystemService(android.hardware.display.DisplayManager::class.java)?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                ?: return 0
+            val turns = display.rotation
+            val size = android.graphics.Point()
+            display.getRealSize(size)
+            val naturalPortrait = if (turns % 2 == 0) size.y >= size.x else size.x >= size.y
+            val kind = (turns + if (naturalPortrait) 0 else 1) % 4
+            return 16 or (turns shl 2) or kind
         }
 
         /** The device is a television: its UI mode's type, which a TV's launcher sets (LLP 1115.001.003 D2). */

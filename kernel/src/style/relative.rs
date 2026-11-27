@@ -63,6 +63,11 @@ pub enum Unit {
 }
 
 impl Unit {
+    /// Whether it is a container unit, which a box's query containers size (LLP 1123 D16).
+    pub fn is_container(self) -> bool {
+        matches!(self, Unit::Viewport(u) if u.is_container())
+    }
+
     /// The pixels one of this unit is, given the root's and the
     /// reference (the parent's or the element's) font size, and the pixels
     /// one device pixel is ([`device_pixel`]), and the viewport environment.
@@ -223,10 +228,61 @@ fn ramp(sizes: &[f32], root: f32) -> f32 {
     sizes[i - 1] + (sizes[i] - sizes[i - 1]) * t
 }
 
-/// The rows of one style authored as relative lengths, with the factor written.
+/// A retained relative length or CSS length math expression on a style row
+/// (LLP 1069.000 D3, LLP 1035.000.000).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LengthSpec {
+    /// A single relative unit scaled by `f32` (`rem`, `em`, viewport, text style, hairline, ramp).
+    Scaled(Unit, f32),
+    /// A CSS length math function (`calc()`, `min()`, `max()`, `clamp()`) on `line-height`.
+    Math(crate::style::calc::Comparison),
+}
+
+impl LengthSpec {
+    /// Whether it reads a container unit (`cqw`..`cqmax`, LLP 1123 D16).
+    pub fn is_container(&self) -> bool {
+        match self {
+            Self::Scaled(unit, _) => unit.is_container(),
+            Self::Math(c) => c.reads_container(),
+        }
+    }
+
+    /// Whether any viewport unit this length reads changed basis between `old` and `new`.
+    pub(crate) fn reads_viewport_change(&self, old: &crate::Env, new: &crate::Env) -> bool {
+        match self {
+            Self::Scaled(Unit::Viewport(u), _) => u.basis(old) != u.basis(new),
+            Self::Scaled(..) => false,
+            Self::Math(c) => c.reads_viewport_change(old, new),
+        }
+    }
+
+    /// Resolve to computed pixels under `root`, `reference`, `device`, and `env`.
+    /// `line-height` viewport lengths and length math evaluate in `f64`, censor via
+    /// `calc::narrow`, and clamp negative results to `0.0` (CSS Values 4 §10.9.2, §10.12).
+    pub fn px(&self, id: StyleId, root: f32, reference: f32, device: f32, env: &crate::Env) -> f32 {
+        match self {
+            Self::Scaled(Unit::Viewport(u), n) if id == StyleId::LineHeight => {
+                crate::style::calc::narrow(f64::from(u.basis(env)) * f64::from(*n) / 100.0).max(0.0)
+            }
+            Self::Scaled(unit, n) => unit.px(*n, root, reference, device, env),
+            Self::Math(c) => {
+                let value = if env.root_font_size == root {
+                    c.value(env, None)
+                } else {
+                    let mut scoped = env.clone();
+                    scoped.root_font_size = root;
+                    c.value(&scoped, None)
+                };
+                value.unwrap_or(0.0).max(0.0)
+            }
+        }
+    }
+}
+
+/// The rows of one style authored as relative lengths or length math, in row order.
 /// Empty — no allocation — for every style that uses none.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Relative(Vec<(StyleId, Unit, f32)>);
+pub struct Relative(Vec<(StyleId, LengthSpec)>);
 
 impl Relative {
     /// Whether no row is relative.
@@ -234,27 +290,46 @@ impl Relative {
         self.0.is_empty()
     }
 
-    /// The row's relative length, if it has one.
+    /// The row's scalar relative length, if it has one.
     pub fn get(&self, id: StyleId) -> Option<(Unit, f32)> {
         self.0
             .iter()
-            .find(|(row, ..)| *row == id)
-            .map(|(_, unit, n)| (*unit, *n))
+            .find(|(row, _)| *row == id)
+            .and_then(|(_, spec)| match spec {
+                LengthSpec::Scaled(unit, n) => Some((*unit, *n)),
+                LengthSpec::Math(_) => None,
+            })
     }
 
-    /// Every relative row, in row order.
+    /// The row's retained relative length or length math, if it has one.
+    pub fn get_spec(&self, id: StyleId) -> Option<&LengthSpec> {
+        self.0
+            .iter()
+            .find(|(row, _)| *row == id)
+            .map(|(_, spec)| spec)
+    }
+
+    /// Every scalar relative row, in row order.
     pub fn iter(&self) -> impl Iterator<Item = (StyleId, Unit, f32)> + '_ {
-        self.0.iter().copied()
+        self.0.iter().filter_map(|(row, spec)| match spec {
+            LengthSpec::Scaled(unit, n) => Some((*row, *unit, *n)),
+            LengthSpec::Math(_) => None,
+        })
     }
 
-    /// Set or remove the row's relative length.
-    pub(crate) fn put(&mut self, id: StyleId, value: Option<(Unit, f32)>) {
-        let at = self.0.iter().position(|(row, ..)| *row >= id);
+    /// Every retained relative or length-math row, in row order.
+    pub fn iter_specs(&self) -> impl Iterator<Item = (StyleId, &LengthSpec)> + '_ {
+        self.0.iter().map(|(row, spec)| (*row, spec))
+    }
+
+    /// Set or remove the row's retained length.
+    pub(crate) fn put(&mut self, id: StyleId, value: Option<LengthSpec>) {
+        let at = self.0.iter().position(|(row, _)| *row >= id);
         let here = at.is_some_and(|i| self.0[i].0 == id);
         match (value, at) {
-            (Some((unit, n)), Some(i)) if here => self.0[i] = (id, unit, n),
-            (Some((unit, n)), Some(i)) => self.0.insert(i, (id, unit, n)),
-            (Some((unit, n)), None) => self.0.push((id, unit, n)),
+            (Some(spec), Some(i)) if here => self.0[i] = (id, spec),
+            (Some(spec), Some(i)) => self.0.insert(i, (id, spec)),
+            (Some(spec), None) => self.0.push((id, spec)),
             (None, Some(i)) if here => {
                 self.0.remove(i);
             }
@@ -268,28 +343,38 @@ impl Relative {
         if self.0.is_empty() && from.0.is_empty() {
             return;
         }
-        self.0.retain(|(row, ..)| !mask.has(*row));
-        for (row, unit, n) in &from.0 {
+        self.0.retain(|(row, _)| !mask.has(*row));
+        for (row, spec) in &from.0 {
             if mask.has(*row) {
-                self.put(*row, Some((*unit, *n)));
+                self.put(*row, Some(spec.clone()));
             }
         }
     }
 
-    /// The bytes that tell two styles' relative rows apart, for sharing.
+    /// The bytes that tell two styles' relative rows apart, for sharing and wire encoding.
     pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-        for (row, unit, n) in &self.0 {
+        for (row, spec) in &self.0 {
             out.extend_from_slice(&row.bit().to_le_bytes());
-            match unit {
-                Unit::Rem => out.push(0),
-                Unit::Viewport(unit) => out.extend_from_slice(&[6, *unit as u8]),
-                Unit::Em => out.push(1),
-                Unit::TextStyle(id) => out.extend_from_slice(&[2, *id]),
-                Unit::Hairline => out.push(3),
-                Unit::Ramp(id) => out.extend_from_slice(&[4, *id]),
-                Unit::TextStyleAtMost(id) => out.extend_from_slice(&[5, *id]),
+            match spec {
+                LengthSpec::Scaled(unit, n) => {
+                    match unit {
+                        Unit::Rem => out.push(0),
+                        Unit::Viewport(unit) => out.extend_from_slice(&[6, *unit as u8]),
+                        Unit::Em => out.push(1),
+                        Unit::TextStyle(id) => out.extend_from_slice(&[2, *id]),
+                        Unit::Hairline => out.push(3),
+                        Unit::Ramp(id) => out.extend_from_slice(&[4, *id]),
+                        Unit::TextStyleAtMost(id) => out.extend_from_slice(&[5, *id]),
+                    }
+                    out.extend_from_slice(&n.to_bits().to_le_bytes());
+                }
+                LengthSpec::Math(c) => {
+                    out.push(7);
+                    let mut w = crate::wire::codec::Writer::new();
+                    c.encode(&mut w);
+                    out.extend_from_slice(w.as_slice());
+                }
             }
-            out.extend_from_slice(&n.to_bits().to_le_bytes());
         }
     }
 }
@@ -409,14 +494,6 @@ pub(crate) fn of(id: StyleId, value: &StyleValue) -> Result<Option<(Unit, f32)>,
             },
         });
     }
-    // A row's relative length resolves against the document's environment,
-    // where no box's containers are known (LLP 1123 D16)
-    if matches!(unit, Unit::Viewport(u) if u.is_container()) {
-        return Err(StyleValueError::WrongKind {
-            style: id,
-            expected: "a length here: a container unit (cqw, cqh, cqi, cqb, cqmin, cqmax) is not built on this row; write a viewport unit, px, rem or em",
-        });
-    }
     if n < 0.0 && nonnegative_row(id) {
         return Err(StyleValueError::WrongKind {
             style: id,
@@ -477,7 +554,46 @@ fn unitless_zero(id: StyleId, value: &StyleValue) -> Option<StyleValue<'static>>
     (n == 0.0).then_some(StyleValue::Number(0.0))
 }
 
-type PreparedLength = (Option<(Unit, f32)>, Option<StyleValue<'static>>);
+type PreparedLength = (Option<LengthSpec>, Option<StyleValue<'static>>);
+
+fn prepare_line_height_math(id: StyleId, text: &str) -> Result<PreparedLength, StyleValueError> {
+    use crate::style::calc;
+    use crate::Dimension;
+    let dim = match calc::parse(text) {
+        Err(calc::Refused::Comparison(reason)) => {
+            return Err(StyleValueError::BadComparison { style: id, reason });
+        }
+        Err(calc::Refused::Env(refusal)) => {
+            return Err(StyleValueError::BadEnv { style: id, refusal });
+        }
+        Ok(Some(d)) => d,
+        Ok(None) => return Ok((None, None)),
+    };
+    if dim.has_percent() {
+        return Err(StyleValueError::WrongKind {
+            style: id,
+            expected: calc::without_percent(id),
+        });
+    }
+    match dim {
+        Dimension::Points(px) => Ok((None, Some(pixels(id, px.max(0.0))))),
+        Dimension::Viewport(unit, n) if n.is_finite() && n >= 0.0 => {
+            let spec = LengthSpec::Scaled(Unit::Viewport(unit), n);
+            let value = provisional_spec(id, &spec);
+            Ok((Some(spec), Some(value)))
+        }
+        Dimension::Viewport(_, n) if n.is_finite() => Ok((None, Some(pixels(id, 0.0)))),
+        Dimension::Compare(c) if c.is_line_height_math() => {
+            let spec = LengthSpec::Math(c);
+            let value = provisional_spec(id, &spec);
+            Ok((Some(spec), Some(value)))
+        }
+        _ => Err(StyleValueError::WrongKind {
+            style: id,
+            expected: "a length math expression using px, rem, or viewport/container units (not %, em, env(), or var())",
+        }),
+    }
+}
 
 /// Dispatch a length by its final byte, after CSS whitespace. Viewport units
 /// share final bytes with cell and pixel lengths, so those try both parsers.
@@ -491,8 +607,12 @@ pub(crate) fn prepare(id: StyleId, value: &StyleValue) -> Result<PreparedLength,
         if (dashed && (text_style(text).is_some() || named_length(text).is_some()))
             || text_style_at_most(text).is_some()
         {
-            let relative = of(id, value)?;
-            return Ok((relative, relative.map(|r| provisional(id, r))));
+            let relative = of(id, value)?.map(|(u, n)| LengthSpec::Scaled(u, n));
+            let converted = relative.as_ref().map(|r| provisional_spec(id, r));
+            return Ok((relative, converted));
+        }
+        if id == StyleId::LineHeight && text.contains('(') {
+            return prepare_line_height_math(id, text);
         }
     }
     let last = match value {
@@ -506,21 +626,22 @@ pub(crate) fn prepare(id: StyleId, value: &StyleValue) -> Result<PreparedLength,
     match last {
         // `i` and `b` end `cqi` and `cqb`, which `of` refuses on these rows
         Some(b'm' | b'M' | b'w' | b'W' | b'n' | b'N' | b'i' | b'I' | b'b' | b'B') => {
-            let relative = of(id, value)?;
-            Ok((relative, relative.map(|r| provisional(id, r))))
+            let relative = of(id, value)?.map(|(u, n)| LengthSpec::Scaled(u, n));
+            let converted = relative.as_ref().map(|r| provisional_spec(id, r));
+            Ok((relative, converted))
         }
         Some(b'h' | b'H') => {
-            let relative = of(id, value)?;
-            let converted = match relative {
-                Some(r) => Some(provisional(id, r)),
+            let relative = of(id, value)?.map(|(u, n)| LengthSpec::Scaled(u, n));
+            let converted = match relative.as_ref() {
+                Some(r) => Some(provisional_spec(id, r)),
                 None => super::cells::of(id, value)?,
             };
             Ok((relative, converted))
         }
         Some(b'x' | b'X') => {
-            let relative = of(id, value)?;
-            let converted = match relative {
-                Some(r) => Some(provisional(id, r)),
+            let relative = of(id, value)?.map(|(u, n)| LengthSpec::Scaled(u, n));
+            let converted = match relative.as_ref() {
+                Some(r) => Some(provisional_spec(id, r)),
                 None => pixels_text(id, value)?,
             };
             Ok((relative, converted))
@@ -532,8 +653,8 @@ pub(crate) fn prepare(id: StyleId, value: &StyleValue) -> Result<PreparedLength,
 
 /// What the row holds until the kernel resolves it: the length at CSS's
 /// initial font size and an unset viewport, in the form the row's codec reads as pixels.
-pub(crate) fn provisional(id: StyleId, (unit, n): (Unit, f32)) -> StyleValue<'static> {
-    pixels(id, unit.px(n, MEDIUM, MEDIUM, 1.0, &crate::Env::default()))
+pub(crate) fn provisional_spec(id: StyleId, spec: &LengthSpec) -> StyleValue<'static> {
+    pixels(id, spec.px(id, MEDIUM, MEDIUM, 1.0, &crate::Env::default()))
 }
 
 fn pixels(id: StyleId, px: f32) -> StyleValue<'static> {
@@ -556,7 +677,7 @@ impl StyleProps {
         {
             return false;
         }
-        let keep = self.relative.get(id);
+        let keep = self.relative.get_spec(id).cloned();
         self.copy_rows(&patch, crate::StyleMask::of(id));
         self.relative.put(id, keep);
         true
@@ -653,8 +774,16 @@ mod tests {
     #[test]
     fn length_dispatch_preserves_conversions_and_refusals_for_every_row() {
         fn prior(id: StyleId, value: &StyleValue) -> Result<PreparedLength, StyleValueError> {
-            let relative = of(id, value)?;
-            let provisional = relative.map(|r| super::provisional(id, r));
+            if let StyleValue::Text(text) = value {
+                if id == StyleId::LineHeight
+                    && text.contains('(')
+                    && text_style_at_most(text).is_none()
+                {
+                    return prepare_line_height_math(id, text);
+                }
+            }
+            let relative = of(id, value)?.map(|(u, n)| LengthSpec::Scaled(u, n));
+            let provisional = relative.as_ref().map(|r| super::provisional_spec(id, r));
             let pixels = pixels_text(id, value)?;
             let cells = super::super::cells::of(id, value)?;
             let zero = unitless_zero(id, value);
@@ -767,12 +896,12 @@ mod tests {
                 matches!(opacity, Err(StyleValueError::WrongKind { expected, .. }) if expected.starts_with("no length")),
                 "{unit:?}"
             );
-            // A container unit is not built on a row that takes relative lengths
+            // A row that takes relative lengths takes every viewport and container unit
             let spacing = of(
                 StyleId::LetterSpacing,
                 &StyleValue::Text(format!("-1{}", unit.name()).into()),
             );
-            assert_eq!(spacing.is_ok(), !unit.is_container(), "{unit:?}");
+            assert!(spacing.is_ok(), "{unit:?}");
         }
         for text in [
             "vw",
@@ -1004,5 +1133,208 @@ mod tests {
         assert!(s
             .set_dynamic(StyleId::Width, &StyleValue::Text("none".into()))
             .is_err());
+    }
+
+    /// Regression for expo/exact#1927: `line-height` accepts CSS length math
+    /// (`calc()`, `min()`, `max()`, `clamp()`) over `px`, `rem`, and viewport/container
+    /// units, clamps negative math results to `0px`, and refuses `%`, `em`,
+    /// unitless-number math, `env()`, and `var()`.
+    #[test]
+    fn line_height_length_math_parses_resolves_clamps_and_refuses_invalid() {
+        let mut s = StyleProps::default();
+        s.set_dynamic(
+            StyleId::LineHeight,
+            &StyleValue::Text("calc(12px + 12px)".into()),
+        )
+        .unwrap();
+        assert_eq!(s.line_height, crate::LineHeight::Length(24.0));
+        assert!(
+            s.relative.is_empty(),
+            "constant px folds with no relative entry"
+        );
+
+        s.set_dynamic(
+            StyleId::LineHeight,
+            &StyleValue::Text("calc(-10px + 2px)".into()),
+        )
+        .unwrap();
+        assert_eq!(s.line_height, crate::LineHeight::Length(0.0));
+
+        s.set_dynamic(
+            StyleId::LineHeight,
+            &StyleValue::Text("clamp(20px, 4vw, 32px)".into()),
+        )
+        .unwrap();
+        let spec = s
+            .relative
+            .get_spec(StyleId::LineHeight)
+            .expect("retained Math")
+            .clone();
+        assert!(matches!(spec, LengthSpec::Math(_)));
+        let env_narrow = crate::Env::default().with_viewport(crate::Offer {
+            width: crate::AxisOffer::Definite(400.0),
+            height: crate::AxisOffer::Definite(800.0),
+        });
+        let env_mid = crate::Env::default().with_viewport(crate::Offer {
+            width: crate::AxisOffer::Definite(650.0),
+            height: crate::AxisOffer::Definite(800.0),
+        });
+        let env_wide = crate::Env::default().with_viewport(crate::Offer {
+            width: crate::AxisOffer::Definite(1200.0),
+            height: crate::AxisOffer::Definite(800.0),
+        });
+        assert_eq!(
+            spec.px(StyleId::LineHeight, MEDIUM, MEDIUM, 1.0, &env_narrow),
+            20.0
+        );
+        assert_eq!(
+            spec.px(StyleId::LineHeight, MEDIUM, MEDIUM, 1.0, &env_mid),
+            26.0
+        );
+        assert_eq!(
+            spec.px(StyleId::LineHeight, MEDIUM, MEDIUM, 1.0, &env_wide),
+            32.0
+        );
+        assert!(spec.reads_viewport_change(&env_narrow, &env_wide));
+
+        s.set_dynamic(
+            StyleId::LineHeight,
+            &StyleValue::Text("calc(1rem + 4px)".into()),
+        )
+        .unwrap();
+        let rem_spec = s
+            .relative
+            .get_spec(StyleId::LineHeight)
+            .expect("retained rem Math")
+            .clone();
+        assert_eq!(
+            rem_spec.px(StyleId::LineHeight, 16.0, 16.0, 1.0, &crate::Env::default()),
+            20.0
+        );
+        assert_eq!(
+            rem_spec.px(StyleId::LineHeight, 24.0, 16.0, 1.0, &crate::Env::default()),
+            28.0
+        );
+
+        // Negative computed result clamps to 0 at resolution time.
+        s.set_dynamic(
+            StyleId::LineHeight,
+            &StyleValue::Text("calc(1rem - 40px)".into()),
+        )
+        .unwrap();
+        let neg_spec = s
+            .relative
+            .get_spec(StyleId::LineHeight)
+            .expect("retained Math")
+            .clone();
+        assert_eq!(
+            neg_spec.px(StyleId::LineHeight, 16.0, 16.0, 1.0, &crate::Env::default()),
+            0.0
+        );
+        assert_eq!(
+            neg_spec.px(StyleId::LineHeight, 48.0, 16.0, 1.0, &crate::Env::default()),
+            8.0
+        );
+
+        // Non-finite and huge finite viewport coefficients censor via calc::narrow without overflow.
+        for huge in [
+            "calc(infinity * 1vw)",
+            "calc(10000000vw)",
+            "calc(10000000vw + 0px)",
+            "calc(1.7014118346046923e38vw)",
+        ] {
+            s.set_dynamic(StyleId::LineHeight, &StyleValue::Text(huge.into()))
+                .unwrap();
+            let huge_spec = s
+                .relative
+                .get_spec(StyleId::LineHeight)
+                .expect(huge)
+                .clone();
+            assert_eq!(
+                huge_spec.px(StyleId::LineHeight, 16.0, 16.0, 1.0, &crate::Env::default()),
+                0.0,
+                "unset viewport: {huge}"
+            );
+            assert_eq!(
+                huge_spec.px(StyleId::LineHeight, 16.0, 16.0, 1.0, &env_narrow),
+                crate::style::calc::LARGEST as f32,
+                "positive viewport: {huge}"
+            );
+        }
+        s.set_dynamic(
+            StyleId::LineHeight,
+            &StyleValue::Text("calc(-infinity * 1vw)".into()),
+        )
+        .unwrap();
+        let neg_inf = s
+            .relative
+            .get_spec(StyleId::LineHeight)
+            .expect("retained -infinite Math")
+            .clone();
+        assert_eq!(
+            neg_inf.px(StyleId::LineHeight, 16.0, 16.0, 1.0, &crate::Env::default()),
+            0.0
+        );
+        assert_eq!(
+            neg_inf.px(StyleId::LineHeight, 16.0, 16.0, 1.0, &env_narrow),
+            0.0
+        );
+
+        // Comments, CSS escapes, clamp(none, ...), and cell units canonicalize identically.
+        for (text, expected) in [
+            ("calc(1px/**/ + 1px)", 2.0),
+            ("calc(1\\70 x + 1px)", 2.0),
+            ("clamp(none, 24px, 32px)", 24.0),
+            ("calc(1lh + 4px)", 20.0),
+            ("calc(1ch + 4px)", 12.0),
+        ] {
+            s.set_dynamic(StyleId::LineHeight, &StyleValue::Text(text.into()))
+                .unwrap();
+            assert_eq!(s.line_height, crate::LineHeight::Length(expected), "{text}");
+        }
+
+        // Equal-pixel transitions between plain px and different Math expressions mark changed.
+        let mut px20 = StyleProps::default();
+        px20.set_dynamic(StyleId::LineHeight, &StyleValue::Text("20px".into()))
+            .unwrap();
+        let mut rem_a = StyleProps::default();
+        rem_a
+            .set_dynamic(
+                StyleId::LineHeight,
+                &StyleValue::Text("calc(1rem + 4px)".into()),
+            )
+            .unwrap();
+        let mut rem_b = StyleProps::default();
+        rem_b
+            .set_dynamic(
+                StyleId::LineHeight,
+                &StyleValue::Text("calc(0.5rem + 12px)".into()),
+            )
+            .unwrap();
+        assert!(px20.changed_mask(&rem_a).has(StyleId::LineHeight));
+        assert!(rem_a.changed_mask(&px20).has(StyleId::LineHeight));
+        assert!(rem_a.changed_mask(&rem_b).has(StyleId::LineHeight));
+        assert!(!rem_a.changed_mask(&rem_a).has(StyleId::LineHeight));
+
+        for invalid in [
+            "calc(1 + 0.5)",
+            "min(1.2, 1.5)",
+            "clamp(1.1, 1.4, 1.8)",
+            "calc(100% + 4px)",
+            "calc(150%)",
+            "calc(1.5em + 4px)",
+            "calc(pi * 1em)",
+            "clamp(none, 1em, none)",
+            "calc(10px +)",
+            "calc(10px + env(safe-area-inset-top))",
+            "calc(10px + var(--x))",
+            "calc(10px + 0)",
+        ] {
+            assert!(
+                s.set_dynamic(StyleId::LineHeight, &StyleValue::Text(invalid.into()))
+                    .is_err(),
+                "expected refusal for {invalid}"
+            );
+        }
     }
 }

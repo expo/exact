@@ -272,6 +272,13 @@ final class SessionClockTimerTests: XCTestCase {
         #endif
     }
 
+    #if os(macOS)
+    func testSquareMonitorKeepsItsNaturalOrientation() {
+        let size = CGSize(width: 1920, height: 1920)
+        XCTAssertEqual((0..<4).map { DisplayPreferences.desktopOrientationBits(size, $0) >> 20 }, [16, 21, 26, 31])
+    }
+    #endif
+
     func testScreenNotificationsRepublishDynamicRange() throws {
         #if os(macOS)
         let old = DisplayRange.pinned

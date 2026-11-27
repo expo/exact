@@ -46,8 +46,10 @@ internal object Activations {
     private var ready = false
     /** What arrived before it: an event to raise, with the declared action it names, or a journal line (`event`
      * null). */
-    private class Held(val extension: String, val event: String?, val args: String, val action: String? = null)
+    private class Held(val extension: String, val event: String?, val args: String, val action: String? = null, val device: Boolean = false)
     private val held = ArrayList<Held>()
+    private class Overflow(var count: Int, var last: String)
+    private val overflow = mutableMapOf<Pair<String, String>, Overflow>()
 
     /** The intent a tap starts: the alias, at [navigate] when given, else raising [event] of [extension] with [args]. */
     fun intent(context: Context, extension: String, event: String, args: JSONArray, navigate: String?): Intent {
@@ -103,17 +105,39 @@ internal object Activations {
         return list.toString()
     }
 
+    /** A receiver can observe a visible presentation before the activity draws. Keep its place among launching taps. */
+    fun emit(extension: String, event: String, args: JSONArray, hold: Int) {
+        val raised = Held(extension, event, args.toString(), device = true)
+        if (ready) return raise(raised)
+        if (held.count { it.device && it.extension == extension && it.event == event } >= hold.coerceAtLeast(1)) {
+            val old = held.removeAt(held.indexOfFirst { it.device && it.extension == extension && it.event == event })
+            val drops = overflow.getOrPut(extension to event) { Overflow(0, "") }
+            drops.count++
+            drops.last = JSONArray(old.args).optString(0)
+        }
+        held.add(raised)
+    }
+
     /** The first frame: what a launching tap carried is raised now. */
     fun started() {
         if (ready) return
         ready = true
+        for ((key, drops) in overflow) {
+            val count = if (drops.count == 1) "" else " ${drops.count} before first frame, last"
+            Exact.journal("${key.first}.${key.second}: dropped$count (${drops.last})")
+        }
+        overflow.clear()
         held.forEach(::raise)
         held.clear()
     }
 
     private fun raise(a: Held) {
         try {
-            if (a.event != null) Exact.activate(a.extension, a.event, a.args, a.action) else Exact.journal(a.args)
+            when {
+                a.event == null -> Exact.journal(a.args)
+                a.device -> Extensions.emit(a.extension, a.event, JSONArray(a.args))
+                else -> Exact.activate(a.extension, a.event, a.args, a.action)
+            }
         } catch (e: UnsatisfiedLinkError) {
             android.util.Log.w("exact", "activation: no session")
         }

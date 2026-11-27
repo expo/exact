@@ -3,11 +3,14 @@ package dev.exact.canvas
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.window.WindowSdkExtensions
+import androidx.window.layout.WindowInfoTracker
 import java.io.File
 
 /**
@@ -17,6 +20,7 @@ import java.io.File
 fun interface Drive {
     /** The first frame after successful startup, even with an empty page: called once, on the main thread. */
     fun contentReady()
+    fun windowEntered() {}
 }
 
 /**
@@ -29,6 +33,21 @@ open class ExactActivity : Activity() {
     /** The `video` and `audio` elements' player ([VideoPlayer]), where the APK links one (LLP 1042.001 D2). */
     protected open val video: ((Context) -> VideoPlayer)? = null
     private var natives: Natives? = null
+    internal val picture by lazy { VideoPictureInPicture(this) }
+    internal fun floatPicture(target: MediaAllocation) {
+        natives?.floatPicture(target, picture) ?: target.tell("pictureinpictureerror", "no video player is mounted", "")
+    }
+    // After system expansion the activity resumes. After Close it stops, sometimes before the mode callback.
+    private var pictureAwaitingResume: MediaAllocation? = null
+    internal fun leftPicture(target: MediaAllocation) {
+        if (!nativeStarted) natives?.stopPicture(target)
+        else if (!nativeResumed) pictureAwaitingResume = target
+    }
+    override fun onPictureInPictureModeChanged(active: Boolean, config: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(active, config)
+        picture.modeChanged(active)
+    }
+    private val hostedModules by lazy { HostedModules(Extensions.withViews(modules)) }
 
     /** A signed update activated ([Requests]): the open videos and pages are opened from its assets again, and its
      * boot is good once the view draws it; a control's press waits for that frame too. */
@@ -42,9 +61,34 @@ open class ExactActivity : Activity() {
         val start = stops
         view.viewTreeObserver.registerFrameCommitCallback { if (start == stops) { drawn = true; Controls.ready(this) } }
     }
+    internal var moduleOwners: ModuleOwners? = null
+        private set
+    private var retainedModules: Any? = null
+    private var moduleState: Bundle? = null
+    // Primitive lifecycle facts keep AndroidX off the path of apps without module or hatch views.
+    private var modulePhase = 1
+    internal fun prepareHostedView() {
+        if (moduleOwners == null) {
+            moduleOwners = ModuleOwners(root, moduleState, retainedModules, ::leave, ::commitBack, ::backProgress).also {
+                it.subscribe()
+                it.move(modulePhase)
+                if (Build.VERSION.SDK_INT >= 33) {
+                    it.onBackPressedDispatcher.setOnBackInvokedDispatcher(backCallback)
+                    backCallback.take(it.onBackPressedDispatcher.hasEnabledCallbacks())
+                }
+            }
+            requests.surfaces?.connectBack()
+            moduleState = null
+            retainedModules = null
+        }
+    }
+
+    final override fun onRetainNonConfigurationInstance(): Any? = moduleOwners?.viewModelStore ?: retainedModules
+
     private var nativeState: Bundle? = null
     private var nativeStarted = false
-    private var nativeResumed = false
+    internal var nativeResumed = false
+        private set
     /** The app's text fields, each the platform's own ([Fields], LLP 1115.001 D8). */
     private var fields: Fields? = null
     /** The row pitch `start=N` scrolls by (0: the app's plan scrolls to it itself). */
@@ -73,7 +117,8 @@ open class ExactActivity : Activity() {
      */
     protected open fun drive(scroll: (Float) -> Unit): Drive? = null
     private var driver: Drive? = null
-    private lateinit var view: ExactView
+    internal lateinit var view: ExactView
+        private set
     /** The process's gamepads ([Pads]): every key and motion event is offered to them first. */
     private val pads: Pads get() = Pads.attach(this)
 
@@ -81,8 +126,18 @@ open class ExactActivity : Activity() {
         pads.key(event, requests.padInput) || super.dispatchKeyEvent(event)
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
         pads.motion(event, requests.padInput) || super.dispatchGenericMotionEvent(event)
+    override fun onEnterAnimationComplete() {
+        super.onEnterAnimationComplete()
+        driver?.windowEntered()
+    }
+    internal var windowTouch = false
+        private set
     /** Every touch of the window, seen by a drag out of the app first ([DragOut.touched]). */
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> windowTouch = true
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> windowTouch = false
+        }
         DragOut.touched(event)
         if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN && ::root.isInitialized) {
             root.access.touched()
@@ -106,6 +161,9 @@ open class ExactActivity : Activity() {
         take()
         super.onCreate(state)
         nativeState = state?.getBundle("exact.hosted")
+        moduleState = state?.getBundle("exact.moduleOwners")
+        // Activity releases its non-configuration instance on resume; module owners stay lazy beyond it.
+        retainedModules = lastNonConfigurationInstance
         hatchReader?.activity = this
         // The starting window goes the moment the first frame is drawn, not after its exit fade (splashfade=1: the
         // platform's fade, to compare): the first frame is what shows.
@@ -122,6 +180,9 @@ open class ExactActivity : Activity() {
                 if (!File(shaders, "com.android.skia.shaders_cache").exists()) Warm.launch()
             }
             environment(arrived)
+            if (Setup.development && intent.getStringExtra("x_agent_seed_wait") == "1") {
+                (drive {} as? AgentDrive)?.awaitSeed()
+            }
             Setup.nativeEnvironment()
             try { FilePicker.start(applicationContext) }
             catch (e: Exception) { android.util.Log.w("exact", "file picker: startup cleanup failed", e) }
@@ -134,7 +195,7 @@ open class ExactActivity : Activity() {
         Extensions.bind(this)
         Setup.assets(applicationContext)
         // What the host asks of the platform (LLP 1115.001 D5), acted on here, on the main thread.
-        requests = Requests(this).also { it.back = { goes -> takeBack(goes) } }
+        requests = Requests(this).also { it.back = ::takeBack }
         // No background of its own: the window's shows behind the page, the launch theme's surface until the host says
         // the page's ([chrome]).
         root = Root(this)
@@ -144,8 +205,15 @@ open class ExactActivity : Activity() {
         // The raw insets go to the host whenever they change, and the window's size when it does; nothing is padded
         // here (D3.3).
         root.setOnApplyWindowInsetsListener { _, insets -> window(insets); insets }
-        root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
-            if (r - l != or - ol || b - t != ob - ot) root.rootWindowInsets?.let { window(it) }
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> window() }
+        // A freeform window can move without laying out its children again.
+        val location = IntArray(2)
+        root.viewTreeObserver.addOnPreDrawListener {
+            val x = location[0]
+            val y = location[1]
+            root.getLocationOnScreen(location)
+            if (location[0] != x || location[1] != y) window()
+            true
         }
         setContentView(root)
         accessibility.addAccessibilityStateChangeListener(accessWatch)
@@ -233,6 +301,7 @@ open class ExactActivity : Activity() {
         if (!on && asked) return
         if (on == root.accessible && !on) return
         root.accessible = on
+        view.natives?.accessible(on)
         if (!on) { root.access.clear(); requests.surfaces?.access(null) }
         val owner = view.owner
         if (owner != null) owner.access(on) else view.accessible(on)
@@ -256,43 +325,123 @@ open class ExactActivity : Activity() {
     private val backCallback by lazy { Back(this) }
     private var takesBack = false
     private fun takeBack(on: Boolean) {
+        moduleOwners?.let { it.subscribe(); return }
         if (on == takesBack) return
         takesBack = on
         if (Build.VERSION.SDK_INT >= 33) backCallback.take(on)
     }
-    private fun back() { if (Exact.back()) view.invalidate() else finish() }
+    private fun commitBack(kind: Int, id: Int): Int {
+        if (kind == 5 && requests.surfaces?.dismissBack(id) == true) return 1
+        return Exact.back(kind, id).also {
+            if (it == 1) view.invalidate() else if (it == 0) finish()
+        }
+    }
+    private fun back() { commitBack(0, 0) }
+    @Suppress("DEPRECATION")
+    private fun leave() { if (Build.VERSION.SDK_INT < 33) super.onBackPressed() else finish() }
     /** Predictive Back's gesture as it goes ([Native.backProgress]): exact2 previews the pop or the sheet's close. */
-    private fun backProgress(phase: Int, progress: Float, edge: Int) { Exact.backProgress(phase, progress, edge); view.invalidate() }
+    private fun backProgress(kind: Int, id: Int, phase: Int, progress: Float, edge: Int) {
+        Exact.backProgress(kind, id, phase, progress, edge)
+        view.invalidate()
+    }
 
     /** Before Android 13 Back arrives here, and the app's routes take it while they have somewhere to go. */
     @Deprecated("Android 13's OnBackInvokedDispatcher takes Back from then on ([Back]).")
     override fun onBackPressed() {
-        if (Build.VERSION.SDK_INT < 33 && takesBack) back() else @Suppress("DEPRECATION") super.onBackPressed()
+        if (Build.VERSION.SDK_INT < 33) {
+            moduleOwners?.let { it.receiveBack(); return }
+            if (takesBack) { back(); return }
+        }
+        @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     /** [takeBack]'s callback from Android 13, in a class of its own: an older release never resolves its types. From
      * Android 14 it hears the gesture as it goes, so exact2 can preview what Back does (LLP 1115.001 D6, D12). */
     @android.annotation.TargetApi(33)
-    private class Back(activity: ExactActivity) {
-        private val dispatcher = activity.onBackInvokedDispatcher
-        private val callback: android.window.OnBackInvokedCallback =
-            if (Build.VERSION.SDK_INT >= 34) Predictive.callback(activity) else android.window.OnBackInvokedCallback { activity.back() }
+    private class Back(private val activity: ExactActivity) : android.window.OnBackInvokedDispatcher {
+        private val root = activity.onBackInvokedDispatcher
+        private var surface: android.window.OnBackInvokedDispatcher? = null
+        private var hosted: android.window.OnBackInvokedCallback? = null
+        private var registered = false
+        private fun target(): android.window.OnBackInvokedCallback? {
+            Exact.backHandoff?.flush()
+            return hosted
+        }
+        private fun entry(current: () -> Boolean): android.window.OnBackInvokedCallback =
+            if (Build.VERSION.SDK_INT >= 34) Predictive.callback(activity, ::target, current)
+            else android.window.OnBackInvokedCallback {
+                val handler = target()
+                if (current()) handler?.onBackInvoked() ?: activity.back()
+            }
+
+        private val callback = entry { true }
+        private var surfaceCallback: android.window.OnBackInvokedCallback? = null
+
         fun take(on: Boolean) {
-            if (on) dispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
-            else dispatcher.unregisterOnBackInvokedCallback(callback)
+            if (registered == on) return
+            registered = on
+            if (on) {
+                root.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
+                surfaceCallback?.let { surface?.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, it) }
+            } else {
+                root.unregisterOnBackInvokedCallback(callback)
+                surfaceCallback?.let { surface?.unregisterOnBackInvokedCallback(it) }
+            }
+        }
+
+        // A focusable window needs the same entry point. The activity keeps its place at default priority.
+        fun surface(next: android.window.OnBackInvokedDispatcher?, current: () -> Boolean) {
+            val window = next?.takeUnless { it === root }
+            if (window === surface) return
+            if (registered) surfaceCallback?.let { surface?.unregisterOnBackInvokedCallback(it) }
+            surface = window
+            surfaceCallback = window?.let { entry(current) }
+            if (registered) surfaceCallback?.let { window?.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, it) }
+        }
+
+        override fun registerOnBackInvokedCallback(priority: Int, callback: android.window.OnBackInvokedCallback) {
+            hosted = callback
+            take(true)
+        }
+        override fun unregisterOnBackInvokedCallback(callback: android.window.OnBackInvokedCallback) {
+            take(false)
         }
     }
 
-    /** Android 14's `OnBackAnimationCallback`, in an object of its own: an older release never resolves its types. The
-     * system eases the progress; the edge is `BackEvent`'s (0 the left, 1 the right). */
+    @android.annotation.TargetApi(33)
+    internal fun backSurface(window: android.window.OnBackInvokedDispatcher?, current: () -> Boolean = { false }) { backCallback.surface(window, current) }
+
     @android.annotation.TargetApi(34)
     private object Predictive {
-        fun callback(activity: ExactActivity) = object : android.window.OnBackAnimationCallback {
-            override fun onBackStarted(e: android.window.BackEvent) = activity.backProgress(0, e.progress, e.swipeEdge)
-            override fun onBackProgressed(e: android.window.BackEvent) = activity.backProgress(1, e.progress, e.swipeEdge)
-            override fun onBackCancelled() = activity.backProgress(2, 0f, 0)
-            override fun onBackInvoked() = activity.back()
-        }
+        fun callback(activity: ExactActivity, target: () -> android.window.OnBackInvokedCallback?, current: () -> Boolean) =
+            object : android.window.OnBackAnimationCallback {
+                private var started = false
+                private var handler: android.window.OnBackAnimationCallback? = null
+                override fun onBackStarted(e: android.window.BackEvent) {
+                    handler = target() as? android.window.OnBackAnimationCallback
+                    started = current()
+                    if (!started) { handler = null; return }
+                    handler?.onBackStarted(e) ?: activity.backProgress(0, 0, 0, e.progress, e.swipeEdge)
+                }
+                override fun onBackProgressed(e: android.window.BackEvent) {
+                    if (!started) return
+                    if (!current()) { onBackCancelled(); return }
+                    handler?.onBackProgressed(e) ?: activity.backProgress(0, 0, 1, e.progress, e.swipeEdge)
+                }
+                override fun onBackCancelled() {
+                    if (!started) return
+                    handler?.onBackCancelled() ?: activity.backProgress(0, 0, 2, 0f, 0)
+                    started = false
+                    handler = null
+                }
+                override fun onBackInvoked() {
+                    val selected = if (started) handler else target()
+                    if (!current()) { onBackCancelled(); return }
+                    started = false
+                    handler = null
+                    selected?.onBackInvoked() ?: activity.back()
+                }
+            }
     }
 
     /** The starting window goes the moment the first frame is drawn (Android 12's SplashScreen), in an object of its
@@ -332,12 +481,15 @@ open class ExactActivity : Activity() {
      * sent it. A new one adopts the host, which paints everything again for it; the app is as it was.
      */
     private fun read() {
-        natives?.let {
-            nativeState = it.lifecycle.save()
-            it.destroyAll(keepPlayback = true)
+        val elements = Natives(this, { AssetRoot.of(this) }, hostedModules, video)
+        val oldChildren = root.childCount
+        root.addView(elements, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        natives?.let { old ->
+            elements.takeModuleViews(old)
+            old.destroyAll(keepPlayback = true)
         }
         fields?.leaving()
-        root.removeAllViews()
+        root.removeViews(0, oldChildren)
         // Before the host boots: its first layout measures the app's text fields in a field of this activity's
         // theme ([Fields.measure], LLP 1115.001 D8).
         Fields.context = this
@@ -349,10 +501,10 @@ open class ExactActivity : Activity() {
         val colors = Palette.read(this).also { toldColors = it }
         // The window as it is now, with the system's raw insets (D3.3): told before the host boots too, so the page is
         // laid out where it will be shown. The view's own size is never told: the presenter places the page.
-        val size = windowSize()
+        val placement = foldWindow()
+        val size = placement.bounds.width() to placement.bounds.height()
         val density = Device.scale(this)
-        val insets = root.rootWindowInsets ?: if (Build.VERSION.SDK_INT >= 30) windowManager.currentWindowMetrics.windowInsets else null
-        val edges = insets?.let { edges(it) } ?: IntArray(16)
+        val edges = geometry(root.rootWindowInsets, placement)
         toldWindow = Triple(size, density, edges.toList())
         // asyncboot=0: boot when the view is laid out, on the main thread, to compare. Otherwise now, on a thread that
         // also loads the library: exact2 loads, boots and paints its first frame while Android sets the activity up,
@@ -362,7 +514,7 @@ open class ExactActivity : Activity() {
         val live = intent.getStringExtra("live").let { it == "1" || it == "true" }
         if (owner != null) {
             owner.chrome = { c -> chrome(c) }
-            owner.asked = { r -> requests.perform(r) }
+            owner.asked = requests::perform
             owner.rates = { r -> natives?.frameRates(r) }
             owner.displays(this)
             frameIdentity(owner)
@@ -404,13 +556,12 @@ open class ExactActivity : Activity() {
         Exact.answered = { view.onPublished() }
         Exact.turned = { view.turned() }
         if (input) view.keys = Keys(view)
-        val elements = Natives(this, { AssetRoot.of(this) }, Extensions.withViews(modules), video)
         natives = elements
-        elements.lifecycle.restore(nativeState)
+        nativeState?.let { elements.lifecycle.restore(it) }
         nativeState = null
         if (nativeStarted) elements.lifecycle.event(ViewLifecycle.START)
         if (nativeResumed) elements.lifecycle.event(ViewLifecycle.RESUME)
-        elements.hatched = { node, context -> hatchReader?.made(node, context) }
+        if (HatchReader.appType != null) elements.hatched = { node, context -> hatchReader?.made(node, context) }
         view.natives = elements
         elements.reader = view
         // The app's text fields (LLP 1115.001 D8) outlive a reader made again: a field keeps its view, and with it
@@ -429,9 +580,9 @@ open class ExactActivity : Activity() {
         root.access.fields = hosted
         root.access.others = { listOfNotNull(elements.takeIf { it.childCount > 0 }, loopNotice?.label?.takeIf { it.isShown }) }
         root.access.controller = { elements.controller(it) }
-        root.addView(elements, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(hosted, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.drags.page = view
         val ticker = if (intent.getStringExtra("tag") == "1") TagView(this) { view.tagState() } else View(this)
         elements.frame = { ticker.invalidate() }
         hosted.frame = { ticker.invalidate() }
@@ -444,12 +595,24 @@ open class ExactActivity : Activity() {
         view.ticker = ticker
         // The app's bars (LLP 1115.001 D11), over the page and everything it hosts. The host tells this reader its
         // bars anew, as it paints everything again for it.
-        view.bars = Bars(this, root)
+        requests.surfaces?.picture = view::picture
+        view.bars = Bars(this, root, view::picture)
         loopNotice = android.system.Os.getenv("EXACT_DEV_PLAN")?.let { DevLoop.Notice(this, root, it) }
         accessible(accessibility.isEnabled || asked)
     }
 
     private var loopNotice: DevLoop.Notice? = null
+
+    /** Tell the host the keyboard as its inset animation moves it, which the inset dispatch gives only at its ends (LLP
+     * 1123 D7), while this reader reads. Activation (stage 5) calls it: registering an inset animation callback changes
+     * how Android runs the keyboard's animation, so no shipping reader registers one before then. */
+    internal fun followKeyboard() {
+        if (Build.VERSION.SDK_INT < 30) return
+        root.setWindowInsetsAnimationCallback(KeyboardProgress { depth ->
+            if (stopped || !reads()) return@KeyboardProgress
+            view.owner?.keyboardProgress(depth) ?: Native.keyboardProgress(depth)
+        })
+    }
     private lateinit var root: Root
 
     /** The app is edge to edge (LLP 1115.001 D3.4): the window reaches under transparent system bars and into the
@@ -486,21 +649,54 @@ open class ExactActivity : Activity() {
         return out
     }
 
-    /** The window's size, in pixels. */
-    private fun windowSize(): Pair<Int, Int> =
-        if (Build.VERSION.SDK_INT >= 30) windowManager.currentWindowMetrics.bounds.let { it.width() to it.height() }
-        else Legacy.windowSize(this)
+    private val foldTracker by lazy { WindowInfoTracker.getOrCreate(this) }
+    private val hasHinge by lazy {
+        packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_SENSOR_HINGE_ANGLE) || try {
+            WindowSdkExtensions.getInstance().extensionVersion >= 6 && foldTracker.supportedPostures.isNotEmpty()
+        } catch (_: UnsupportedOperationException) { false }
+    }
+    private val folds by lazy {
+        val snapshot = if (WindowSdkExtensions.getInstance().extensionVersion >= 9)
+            ({ foldTracker.getCurrentWindowLayoutInfo(this) }) else null
+        WindowFolds(foldTracker.windowLayoutInfo(this), snapshot, ::foldWindow) { window() }
+    }
+
+    private fun geometry(insets: android.view.WindowInsets?, placement: FoldWindow): IntArray {
+        val current = insets ?: if (Build.VERSION.SDK_INT >= 30) windowManager.currentWindowMetrics.windowInsets else null
+        // Before API 30 a layout can arrive between inset dispatches, with no metrics fallback.
+        val edges = current?.let(::edges) ?: toldWindow?.third?.take(16)?.toIntArray() ?: IntArray(16)
+        val fold = folds.report(placement, hasHinge) ?: return edges
+        return edges + fold
+    }
+
+    private fun foldWindow(): FoldWindow {
+        val display = if (Build.VERSION.SDK_INT >= 30) this.display else Legacy.display(this)
+        return FoldWindow(windowBounds(), display?.displayId ?: 0, display?.rotation ?: 0)
+    }
+
+    private fun windowBounds(): Rect {
+        if (Build.VERSION.SDK_INT >= 30) return windowManager.currentWindowMetrics.bounds
+        if (root.width == 0 || root.height == 0) {
+            val (width, height) = Legacy.windowSize(this)
+            return Rect(0, 0, width, height)
+        }
+        val location = IntArray(2)
+        root.getLocationOnScreen(location)
+        return Rect(location[0], location[1], location[0] + root.width, location[1] + root.height)
+    }
 
     /** The window's size, density and insets as the host was last told them. */
     private var toldWindow: Triple<Pair<Int, Int>, Float, List<Int>>? = null
 
     /** Tell the host the window, whole, when its size, the display's density or any inset is not what it was last
      * told (LLP 1115.001 D3.3). The host answers with where the page is ([chrome]). */
-    private fun window(insets: android.view.WindowInsets) {
-        if (!reads()) return
-        val size = if (root.width > 0 && root.height > 0) root.width to root.height else windowSize()
+    private fun window(insets: android.view.WindowInsets? = root.rootWindowInsets) {
+        if (stopped || !reads()) return
+        val placement = foldWindow()
+        val size = if (root.width > 0 && root.height > 0) root.width to root.height
+            else placement.bounds.width() to placement.bounds.height()
         val density = Device.scale(this)
-        val edges = edges(insets)
+        val edges = geometry(insets, placement)
         loopNotice?.place(maxOf(edges[0], edges[4]), maxOf(edges[1], edges[5]))
         val now = Triple(size, density, edges.toList())
         if (now == toldWindow) return
@@ -550,6 +746,15 @@ open class ExactActivity : Activity() {
 
     /** The device's settings as the host was last told them. */
     private var told: Device? = null
+    private val displayChanges = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) {}
+        override fun onDisplayRemoved(id: Int) {}
+        override fun onDisplayChanged(id: Int) {
+            @Suppress("DEPRECATION")
+            if (id == windowManager.defaultDisplay.displayId && Device.orientation(this@ExactActivity) != told?.orientation) configure()
+        }
+    }
+    private var stopContrastUpdates: (() -> Unit)? = null
     private val screenReaderChanged = android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener { configure() }
 
     /** The device's colours as the host was last told them ([Palette]). */
@@ -590,7 +795,7 @@ open class ExactActivity : Activity() {
         configure()
         // The channels' names are the strings tables' (LLP 1133.004.000 D1).
         if (config.locales != channelLocales) { channelLocales = config.locales; Channels.made(this) }
-        root.rootWindowInsets?.let { window(it) }
+        window()
     }
 
     /** The activity was stopped since its reader was made: Android discarded what that reader kept. */
@@ -608,9 +813,19 @@ open class ExactActivity : Activity() {
     override fun onStart() {
         super.onStart()
         nativeStarted = true
+        folds.start()
+        modulePhase = 2; moduleOwners?.move(modulePhase)
         if (stopped) { stopped = false; take(); read() }
+        if (Build.VERSION.SDK_INT >= 34) {
+            getSystemService(android.app.UiModeManager::class.java)?.let { mode ->
+                val listener = android.app.UiModeManager.ContrastChangeListener { configure() }
+                mode.addContrastChangeListener(mainExecutor, listener)
+                stopContrastUpdates = { mode.removeContrastChangeListener(listener) }
+            }
+        }
         contentResolver.registerContentObserver(android.provider.Settings.Global.getUriFor(android.provider.Settings.Global.ANIMATOR_DURATION_SCALE), false, settings)
         contentResolver.registerContentObserver(android.provider.Settings.System.getUriFor(android.provider.Settings.System.TIME_12_24), false, settings)
+        getSystemService(android.hardware.display.DisplayManager::class.java)?.registerDisplayListener(displayChanges, null)
         getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.addTouchExplorationStateChangeListener(screenReaderChanged)
         // What changed while the activity was stopped and is no configuration change.
         configure()
@@ -640,7 +855,10 @@ open class ExactActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus && reads()) pads.background()
-        if (hasFocus) Activities.resumed()
+        if (hasFocus) {
+            Activities.resumed()
+            picture.pageReady()
+        }
         // Over the keyguard's dismissal: focus comes once the phone is unlocked.
         if (hasFocus) Controls.ready(this)
     }
@@ -652,6 +870,7 @@ open class ExactActivity : Activity() {
         Controls.stopped(this)
         Exact.owner?.windowFrames?.detach(window)
         nativeStarted = false
+        modulePhase = 1; moduleOwners?.move(modulePhase)
         requests.foreground(false)
         if (reads()) Auth.stopped()
         // A replaced activity's stop can come after its successor's start: the page is the successor's to hide.
@@ -660,13 +879,18 @@ open class ExactActivity : Activity() {
         if (reads()) Extensions.stopped(isChangingConfigurations)
         view.running(false, reads())
         natives?.lifecycle?.event(ViewLifecycle.STOP)
+        pictureAwaitingResume?.let { natives?.stopPicture(it) }
+        pictureAwaitingResume = null
         natives?.stopMedia(allowBackground = !isFinishing && reads())
         // Behind the hide, the pads' release and the stop of the turns (none queued after it), what they and anything
         // since the pause committed is on disk before Android may kill it.
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the stop")
         Partitions.flush(natives?.profiles().orEmpty())
         if (reads() && !isChangingConfigurations) updateWidgets()
+        stopContrastUpdates?.invoke()
+        stopContrastUpdates = null
         contentResolver.unregisterContentObserver(settings)
+        getSystemService(android.hardware.display.DisplayManager::class.java)?.unregisterDisplayListener(displayChanges)
         getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.removeTouchExplorationStateChangeListener(screenReaderChanged)
         super.onStop()
     }
@@ -689,8 +913,12 @@ open class ExactActivity : Activity() {
      * reads again what the person may have changed in Settings ([Extensions.resumed]). */
     override fun onResume() {
         super.onResume()
+        window()
         configure()
         nativeResumed = true
+        pictureAwaitingResume = null
+        picture.pageReady()
+        modulePhase = 3; moduleOwners?.move(modulePhase)
         natives?.lifecycle?.event(ViewLifecycle.RESUME)
         Auth.resumed()
         requests.resumed()
@@ -701,6 +929,7 @@ open class ExactActivity : Activity() {
 
     override fun onPause() {
         nativeResumed = false
+        modulePhase = 2; moduleOwners?.move(modulePhase)
         natives?.lifecycle?.event(ViewLifecycle.PAUSE)
         // Everything committed before the pause is on disk (exact2 writes the store on a thread of its own).
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the pause")
@@ -724,6 +953,8 @@ open class ExactActivity : Activity() {
     }
 
     override fun onSaveInstanceState(state: Bundle) {
+        modulePhase = 1
+        (moduleOwners?.save() ?: moduleState)?.let { state.putBundle("exact.moduleOwners", it) }
         natives?.lifecycle?.save()?.let { state.putBundle("exact.hosted", it) }
         super.onSaveInstanceState(state)
     }
@@ -735,9 +966,15 @@ open class ExactActivity : Activity() {
     }
 
     override fun onDestroy() {
+        picture.destroy()
+        folds.stop()
         accessibility.removeAccessibilityStateChangeListener(accessWatch)
         requests.destroy()
         release()
+        if (Build.VERSION.SDK_INT >= 33 && moduleOwners != null) backCallback.take(false)
+        moduleOwners?.destroy(isChangingConfigurations)
+        // A recreated activity can finish before mounting its first module view.
+        if (moduleOwners == null && !isChangingConfigurations) retainedModules?.let { ModuleOwners.clear(it) }
         super.onDestroy()
     }
 
@@ -745,8 +982,10 @@ open class ExactActivity : Activity() {
      * finished: its stop and onDestroy come after this activity's create or start) lets go of the host now, before
      * this one's view takes it, and from then on tells the host nothing. */
     private fun take() {
-        Exact.reader?.get()?.takeIf { it !== this }?.release()
+        if (reads()) return
+        Exact.reader?.get()?.release()
         Exact.reader = java.lang.ref.WeakReference(this)
+        moduleOwners?.subscribe()
     }
 
     /** Whether this activity's view is the one that reads the host. An activity that was replaced before it stopped
@@ -757,13 +996,18 @@ open class ExactActivity : Activity() {
     /** This activity's reader lets go of the host: its hosted views and their surfaces go, and the owner stops
      * telling its view. Once: at [onDestroy], or sooner when the activity that replaces it is made first. */
     private fun release() {
+        Extensions.credentials.leaving(this)
         hatchReader?.takeIf { it.activity === this }?.activity = null
         requests.surfaces?.destroy()
-        natives?.destroyAll(keepPlayback = !isFinishing)
+        natives?.let { elements ->
+            elements.destroyAll(keepPlayback = !isFinishing)
+            elements.lifecycle.event(ViewLifecycle.STOP)
+        }
         natives = null
         fields?.leaving()
         if (Fields.context === this) Fields.context = null
         if (!reads()) return
+        moduleOwners?.unsubscribe()
         if (::view.isInitialized) view.stopMainWakes()
         Exact.reader = null
         Exact.owner?.let { it.published = {}; it.asked = null; it.chrome = {} }
@@ -774,7 +1018,7 @@ open class ExactActivity : Activity() {
     /** The launch extras that reach exact2 as its environment, written before its library loads; the launching
      * intent's URL or share only when it [arrived] now. */
     private fun environment(arrived: Boolean) {
-        val meta = Setup.environment(applicationContext, intent)
+        Setup.environment(applicationContext, intent)
         if (arrived) {
             launchUrl()?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it, true) }
             // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
@@ -782,7 +1026,7 @@ open class ExactActivity : Activity() {
         }
         // filters=0: a box's filter runs on the CPU, not as a RenderEffect (exact2's EXACT_FILTERS), to compare.
         if (intent.getStringExtra("filters") == "0") android.system.Os.setenv("EXACT_FILTERS", "0", true)
-        if (meta?.getBoolean("dev.exact.development", false) != true) return
+        if (!Setup.development) return
         // rows=0: no kept rows, every frame walks every row (exact2's EXACT_ROWS), to compare.
         if (intent.getStringExtra("rows") == "0") android.system.Os.setenv("EXACT_ROWS", "0", true)
         // imgvp=N: keep N viewports of decoded pictures (exact2's EXACT_IMAGE_VIEWPORTS; 12 by default).
@@ -799,9 +1043,9 @@ open class ExactActivity : Activity() {
         listOf("mi_purge_delay", "mi_eager_commit", "mi_arena_eager_commit").forEach { k ->
             intent.getStringExtra(k)?.let { android.system.Os.setenv("MIMALLOC_" + k.removePrefix("mi_").uppercase(), it, true) }
         }
-        listOf("x_agent", "x_auth_fixture", "x_hatches", "x_agent_storage", "x_agent_storage_fresh", "x_agent_stored", "x_plan", "x_store",
+        listOf("x_agent", "x_auth_fixture", "x_hatches", "x_agent_storage", "x_agent_storage_fresh", "x_agent_stored", "x_agent_stored_file", "x_plan", "x_store",
             "x_agent_epoch", "x_agent_seed", "x_agent_locale", "x_agent_format_locale", "x_agent_time_zone",
-            "x_agent_fail_fetch", "x_agent_process", "x_agent_home", "x_agent_login_env",
+            "x_agent_substitutes", "x_agent_fail_fetch", "x_agent_process", "x_agent_home", "x_agent_login_env",
             "x_agent_share", "x_agent_bind", "x_agent_pads", "x_agent_timing", "x_agent_presentation", "x_agent_chrome",
             "x_rows", "x_moves", "x_idle_frames", "x_slots", "x_lower", "x_row_reuse",
             "x_image_viewports", "x_defer_collections", "x_log_journal",

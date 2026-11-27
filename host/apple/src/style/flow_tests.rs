@@ -323,3 +323,127 @@ fn a_moving_colour_leaves_system_colours_and_the_rest_stay() {
         serde_json::from_str(&restyle_presented(last, &Env::default(), &shown, false)).unwrap();
     assert!(json.get("system_colors").is_none(), "{json}");
 }
+
+#[test]
+fn authored_text_style_marks_font_weight_written_and_implied_or_numeric_does_not() {
+    use exact_kernel::{Kernel, MonospaceMeasurer, Op};
+    let mut kernel = Kernel::new(Box::new(MonospaceMeasurer::default()));
+    let patch = |rows: &[(StyleId, StyleValue, bool)]| {
+        let mut p = StyleProps::default();
+        for (id, value, written) in rows {
+            p.set_dynamic(*id, value).unwrap();
+            if *written {
+                p.written.set(*id);
+            }
+        }
+        Box::new(p)
+    };
+    let ops = vec![
+        // 1: authored `font="-exact-body"` on a heading
+        Op::CreateView {
+            id: 1,
+            node_type: NodeType::Text,
+        },
+        Op::SetProp {
+            id: 1,
+            prop: PropId::FontShorthand,
+            value: true.into(),
+        },
+        Op::SetStyle {
+            id: 1,
+            patch: patch(&[
+                (StyleId::FontStyle, StyleValue::Text("normal".into()), true),
+                (
+                    StyleId::FontSize,
+                    StyleValue::Text("-exact-body".into()),
+                    true,
+                ),
+            ]),
+        },
+        // 2: authored bare `font-size="-exact-headline"`
+        Op::CreateView {
+            id: 2,
+            node_type: NodeType::Text,
+        },
+        Op::SetStyle {
+            id: 2,
+            patch: patch(&[(
+                StyleId::FontSize,
+                StyleValue::Text("-exact-headline".into()),
+                true,
+            )]),
+        },
+        // 3: compiler-implied heading text style (unwritten)
+        Op::CreateView {
+            id: 3,
+            node_type: NodeType::Text,
+        },
+        Op::SetProp {
+            id: 3,
+            prop: PropId::FontShorthand,
+            value: true.into(),
+        },
+        Op::SetStyle {
+            id: 3,
+            patch: patch(&[(
+                StyleId::FontSize,
+                StyleValue::Text("-exact-title1".into()),
+                false,
+            )]),
+        },
+        // 4: authored numeric `font-size=24` (not a platform text style)
+        Op::CreateView {
+            id: 4,
+            node_type: NodeType::Text,
+        },
+        Op::SetProp {
+            id: 4,
+            prop: PropId::FontShorthand,
+            value: true.into(),
+        },
+        Op::SetStyle {
+            id: 4,
+            patch: patch(&[(StyleId::FontSize, StyleValue::Number(24.0), true)]),
+        },
+    ];
+    kernel.apply(0, 1, &ops).unwrap();
+    let json = |id: u32| -> serde_json::Value {
+        serde_json::from_str(&style_json_for(&kernel.node(id).unwrap(), &Env::default()).0).unwrap()
+    };
+    let written = |j: &serde_json::Value| -> Vec<String> {
+        j["written"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let body = json(1);
+    assert_eq!(body["font_weight"], 400);
+    assert!(
+        written(&body).iter().any(|w| w == "font_weight"),
+        "font=\"-exact-body\" marks font_weight written: {body}"
+    );
+
+    let headline = json(2);
+    assert!(
+        written(&headline).iter().any(|w| w == "font_weight"),
+        "bare font-size=\"-exact-headline\" marks font_weight written: {headline}"
+    );
+
+    let implied = json(3);
+    assert!(
+        implied.get("written").is_none(),
+        "compiler-implied heading style leaves written absent: {implied}"
+    );
+
+    let numeric = json(4);
+    assert!(written(&numeric).iter().any(|w| w == "font_size"));
+    assert!(
+        !written(&numeric).iter().any(|w| w == "font_weight"),
+        "numeric font-size does not mark font_weight written: {numeric}"
+    );
+}

@@ -17,7 +17,7 @@ fn source() -> String {
   view
     column width=400 height=500
       if showing
-        box testId="row" width=400 height=100 swiperight=reply touch-action="pan-y" opacity=(target == 0 ? 1 : 0.25) transition="translate -exact-spring(300, 30, 1)"
+        box testId="row" width=400 height=100 swipe=reply swipe-follow="right" touch-action="pan-y" opacity=(target == 0 ? 1 : 0.25) transition="translate -exact-spring(300, 30, 1)"
           box testId="indicator" swipeIndicator=true opacity=0 scale=0 transition="opacity 100ms ease-out, scale 100ms ease-out" width=10 height=10
           text "swipe me" testId="label"
       button press=hide testId="hide"
@@ -162,7 +162,7 @@ fn deletion_remount_and_runtime_replacement_cannot_receive_old_release() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     p.tap(id(&p, "hide")).unwrap();
     assert!(!p.host.has_hold(token));
@@ -179,7 +179,7 @@ fn deletion_remount_and_runtime_replacement_cannot_receive_old_release() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     // A replacement waits for the press to end (LLP 1029.000.002 D9): here
     // the device loses its pointer, and a late release follows.
@@ -198,13 +198,13 @@ fn deletion_remount_and_runtime_replacement_cannot_receive_old_release() {
 
 #[test]
 fn action_deletion_and_ordinary_click_release_clean_up_once() {
-    let mut p = boot(&source().replace("swiperight=reply", "swiperight=hide"));
+    let mut p = boot(&source().replace("swipe=reply", "swipe=hide"));
     recognize(&mut p);
     p.pointer_up(150., 40., 50.).unwrap();
     assert!(p.host.kernel().find_by_test_id("row").is_empty());
     assert_eq!(p.collection_interaction(), None);
     assert!(!p.host.motion());
-    let mut p = boot(&source().replace("swiperight=reply", "press=reply"));
+    let mut p = boot(&source().replace(r#"swipe=reply swipe-follow="right""#, "press=reply"));
     p.pointer_down(20., 40., 0.).unwrap();
     p.pointer_up(20., 40., 10.).unwrap();
     assert_eq!(count(&p), "1");
@@ -305,7 +305,7 @@ fn resize_keeps_live_hold_origin_pin_and_latest_target() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     assert!(p.resize(600., 700.).is_none());
     assert!(p.host.has_hold(token));
@@ -334,7 +334,7 @@ fn navigation_cancels_a_held_view_without_waiting_for_the_next_pointer_event() {
   view
     main navigationKey=selected navigationBack="back"
       column navigationKey="a"
-        box testId="row" width=400 height=100 swiperight=reply touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
+        box testId="row" width=400 height=100 swipe=reply swipe-follow="right" touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
           text "swipe me"
       column navigationKey="b"
         text "other route"
@@ -353,7 +353,7 @@ fn navigation_cancels_a_held_view_without_waiting_for_the_next_pointer_event() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     p.pointer_move(150., 40., 30.).unwrap();
     assert!(p
@@ -421,7 +421,7 @@ fn malformed_pointer_samples_preserve_contact_and_presentation() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     for (x, time) in [(f32::NAN, 100.), (80., 9.), (80., f64::INFINITY)] {
         assert!(p.pointer_move(x, 40., time).is_err());
@@ -540,7 +540,7 @@ component App
         list id="content" testId="transcript" virtualized=true width=360.25 height=200.5 padding-left=1.3 border-width=0.7 border-style="solid" box-sizing="border-box"
           for m in rows key=m.rowKey
             column width="100%" padding=5.3 disabled=disabled display=(showing ? "flex" : "none")
-              box testId=`reply-hit-${{m.id}}` swiperight=replyTo(m.id) touch-action="pan-y" retainFocus=true transition="translate -exact-spring(300, 30, 1)" width="100%" padding=0 border-width=0 background-color="#00000000" text-align="left"
+              box testId=`reply-hit-${{m.id}}` swipe=replyTo(m.id) swipe-follow="right" touch-action="pan-y" retainFocus=true transition="translate -exact-spring(300, 30, 1)" width="100%" padding=0 border-width=0 background-color="#00000000" text-align="left"
                 MessageBubble(message=m)
               button press=replyTo(m.id) testId=`reply-${{m.id}}` padding=4 border-width=0 background-color="#00000000" align-self="flex-end"
                 text "Reply" font-size=11 color="#2668d8"
@@ -774,7 +774,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         let _gate = block_body(&mut p, 21.);
         action(&mut p, "curry-change", 22.);
@@ -940,7 +940,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         let before = clocks(&p);
         // Existing region sessions explicitly refuse in-place reload; do not
@@ -1032,7 +1032,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         assert!(p.host.has_hold(token));
         assert!(p.host.presented(row).translate.0 > 0.);
@@ -1087,7 +1087,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         let moved = ack(&mut p);
         assert_eq!(moved.pixels.data(), ack(&mut ordinary).pixels.data());
@@ -1179,7 +1179,7 @@ component MessageBubble
                 .hold
                 .as_ref()
                 .unwrap()
-                .primary
+                .motion()
                 .token;
             p.pointer_cancel(41.).unwrap();
             assert!(p.contact.is_none());

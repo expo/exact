@@ -70,8 +70,8 @@ package final class Shadow {
     /// module re-import and re-bind every capture, and a surface takes a
     /// new children view as a fresh set — the glass crossfaded on every
     /// capture, a flicker with the alpha in between. The module's reads of
-    /// it are complete before it is drawn into again (`gpu_sync`, called by
-    /// the capture).
+    /// it are complete before it is drawn into again (`gpu_prepare_texture_metal`
+    /// or `gpu_sync`, called by the capture).
     private var handed: Pass?
     /// The pass read back into a bitmap (`render`), at the last size asked.
     private var readback: Pass?

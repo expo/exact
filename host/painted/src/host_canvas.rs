@@ -12,6 +12,7 @@ impl<D: DataSource> Host<D> {
         assets: &crate::image::Assets,
         images: &mut crate::image::Images,
     ) -> bool {
+        let _roles = self.runner.bind_roles();
         if !self.runner.plan().surfaces.is_empty() {
             if self.canvas2d.text.is_none() {
                 // Text measured and drawn by one engine (LLP 1056 D8).

@@ -210,6 +210,8 @@ final class Recorder: ExactTrackConsumer, MediaTake {
     private let track: String
     private(set) var state = "recording", reason: String?, error: String?
     private var result: [String: Any]?
+    /// What every stop is answered once finished: `result`, or the error that prevented a valid file.
+    private var answer: [String: Any]?
     private var limit: (() -> Void)?
     private let maxDuration: Double
     func arm() {
@@ -335,7 +337,7 @@ final class Recorder: ExactTrackConsumer, MediaTake {
 
     /// Stop for `why`, finish the file, answer the result; sticky once inactive (D1).
     func finish(_ why: String, error: String? = nil, _ done: @escaping ([String: Any]) -> Void) {
-        if let result { return done(result) }
+        if let answer { return done(answer) }
         finishing.append(done)
         guard state != "inactive" else { return }
         recorded = duration; since = nil
@@ -347,25 +349,45 @@ final class Recorder: ExactTrackConsumer, MediaTake {
         changed()
         let spans = spans, agent = context.agent, url = url, duration = recorded, writer = writer
         queue.async { [self] in
+            var agentFailure: String?
             if agent {
-                try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? Writer.tone(spans).write(to: url)
+                do {
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Writer.tone(spans).write(to: url)
+                } catch {
+                    agentFailure = "the file was not written: \(error)"
+                }
             }
-            let complete = { let failure = writer?.failure; DispatchQueue.main.async { self.completed(why, duration, failure: failure) } }
+            let complete = {
+                let failure = agentFailure ?? writer?.failure
+                DispatchQueue.main.async { self.completed(why, duration, failure: failure) }
+            }
             if let writer { writer.finish(complete) } else { complete() }
         }
     }
 
-    /// The file is finished: the result, answered to every stop that waited.
+    /// The file is finished: the result or failure, answered to every stop that waited.
     private func completed(_ why: String, _ duration: Double, failure: String?) {
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
         subscription?.cancel(); subscription = nil
-        let result: [String: Any] = ["path": path, "mimeType": type, "duration": duration, "size": size]
-        self.result = result
-        context.log("recording: \(id) stopped (\(why)), \(path), \(size) bytes" + (failure.map { "; the writer failed: \($0)" } ?? ""))
+        let unwritten = self.error ?? failure ?? (size == 0 ? "the file was not written" : nil)
+        let out: [String: Any]
+        if let unwritten {
+            reason = "error"
+            self.error = unwritten
+            self.result = nil
+            out = ["error": "UnknownError", "message": unwritten]
+            context.log("recording: \(id) stopped (\(why)), \(path) not written: \(unwritten)")
+        } else {
+            out = ["path": path, "mimeType": type, "duration": duration, "size": size]
+            self.result = out
+            context.log("recording: \(id) stopped (\(why)), \(path), \(size) bytes")
+        }
+        self.answer = out
         changed()
-        for f in finishing { f(result) }
+        let callbacks = finishing
         finishing = []
+        for f in callbacks { f(out) }
     }
 
     /// A buffer's frames, copied off the audio thread's reuse.
@@ -468,11 +490,16 @@ final class Writer {
     /// One buffer, on the recorder's queue. Its time is the frames written,
     /// so a pause leaves no gap in the file.
     func append(_ buffer: AVAudioPCMBuffer) {
-        guard let buffer = conformed(buffer) else {
+        guard buffer.frameLength > 0 else { return }
+        guard let converted = conformed(buffer) else {
             let why = "a buffer of \(Writer.describe(buffer.format)) did not convert to \(Writer.describe(format))"
             backupFailure = why
             return fail(why)
         }
+        for chunk in converted where chunk.frameLength > 0 { writeChunk(chunk) }
+    }
+
+    private func writeChunk(_ buffer: AVAudioPCMBuffer) {
         if let file {
             do { try file.write(from: buffer) } catch { fail(Writer.code(error)) }
             return
@@ -498,19 +525,66 @@ final class Writer {
 
     static func describe(_ f: AVAudioFormat) -> String { "\(Int(f.sampleRate)) Hz, \(f.channelCount) ch" }
 
-    /// `buffer` in the file's format.
-    private func conformed(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        if buffer.format == format { return buffer }
-        if converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: format) }
-        guard let converter else { return nil }
-        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate).rounded(.up)) + 1
-        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
-        var given = false
-        let status = converter.convert(to: out, error: nil) { _, state in
-            if given { state.pointee = .noDataNow; return nil }
-            given = true; state.pointee = .haveData; return buffer
+    /// `buffer` in the file's format, draining any prior converter at a format boundary
+    /// and looping until `buffer` is fully consumed.
+    private func conformed(_ buffer: AVAudioPCMBuffer) -> [AVAudioPCMBuffer]? {
+        guard buffer.format.sampleRate > 0, format.sampleRate > 0 else { return nil }
+        var chunks: [AVAudioPCMBuffer] = []
+        if let previous = converter,
+           buffer.format == format || previous.inputFormat != buffer.format || previous.outputFormat != format {
+            drainConverter(previous, into: &chunks)
+            converter = nil
         }
-        return status == .error ? nil : out
+        if buffer.format == format {
+            chunks.append(buffer)
+            return chunks
+        }
+        if converter == nil { converter = AVAudioConverter(from: buffer.format, to: format) }
+        guard let active = converter else { return nil }
+        let capacity = max(AVAudioFrameCount((Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate).rounded(.up)) + 64, 256)
+        var given = false
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
+            var error: NSError?
+            let status = active.convert(to: out, error: &error) { _, state in
+                if given { state.pointee = .noDataNow; return nil }
+                given = true; state.pointee = .haveData; return buffer
+            }
+            if status == .error || error != nil {
+                converter = nil
+                return nil
+            }
+            if out.frameLength > 0 { chunks.append(out) }
+            switch status {
+            case .haveData:
+                if out.frameLength == 0 && given { return chunks }
+            case .inputRanDry:
+                return chunks
+            case .endOfStream:
+                converter = nil
+                return chunks
+            case .error:
+                converter = nil
+                return nil
+            @unknown default:
+                return chunks
+            }
+        }
+    }
+
+    private func drainConverter(_ active: AVAudioConverter, into chunks: inout [AVAudioPCMBuffer]) {
+        let capacity: AVAudioFrameCount = 1024
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var error: NSError?
+            let status = active.convert(to: out, error: &error) { _, state in
+                state.pointee = .endOfStream
+                return nil
+            }
+            if status == .error || error != nil { return }
+            if out.frameLength > 0 { chunks.append(out) }
+            if status != .haveData || out.frameLength == 0 { return }
+        }
     }
 
     private func sample(_ buffer: AVAudioPCMBuffer) -> CMSampleBuffer? {
@@ -549,13 +623,14 @@ final class Writer {
     }
 
     /// Re-encode only a failed take, with bounded memory. Preserve the original
-    /// and PCM if recovery fails; replace the playable path only after closing AAC.
+    /// and PCM if recovery fails; replace the playable path only after closing the re-encoded file.
     func recover() throws {
         if let backupFailure { throw CaptureFailure(backupFailure) }
         guard let backupURL else { throw CaptureFailure("no recovery audio") }
         backup = nil
         let source = try AVAudioFile(forReading: backupURL, commonFormat: format.commonFormat, interleaved: format.isInterleaved)
-        let rebuilt = url.deletingPathExtension().appendingPathExtension("recovered.m4a")
+        let ext = (encoding[AVFormatIDKey] as? AudioFormatID) == kAudioFormatOpus ? "recovered.mp4" : "recovered.m4a"
+        let rebuilt = url.deletingPathExtension().appendingPathExtension(ext)
         defer { try? FileManager.default.removeItem(at: rebuilt) }
         var output: AVAudioFile? = try AVAudioFile(forWriting: rebuilt, settings: encoding,
                                                   commonFormat: format.commonFormat, interleaved: format.isInterleaved)

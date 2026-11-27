@@ -319,12 +319,17 @@ pub(crate) fn marks(
     branch: TokenBranch,
 ) -> Vec<Pin> {
     let mut pins = Vec::new();
-    // Each token by its name, then by its name in any ASCII case: the first
-    // so named, read once for all the operations.
-    let (mut exact, mut folded) = (HashMap::new(), HashMap::new());
-    for (k, t) in cur.design.tokens.iter().enumerate().take(cur.tokens.len()) {
+    // Each token by its declared spelling and any spelling of its role,
+    // matching `edit::token_index`.
+    let (mut exact, mut by_role) = (HashMap::new(), HashMap::new());
+    for (k, (t, checked)) in cur.design.tokens.iter().zip(&cur.tokens).enumerate() {
         exact.entry(t.name.value.as_str()).or_insert(k);
-        folded.entry(t.name.value.to_ascii_lowercase()).or_insert(k);
+        if let Some(role) = &checked.role {
+            by_role
+                .entry(checked.name.to_ascii_lowercase())
+                .or_insert(k);
+            by_role.entry(role.to_ascii_lowercase()).or_insert(k);
+        }
     }
     for op in ops {
         let Op::SetToken {
@@ -335,7 +340,7 @@ pub(crate) fn marks(
         };
         let Some(k) = exact
             .get(name.as_str())
-            .or_else(|| folded.get(&name.to_ascii_lowercase()))
+            .or_else(|| by_role.get(&name.to_ascii_lowercase()))
         else {
             continue;
         };

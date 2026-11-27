@@ -120,18 +120,23 @@ pub(crate) fn quote_prefix(line: &str) -> (u8, Vec<B>, usize) {
     }
 }
 
-/// `#` to `######` and the spaces after, as (level, marker length).
+/// `#` to `######` and the spaces after, as (level, marker length). CommonMark
+/// 0.31.2 §4.2: up to three spaces of indent come first, inside the marker.
 pub(crate) fn heading(s: &str) -> Option<(u8, usize)> {
-    let level = s.bytes().take_while(|&c| c == b'#').count();
+    let indent = s.bytes().take(4).take_while(|&c| c == b' ').count();
+    if indent > 3 {
+        return None;
+    }
+    let level = s[indent..].bytes().take_while(|&c| c == b'#').count();
     if !(1..=6).contains(&level) {
         return None;
     }
-    let rest = &s[level..];
+    let rest = &s[indent + level..];
     if rest.is_empty() {
-        return Some((level as u8, level));
+        return Some((level as u8, indent + level));
     }
     let spaces = rest.bytes().take_while(|&c| c == b' ').count();
-    (spaces > 0).then_some((level as u8, level + spaces))
+    (spaces > 0).then_some((level as u8, indent + level + spaces))
 }
 
 fn rule(s: &str) -> bool {
@@ -140,7 +145,7 @@ fn rule(s: &str) -> bool {
         return false;
     };
     matches!(first, '-' | '*' | '_')
-        && t.chars().all(|c| c == first || c == ' ')
+        && t.chars().all(|c| c == first || matches!(c, ' ' | '\t'))
         && t.chars().filter(|&c| c == first).count() >= 3
 }
 
@@ -166,10 +171,22 @@ pub(crate) fn list_marker(s: &str) -> Option<ListMarker> {
         i += 1;
     }
     let symbol = start..i;
-    if i < b.len() && b[i] != b' ' {
+    if i < b.len() && !matches!(b[i], b' ' | b'\t') {
         return None;
     }
-    let content = (i + 1).min(b.len());
+    // CommonMark 0.31.2 §5.2: 1 to 4 columns, tab stops every 4, are the
+    // marker's; more is indented code, which leaves the marker one.
+    let advance = |column: usize, c: u8| match c {
+        b'\t' => (column / 4 + 1) * 4,
+        _ => column + 1,
+    };
+    let after = b[..i].iter().fold(0, |column, &c| advance(column, c));
+    let (mut end, mut column) = (i, after);
+    while end < b.len() && matches!(b[end], b' ' | b'\t') {
+        column = advance(column, b[end]);
+        end += 1;
+    }
+    let content = if column - after > 4 { i + 1 } else { end };
     let mut marker = ListMarker {
         columns,
         symbol,
@@ -185,7 +202,7 @@ pub(crate) fn list_marker(s: &str) -> Option<ListMarker> {
     {
         let mark = rest.as_bytes()[1];
         let after = rest.as_bytes().get(3);
-        if matches!(mark, b' ' | b'x' | b'X') && matches!(after, None | Some(b' ')) {
+        if matches!(mark, b' ' | b'x' | b'X') && matches!(after, None | Some(b' ' | b'\t')) {
             marker.task = Some((content..content + 3, mark != b' '));
             marker.content = (content + 4).min(b.len());
         }

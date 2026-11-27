@@ -146,6 +146,8 @@ impl Wgpu {
 
     pub fn present(&mut self, texture: TextureId) -> Result<f64> {
         let started = Instant::now();
+        // The frame's passes reach the render thread before its presentation.
+        self.flush()?;
         failure(&self.errors)?;
         let source = self.texture(texture)?;
         let view = source.view.clone();
@@ -160,6 +162,7 @@ impl Wgpu {
         let benchmark = crate::device::apple::benchmark_scene();
         let transaction = window._layer.live_resize();
         self.submitted.0 += 1;
+        self.flushed = self.submitted;
         let submission = self.submitted;
         let work = move |show| {
             let mut renderer = renderer.lock().unwrap();

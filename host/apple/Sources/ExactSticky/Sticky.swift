@@ -86,6 +86,10 @@ final class StickyHost: StickyHosting {
         byScroller[old.scroller]?.remove(id)
         if byScroller[old.scroller]?.isEmpty == true { byScroller[old.scroller] = nil }
     }
+    func reset() {
+        boxes.removeAll()
+        byScroller.removeAll()
+    }
     /// A scroller moved; `nil` is the page, which scrolls every sticky box
     /// whose scroller is a root that does not scroll itself.
     func scrolled(_ scroller: UInt32?) {

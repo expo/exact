@@ -7,12 +7,13 @@
   const maxStops = MAX_LINEAR_STOPS;
   const trim = s => s.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
   const number = s => /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![\s\S])/.test(s) ? Number(s) : NaN;
+  // A space separator stands for any CSS white space, as motion's split_top_level reads it.
   const split = (s, sep) => {
     const out = []; let depth = 0, start = 0;
     for (let i = 0; i < s.length; i++) {
       if (s[i] === "(") depth++;
       else if (s[i] === ")") depth--;
-      else if (s[i] === sep && depth === 0) { out.push(s.slice(start, i)); start = i + 1; }
+      else if (depth === 0 && (s[i] === sep || sep === " " && "\t\n\r\f".includes(s[i]))) { out.push(s.slice(start, i)); start = i + 1; }
     }
     out.push(s.slice(start)); return out;
   };

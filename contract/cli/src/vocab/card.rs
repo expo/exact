@@ -279,7 +279,7 @@ pub fn card() -> String {
     }
     out += &format!("\nrules\n{}\n", section("rules"));
     out += &format!(
-        "idioms with code (vocab <name>): {}\n",
+        "idioms with code: {}\n",
         super::concepts::concepts()
             .iter()
             .map(|c| c.name)

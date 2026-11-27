@@ -17,7 +17,9 @@ internal class PaintedOrigins {
     /** A full stream is being ingested. Its placements become visible together when the reader replays its root. */
     var publishing = false
     @Volatile var tracksFrames = false
-    val frameClips get() = tracksFrames || planHasFrames
+    @Volatile var hasHostedViews = false
+    @Volatile var tracksFields = false
+    val frameClips get() = tracksFrames || planHasFrames || hasHostedViews || tracksFields
     @Volatile var version = 0L
         private set
     private var topology = 0L

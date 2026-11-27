@@ -5,6 +5,40 @@ import QuartzCore
 @testable import ExactKit
 
 final class FrameHealthMacTests: XCTestCase {
+    func testClearKeepsPauseAndTheRequestedRateAndDiscardsRetainedHitches() throws {
+        _ = NSApplication.shared
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlayMac(health: health)
+        overlay.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+        overlay.setVisible(true)
+        overlay.layoutSubtreeIfNeeded()
+        health.requestedRate(120)
+        let start = CACurrentMediaTime()
+        health.record(arrival: start, target: start + 0.001, period: 1 / 120, finished: start + 0.010)
+        XCTAssertGreaterThan(health.historyStatus().retained, 0)
+        overlay.card.activate?(.status)
+        overlay.card.activate?(.details)
+        let elements = overlay.card.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement } ?? []
+        let clear = try XCTUnwrap(elements.first { $0.accessibilityLabel() == "Clear frame health" })
+        let generation = health.snapshot().generation
+        XCTAssertTrue(clear.accessibilityPerformPress())
+        XCTAssertGreaterThan(health.snapshot().generation, generation)
+        XCTAssertEqual(health.snapshot().callbacks, 0)
+        XCTAssertEqual(health.historyStatus().retained, 0)
+        XCTAssertEqual(health.requestedHertz, 120)
+        XCTAssertEqual(health.requestedPeriodNs, 8_333_333)
+        XCTAssertEqual(overlay.card.state.status, .paused)
+        XCTAssertEqual(overlay.card.state.rows[0].1, "—")
+        XCTAssertTrue(overlay.card.state.showsDetails)
+        XCTAssertTrue(overlay.card.chart.held)
+        overlay.card.activate?(.status)
+        XCTAssertFalse(overlay.card.chart.held)
+        XCTAssertTrue(clear.accessibilityPerformPress())
+        XCTAssertNotEqual(overlay.card.state.status, .paused)
+        overlay.setVisible(false)
+    }
+
     func testPlatformTrackpadReplayIsRefusedBeforeInputOrClockChanges() throws {
         guard !ExactEnv.agentFreezes else { throw XCTSkip("platform-timing input regression") }
         _ = NSApplication.shared
@@ -72,6 +106,38 @@ final class FrameHealthMacTests: XCTestCase {
         XCTAssertEqual(overlay.card.frame.minX, 8 + (overlay.bounds.width - 16 - overlay.card.frame.width) * 0.37, accuracy: 0.001)
         XCTAssertEqual(overlay.card.frame.maxY, overlay.bounds.maxY - 8, accuracy: 0.001)
         overlay.setVisible(false)
+    }
+
+    /// Share gives one text, the summary and then the agent report, and its picker offers Copy first: AppKit's picker
+    /// offers no Copy for text
+    func testShareGivesTheSummaryThenTheAgentReportAndOffersCopy() throws {
+        _ = NSApplication.shared
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlayMac(health: health)
+        var shared: String?
+        overlay.shareText { shared = $0 }
+        waitFor("the report is encoded") { shared != nil }
+        let text = try XCTUnwrap(shared)
+        XCTAssertTrue(text.hasPrefix("# Frame health, idle\n\nA summary of how smoothly this app is drawing, followed by detailed data for an AI agent.\n\n"
+            + "## What was measured\n\n- Frames: the frames Exact drew\n"), "the card's status, then the summary: \(text)")
+        let parts = text.components(separatedBy: "\n\n### Exact's frames (`\(health.source)`)\n\n")
+        XCTAssertEqual(parts.count, 2, text)
+        XCTAssertTrue(parts[0].hasSuffix("\n\n## Data for an AI agent\n\nThere is one report, because on the Mac and on iOS before 18 "
+            + "the card can't measure all screen updates. The JSON format is described in Exact's docs/contract-for-agents.md "
+            + "(search for exact.frame-health/2)."), text)
+        let json = try XCTUnwrap(parts[1].components(separatedBy: "```json\n").last?.components(separatedBy: "\n```").first)
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(report["format"] as? String, FrameHealthReport.format)
+        XCTAssertEqual(report["source"] as? String, health.source)
+        let pasteboard = NSPasteboard(name: .init("exact-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        overlay.pasteboard = pasteboard
+        let copy = try XCTUnwrap(overlay.sharingServicePicker(NSSharingServicePicker(items: [text]), sharingServicesForItems: [text],
+            proposedSharingServices: []).first)
+        XCTAssertEqual(copy.title, "Copy")
+        copy.perform(withItems: [text])
+        waitFor("Copy writes the text") { pasteboard.string(forType: .string) == text }
     }
 
     func testDesktopCardUsesHostSlotTakesClicksWithinItsBoundsAndClampsWithoutResizingTheApp() throws {

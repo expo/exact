@@ -1,5 +1,6 @@
 //! @ref LLP 1038 D6 — the browser's route visibility rule, without a view mirror.
 use exact_kernel::invocation::Action;
+use exact_kernel::props::Presentation;
 use exact_kernel::{Kernel, NodeRef, PropId, StyleId, ViewId};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,11 +65,12 @@ pub enum Presented {
 
 impl Presented {
     pub(crate) fn of(node: &NodeRef<'_>) -> Self {
-        match node.props.str(PropId::NavigationPresentation) {
-            Some("modal") => Self::Sheet,
-            Some("fullscreen") if over_page(node) => Self::Over,
-            Some("fullscreen") => Self::Full,
-            _ => Self::Pushed,
+        // A popover is a sheet here: the painted hosts have no popovers (LLP 1123 D7)
+        match node.props.presentation() {
+            Some(Presentation::Sheet | Presentation::Popover) => Self::Sheet,
+            Some(Presentation::FullScreen) if over_page(node) => Self::Over,
+            Some(Presentation::FullScreen) => Self::Full,
+            None => Self::Pushed,
         }
     }
 
@@ -80,13 +82,13 @@ impl Presented {
 /// A full-screen route's authored background composites over the page,
 /// including while its colour animates toward transparent (Charlie, 2026-11-10).
 pub(crate) fn over_page(node: &NodeRef<'_>) -> bool {
-    match node.props.str(PropId::NavigationPresentation) {
-        Some("modal") => true,
-        Some("fullscreen") => {
+    match node.props.presentation() {
+        Some(Presentation::Sheet | Presentation::Popover) => true,
+        Some(Presentation::FullScreen) => {
             node.style.written.has(StyleId::BackgroundColor)
                 || node.style.written.has(StyleId::BackgroundImage)
         }
-        _ => false,
+        None => false,
     }
 }
 
@@ -207,6 +209,10 @@ pub struct RouteBar {
     pub pushed: bool,
     /// Its header as the bar shows it.
     pub shape: exact_kernel::HeaderShape<ViewId>,
+    /// The header's plain-text supporting subtitle node, if any (LLP 1115.001 D11).
+    pub subtitle: Option<ViewId>,
+    /// True when projected inside a modal sheet route (LLP 1156.008.001 B5).
+    pub sheet: bool,
 }
 
 /// The structure a shell's bars are made from (LLP 1115.001 D11), read
@@ -219,6 +225,12 @@ pub struct Projection {
     /// under a sheet's foot, in points. `None`: no
     /// shell has bars, and nothing is projected.
     pub(crate) room: Option<(f32, f32, f32)>,
+    /// Top bar room for a route whose header carries a supporting subtitle
+    /// (equals `room.0` at normal font scales, grows at large text scales).
+    pub(crate) subtitled_above: f32,
+    /// Top bar content heights `(plain, subtitled)` without status bar padding,
+    /// used for projected modal sheet headers (LLP 1156.008.001 B5).
+    pub(crate) sheet_above: (f32, f32),
     /// The navigation root.
     pub root: Option<ViewId>,
     /// Its routes whose header is a bar, in every stack.
@@ -232,6 +244,10 @@ pub struct Projection {
     /// Each barred or sheeted route's local insets (LLP 1123 D9), top right
     /// bottom left, as the kernel was last told.
     pub(crate) locals: BTreeMap<ViewId, [f32; 4]>,
+    /// Each route's band as the bars and its sheet give it (LLP 1123 D2),
+    /// top right bottom left, barred or not: the room its local insets
+    /// carry, or the window's insets where it has no bar.
+    pub(crate) bands: BTreeMap<ViewId, [f32; 4]>,
 }
 
 impl Navigation {

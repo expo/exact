@@ -1,6 +1,6 @@
 // The conformance fixture the vision and translation packages share (LLP
 // 1133.001 D7, LLP 1133.027 §9): an app `exact new` made outside the repo,
-// its files replaced by `fixture/`'s, depending by `file:` on the three
+// its files replaced by `fixture/`'s, depending by `file:` on the vision and translation
 // packages and on @exact/media-capture and @exact/camera, whose viewfinder
 // a live scan rides on, and installed.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,20 +32,28 @@ export const run = (cmd, args, cwd, env = process.env) => {
 const kept = process.env.EXACT_VISION_FIXTURE;
 
 /** The fixture app's directory and its bundle id. `dependencies` replace or add the app's packages by spec. */
-export function makeFixture({ dependencies = {} } = {}) {
+export function makeFixture({ dependencies = {}, android = false } = {}) {
   const app = kept && existsSync(join(kept, 'app.json')) ? resolve(kept) : join(mkdtempSync(join(tmpdir(), 'exact-vision-')), 'visionfixture');
-  if (app !== resolve(kept ?? '')) run('bun', [resolve(root, 'scripts/exact.mjs'), 'new', app, '--with', 'ios,mac'], root);
+  if (app !== resolve(kept ?? '')) run('bun', [resolve(root, 'scripts/exact.mjs'), 'new', app, '--with', android ? 'ios,mac,android' : 'ios,mac'], root);
   else rmSync(join(app, 'node_modules/@exact'), { recursive: true, force: true });
-  for (const f of ['app.contract', 'app.ts', 'strings']) cpSync(join(here, 'fixture', f), join(app, f), { recursive: true });
+  const files = ['app.contract', 'app.ts', 'strings'];
+  if (android) files.push('gradle.lockfile', 'gradle-verification.xml');
+  for (const f of files) cpSync(join(here, 'fixture', f), join(app, f), { recursive: true });
   rmSync(join(app, 'app.test.contract'), { force: true });
   // The camera's agent picture is an app asset (§9): the fixtures, as `assets/test/<file>`.
   mkdirSync(join(app, 'assets/test'), { recursive: true });
-  for (const path of Object.values(images)) cpSync(path, join(app, 'assets/test', basename(path)));
+  for (const path of Object.values(images)) {
+    const asset = join(app, 'assets/test', basename(path));
+    // A kept Android bake records the identities of the files in this directory.
+    if (!existsSync(asset) || !readFileSync(path).equals(readFileSync(asset))) cpSync(path, asset);
+  }
   const id = JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')).app.id;
-  writeFileSync(join(app, 'app.ts'), readFileSync(join(app, 'app.ts'), 'utf8').replace('__APP_ID__', id));  const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
+  writeFileSync(join(app, 'app.ts'), readFileSync(join(app, 'app.ts'), 'utf8').replace('__APP_ID__', id));
+  const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
   const local = n => `file:${resolve(root, 'packages', n)}`;
   manifest.dependencies = {
     ...manifest.dependencies, '@exact/media-capture': local('media-capture'), '@exact/camera': local('camera'),
+    '@exact/face-detection': local('face-detection'),
     '@exact/barcode-detection': local('barcode-detection'), '@exact/text-detection': local('text-detection'), '@exact/translation': local('translation'),
     ...dependencies,
   };

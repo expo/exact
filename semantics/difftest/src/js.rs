@@ -518,6 +518,7 @@ pub fn report(
     lean: Option<&[bool]>,
     shrinking: bool,
     verbose_outside: bool,
+    strict_refusals: bool,
 ) -> Result<bool, String> {
     let (mut agree, mut diverge, mut outside, mut refused, mut errors) = (0, 0, 0, 0, 0);
     let dir = crate::work_dir().join("failures");
@@ -525,7 +526,12 @@ pub fn report(
     for (i, (case, v)) in cases.iter().zip(verdicts).enumerate() {
         match v {
             JsVerdict::Agree { .. } => agree += 1,
-            JsVerdict::Refused(_) => refused += 1,
+            JsVerdict::Refused(e) => {
+                refused += 1;
+                if strict_refusals {
+                    println!("REFUSED {}: {e}", case.name);
+                }
+            }
             JsVerdict::Outside(why) => {
                 outside += 1;
                 if verbose_outside {
@@ -596,12 +602,54 @@ pub fn report(
         "difftest js: {} cases: {agree} agree, {diverge} diverge, {outside} outside the JS target, {refused} refused by the compiler, {errors} driver errors",
         cases.len()
     );
-    Ok(diverge == 0 && errors == 0)
+    Ok(diverge == 0 && errors == 0 && (!strict_refusals || refused == 0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_refusals_fail_js_report_while_non_strict_allows_them() {
+        let case = Case {
+            name: "corpus/broken.contract:test".into(),
+            seed: None,
+            path: None,
+            source: String::new(),
+            events: Vec::new(),
+            answers: Vec::new(),
+            stored: false,
+            launch: Default::default(),
+            prerendered: false,
+        };
+        let verdicts = [JsVerdict::Refused("syntax error".into())];
+        assert_eq!(
+            report(
+                Path::new("/unused"),
+                std::slice::from_ref(&case),
+                &verdicts,
+                None,
+                false,
+                true,
+                true,
+            )
+            .unwrap(),
+            false
+        );
+        assert_eq!(
+            report(
+                Path::new("/unused"),
+                std::slice::from_ref(&case),
+                &verdicts,
+                None,
+                false,
+                true,
+                false,
+            )
+            .unwrap(),
+            true
+        );
+    }
 
     #[test]
     fn agreeing_js_observations_are_retained_for_always_checks() {

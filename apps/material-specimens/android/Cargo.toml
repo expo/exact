@@ -20,6 +20,8 @@ bench = false
 
 [target.'cfg(target_os = "android")'.dependencies]
 hello-data = { path = "../../hello/data" }
+exact-plan = { path = "../../../plan" }
+exact-kernel = { path = "../../../kernel" }
 exact-painted = { path = "../../../host/painted" }
 
 [build-dependencies]

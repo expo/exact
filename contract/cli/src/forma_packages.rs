@@ -4,6 +4,7 @@
 //! of a package (or base scale) token is one op, `set-token`.
 
 use crate::forma_serve::digest;
+use contract::forma_levels::{Designs, PackageTokens};
 use contract::forma_params::AppParams;
 use contract_syntax::DesignSource;
 use exact_forma::Op;
@@ -349,107 +350,37 @@ fn in_package(dir: &std::path::Path, file: &std::path::Path) -> Result<Option<St
         .then(|| "node_modules".to_string()))
 }
 
-/// The package design that defines the token `name`, and its line for it;
-/// with `icons`, an icon of that name too (stage 13): what a row says of
-/// it, where a write's ops take tokens alone (no op writes an icon).
-fn owner<'a>(
-    app: &'a AppParams,
+/// Mark a package row with its package and the file supplying its value.
+pub(super) fn mark<'a>(
+    row: &mut Value,
+    designs: &'a Designs<'_>,
     name: &str,
-    icons: bool,
-) -> Option<(&'a DesignSource, exact_forma::Token)> {
-    app.packages.iter().find_map(|p| {
-        let design = exact_forma::parse(&p.text).ok()?;
-        let icons = design.icons.into_iter().filter(|_| icons);
-        let token = design
-            .tokens
-            .into_iter()
-            .chain(icons)
-            .find(|t| t.name.value == name)?;
-        Some((p, token))
-    })
+) -> Option<(&'a DesignSource, &'a exact_forma::Token)> {
+    let (source, token) = designs.package_token(name)?;
+    row["package"] = json!(source.package);
+    row["file"] = json!(if designs.defines(name) {
+        designs.file
+    } else {
+        &source.home
+    });
+    Some((source, token))
 }
 
-/// Whether the app's design text `design` defines `name`, a token or an
-/// icon.
-fn defines(design: &str, name: &str) -> bool {
-    exact_forma::parse(design).is_ok_and(|d| {
-        d.tokens
-            .iter()
-            .chain(&d.icons)
-            .any(|t| t.name.value == name)
-    })
-}
-
-/// What a package token's row says: its package, the file its value comes
-/// from (the app's design `file` when the app sets it, else the package's),
-/// and its identity, `<package>/<file>#<token>`. None for the app's own.
-pub(crate) fn about(app: &AppParams, design: &str, file: &str, name: &str) -> Option<Value> {
-    let (source, _) = owner(app, name, true)?;
-    let from = match defines(design, name) {
-        true => file.to_string(),
-        false => source.home.clone(),
-    };
-    Some(
-        json!({"package": source.package, "file": from, "identity": format!("{}#{name}", source.home)}),
-    )
-}
-
-/// `out` (a `resolve` or `explain` answer) with a package token's
-/// `package`, `file` and `identity`, and with `own` (explain) an app-set
-/// one's `package_value`, the package's own line. `file` is the design asked
-/// about, as `snap` has it.
-pub(crate) fn fields(
-    app: &AppParams,
-    snap: &[(String, String, String)],
-    file: &str,
-    name: &str,
-    out: &mut Value,
-    own: bool,
-) {
-    let text = snap
-        .iter()
-        .find(|(f, _, _)| f == file)
-        .map_or("", |(_, t, _)| t.as_str());
-    if let Some(about) = about(app, text, file, name) {
-        for k in ["package", "file", "identity"] {
-            out[k] = about[k].clone();
-        }
-    }
-    if let Some(line) = own.then(|| package_value(app, text, name)).flatten() {
-        out["package_value"] = line;
-    }
-}
-
-/// Each package token's row in `rows` (the IR's tokens, by `name`) given
-/// its package and file.
-pub(crate) fn mark(rows: &mut [Value], app: &AppParams, design: &str, file: &str) {
-    if app.packages.is_empty() {
+/// A resolved token's identity and, for an explained override, its original package value.
+pub(super) fn fields(designs: &Designs<'_>, name: &str, out: &mut Value, own: bool) {
+    let Some((source, token)) = mark(out, designs, name) else {
         return;
+    };
+    out["identity"] = json!(format!("{}#{name}", source.home));
+    if own && designs.defines(name) {
+        let whens: Vec<Value> = token
+            .whens
+            .iter()
+            .map(|w| json!({"when": w.conds.iter().map(|(a, v)| json!({"axis": a, "value": v})).collect::<Vec<_>>(), "value": w.value.value}))
+            .collect();
+        out["package_value"] =
+            json!({"value": token.value.value, "whens": whens, "file": source.home});
     }
-    for row in rows {
-        let Some(name) = row["name"].as_str().map(str::to_string) else {
-            continue;
-        };
-        if let Some(about) = about(app, design, file, &name) {
-            row["package"] = about["package"].clone();
-            row["file"] = about["file"].clone();
-        }
-    }
-}
-
-/// An app-set package token's own line in its package: its value, its
-/// `when` lines (which the app's override drops, whole) and its file.
-pub(crate) fn package_value(app: &AppParams, design: &str, name: &str) -> Option<Value> {
-    if !defines(design, name) {
-        return None;
-    }
-    let (source, token) = owner(app, name, true)?;
-    let whens: Vec<Value> = token
-        .whens
-        .iter()
-        .map(|w| json!({"when": w.conds.iter().map(|(a, v)| json!({"axis": a, "value": v})).collect::<Vec<_>>(), "value": w.value.value}))
-        .collect();
-    Some(json!({"value": token.value.value, "whens": whens, "file": source.home}))
 }
 
 /// The ops as the app's design takes them (theme2's ruling 17:09): an op on
@@ -473,7 +404,8 @@ pub(crate) fn ops(
 ) -> Result<(), Value> {
     let refuse = |m: String| Err(json!({"message": m}));
     let base = |name: &str| contract_lower::BASE_SCALE.contains(&name);
-    let theirs = |name: &str| owner(app, name, false).is_some() || base(name);
+    let packages = std::cell::LazyCell::new(|| PackageTokens::new(&app.packages));
+    let theirs = |name: &str| base(name) || packages.package_line(name, false).is_some();
     let namespace = |name: &str| {
         app.packages.iter().find(|p| {
             let ns = p
@@ -511,7 +443,9 @@ pub(crate) fn ops(
                 }
                 defined.insert(name.clone());
                 // The package's written kind (a shadow's must be written), its `when`s not.
-                let kind = owner(app, name, false).and_then(|(_, t)| t.kind);
+                let kind = packages
+                    .package_line(name, false)
+                    .and_then(|(_, t)| t.kind.clone());
                 *op = Op::AddToken {
                     name: name.clone(),
                     kind,

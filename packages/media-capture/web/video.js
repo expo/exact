@@ -140,7 +140,7 @@ export function video({ changed, agent, log, tracks, nextId, media, shown, now =
   }
   function end(t, why) {
     if (t.readyState === 'ended') return;
-    t.readyState = 'ended'; t.active = false;
+    t.readyState = 'ended'; t.active = false; t.lease = (t.lease ?? 0) + 1;
     stopSource(t);
     say(`${t.id}: ended (${why})`);
     each(t, c => c.ended?.());
@@ -255,16 +255,20 @@ export function video({ changed, agent, log, tracks, nextId, media, shown, now =
           Object.assign(t, agentCamera(facing));
         } else {
           // Opened even while idle, so the answer and the next lease name the camera moved to; idle, it closes again.
-          // An activation's open already in flight asked for the camera moved from: a new lease drops it.
-          t.lease = (t.lease ?? 0) + 1;
+          // Each move owns a lease so a superseded open or rejection leaves a newer move or activation untouched.
+          const lease = t.lease = (t.lease ?? 0) + 1;
           stopSource(t);
-          t.settings = { ...t.settings, deviceId: null };
+          t.settings = { ...t.settings, deviceId: null, facingMode: null };
           let source;
           try { source = (await media.getUserMedia({ video: next })).getVideoTracks()[0]; }
-          catch (e) { say(`${t.id}: could not move: ${failure(e).error}`); end(t, failure(e).error); return failure(e); }
-          // A lease taken while it opened may have opened the camera too; this open replaces that one.
+          catch (e) {
+            say(`${t.id}: could not move: ${failure(e).error}`);
+            if (t.lease !== lease) return failure(e);
+            end(t, failure(e).error);
+            return failure(e);
+          }
+          if (t.lease !== lease || t.readyState === 'ended') { source.stop(); return shape(t); }
           stopSource(t);
-          if (t.readyState === 'ended') { source.stop(); return shape(t); }
           adopt(t, source);
           if (!t.active) stopSource(t);
         }

@@ -49,9 +49,9 @@ final class NavigationBasicsIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+    func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+    func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
         let deadline = Date().addingTimeInterval(seconds)
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(done(), what)
@@ -59,7 +59,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
 
     /// A session over the native fixture's plan, or over the one `plan`
     /// names: `EXACT_NAVIGATION_BARS_PLAN` is `scripts/fixtures/navigation-bars.contract`.
-    private func fixture(_ label: String, plan: String = "EXACT_FIXTURE_PLAN", launch: String? = nil) throws -> ExactSession {
+    func fixture(_ label: String, plan: String = "EXACT_FIXTURE_PLAN", launch: String? = nil) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[plan], "build.mjs --test --ios compiles the fixtures' plans")))
         ExactGroupedLists.install() // navigation-bars.contract's `rows` route is a grouped list
@@ -85,13 +85,13 @@ final class NavigationBasicsIOSTests: XCTestCase {
         return session
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 
     private func journal(_ session: ExactSession) -> String { session.agent(#"{"op":"logs","since":0}"#) }
 
-    private func text(_ session: ExactSession, _ testId: String) -> String? {
+    func text(_ session: ExactSession, _ testId: String) -> String? {
         (try? node(session, testId))?.accessibleText
     }
 
@@ -380,7 +380,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
     }
 
     /// Home's stack with Chat pushed on it.
-    private func chat(_ session: ExactSession) throws -> (UITabBarController, UINavigationController, RouteController) {
+    func chat(_ session: ExactSession) throws -> (UITabBarController, UINavigationController, RouteController) {
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         try tapNode(session, "chat")
@@ -525,7 +525,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertNil(item.action, "nothing presses a readout")
         if #available(iOS 26.0, *) { XCTAssertTrue(item.hidesSharedBackground, "nothing in it presses: no glass") }
         until("laid out in its block") { readout.frame.width > 7 + 6 && words.frame.width > 0 }
-        XCTAssertEqual(view.intrinsicContentSize.width, readout.frame.maxX, accuracy: 0.5, "the item is the element's size")
+        until("the item is the element's size") { abs(view.bounds.width - readout.frame.maxX) < 0.5 }
         XCTAssertEqual(readout.accessibilityLabel, "0 composed", "its `aria-label`")
         // What it leaves unsaid is the bar's: a plain bar item title's size and weight (D3); what it writes wins.
         let unsaid = try node(session, "readout-unsaid"), bar = FieldChromeCache.barItemFont(plain.traitCollection)
@@ -887,6 +887,11 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let scroller = box(sheet, y: 60, height: 506, overflow: "y")
         XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller, "the component's scroller reaches the edge")
         XCTAssertNil(NavigationHost.bottomScroller(in: route), "not with the cover unsaid: it ends 34 above the content box")
+        sheet.frame.size.height = 576
+        scroller.frame.size.height = 516
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a 24-point gap is neither the edge nor the 34-point bar")
+        sheet.frame.size.height = 566
+        scroller.frame.size.height = 506
         sheet.applyKernelContentBox(CGRect(x: 0, y: 0, width: 400, height: 546), padding: [0, 0, 20, 0])
         XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a padding under it keeps the cover")
         sheet.applyKernelContentBox(nil, padding: nil)
@@ -1369,6 +1374,10 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         let settled = { nav.transitionCoordinator == nil }
+        // The bar's hidden state, which Exact keeps with UIKit's flag (iOS 18)
+        let kept = { (hidden: Bool, what: String) in
+            if #available(iOS 18.0, *) { XCTAssertEqual(tabs.isTabBarHidden, hidden, "the kept state: \(what)") }
+        }
         try tapNode(session, "detail")
         until("Detail pushed") { nav.viewControllers.count == 2 && settled() && barShows(tabs) }
         spin(0.3)
@@ -1384,6 +1393,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertTrue(barShows(tabs), "Second's root shows the bar, Home's late push notwithstanding")
         tapTab(tabs, 0)
         until("back on Chat over Detail, hidden") { tabs.selectedIndex == 0 && settled() && nav.viewControllers.count == 3 && !barShows(tabs) }
+        kept(true, "Chat")
         spin(0.3)
         // A cancelled interactive pop back to Detail keeps it hidden; a completed one shows it.
         let pop = InteractivePop()
@@ -1397,9 +1407,11 @@ final class NavigationBasicsIOSTests: XCTestCase {
         until("the cancelled pop leaves Chat, the bar hidden") { settled() && nav.viewControllers.count == 3 && !barShows(tabs) }
         spin(0.3)
         XCTAssertFalse(barShows(tabs), "still hidden over Chat")
+        kept(true, "Chat, the pop cancelled")
         pop.interactive = false
         nav.popViewController(animated: true)
         until("back on Detail, the bar shows") { settled() && nav.viewControllers.count == 2 && barShows(tabs) }
+        kept(false, "Detail")
         session.presenter.navigationHost.setAppDelegate(nav, nil)
         // A route that shows the tablist pushed over Chat, which hides it: hidden still, as Chat is under it.
         nav.popToRootViewController(animated: true)
@@ -1412,6 +1424,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         until("Detail over Chat") { settled() && nav.viewControllers.count == 3 }
         spin(0.4)
         XCTAssertFalse(barShows(tabs), "Chat under Detail keeps the bar hidden")
+        kept(true, "Detail over Chat")
         try tapNode(session, "compose-detail") // a batch: the stack at rest is followed again
         spin(0.4)
         XCTAssertFalse(barShows(tabs), "and after an ordinary update")
@@ -1453,7 +1466,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertFalse(nav.isNavigationBarHidden)
         XCTAssertEqual(chat.view.safeAreaInsets.top, top, accuracy: 0.5)
         XCTAssertEqual(sv.adjustedContentInset.top, inset, accuracy: 0.5)
-        XCTAssertEqual(list.scrollOrigin, list.scrollCollapsed, "an inline title has no collapse slack")
+        XCTAssertEqual(list.scrollOrigin, inset, accuracy: 0.5, "an inline title's inset is the one it has")
         list.pendingScrollTop = 100_000
         list.applyPendingScroll()
         spin(0.3)

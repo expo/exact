@@ -134,6 +134,11 @@ export function answer(name: string, args: any[]): any {
   }
 }, 240000);
 
+function stageAdmission(root, dir) {
+  writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
+  for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js', 'storage-environment.js', 'http-body.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
+}
+
 // What the JS target refuses of an upload (ts-fetch.js, ts-stream.js `uploadOf`), in Hermes's
 // words and order (js/src/binary.js; js/tests/it/upload.rs has Hermes's): `fetch` itself rejects
 // what it can tell alone, and the stream's opening ends the answer with the rest.
@@ -167,9 +172,8 @@ export function answer(name, args) { return fetch(...inits[args[0]]); }
   writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n');
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
   writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes={};\n');
-  writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
+  stageAdmission(root, dir);
   writeFileSync(resolve(dir, 'admission-data.js'), "import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(null);\n");
-  for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js', 'storage-environment.js', 'http-body.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
   for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   try {
     const ts = await import(pathToFileURL(resolve(dir, 'ts-data.js')).href), data = { q: [] };
@@ -234,32 +238,41 @@ test('an upload let go is cut off if it went out, and forgotten if it never did'
 
 test('an untraced async tool handler keeps its origin for fetches and nested module calls', async () => {
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-tool-origin-'));
-  const kept = ['fetch', 'location', 'exact', '__exact_module', '__exact_async_context', '__exact_ordinary'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
-  let sent = 0;
-  globalThis.fetch = async (url, init) => { sent++; return Object.defineProperty(new Response('sent'), 'url', { value: new Request(url, init).url }); };
-  globalThis.location = { hostname: 'public.example' };
-  writeFileSync(resolve(dir, 'source.js'), `import {fetch} from './ts-fetch.js';
+  const kept = ['fetch', 'location', 'exact', 'captureCanvas', '__exact_module', '__exact_async_context', '__exact_ordinary'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
+  try {
+    writeFileSync(resolve(dir, 'source.js'), `import {fetch} from './ts-fetch.js';
 const ask = () => fetch('https://127.0.0.1/').then(() => 'sent', e => e.message);
 export const tools = { async probe() { const before = await ask(); await Promise.resolve(); const after = await ask(); const module = await globalThis.__exact_module({extension:'fixture', source:'ask'}); return {before, after, module}; }, throws() { throw new Error('handler failed'); } };`);
-  writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(root, 'host/web-js/ts-data.js'), 'utf8').replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-  writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();');
-  writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
-  writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes={};');
-  writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
-  writeFileSync(resolve(dir, 'grant-admission.js'), `export {isCloudMetadata, isLocalNetwork, knownFolderPath, socketProtocols, trimGrant, grantWords} from ${JSON.stringify(pathToFileURL(resolve(root, 'host/web/grant-admission.js')).href)};
-export const admitsNetwork=()=>true, admitsSecret=()=>false, coversPath=()=>false, createGrantSet=x=>x, grantError=()=>null, hasGrant=()=>false, rawGrantText=()=>'', scopedGrantSet=x=>x, unionGrantSets=x=>x, sameGrantDeclaration=()=>true;`);
-  writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet={};');
-  for (const name of ['address-space.js', 'faults.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
-  for (const name of ['ts-fetch.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
-  cpSync(resolve(dir, 'admission.js'), resolve(dir, 'landing.js'));
-  try {
+    writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(root, 'host/web-js/ts-data.js'), 'utf8').replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
+    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();');
+    writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
+    writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes={};');
+    stageAdmission(root, dir);
+    // The compiler's normalized net.fetch grants for this fixture's two destinations.
+    const grants = { version: 1, error: null, keepsNoAnswers: false, seal: '38c94661bb456606', entries: [
+      [1, 'net.fetch https://public.example', ['fetch', 'https', 'public.example', 443], null],
+      [2, 'net.fetch https://127.0.0.1', ['fetch', 'https', '127.0.0.1', 443], null],
+    ] };
+    writeFileSync(resolve(dir, 'admission-data.js'), `import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(${JSON.stringify(grants)});`);
+    for (const name of ['ts-fetch.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
+    cpSync(resolve(dir, 'admission.js'), resolve(dir, 'landing.js'));
+    let sent = 0;
+    globalThis.fetch = async (url, init) => { sent++; return Object.defineProperty(new Response('sent'), 'url', { value: new Request(url, init).url }); };
+    globalThis.location = new URL('https://reader.example/');
+    globalThis.exact = {};
     const ts = await import(pathToFileURL(resolve(dir, 'ts-data.js')).href), tsf = await import(pathToFileURL(resolve(dir, 'ts-fetch.js')).href), data = { q: [] };
+    const { tsGrantSet } = await import(pathToFileURL(resolve(dir, 'admission-data.js')).href);
     ts.install(data);
-    globalThis.exact.extensions = { call: async body => ({ origin: body.origin, synchronousOrigin: tsf.answering.call?.origin,
-      fetch: await tsf.fetch('https://127.0.0.1/').then(() => 'sent', e => e.message) }) };
+    const { Origin } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
+    Origin.callData = async (body, _wanted, _input, grants) => {
+      expect(grants).toBe(tsGrantSet);
+      return { origin: body.origin, synchronousOrigin: tsf.answering.call?.origin,
+        fetch: await tsf.fetch('https://127.0.0.1/').then(() => 'sent', e => e.message) };
+    };
     const result = await data.tool('probe', {}, new Map(), 'tool');
     expect(result).toEqual({ before: 'NotAllowedError: person-required', after: 'NotAllowedError: person-required',
       module: { origin: 'tool', synchronousOrigin: 'tool', fetch: 'NotAllowedError: person-required' } });
+    await expect(tsf.fetch('https://unlisted.example/')).rejects.toMatchObject({ kind: 'Refused', message: "outside the app's grants (net.fetch)" });
     expect(sent).toBe(0); expect(tsf.answering.untraced.size).toBe(0);
     expect(() => data.tool('throws', {}, new Map(), 'tool')).toThrow('handler failed');
     expect(tsf.answering.untraced.size).toBe(0);
@@ -267,15 +280,13 @@ export const admitsNetwork=()=>true, admitsSecret=()=>false, coversPath=()=>fals
     const spaces = await import(pathToFileURL(resolve(dir, 'address-space.js')).href);
     // Even a fetch implementation that returns a landing URL must pass the destination gate before its body reader runs.
     let read = false, redirect;
-    const native = globalThis.fetch;
     globalThis.fetch = async (url, init) => { redirect = new Request(url, init).redirect; return Object.defineProperty(new Response('private'), 'url', { value: 'https://127.0.0.1/' }); };
     const checked = await import(pathToFileURL(resolve(dir, 'landing.js')).href);
-    await expect(checked.fetchWith({}, 'https://public.example/', {}, null, undefined, () => { read = true; }, 'tool')).rejects.toMatchObject({ kind: 'Refused', message: 'NotAllowedError: person-required' });
+    await expect(checked.fetchWith(tsGrantSet, 'https://public.example/', {}, null, undefined, () => { read = true; }, 'tool')).rejects.toMatchObject({ kind: 'Refused', message: 'NotAllowedError: person-required' });
     expect(read).toBe(false); expect(redirect).toBe('error');
     spaces.setSpaceState('local', 'granted'); spaces.setSpaceState('loopback', 'granted');
-    await checked.fetchWith({}, 'https://public.example/', {}, null, undefined, () => { read = true; }, 'tool');
+    await checked.fetchWith(tsGrantSet, 'https://public.example/', {}, null, undefined, () => { read = true; }, 'tool');
     expect(read).toBe(true); expect(redirect).toBe('follow');
-    globalThis.fetch = native;
   } finally {
     for (const [key, descriptor] of kept) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key];
     rmSync(dir, { recursive: true, force: true });

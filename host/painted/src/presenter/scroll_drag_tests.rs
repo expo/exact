@@ -413,3 +413,72 @@ fn agent_reader_scroll_preserves_pan_ownership_and_nested_containment() {
     .unwrap();
     assert!((p.scroll[&outer].0 - 40.).abs() < 0.01);
 }
+
+#[test]
+fn agent_drags_text_in_its_enclosing_scroller_or_the_page() {
+    for container in ["scroll height=300", "column"] {
+        let mut p = boot(&format!(
+            "component App\n  view\n    {container} testId=\"body\"\n      text \"Intro\" testId=\"intro\"\n      column height=2000\n        text \"End\"\n"
+        ));
+        let intro = id(&p, "intro");
+        let before = p.rect_of(intro).unwrap().1;
+        let t = p.host.now();
+        let reply: serde_json::Value = serde_json::from_str(&p.agent_scroll_drag(
+            &serde_json::json!({"id": intro, "scrollDrag": [0, -170], "from": [30, 40], "ms": 400, "hold": 200})
+        ).unwrap()).unwrap();
+        assert_eq!(reply["tapped"], intro);
+        assert!((reply["scrolledBy"][1].as_f64().unwrap() - 170.).abs() < 0.01);
+        assert_eq!(p.host.now(), t + 600.);
+        p.frame();
+        assert!(p.rect_of(intro).unwrap().1 < before);
+    }
+}
+
+#[test]
+fn content_drags_leave_taps_alone_and_take_the_axis_its_scroller_accepts() {
+    let source = LIST.replace(
+        "box width=400 height=1000",
+        "box width=400 height=1000 testId=\"body\"",
+    );
+    let mut p = boot(&source);
+    let body = id(&p, "body");
+    let probe = |p: &mut Presenter<()>, delta| {
+        let reply = p
+            .agent_scroll_drag(&serde_json::json!({
+                "id": body, "from": [100, 100], "scrollDrag": delta, "ms": 200, "probe": true
+            }))
+            .unwrap();
+        serde_json::from_str::<serde_json::Value>(&reply).unwrap()["scrollDrag"].clone()
+    };
+    assert_eq!(probe(&mut p, [0, -1]), "presenter");
+    assert_eq!(probe(&mut p, [80, -50]), "reader");
+    p.agent_scroll_drag(&serde_json::json!({
+        "id": body, "from": [100, 100], "scrollDrag": [80, -50], "ms": 200
+    }))
+    .unwrap();
+    let moved = p.scroll_of(id(&p, "list"));
+    assert!(moved.0 == 0. && (moved.1 - 50.).abs() < 0.01);
+}
+
+#[test]
+fn a_vertical_drag_on_a_horizontal_scroller_moves_its_page() {
+    let mut p = boot(
+        r#"component App
+  view
+    column
+      scroll width=300 height=80 overflow-x="scroll" overflow-y="hidden" testId="shelf"
+        box width=2000 height=80
+      box height=2000
+"#,
+    );
+    let shelf = id(&p, "shelf");
+    let reply: serde_json::Value = serde_json::from_str(
+        &p.agent_scroll_drag(
+            &serde_json::json!({"id":shelf,"scrollDrag":[0,-170],"from":[30,40],"ms":400}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!((reply["scrolledBy"][1].as_f64().unwrap() - 170.).abs() < 0.01);
+    assert_eq!(p.scroll_of(shelf), (0., 0.));
+}

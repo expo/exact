@@ -54,7 +54,7 @@ impl Module {
             inst.child_geometry[index] = Some((name.to_owned(), frame));
             inst.each[index] = None;
             inst.surface.child(index, name, None, frame);
-            inst.dirty = true;
+            inst.invalidate();
             return true;
         }
         let expected = (width as usize)
@@ -135,7 +135,7 @@ impl Module {
             size,
         );
         inst.children_generation += 1;
-        inst.dirty = true;
+        inst.invalidate();
         true
     }
 
@@ -154,7 +154,7 @@ impl Module {
             }
             inst.each.truncate(count);
             inst.child_geometry.truncate(count);
-            inst.dirty = true;
+            inst.invalidate();
         }
         true
     }
@@ -267,7 +267,181 @@ impl Module {
             },
             size,
         );
-        inst.dirty = true;
+        inst.invalidate();
+        true
+    }
+
+    /// Snapshot `id`'s Metal children texture into `previous` (when
+    /// [`ChildrenMode::Composite`] retains it) and wait for every GPU command
+    /// reading it to finish before the host overwrites that texture (LLP 1008 §9).
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+    pub fn prepare_texture_metal(&mut self, id: u32) -> bool {
+        self.flush();
+        let Some(gpu) = self.gpu.as_ref() else {
+            return false;
+        };
+        if let Some(Children {
+            texture,
+            previous: Some(previous),
+            width,
+            height,
+            metal: Some(_),
+        }) = self.instances.get(&id).and_then(|i| i.children.as_ref())
+        {
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_texture(
+                texture.as_image_copy(),
+                previous.as_image_copy(),
+                wgpu::Extent3d {
+                    width: *width,
+                    height: *height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            gpu.queue.submit([encoder.finish()]);
+        }
+        gpu.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .is_ok()
+    }
+
+    /// Import the host's retained Metal children texture; reuse an unchanged
+    /// pointer without re-binding. When reusing the same texture in place, the
+    /// caller snapshots previous children with [`Module::prepare_texture_metal`]
+    /// before overwriting it.
+    ///
+    /// # Safety
+    /// `raw` is a live `MTLTexture` of that size and format, valid until
+    /// the canvas is destroyed or another texture replaces it.
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+    pub unsafe fn texture_from_metal(
+        &mut self,
+        id: u32,
+        width: u32,
+        height: u32,
+        raw: *mut std::ffi::c_void,
+    ) -> bool {
+        self.check_device();
+        self.settle(id);
+        use objc2::rc::Retained;
+        use objc2::runtime::ProtocolObject;
+        use objc2_metal::MTLTexture;
+        if width == 0 || height == 0 || raw.is_null() {
+            self.error = format!("children: a {width}x{height} Metal texture at {raw:?}");
+            return false;
+        }
+        let Some(gpu) = self.gpu.as_ref() else {
+            self.error = "no device".into();
+            return false;
+        };
+        let Some(inst) = self.instances.get_mut(&id) else {
+            self.error = "no such canvas".into();
+            return false;
+        };
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let same = matches!(&inst.children, Some(c) if c.width == width && c.height == height && c.metal == Some(raw as usize));
+        if !same {
+            // SAFETY: the caller's contract — a live MTLTexture; `retain`
+            // takes its own reference to it.
+            let Some(retained) =
+                (unsafe { Retained::retain(raw as *mut ProtocolObject<dyn MTLTexture>) })
+            else {
+                self.error = "children: the Metal texture could not be retained".into();
+                return false;
+            };
+            // SAFETY: the texture's own size and format, as the host made it.
+            let hal = unsafe {
+                wgpu::hal::metal::Device::texture_from_raw(
+                    retained,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    objc2_metal::MTLTextureType::Type2D,
+                    1,
+                    1,
+                    wgpu::hal::CopyExtent {
+                        width,
+                        height,
+                        depth: 1,
+                    },
+                    None,
+                )
+            };
+            // SAFETY: the hal texture matches the descriptor.
+            let texture = unsafe {
+                gpu.device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+                    hal,
+                    &wgpu::TextureDescriptor {
+                        label: Some("children (metal)"),
+                        size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    },
+                    wgpu::TextureUses::RESOURCE,
+                )
+            };
+            // The previous children, out of the texture bound until now,
+            // before the surface hears of the new one.
+            let previous = match inst.children.take() {
+                Some(Children {
+                    texture: old,
+                    previous: Some(previous),
+                    width: w,
+                    height: h,
+                    ..
+                }) if w == width && h == height => {
+                    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                    encoder.copy_texture_to_texture(
+                        old.as_image_copy(),
+                        previous.as_image_copy(),
+                        size,
+                    );
+                    gpu.queue.submit([encoder.finish()]);
+                    Some(previous)
+                }
+                _ => matches!(
+                    inst.surface.children_mode(),
+                    ChildrenMode::Composite { previous: true }
+                )
+                .then(|| {
+                    gpu.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("previous children"),
+                        size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    })
+                }),
+            };
+            let view = texture.create_view(&Default::default());
+            let previous_view = previous
+                .as_ref()
+                .map(|p| p.create_view(&Default::default()));
+            inst.surface.children(Some(&view), previous_view.as_ref());
+            inst.children = Some(Children {
+                texture,
+                previous,
+                width,
+                height,
+                metal: Some(raw as usize),
+            });
+        }
+        inst.children_generation += 1;
+        inst.invalidate();
         true
     }
 }

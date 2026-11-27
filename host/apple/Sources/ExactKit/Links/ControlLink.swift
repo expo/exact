@@ -31,6 +31,10 @@ package protocol ControlKinding: AnyObject {
     #endif
     /// Each `progress`'s indicator, made and updated.
     func syncProgress()
+    #if os(macOS)
+    /// Apply a resolved accent without changing the control's value or interrupting tracking.
+    func applyAccent(_ accent: NSColor?, to control: NSControl)
+    #endif
     /// Whether a radio's control shows it checked, and showing it so.
     func radioOn(_ control: PlatformControl) -> Bool
     func showRadio(_ id: UInt32, _ on: Bool)
@@ -74,6 +78,9 @@ package final class NoControlKinds: ControlKinding {
     package func activate(_ control: PlatformControl, _ node: NodeView) -> Bool { false }
     package func observation(_ control: PlatformControl) -> [String: Any] { [:] }
     package func syncProgress() {}
+    #if os(macOS)
+    package func applyAccent(_ accent: NSColor?, to control: NSControl) {}
+    #endif
     package func progressObservation(_ node: NodeView) -> [String: Any]? { nil }
     package func radioOn(_ control: PlatformControl) -> Bool { false }
     package func showRadio(_ id: UInt32, _ on: Bool) {}

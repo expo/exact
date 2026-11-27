@@ -63,7 +63,7 @@ extension GroupedListView {
         for case let other as NodeView in view.contentView.subviews where other !== node { sendHome(other) }
         if carried[id] == nil, let parent = node.superview {
             noteHome(parent)
-            carried[id] = (parent, node.frame, node.authoredInert, nil)
+            carried[id] = (parent, node.frame, node.authoredInert, nil, nil)
         }
         guard let place = carried[id] else { return }
         let drawn = node.grid.map { Self.cellFrame($0, scale: host.presenter.gridScale) }

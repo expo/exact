@@ -216,3 +216,21 @@ fn a_unicode_url_is_checked_without_slicing_a_character() {
     }
     assert_eq!(host.outbound, handed);
 }
+
+#[test]
+fn a_route_panel_reports_which_presentation_the_terminal_cannot_open() {
+    let plan = contract::compile(
+        r#"component App
+  view
+    link href="/shortcuts" target="shortcuts" windowKind="panel" id="hud"
+      text "Shortcuts"
+"#,
+    )
+    .unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 80, 24).unwrap();
+    press(&mut host, "hud");
+    assert!(host
+        .runner
+        .journal()
+        .any(|line| line.contains("panel unsupported")));
+}

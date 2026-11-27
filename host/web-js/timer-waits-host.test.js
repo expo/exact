@@ -210,3 +210,62 @@ test('the wasm scheduler resamples idle demand and discards callbacks after rese
   expect(firings).toEqual([10]);
   scheduler.dispose();
 });
+
+test('wake keeps past-due unchecked waits finite and restores them after clock.stopped', () => {
+  const f = fixture();
+  const scrollTask = f.task(3), frameTask = f.task(1);
+  f.at(20);
+  // Before check() observes them, past-due waited timers must wake at due (not Infinity / cap).
+  expect(rt.timerWait.wake(scrollTask)).toBe(10);
+  expect(rt.timerWait.wake(frameTask)).toBe(10);
+  // Once check() holds a timer (scrolling or waiting for a frame), wake falls back to cap without busy-looping.
+  f.event('scroll');
+  f.check();
+  expect(rt.timerWait.wake(scrollTask)).toBe(Infinity);
+  expect(rt.timerWait.wake(frameTask)).toBe(110);
+  // If a frame callback runs while clock.stopped is true, wake drops the held mark so drive() re-checks after resume.
+  rt.clock.stopped = true;
+  f.frame();
+  expect(f.fired).toEqual([]);
+  rt.clock.stopped = false;
+  expect(rt.timerWait.wake(scrollTask)).toBe(10);
+  expect(rt.timerWait.wake(frameTask)).toBe(10);
+});
+
+test('the wasm scheduler keeps timeout wakes armed while requestFrame is pending or deadlines are short', () => {
+  let now = 0, serial = 0;
+  const frames = new Map(), timers = new Map(), fired = [];
+  const runTimeout = () => {
+    const [id, task] = [...timers.entries()].sort((a, b) => a[1].due - b[1].due)[0];
+    timers.delete(id);
+    now = Math.max(now, task.due);
+    task.fn();
+  };
+  const scheduler = createTimerScheduler({
+    now: () => now,
+    advance(time) {
+      fired.push(time);
+      scheduler.update(fired.length === 1 ? time + 50 : fired.length === 2 ? time : null);
+    },
+    raf(fn) { frames.set(++serial, fn); return serial; }, cancel(id) { frames.delete(id); },
+    delay(fn, ms) { timers.set(++serial, { fn, ms, due: now + ms }); return serial; }, clearDelay(id) { timers.delete(id); },
+  });
+  // Trigger 1: pending requestFrame() before a tab hides (rAF paused, each === false) must not suppress timeouts.
+  scheduler.update(2000);
+  scheduler.requestFrame();
+  expect(frames.size).toBe(1);
+  expect(timers.size).toBe(1);
+  runTimeout();
+  expect(fired).toEqual([2000]);
+  // Trigger 2: short (<= 133.33ms) and immediate (due <= now) deadlines still wake via timeout while rAF stays paused.
+  expect(timers.size).toBe(1);
+  expect([...timers.values()][0].ms).toBe(50);
+  runTimeout();
+  expect(fired).toEqual([2000, 2050]);
+  expect(timers.size).toBe(1);
+  expect([...timers.values()][0].ms).toBe(0);
+  runTimeout();
+  expect(fired).toEqual([2000, 2050, 2050]);
+  expect(timers.size).toBe(0);
+  scheduler.dispose();
+});

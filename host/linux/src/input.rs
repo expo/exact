@@ -624,7 +624,23 @@ pub(crate) fn key(code: u16, shift: bool) -> Option<(&'static str, &'static str)
         54 => ("ShiftRight", "Shift", "Shift"),
         56 => ("AltLeft", "Alt", "Alt"),
         57 => ("Space", " ", " "),
+        // The keypad as with Num Lock on: Num Lock's state is not tracked.
+        55 => ("NumpadMultiply", "*", "*"),
+        71 => ("Numpad7", "7", "7"),
+        72 => ("Numpad8", "8", "8"),
+        73 => ("Numpad9", "9", "9"),
+        74 => ("NumpadSubtract", "-", "-"),
+        75 => ("Numpad4", "4", "4"),
+        76 => ("Numpad5", "5", "5"),
+        77 => ("Numpad6", "6", "6"),
+        78 => ("NumpadAdd", "+", "+"),
+        79 => ("Numpad1", "1", "1"),
+        80 => ("Numpad2", "2", "2"),
+        81 => ("Numpad3", "3", "3"),
+        82 => ("Numpad0", "0", "0"),
+        83 => ("NumpadDecimal", ".", "."),
         96 => ("NumpadEnter", "Enter", "Enter"),
+        98 => ("NumpadDivide", "/", "/"),
         97 => ("ControlRight", "Control", "Control"),
         100 => ("AltRight", "Alt", "Alt"),
         102 => ("Home", "Home", "Home"),
@@ -818,6 +834,40 @@ mod tests {
             })
         );
         assert_eq!(key(158, false), Some(("BrowserBack", "BrowserBack")));
+    }
+    #[test]
+    fn numeric_keypad_types_its_digits_and_operators() {
+        for (evdev, code, key) in [
+            (55, "NumpadMultiply", "*"),
+            (71, "Numpad7", "7"),
+            (72, "Numpad8", "8"),
+            (73, "Numpad9", "9"),
+            (74, "NumpadSubtract", "-"),
+            (75, "Numpad4", "4"),
+            (76, "Numpad5", "5"),
+            (77, "Numpad6", "6"),
+            (78, "NumpadAdd", "+"),
+            (79, "Numpad1", "1"),
+            (80, "Numpad2", "2"),
+            (81, "Numpad3", "3"),
+            (82, "Numpad0", "0"),
+            (83, "NumpadDecimal", "."),
+            (98, "NumpadDivide", "/"),
+        ] {
+            assert_eq!(super::key(evdev, false), Some((code, key)), "{evdev}");
+        }
+        let mut keyboard = Keyboard::default();
+        for (value, down) in [(1, true), (0, false)] {
+            assert_eq!(
+                keyboard.event(79, value, None),
+                Some(InputEvent::Key {
+                    code: 79,
+                    shift: false,
+                    down,
+                    repeat: false,
+                })
+            );
+        }
     }
     #[test]
     fn shift_sides_and_shortcut_chords_pass() {

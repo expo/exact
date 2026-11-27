@@ -303,6 +303,8 @@ fn p3_presentation_uses_srgb_for_native_capture_then_restores_its_grant() {
     };
     let layer = layer();
     let mut m = Module::new(&REGISTRY);
+    let plain = m.create_headless("srgb").unwrap();
+    assert_eq!(m.agent(plain, "state").as_deref(), Some(""));
     m.set_gpu(gpu);
     let t = target(&m, &layer);
     let id = m.create("p3", t, 8, 8).unwrap();
@@ -338,6 +340,14 @@ fn p3_presentation_uses_srgb_for_native_capture_then_restores_its_grant() {
         "a detached P3 surface receives sRGB for offscreen capture"
     );
     assert_eq!(m.agent(id, "state").as_deref(), Some("Srgb;prepare;"));
+
+    let t = target(&m, &layer);
+    assert!(m.attach(plain, t, 8, 8));
+    assert!(m.bind(plain, &[Value::record(vec![Value::Number(1.); 4])], None));
+    assert!(!m.instances[&plain].has_color_inputs);
+    m.agent(plain, "state");
+    m.readback(plain, &frame).unwrap();
+    assert_eq!(m.agent(plain, "state").as_deref(), Some("Srgb;prepare;"));
 }
 
 #[test]

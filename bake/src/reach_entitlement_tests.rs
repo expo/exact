@@ -100,3 +100,29 @@ fn sensitive_content_analysis_signs_its_array_on_ios_and_the_mac_and_leaves_tvos
     assert_eq!(mac["entitlementValues"], json!({key: ["analysis"]}));
     assert_eq!(derive_for("linux")["android"], json!([]));
 }
+
+/// A loopback https callback is the device's own, which no associated
+/// domain names: `[::1]` with or without a port, as `127.0.0.1` and
+/// `localhost` are.
+#[test]
+fn a_loopback_callback_claims_no_webcredentials() {
+    let dir = app(&[("en", "{}")]);
+    for callback in [
+        "https://127.0.0.1:8443/cb",
+        "https://localhost/cb",
+        "https://[::1]/cb",
+        "https://[::1]:8443/cb",
+    ] {
+        assert!(
+            exact_runner::grants::parse(&format!("auth.callback {callback}")).is_ok(),
+            "{callback} is a grant line"
+        );
+        let mut ios = compat(&format!("auth.callback {callback}"));
+        derive(&dir.0, "ios", None, &mut ios).unwrap();
+        assert_eq!(
+            ios.reach["auth"]["associatedDomains"],
+            json!([]),
+            "{callback}"
+        );
+    }
+}

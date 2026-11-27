@@ -79,6 +79,8 @@
     "grouped-row-min-height": { "token": "ListTokens.ListItemOneLineContainerHeight" },
     "grouped-button-min-height": { "token": "ListTokens.ListItemOneLineContainerHeight" },
     "grouped-button-stack-min-height": { "token": "ListTokens.ListItemTwoLineContainerHeight" },
+    "grouped-row-inset": { "source": "ListItem.kt", "name": "ListItemStartPadding" },
+    "grouped-row-padding-end": { "source": "ListItem.kt", "name": "ListItemEndPadding" },
     "grouped-row-padding-block": { "source": "ListItem.kt", "name": "ListItemVerticalPadding" },
     "grouped-row-inline-gap": { "source": "ListItem.kt", "name": "LeadingContentEndPadding" },
     "grouped-symbol-gap": {

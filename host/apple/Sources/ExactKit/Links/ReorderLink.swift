@@ -9,6 +9,11 @@ import AppKit
 import UIKit
 #endif
 
+package protocol NativeListReorder: AnyObject {
+    func queueDrop(before: UInt32?)
+    func cancel()
+}
+
 /// What the core asks of a presenter's reorders.
 package protocol ReorderHosting: AnyObject {
     /// Whether a List row is lifted, its contact unsettled.
@@ -19,6 +24,7 @@ package protocol ReorderHosting: AnyObject {
     var groupActive: Bool { get }
     /// Cancel the active drag from the list with this authored id (LLP 1094 D8).
     func cancel(_ id: String)
+    func nativeMovement(grip: NodeView, list: UInt32, finished: @escaping () -> Void) -> NativeListReorder?
     /// A batch's reorder ops, after it applies.
     func observe(_ ops: [BatchOp])
     /// The presenter's tree goes: every reorder ends.
@@ -41,6 +47,10 @@ package protocol ReorderHosting: AnyObject {
     /// not a reorder's.
     func shouldBegin(_ view: NodeView, _ gesture: UIGestureRecognizer) -> Bool?
     #endif
+}
+
+extension ReorderHosting {
+    package func nativeMovement(grip: NodeView, list: UInt32, finished: @escaping () -> Void) -> NativeListReorder? { nil }
 }
 
 /// No reorders.
@@ -74,14 +84,21 @@ package enum ReorderLink {
 extension NodeView {
     /// A grouped grip's reorder actions (LLP 1094 D9).
     package override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
-        presenter?.reorders.actions(self) ?? super.accessibilityCustomActions()
+        // Reading an unset NSView custom-actions property during an AX request
+        // makes AppKit report kAXErrorFailure even when the handler succeeds.
+        let assigned = hasAssignedCustomActions ? super.accessibilityCustomActions() : nil
+        return appendingActions(to: presenter?.reorders.actions(self) ?? assigned)
+    }
+    package override func setAccessibilityCustomActions(_ actions: [NSAccessibilityCustomAction]?) {
+        hasAssignedCustomActions = actions != nil
+        super.setAccessibilityCustomActions(actions)
     }
 }
 #else
 extension NodeView {
     /// A grouped grip's reorder actions (LLP 1094 D9).
     package override var accessibilityCustomActions: [UIAccessibilityCustomAction]? {
-        get { presenter?.reorders.actions(self) ?? super.accessibilityCustomActions }
+        get { appendingActions(to: presenter?.reorders.actions(self) ?? super.accessibilityCustomActions) }
         set { super.accessibilityCustomActions = newValue }
     }
 }

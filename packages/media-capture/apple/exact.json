@@ -53,7 +53,14 @@
     "swift": [
       "MediaCapture.swift",
       "VideoCapture.swift"
-    ]
+    ],
+    "objc": [
+      "MediaCaptureBridge.m"
+    ],
+    "objcModule": {
+      "name": "MediaCaptureObjC",
+      "header": "MediaCaptureBridge.h"
+    }
   },
   "artifacts": [],
   "class": "MediaCaptureModule"

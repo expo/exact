@@ -65,7 +65,7 @@ extension NSWindow {
     /// development drive tells WebKit that its covered window is visible.
     public var screenOcclusionState: NSWindow.OcclusionState {
         #if EXACT_AGENT
-        return (self as? ExactAgentWindow)?.physicalOcclusionState ?? occlusionState
+        return (self as? any DrivenOcclusion)?.physicalOcclusionState ?? occlusionState
         #else
         return occlusionState
         #endif

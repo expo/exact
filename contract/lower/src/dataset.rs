@@ -20,7 +20,7 @@ use exact_plan::BindingsRow;
 /// `host/web-js`'s row tests check the names their Rust writers emit; the
 /// markers the JS glue writes (`agent.js`, `modes.js`, `gpu-refusal.js`)
 /// and the render host's `audio-session` are kept here by hand.
-const HOST_WORDS: [&str; 130] = [
+const HOST_WORDS: [&str; 156] = [
     "accept",
     "accessibilitybusy",
     "accessibilitydisabled",
@@ -39,6 +39,7 @@ const HOST_WORDS: [&str; 130] = [
     "atoms",
     "atomstyles",
     "audio-session",
+    "audiovisualbackgroundplaybackpolicy",
     "autofocus",
     "bitmapheight",
     "bitmapwidth",
@@ -52,7 +53,9 @@ const HOST_WORDS: [&str; 130] = [
     "colortype",
     "context-preview",
     "dataset",
+    "datatransferentries",
     "datatransferfiles",
+    "datatransfernames",
     "datatransfertext",
     "datatransferurl",
     "decorations",
@@ -101,14 +104,36 @@ const HOST_WORDS: [&str; 130] = [
     "nativeid",
     "nativeviewmodulename",
     "nativeviewprops",
+    "navigationaccessorycontentinsets",
+    "navigationaccessoryscrolledgeeffect",
     "navigationbar",
     "navigationbarstyle",
     "navigationdetent",
+    "navigationedgeattachedincompactheight",
+    "navigationextendedlayout",
+    "navigationextendsunderopaquebars",
+    "navigationfullsizecontent",
     "navigationgrabber",
     "navigationhistory",
     "navigationinitialdetent",
+    "navigationpopoveradaptation",
+    "navigationpopoveranchor",
+    "navigationpopoverarrows",
+    "navigationpopovermargins",
+    "navigationpopoveroverlapssource",
     "navigationscroll",
+    "navigationscrollexpands",
+    "navigationselecteddetent",
+    "navigationsizing",
+    "navigationsplititemadjustsforoverlays",
+    "navigationsplititembottomaccessory",
+    "navigationsplititemfullheight",
+    "navigationsplititemtopaccessory",
     "navigationtabaccessory",
+    "navigationundimmeddetent",
+    "navigationverticalbar",
+    "navigationverticalbarcompression",
+    "navigationwidthfollowspreferredcontentsize",
     "num",
     "paragraph-dirs",
     "portal",
@@ -131,6 +156,7 @@ const HOST_WORDS: [&str; 130] = [
     "site",
     "surface",
     "svgrelativefontweight",
+    "swipedirection",
     "symbol-fill",
     "symbol-path",
     "symboleffectvalue",
@@ -158,16 +184,12 @@ pub fn word(name: &str) -> Option<&str> {
     name.strip_prefix("data-")
 }
 
-/// HTML's lowercase spelling of a custom data attribute's name:
-/// `[a-z][a-z0-9]*` words joined by `-` (the lexer joins a `-` only to a
-/// following letter).
+/// The admitted custom data name, without `data-`: `[a-z][a-z0-9-]*`
+/// (LLP 1075.003 §3.3).
 pub fn is_word(word: &str) -> bool {
-    !word.is_empty()
-        && word.split('-').all(|w| {
-            let mut chars = w.chars();
-            chars.next().is_some_and(|c| c.is_ascii_lowercase())
-                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        })
+    let mut chars = word.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// Whether a host already writes `data-<word>`: one of `HOST_WORDS`, or
@@ -183,7 +205,7 @@ pub(crate) fn refused(a: &Attr) -> Option<LowerError> {
     let w = word(&a.name)?;
     let message = if !is_word(w) {
         format!(
-            "`{}` is not a data attribute name: `data-` then lowercase words of letters and digits joined by `-`",
+            "`{}` is not a data attribute name: `data-` then a lowercase letter followed by lowercase letters, digits or `-`",
             a.name
         )
     } else if reserved(w) {
@@ -263,7 +285,7 @@ fn hatch_refusal(tag: &str, a: &Attr) -> Option<LowerError> {
         Expr::Str(w, _) if is_word(w) => None,
         Expr::Str(w, _) => refused(
             "lower-hatch-word",
-            format!("`hatch=\"{w}\"` is not a word: lowercase words of letters and digits joined by `-`"),
+            format!("`hatch=\"{w}\"` is not a word: a lowercase letter followed by lowercase letters, digits or `-`"),
         ),
         _ => refused(
             "lower-hatch-value",
@@ -373,10 +395,20 @@ mod tests {
 
     #[test]
     fn words_are_lowercase_html_data_names() {
-        for ok in ["title", "trailing", "large-title", "h1", "a-b2-c"] {
+        for ok in [
+            "title",
+            "trailing",
+            "large-title",
+            "h1",
+            "a-b2-c",
+            "v-2",
+            "v--2",
+            "v-",
+            "v--",
+        ] {
             assert!(is_word(ok), "{ok}");
         }
-        for bad in ["", "Title", "-x", "x-", "x--y", "1x", "x_y", "x.y"] {
+        for bad in ["", "Title", "-x", "1x", "x_y", "x.y"] {
             assert!(!is_word(bad), "{bad}");
         }
     }

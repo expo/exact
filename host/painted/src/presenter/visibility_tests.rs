@@ -457,3 +457,48 @@ fn captured_mouse_click_bubbles_through_a_child_hidden_by_pointerup() {
     }
     assert_eq!(actual, vec!["press "; 4]);
 }
+
+#[test]
+fn layout_distinguishes_display_none_from_unavailable_geometry() {
+    let source = r#"component App
+  view
+    main navigationKey="shown" navigationBack="back"
+      column navigationKey="other"
+        box testId="covered" display="none"
+      column navigationKey="shown"
+        box testId="box" width=80 height=40
+        column testId="pane" display="none"
+          box testId="child" width=20 height=10
+"#;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let layout = |p: &mut Presenter<()>, name| {
+        serde_json::from_str::<serde_json::Value>(&p.layout_json(Some(id(p, name)), false)).unwrap()
+            ["node"]
+            .clone()
+    };
+    let frame = p.display_frame().unwrap();
+    for name in ["box", "pane", "child"] {
+        assert!(layout(&mut p, name)["space"].get("viewport").is_none());
+    }
+    assert!(p.display_complete(&frame));
+    assert_eq!(layout(&mut p, "box")["space"]["viewport"]["w"], 80);
+    assert!(layout(&mut p, "covered")["space"].get("viewport").is_none());
+    for name in ["pane", "child"] {
+        let node = layout(&mut p, name);
+        assert_eq!(
+            node["space"]["viewport"],
+            serde_json::json!({"x":0,"y":0,"w":0,"h":0}),
+            "{name}"
+        );
+        assert_eq!(node["visible"]["hidden"], true);
+    }
+}

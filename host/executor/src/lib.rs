@@ -9,6 +9,7 @@
 //! and transports and decides which [`WorkerBudget`] its workers count against.
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
+use admission::{response_room, stream_room, StreamCounts, StreamKind};
 use exact_runner::{
     CompletionTiming, FailureKind, HttpScheduling, Outcome, Reply, Request, RequestClass,
     RequestOut, Response, Work as OwnedWork,
@@ -36,11 +37,19 @@ const AGAINS: usize = 128;
 /// What an `Again` marker retains until drained: its record, an empty body.
 const AGAIN_BYTES: usize = std::mem::size_of::<Completed>();
 const ORDERED_WAITING_BYTES: usize = 64 << 20;
-/// Open streams, bounded apart from the independent lane's count: a stream
+/// Open network streams, bounded apart from the independent lane's count: a stream
 /// holds a transport lease and a reader thread for as long as it is open,
 /// and must neither starve nor be starved by a lane of held replies
 /// (LLP 1016.000 D4; LLP 1069.004 As built). Its bytes stay on the lane.
 const STREAMS: usize = 16;
+/// A child with three pipes holds three descriptors and five host threads. On macOS,
+/// 16 long polls and the app held 25 descriptors. With 16 streaming and 16 one-shot
+/// children, 25 + 32 × 3 = 121 stayed open. If every spawn held both ends of its
+/// pipes at once, this app would use 217 descriptors under its tested limit of 256.
+/// A streaming cap of 32 would raise that modeled peak to 313. Linux’s
+/// extra fork-report pipe brings the peak for 16 streaming children and 16 one-shots
+/// to 281 (LLP 1133.007 D3).
+const STREAMING_CHILDREN: usize = 16;
 /// The independent lane holds the largest job it admits: a 64 MiB reply
 /// beside the most request buffers, alone.
 const BYTES: [usize; 2] = [512 << 20, MAX_REQUEST + MAX_BODY + MAX_HEADERS * 2];
@@ -89,7 +98,7 @@ struct Running {
     /// explicit abort fires ([`Core::cancel`]). None for work and streams.
     exchange: Option<AbortController>,
     forgotten: bool,
-    stream: bool,
+    stream: Option<StreamKind>,
     /// An upload waiting for its start (`stream::Uploads`), or a process
     /// one-shot, which has room of its own (`process::admit_one_shot`):
     /// it holds no count or bytes of its lane until then, or at all.
@@ -130,7 +139,7 @@ struct Completed {
     /// reservation stays with the running stream until the stream ends.
     message: bool,
     /// A stream's last outcome: draining it frees a stream slot.
-    stream: bool,
+    stream: Option<StreamKind>,
     /// An ordered outcome that holds no effect slot until drained: a
     /// re-ask's marker or a finished safe read (counted in `light`).
     light: bool,
@@ -146,7 +155,7 @@ enum Fenced {
     Held(Box<RequestOut>, Option<OwnedWork>, usize, bool, bool),
     /// A request refused while the barrier was up: refused when its turn
     /// comes, after the held requests before it are admitted.
-    Refused(u64, &'static str),
+    Refused(u64, String),
 }
 impl Fenced {
     fn ticket(&self) -> u64 {
@@ -178,14 +187,16 @@ struct State {
     /// room for real requests, nor settles before the refusal). One record
     /// per ticket, eight bytes: bounded by the runner's current tickets, one
     /// per target, and never refused for room.
-    waiting: VecDeque<u64>,
+    waiting: VecDeque<(u64, reads::OrderedKind)>,
     /// The tickets in `waiting`, to keep one record each.
     waiting_set: std::collections::HashSet<u64>,
-    /// Admitted streams, also counted in `counts[1]`.
-    streams: usize,
+    /// A stream holds its slot through its undrained terminal reply. Both kinds count in `counts[1]`.
+    streams: StreamCounts,
     bytes: [usize; 2],
     next: usize,
-    ordered: VecDeque<u64>,
+    ordered: VecDeque<reads::OrderedEntry>,
+    shared_workers_started: usize,
+    shared_workers_busy: usize,
     retired: bool,
     ordered_barrier: bool,
     /// Ordered requests behind the barrier, in order: held rather than
@@ -279,7 +290,7 @@ impl Shared {
 /// request buffers, leaving room to start its head.
 pub struct Core {
     shared: Arc<Shared>,
-    disabled: bool,
+    worker_refusal: Option<String>,
     /// The workers not started yet: each owner's bindings and its slot.
     /// They start at the first request admitted (an app that never asks for
     /// anything carries no threads); `None` once they have, or could not.
@@ -458,11 +469,9 @@ impl Core {
             None => (None, owners.len()),
         };
         let budget = budget.live();
-        let reserved = budget
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n + count <= MAX_WORKERS).then_some(n + count)
-            })
-            .is_ok();
+        let reserved = budget.try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n + count <= MAX_WORKERS).then_some(n + count)
+        });
         let lane = Lane::new(host.clone());
         let machine = lanes.map(|lanes| {
             asynch::Machine::new(shared.clone(), owners.clone(), grants, &lane, &lanes)
@@ -474,7 +483,7 @@ impl Core {
             Some(_) => (0..count).map(|_| None).collect(),
             None => owners,
         };
-        let idle = reserved.then(|| {
+        let idle = reserved.is_ok().then(|| {
             owners
                 .into_iter()
                 .enumerate()
@@ -483,7 +492,9 @@ impl Core {
         });
         Self {
             shared,
-            disabled: !reserved,
+            worker_refusal: reserved
+                .err()
+                .map(|used| format!("At executor startup, {} native workers were needed ({used} already reserved, maximum {MAX_WORKERS})", used + count)),
             idle: Mutex::new(idle),
             failed: std::sync::atomic::AtomicBool::new(false),
             grants: grants.to_string(),
@@ -546,6 +557,8 @@ impl Core {
                 });
             if spawned.is_err() {
                 self.failed.store(true, Ordering::Release);
+            } else if index != 0 {
+                state.shared_workers_started += 1;
             }
         }
         !self.failed.load(Ordering::Acquire)
@@ -573,12 +586,12 @@ impl Core {
     }
 
     #[cfg(test)]
-    fn run(&self, r: RequestOut, work: Option<Work>) -> Result<(), &'static str> {
+    fn run(&self, r: RequestOut, work: Option<Work>) -> Result<(), String> {
         self.run_owned(r, work.map(OwnedWork::Now))
     }
 
     /// Admit work, or return a refusal without an overflow queue.
-    pub fn run_owned(&self, r: RequestOut, work: Option<OwnedWork>) -> Result<(), &'static str> {
+    pub fn run_owned(&self, r: RequestOut, work: Option<OwnedWork>) -> Result<(), String> {
         self.admit(r, work, false, false, None)
             .map_err(|(reason, _work)| reason)
     }
@@ -597,23 +610,20 @@ impl Core {
         let mut state = self.shared.state.lock().unwrap();
         let ready = |lane: usize, state: &State| {
             if lane == 0 {
-                state.ordered.front().and_then(|ticket| {
-                    state.completed[0]
-                        .iter()
-                        .position(|done| done.ticket == *ticket)
-                })
+                reads::deliverable(state)
             } else {
-                (!state.completed[1].is_empty()).then_some(0)
+                (!state.completed[1].is_empty()).then_some((0, 0))
             }
         };
         let first = state.next;
-        let (lane, index) = if let Some(index) = ready(first, &state) {
-            (first, index)
-        } else if let Some(index) = ready(1 - first, &state) {
-            (1 - first, index)
-        } else {
-            return vec![];
-        };
+        let (lane, ordered_index, index) =
+            if let Some((ordered_index, index)) = ready(first, &state) {
+                (first, ordered_index, index)
+            } else if let Some((ordered_index, index)) = ready(1 - first, &state) {
+                (1 - first, ordered_index, index)
+            } else {
+                return vec![];
+            };
         let done = state.completed[lane]
             .remove(index)
             .expect("ready completion");
@@ -627,7 +637,8 @@ impl Core {
         };
         let release_count = drained(&mut state, done.ticket);
         if lane == 0 {
-            state.ordered.pop_front();
+            let entry = state.ordered.remove(ordered_index).expect("ordered entry");
+            debug_assert_eq!(entry.ticket, done.ticket);
         }
         state.next = 1 - lane;
         if !done.message {
@@ -636,7 +647,7 @@ impl Core {
             }
             state.light -= usize::from(done.light);
             state.agains -= usize::from(done.again);
-            state.streams -= usize::from(done.stream);
+            state.streams.release(done.stream);
             state.bytes[lane] -= done.bytes;
         }
         // An ordered job may be waiting for these bytes, a re-ask for this
@@ -670,20 +681,22 @@ impl Core {
     /// the host when something is ready). The answer stays pending: room
     /// never refuses a re-ask. Refused only when the executor is retired or
     /// never started, as all work is.
-    pub fn again(&self, ticket: u64) -> Result<(), &'static str> {
+    pub fn again(&self, ticket: u64, class: RequestClass) -> Result<(), String> {
         let mut state = self.shared.state.lock().unwrap();
         state.dispatched = true;
-        if self.disabled {
-            return Err("native executor worker limit reached");
+        if let Some(why) = &self.worker_refusal {
+            return Err(why.clone());
         }
         if state.retired {
-            return Err("native executor retired");
+            return Err("native executor retired".into());
         }
-        if state.waiting_set.contains(&ticket) || state.ordered.contains(&ticket) {
+        if state.waiting_set.contains(&ticket)
+            || state.ordered.iter().any(|entry| entry.ticket == ticket)
+        {
             return Ok(());
         }
         state.waiting_set.insert(ticket);
-        state.waiting.push_back(ticket);
+        state.waiting.push_back((ticket, reads::again_kind(class)));
         place_waiting(&mut state);
         if has_ready(&state) {
             wake(&mut state);
@@ -739,7 +752,7 @@ impl Core {
                     for done in outcomes.iter().filter(|done| !done.message) {
                         state.counts[lane] -= 1;
                         state.bytes[lane] -= done.bytes;
-                        state.streams -= usize::from(done.stream);
+                        state.streams.release(done.stream);
                     }
                 }
                 state.light = 0;
@@ -782,38 +795,7 @@ impl Drop for WorkerSlot {
     }
 }
 
-/// What a core's workers count against: `MAX_WORKERS` live at once,
-/// retired ones included until they exit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorkerBudget {
-    /// The process's one bound, which every core of every host in the
-    /// process shares.
-    Process,
-    /// A bound of the thread that starts the core, for tests that run side
-    /// by side and must not refuse each other's cores.
-    Thread,
-}
-
-impl WorkerBudget {
-    /// The count of live workers this budget bounds.
-    fn live(self) -> Arc<AtomicUsize> {
-        match self {
-            // Cores created by one test share a bound. Slots retain that budget
-            // when their workers outlive the test thread or retire elsewhere.
-            WorkerBudget::Thread => {
-                thread_local! {
-                    static BUDGET: Arc<AtomicUsize> = Arc::default();
-                }
-                BUDGET.with(Arc::clone)
-            }
-            WorkerBudget::Process => {
-                static BUDGET: std::sync::LazyLock<Arc<AtomicUsize>> =
-                    std::sync::LazyLock::new(Arc::default);
-                Arc::clone(&BUDGET)
-            }
-        }
-    }
-}
+pub use admission::WorkerBudget;
 
 /// Forgetting runs after every commit; an idle core needs no worker wake
 /// unless queued jobs or disposal can make progress.
@@ -850,8 +832,8 @@ fn fenced_bytes(fenced: &VecDeque<Fenced>) -> usize {
 /// and no refusal is retained: behind a refusal they wait here, so that they
 /// neither settle before it nor take the fence's room for real requests.
 fn place_waiting(state: &mut State) {
-    while let Some(&ticket) = state.waiting.front() {
-        if state.ordered_barrier || !state.fenced.is_empty() || !settle_again(state, ticket) {
+    while let Some(&(ticket, kind)) = state.waiting.front() {
+        if state.ordered_barrier || !state.fenced.is_empty() || !settle_again(state, ticket, kind) {
             return;
         }
         state.waiting.pop_front();
@@ -861,11 +843,13 @@ fn place_waiting(state: &mut State) {
 
 /// A re-ask's marker, complete, at the end of the ordered sequence; false
 /// when its window (128 markers, the lane's bytes) has no room.
-fn settle_again(state: &mut State, ticket: u64) -> bool {
+fn settle_again(state: &mut State, ticket: u64, kind: reads::OrderedKind) -> bool {
     if state.agains >= AGAINS || AGAIN_BYTES > BYTES[0].saturating_sub(state.bytes[0]) {
         return false;
     }
-    state.ordered.push_back(ticket);
+    state
+        .ordered
+        .push_back(reads::OrderedEntry::new(ticket, kind));
     state.counts[0] += 1;
     state.light += 1;
     state.agains += 1;
@@ -878,7 +862,7 @@ fn settle_again(state: &mut State, ticket: u64) -> bool {
         outcome: exact_runner::Dispatch::again_outcome(),
         bytes: AGAIN_BYTES,
         message: false,
-        stream: false,
+        stream: None,
         light: true,
         again: true,
         reply: false,
@@ -886,9 +870,7 @@ fn settle_again(state: &mut State, ticket: u64) -> bool {
     true
 }
 
-/// An ordered request that may wait among the 128: a plain read with no
-/// opaque work beside it (RFC 9110 §9.2.1's safe methods; not auth, a surface, or
-/// a native call).
+/// An ordered request that may wait among the 128: a plain read with no opaque work (RFC 9110 §9.2.1).
 fn read(request: &Request, work: bool) -> bool {
     !work
         && safe(request)
@@ -897,31 +879,24 @@ fn read(request: &Request, work: bool) -> bool {
         && !request.is_auth()
 }
 
-fn stream_room(state: &State, lane: usize, limit: usize) -> Result<(), &'static str> {
-    let streams: usize = state
-        .running
-        .iter()
-        .filter(|run| run.lane == lane && run.stream)
-        .map(|run| run.charge)
-        .sum();
-    if lane == 1 && limit > BYTES[lane].saturating_sub(streams) {
-        Err("native response ceiling exceeds the lane budget held by open streams")
-    } else {
-        Ok(())
-    }
-}
-
 fn has_ready(state: &State) -> bool {
-    !state.completed[1].is_empty()
-        || state
-            .ordered
-            .front()
-            .is_some_and(|ticket| state.completed[0].iter().any(|done| done.ticket == *ticket))
+    !state.completed[1].is_empty() || reads::deliverable(state).is_some()
 }
 
 fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
+    complete_with(shared, ticket, outcome, None);
+}
+fn complete_with(
+    shared: &Shared,
+    ticket: u64,
+    outcome: Outcome,
+    busy: Option<&mut reads::SharedBusy<'_>>,
+) {
     let finished_at = std::time::Instant::now();
     let mut state = shared.state.lock().unwrap();
+    if let Some(busy) = busy {
+        busy.release_locked(&mut state);
+    }
     if state.retired {
         asynch::external_end(shared, &mut state, ticket);
         return;
@@ -936,19 +911,21 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     // A completion frees ordered bytes a waiting job may need.
     rouse(shared, &state);
     if run.forgotten {
+        if lane == 0 {
+            state.ordered.retain(|entry| entry.ticket != ticket);
+        }
         state.counts[lane] -= usize::from(!run.waiting);
-        state.streams -= usize::from(run.stream);
+        state.streams.release(run.stream);
         state.bytes[lane] -= run.charge;
         cache::serve_ready(&mut state);
-        // The lane going idle can let a retained ordered refusal settle,
-        // and the work held behind it go: the host needs a pump for that.
-        if lane == 0 && (state.counts[0] == 0 || !state.fenced.is_empty()) {
+        // The lane going idle or dropping a forgotten barrier can expose ready work or a refusal.
+        if has_ready(&state) || (lane == 0 && (state.counts[0] == 0 || !state.fenced.is_empty())) {
             wake(&mut state);
         }
         // The room it held, in its lane and among the streams, may start an
         // upload waiting for it; one that held none frees none.
         drop(state);
-        if lane == 1 && (run.charge > 0 || run.stream) {
+        if lane == 1 && (run.charge > 0 || run.stream.is_some()) {
             stream::start_uploads(shared);
         }
         return;
@@ -1011,24 +988,24 @@ fn wake(state: &mut State) {
 }
 
 /// The lane, the charge at admission and the ceiling a job may retain.
-fn reservation(request: &Request) -> Result<(usize, usize, usize), &'static str> {
+fn reservation(request: &Request) -> Result<(usize, usize, usize), String> {
     if request.stream
         && (request.http == HttpScheduling::Ordered
             || request.storage.is_some()
             || request.continuation.is_some()
             || request.is_native())
     {
-        return Err("a stream is independent HTTP (LLP 1016.000)");
+        return Err("a stream is independent HTTP (LLP 1016.000)".into());
     }
     let (lane, body) = match request.http {
         HttpScheduling::Ordered => (0, MAX_BODY),
         HttpScheduling::Independent { max_response_bytes } => {
             if request.storage.is_some() || request.continuation.is_some() {
-                return Err("only HTTP may opt into independent transport");
+                return Err("only HTTP may opt into independent transport".into());
             }
             // 1..=64 MiB, or 1 GiB for a body written to a file.
             if let Some(why) = request.ceiling_refusal() {
-                return Err(why);
+                return Err(why.into());
             }
             (1, max_response_bytes as usize)
         }
@@ -1063,7 +1040,7 @@ fn reservation(request: &Request) -> Result<(usize, usize, usize), &'static str>
         bytes = bytes.checked_add(n).ok_or("request size overflow")?;
     }
     if bytes > MAX_REQUEST {
-        return Err("native request exceeds 4 MiB (URL, headers and body together): send a larger body from an app file with exactBodyFrom");
+        return Err(format!("{bytes} request bytes (maximum {MAX_REQUEST}, including URL, headers and body). Send a larger body from an app file with exactBodyFrom"));
     }
     // A plain independent reply is read into one buffer of its ceiling
     // (`body_to::receive`; the asynchronous core grows its buffer only up to
@@ -1079,15 +1056,11 @@ fn reservation(request: &Request) -> Result<(usize, usize, usize), &'static str>
     // Admission charges the request buffers; the worker charges the
     // ceiling when it starts the job, waiting for bytes (LLP 1054.000 R3).
     // A ceiling the lane can never hold is refused here, not left waiting.
-    if limit > BYTES[lane] {
-        return Err("native response ceiling exceeds the lane's byte budget");
-    }
+    response_room(lane, limit)?;
     Ok((lane, bytes, limit))
 }
 
-/// Whether `request`'s reply is held in a buffer no larger than its ceiling:
-/// plain HTTP on the independent lane, not a stream, a process or a native
-/// call, whose outcomes are collected elsewhere.
+/// Whether `request`'s reply is held in a buffer no larger than its ceiling.
 fn reads_within_ceiling(request: &Request) -> bool {
     matches!(request.http, HttpScheduling::Independent { .. })
         && !request.stream
@@ -1146,6 +1119,9 @@ fn worker(
                     preload::expire(cache);
                 }
                 if let Some(next) = reads::next_job(&shared, &mut state, lane) {
+                    if lane == 1 {
+                        state.shared_workers_busy += 1;
+                    }
                     break next;
                 }
                 let delay = state.cache.as_ref().and_then(|cache| {
@@ -1158,6 +1134,7 @@ fn worker(
                 };
             }
         };
+        let mut busy = reads::SharedBusy(&shared, lane == 1);
         let Job {
             ticket,
             mut request,
@@ -1170,10 +1147,11 @@ fn worker(
         } = job;
         if let Some(deadline) = queued_deadline {
             if !deadline.remaining(&mut request) {
-                complete(
+                complete_with(
                     &shared,
                     ticket,
                     failed(FailureKind::Timeout, "the request timed out while queued"),
+                    Some(&mut busy),
                 );
                 continue;
             }
@@ -1186,10 +1164,19 @@ fn worker(
                 // Reply's drop path publishes an aborted outcome if the handoff panics.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hand(reply)));
                 let mut state = shared.state.lock().unwrap();
+                busy.release_locked(&mut state);
+                let mut unblocked_forgotten = false;
                 if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
                     run.blocking = false;
+                    unblocked_forgotten = run.forgotten;
+                }
+                if unblocked_forgotten {
+                    state.ordered.retain(|entry| entry.ticket != ticket);
                 }
                 rouse(&shared, &state);
+                if has_ready(&state) {
+                    wake(&mut state);
+                }
                 continue;
             }
             Some(OwnedWork::Now(work)) => (Some(work), None),
@@ -1225,7 +1212,7 @@ fn worker(
             )
         }))
         .unwrap_or_else(|_| failed(FailureKind::Aborted, "native work panicked"));
-        complete(&shared, ticket, outcome);
+        complete_with(&shared, ticket, outcome, Some(&mut busy));
     }
 }
 

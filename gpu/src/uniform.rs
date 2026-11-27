@@ -6,42 +6,76 @@
 //! animated shader row's 80 bytes (LLP 1009 §3). On Apple, where the GPU
 //! reads the CPU's memory, the uniform is instead a ring of shared-storage
 //! buffers written in place: the frame writes the slot after the last one,
-//! and binds that slot's bind group. Four slots: a canvas holds at most three
-//! drawables, so the slot a frame writes was last read by a frame whose
-//! drawable has since been returned, its commands complete. On Vulkan the
-//! ring is host-visible, coherent memory, mapped once: there `write_buffer`
-//! is a staging copy the GPU's transfer engine runs as a job of its own each
-//! frame (PowerVR's TDM, with its fences), about a tenth of the thread that
-//! flushes an animated canvas. Elsewhere — the browser — it is one buffer
-//! written through the queue.
+//! and binds that slot's bind group. On Vulkan the ring is host-visible,
+//! coherent memory, mapped once: there `write_buffer` is a staging copy the
+//! GPU's transfer engine runs as a job of its own each frame (PowerVR's TDM,
+//! with its fences), about a tenth of the thread that flushes an animated
+//! canvas.
+//!
+//! The ring has `FRAME_LATENCY + 2` slots (four on Apple and desktop, six on
+//! Android, exceeding its five-image swapchain), and tracks GPU completion per
+//! slot with `on_submitted_work_done`. Steady-state frames write in place; if
+//! a slot is still in flight on the GPU (extra swapchain images, `Scratch`
+//! retries, or back-to-back submits), the write falls back to
+//! `queue.write_buffer` without blocking. Elsewhere — the browser — it is one
+//! buffer written through the queue.
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 /// A per-frame uniform: `slots()` buffers, one bound each frame.
 pub struct FrameUniform {
+    #[cfg(not(target_arch = "wasm32"))]
+    device: Option<wgpu::Device>,
     slots: Vec<Slot>,
     next: usize,
+    /// Highest submission serial whose GPU work has completed.
+    #[cfg(not(target_arch = "wasm32"))]
+    completed: Arc<AtomicU64>,
+    /// Next submission serial assigned when fencing the prior frame's slot.
+    #[cfg(not(target_arch = "wasm32"))]
+    serial: u64,
+    /// The slot written by the previous `write`, fenced on the next call once
+    /// its frame's commands have been submitted.
+    #[cfg(not(target_arch = "wasm32"))]
+    last: Option<usize>,
 }
 
 struct Slot {
     buffer: wgpu::Buffer,
-    /// The slot's memory, written in place (Apple's shared storage); `None`
-    /// writes through the queue.
+    /// The slot's memory, written in place (Apple's shared storage or Vulkan's
+    /// mapped coherent memory); `None` writes through the queue.
     contents: Option<std::ptr::NonNull<u8>>,
     size: usize,
+    /// Submission serial that must complete before writing this slot in place.
+    #[cfg(not(target_arch = "wasm32"))]
+    busy_until: u64,
     /// Keeps the Metal buffer, and so `contents`, alive with the slot.
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
     _raw: Option<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
 }
 
 impl FrameUniform {
-    /// Slots written in place (Apple's shared storage, Vulkan's mapped memory).
+    /// Slots written in place (Apple's shared storage, Vulkan's mapped memory):
+    /// strictly above the swapchain's `FRAME_LATENCY + 1` images.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    const RING: usize = 4;
+    pub(crate) const RING: usize = crate::FRAME_LATENCY as usize + 2;
 
     /// A uniform of `size` bytes, labelled `label`.
     pub fn new(device: &wgpu::Device, size: usize, label: &str) -> FrameUniform {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         if let Some(slots) = shared(device, size, label) {
-            return FrameUniform { slots, next: 0 };
+            return FrameUniform {
+                device: Some(device.clone()),
+                slots,
+                next: 0,
+                completed: Arc::new(AtomicU64::new(0)),
+                serial: 0,
+                last: None,
+            };
         }
         #[cfg(not(any(
             target_os = "macos",
@@ -50,7 +84,14 @@ impl FrameUniform {
             target_arch = "wasm32"
         )))]
         if let Some(slots) = mapped(device, size, label) {
-            return FrameUniform { slots, next: 0 };
+            return FrameUniform {
+                device: Some(device.clone()),
+                slots,
+                next: 0,
+                completed: Arc::new(AtomicU64::new(0)),
+                serial: 0,
+                last: None,
+            };
         }
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
@@ -59,14 +100,24 @@ impl FrameUniform {
             mapped_at_creation: false,
         });
         FrameUniform {
+            #[cfg(not(target_arch = "wasm32"))]
+            device: None,
             slots: vec![Slot {
                 buffer,
                 contents: None,
                 size,
+                #[cfg(not(target_arch = "wasm32"))]
+                busy_until: 0,
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
                 _raw: None,
             }],
             next: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            completed: Arc::new(AtomicU64::new(0)),
+            #[cfg(not(target_arch = "wasm32"))]
+            serial: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            last: None,
         }
     }
 
@@ -82,6 +133,16 @@ impl FrameUniform {
 
     /// Write this frame's bytes; the slot to bind for it.
     pub fn write(&mut self, queue: &wgpu::Queue, bytes: &[u8]) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(prev) = self.last.take() {
+            self.serial += 1;
+            let target = self.serial;
+            self.slots[prev].busy_until = target;
+            let completed = Arc::clone(&self.completed);
+            queue.on_submitted_work_done(move || {
+                completed.fetch_max(target, Ordering::Release);
+            });
+        }
         let slot = self.next;
         self.next = (self.next + 1) % self.slots.len();
         let s = &self.slots[slot];
@@ -91,15 +152,34 @@ impl FrameUniform {
             bytes.len(),
             s.size
         );
-        match s.contents {
+        #[cfg(not(target_arch = "wasm32"))]
+        let ready = if s.contents.is_some() {
+            let mut done = s.busy_until <= self.completed.load(Ordering::Acquire);
+            if !done {
+                if let Some(device) = &self.device {
+                    let _ = device.poll(wgpu::PollType::Poll);
+                }
+                done = s.busy_until <= self.completed.load(Ordering::Acquire);
+            }
+            done
+        } else {
+            false
+        };
+        #[cfg(target_arch = "wasm32")]
+        let ready = false;
+        match (s.contents, ready) {
             // SAFETY: `contents` is the slot's own shared (Metal) or mapped
             // coherent (Vulkan) allocation of `size` bytes, alive as long as
-            // the slot; the GPU last read this slot RING frames ago (see the
-            // module note).
-            Some(p) => unsafe {
+            // the slot; `ready` confirms the GPU submission that last read
+            // this slot has completed.
+            (Some(p), true) => unsafe {
                 std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.as_ptr(), bytes.len())
             },
-            None => queue.write_buffer(&s.buffer, 0, bytes),
+            _ => queue.write_buffer(&s.buffer, 0, bytes),
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if s.contents.is_some() {
+            self.last = Some(slot);
         }
         slot
     }
@@ -136,6 +216,7 @@ fn shared(device: &wgpu::Device, size: usize, label: &str) -> Option<Vec<Slot>> 
             buffer,
             contents: Some(contents),
             size,
+            busy_until: 0,
             _raw: Some(raw),
         });
     }
@@ -158,7 +239,7 @@ fn mapped(device: &wgpu::Device, size: usize, label: &str) -> Option<Vec<Slot>> 
     let desc = wgpu::hal::BufferDescriptor {
         label: Some(label),
         size: size.max(16) as u64,
-        usage: wgpu::BufferUses::MAP_WRITE | wgpu::BufferUses::UNIFORM,
+        usage: wgpu::BufferUses::MAP_WRITE | wgpu::BufferUses::UNIFORM | wgpu::BufferUses::COPY_DST,
         memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
     };
     let mut raws = Vec::with_capacity(FrameUniform::RING);
@@ -206,8 +287,19 @@ fn mapped(device: &wgpu::Device, size: usize, label: &str) -> Option<Vec<Slot>> 
                     buffer,
                     contents: Some(contents),
                     size,
+                    busy_until: 0,
                 }
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FrameUniform;
+
+    #[test]
+    fn ring_exceeds_swapchain_image_count() {
+        assert!(FrameUniform::RING > crate::FRAME_LATENCY as usize + 1);
+    }
 }

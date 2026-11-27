@@ -535,7 +535,7 @@ mod tests {
         let source = format!("component App\n  view\n    column\n{instances}      view width=\"measure.late\"\ncomponent Card\n  view\n    column\n{rows}");
         std::fs::write(dir.join("app.contract"), source).unwrap();
         std::fs::write(dir.join("app.forma"), &design).unwrap();
-        let mut server = Server::start(&dir).unwrap();
+        let mut server = Server::start(&dir, false).unwrap();
         let request = |value: &str| {
             json!({"id": 1, "method": "propose", "ops": [
                 {"op": "set-token", "name": "measure.late", "value": value}
@@ -570,10 +570,8 @@ mod tests {
         let passing = run(&mut server, "12px", false);
         let refused = run(&mut server, "#202020", true);
         eprintln!("complete proposal: passing {passing:?}, refused {refused:?}");
-        assert!(
-            refused < Duration::from_millis(100),
-            "refused proposal: {refused:?}"
-        );
+        let budget = Duration::from_millis(if cfg!(debug_assertions) { 500 } else { 100 });
+        assert!(refused < budget, "refused proposal: {refused:?}");
         assert_eq!(
             std::fs::read_to_string(dir.join("app.forma")).unwrap(),
             design

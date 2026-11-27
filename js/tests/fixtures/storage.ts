@@ -177,6 +177,13 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     try { return {text:String((await native!.later({value})).text)}; }
     catch(error:any) { return {text:'refused: ' + error.message}; }
   }
+  if (op === 'native-probe') {
+    let sync: string;
+    try { native!.call({op: 'ping'}); sync = 'answered'; }
+    catch (e: any) { sync = e.name + '|' + e.message; }
+    try { await native!.later({op: 'ping'}); return {text: 'resolved'}; }
+    catch (e: any) { return {text: [native!.available, sync, e.name, e.message].join('|')}; }
+  }
   if (op === 'native-direct') return {text: String(native!.call({value}).text)}; // no bake branch
   // A package's synchronous form beside the app's own native module (native_later.rs).
   if (op === 'native-extension') return {text: String(native!.call({extension: 'pkg', sync: 'echo', args: {value}}).text)};
@@ -247,6 +254,13 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     try { await storage.fs.forgetDocument(value); } catch (e: any) { again = e.code; }
     const left = (await storage.fs.recentDocuments()).length;
     return {text: [listed.map((d) => `${d.path} ${d.kind} ${d.mode}`).join(","), left, again].join(" | ")};
+  }
+  if (op === "kept-forget") {
+    let err = "ok";
+    try { await storage.fs.forgetDocument(value); }
+    catch (e: any) { err = `${e.kind} ${e.code}`; }
+    const keptNow = (await storage.fs.recentDocuments()).map((d) => d.path).join(",");
+    return {text: `${err} | ${keptNow}`};
   }
   // LLP 1069.010.000 D4: the app's own atomic save of a kept file.
   if (op === "kept-save") {

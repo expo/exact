@@ -36,6 +36,32 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         XCTAssertNotNil(element(ungrouped, "inside"))
     }
 
+    /// A native view's accessibility element with a non-finite frame (infinite,
+    /// NaN, or overflowing coordinate rounding) is reported without a frame
+    /// instead of crashing JSONSerialization.
+    func testNonFiniteAccessibilityFramesAreOmittedInsteadOfCrashingJson() throws {
+        let p = try fixture()
+        let drawn = UIView(frame: CGRect(x: 200, y: 0, width: 60, height: 60))
+        let cases: [(String, CGRect)] = [
+            ("Infinite", CGRect(x: -1e38, y: -1e38, width: CGFloat.infinity, height: .infinity)),
+            ("NaN", CGRect(x: CGFloat.nan, y: 0, width: 60, height: 60)),
+            ("Overflow", CGRect(x: -1e308, y: 0, width: 60, height: 60)),
+        ]
+        drawn.accessibilityElements = cases.map { name, rect in
+            let element = UIAccessibilityElement(accessibilityContainer: drawn)
+            element.accessibilityLabel = name
+            element.accessibilityFrame = rect
+            return element
+        }
+        try XCTUnwrap(p.views[4]).addSubview(drawn)
+        let ax = p.axElements(roots: [p.viewport])
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: ax))
+        for (name, _) in cases {
+            let found = try XCTUnwrap(elements(ax).first { $0["name"] as? String == name }, name)
+            XCTAssertNil(found["frame"], name)
+        }
+    }
+
     func testLabelledImagesExposeTheirTraitAndDecorativeImagesStayHidden() throws {
         let p = try fixture()
         let image = NodeView(id: 20, kind: "image", presenter: p)
@@ -624,6 +650,32 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         p.syncModal()
         XCTAssertEqual([a.accessibilityViewIsModal, c.accessibilityViewIsModal], [true, true])
         XCTAssertEqual(p.announcedModal?.id, 8)
+    }
+
+    func testOnlyAnOpaqueFullCoverDisqualifiesAnAuthoredModal() throws {
+        let p = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 10, "kind": "view", "props": ["accessibilityRole": "dialog", "accessibilityModal": "true"]],
+            ["op": "create", "id": 12, "kind": "view", "props": ["testId": "cover"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 10, 12]],
+            ["op": "frame", "id": 10, "x": 0.0, "y": 100.0, "w": 200.0, "h": 100.0],
+            ["op": "frame", "id": 12, "x": 180.0, "y": 180.0, "w": 40.0, "h": 40.0],
+        ]))
+        let modal = try XCTUnwrap(p.views[10]), cover = try XCTUnwrap(p.views[12])
+        XCTAssertTrue(modal.accessibilityViewIsModal, "an empty overlapping corner covers nothing")
+        p.apply(wireBatch([["op": "frame", "id": 12, "x": 0.0, "y": 100.0, "w": 200.0, "h": 100.0]]))
+        XCTAssertTrue(modal.accessibilityViewIsModal, "a full-size transparent sibling covers nothing")
+        p.apply(wireBatch([["op": "style", "id": 12, "style": ["background_color": [0, 0, 0, 255], "visibility": "hidden"]]]))
+        XCTAssertTrue(cover.cssVisibilityHidden)
+        XCTAssertTrue(modal.accessibilityViewIsModal, "visibility:hidden is not a cover")
+        p.apply(wireBatch([["op": "style", "id": 12, "style": ["background_color": [0, 0, 0, 255], "visibility": "visible"]]]))
+        XCTAssertFalse(modal.accessibilityViewIsModal, "a fully opaque painted cover hides the dialog")
+        p.apply(wireBatch([["op": "style", "id": 12, "style": ["background_color": [0, 0, 0, 128], "visibility": "visible"]]]))
+        XCTAssertTrue(modal.accessibilityViewIsModal, "a translucent cover leaves the dialog exposed")
+        p.apply(wireBatch([["op": "style", "id": 12, "style": ["background_color": [0, 0, 0, 255], "visibility": "visible"]]]))
+        XCTAssertFalse(modal.accessibilityViewIsModal)
+        p.apply(wireBatch([["op": "frame", "id": 12, "x": 180.0, "y": 180.0, "w": 40.0, "h": 40.0]]))
+        XCTAssertTrue(modal.accessibilityViewIsModal, "a painted corner leaves the dialog exposed")
     }
 
     /// The post itself: once per change of the innermost modal, never for an

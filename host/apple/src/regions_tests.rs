@@ -296,3 +296,268 @@ fn the_keyboard_rides_the_view() {
     assert!(refused.contains("viewport:"), "{refused}");
     assert_eq!(read(&h)["keyboardHeight"], 0);
 }
+
+#[test]
+fn resize_at_refuses_invalid_size_before_settling_timers() {
+    let source = r#"component App
+  state switched = false
+  task tick mount
+    after(100, fire)
+  action fire
+    switched = true
+    focus("after")
+  view
+    column width="100%" height="100%"
+      if !switched
+        column testId="before" height=10
+      if switched
+        input id="after" testId="after" aria-label="after" height=10
+"#;
+    let plan = contract::compile(source).unwrap().encode();
+    let (mut h, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        800.,
+    )
+    .unwrap();
+    for (w, ht) in [(0., 0.), (-1., 800.), (f32::NAN, 800.)] {
+        let refused: serde_json::Value = serde_json::from_str(&h.resize_at(w, ht, 200.)).unwrap();
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("viewport:")),
+            "{refused}"
+        );
+        assert_eq!(
+            h.runner().slot("switched"),
+            Some(&exact_plan::Value::Bool(false)),
+            "invalid size ({w}, {ht}) must refuse before settling due timers"
+        );
+        assert_eq!(h.runner().viewport().width, 400.);
+    }
+    // The timer still fires normally once time advances.
+    let fired: serde_json::Value = serde_json::from_str(&h.advance(200.)).unwrap();
+    assert!(fired["error"].is_null(), "{fired}");
+    assert_eq!(
+        h.runner().slot("switched"),
+        Some(&exact_plan::Value::Bool(true))
+    );
+}
+
+#[test]
+fn refused_viewport_after_due_timer_preserves_committed_timer_ops_and_errors() {
+    let source = r#"shape Viewport
+  width: number
+  safeAreaLeft: number
+component App
+  resource viewport = exactViewport() as shape Viewport
+  derive badWidth = 1 / (500 - viewport.width)
+  derive badInset = 1 / (24 - viewport.safeAreaLeft)
+  state switched = false
+  task tick mount
+    after(100, fire)
+  action fire
+    switched = true
+    focus("after")
+  view
+    column width="100%" padding-left="env(safe-area-inset-left)"
+      if !switched
+        column testId="before" height=10
+      if switched
+        input id="after" testId="after" aria-label="after" height=10
+      text `${badWidth}-${badInset}`
+"#;
+    let plan = contract::compile(source).unwrap().encode();
+    let boot = || {
+        Host::boot(
+            &plan,
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            400.,
+            800.,
+        )
+        .unwrap()
+        .0
+    };
+
+    // Path 1: resize_at settles a due timer, then set_view fails in an exactViewport derivation.
+    let mut h = boot();
+    let before_id = h
+        .runner()
+        .kernel()
+        .node_by_key(h.runner().kernel().find_by_test_id("before")[0])
+        .unwrap()
+        .id;
+    let reply: serde_json::Value = serde_json::from_str(&h.resize_at(500., 900., 200.)).unwrap();
+    assert!(
+        reply["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("viewport:")),
+        "{reply}"
+    );
+    let after_id = h
+        .runner()
+        .kernel()
+        .node_by_key(h.runner().kernel().find_by_test_id("after")[0])
+        .unwrap()
+        .id;
+    let ops = reply["ops"].as_array().unwrap();
+    assert!(
+        ops.iter()
+            .any(|op| op["op"] == "create" && op["id"] == after_id),
+        "committed timer create op lost: {reply}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| op["op"] == "destroy" && op["id"] == before_id),
+        "committed timer destroy op lost: {reply}"
+    );
+    assert!(
+        ops.iter().any(|op| op["op"] == "children"),
+        "committed timer children op lost: {reply}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| op["op"] == "command" && op["name"] == "focus"),
+        "committed timer command op lost: {reply}"
+    );
+    assert_eq!(h.runner().viewport().width, 400.);
+
+    // Path 2: set_view_at with size settles a due timer, then fails in set_view.
+    let mut h = boot();
+    h.set_insets(0., 0., 0., 12.);
+    let before_id = h
+        .runner()
+        .kernel()
+        .node_by_key(h.runner().kernel().find_by_test_id("before")[0])
+        .unwrap()
+        .id;
+    let reply: serde_json::Value = serde_json::from_str(&h.set_view_at(
+        None,
+        Some([0., 0., 0., 24.]),
+        None,
+        Some((450., 900.)),
+        None,
+        None,
+        None,
+        &[],
+        &[],
+        Default::default(),
+        Some(200.),
+    ))
+    .unwrap();
+    assert!(
+        reply["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("viewport:")),
+        "{reply}"
+    );
+    let after_id = h
+        .runner()
+        .kernel()
+        .node_by_key(h.runner().kernel().find_by_test_id("after")[0])
+        .unwrap()
+        .id;
+    let ops = reply["ops"].as_array().unwrap();
+    assert!(
+        ops.iter()
+            .any(|op| op["op"] == "create" && op["id"] == after_id),
+        "committed timer create op lost: {reply}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| op["op"] == "destroy" && op["id"] == before_id),
+        "committed timer destroy op lost: {reply}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| op["op"] == "command" && op["name"] == "focus"),
+        "committed timer command op lost: {reply}"
+    );
+    assert_eq!(h.runner().kernel().env().left, 12.);
+    assert_eq!(h.runner().viewport().width, 400.);
+
+    // Path 3: when both the timer and viewport fail, both errors are reported.
+    let both_error = r#"shape Viewport
+  width: number
+component App
+  resource viewport = exactViewport() as shape Viewport
+  derive badWidth = 1 / (500 - viewport.width)
+  state n = 0
+  task bad mount
+    after(100, fail)
+  action fail
+    n = 1 / 0
+  view
+    column
+      text `${n}-${badWidth}`
+"#;
+    let plan = contract::compile(both_error).unwrap().encode();
+    let (mut h, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        800.,
+    )
+    .unwrap();
+    let reply: serde_json::Value = serde_json::from_str(&h.resize_at(500., 900., 200.)).unwrap();
+    let err = reply["error"].as_str().unwrap_or("");
+    assert!(
+        err.contains("viewport:") && err.contains("; "),
+        "both timer error and viewport refusal should be kept: {reply}"
+    );
+}
+
+#[test]
+fn the_aspect_fit_guide_rides_the_view() {
+    // LLP 1123 D16: the view's transaction gives the first root the window's aspect-fit guide, a rectangle
+    // with no size takes it back, and a malformed one is refused before anything changes
+    let source = "shape V\n  width: number\ncomponent App\n  resource v = exactViewport() as shape V\n  view\n    column viewport-fit=\"cover\" -exact-safe-area-aspect-fit=\"16 / 9\" width=\"100%\" height=\"100%\" testId=\"root\"\n      column width=\"50%\" height=10 testId=\"half\"\n";
+    let plan = contract::compile(source).unwrap().encode();
+    let measurer = Box::new(MonospaceMeasurer::default());
+    let (mut h, _) = Host::boot(&plan, NoData, measurer, 402., 874.).unwrap();
+    let frame = |h: &Host<NoData>, id: &str| {
+        let kernel = h.runner().kernel();
+        let f = kernel
+            .node_by_key(kernel.find_by_test_id(id)[0])
+            .unwrap()
+            .frame;
+        [f.x, f.y, f.width, f.height]
+    };
+    let width = |h: &Host<NoData>| {
+        let state: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::state(h.runner())).unwrap();
+        state["resources"]["v"]["width"].clone()
+    };
+    let fit = |h: &mut Host<NoData>, fit: Option<[f32; 4]>| {
+        h.set_view_at(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(fit),
+            &[],
+            &[],
+            Default::default(),
+            None,
+        )
+    };
+    let batch = fit(&mut h, Some([0.0, 324.0, 402.0, 226.125]));
+    assert!(!batch.contains("\"error\":\""), "{batch}");
+    assert_eq!(frame(&h, "root"), [0.0, 324.0, 402.0, 226.125]);
+    assert_eq!(frame(&h, "half")[2], 201.0);
+    assert_eq!(width(&h), 402, "the viewport stays the window's");
+    let refused = fit(&mut h, Some([0.0, 0.0, f32::NAN, 10.0]));
+    assert!(
+        refused.contains("the aspect-fit guide is refused"),
+        "{refused}"
+    );
+    assert_eq!(frame(&h, "root"), [0.0, 324.0, 402.0, 226.125], "unchanged");
+    fit(&mut h, None);
+    assert_eq!(frame(&h, "root"), [0.0, 0.0, 402.0, 874.0]);
+}

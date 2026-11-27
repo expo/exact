@@ -1,8 +1,8 @@
 //! Margins and the layout regions per box (LLP 1123 D8, D10): what a box reads of its margins,
-//! its readable content and their variants, by UIKit's rule. The kernel holds no margin value of
-//! its own: the host reports each owner's from UIKit (`OwnerMargins`), and a box's margins are
-//! its own, or a plain view's, with its safe area added and, where it preserves them, its
-//! superview's margins projected into it.
+//! its readable content and their variants, by UIKit's rule, which AppKit's margins follow. The
+//! kernel holds no margin value of its own: the host reports each owner's from its toolkit
+//! (`OwnerMargins`), and a box's margins are its own, or a plain view's, with its safe area added
+//! and, where it preserves them, its superview's margins projected into it.
 use super::area::{self, Space};
 use super::Kernel;
 use crate::arena::NodeArena;
@@ -22,32 +22,36 @@ pub(crate) const ROWS: [crate::StyleId; 8] = [
     crate::StyleId::LayoutMarginsFromSafeArea,
 ];
 
-/// What a host reports of an owner's margins, each as UIKit gives it, top right bottom left in
-/// the owner's space, and again whenever UIKit changes it (a trait, size class, posture or text
-/// size change included).
+/// What a host reports of an owner's margins, each as its toolkit gives it, top right bottom left
+/// in the owner's space, and again whenever the toolkit changes it (a trait, size class, posture
+/// or text size change included).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OwnerMargins {
-    /// The controller root view's margins rectangle as insets from the allocation's edges
-    /// (`layoutMarginsGuide`): its own margins, raised to the system minimum where it respects
-    /// it, with its safe area added, less Exact's own contributions to that safe area, as the
-    /// band is (D11).
+    /// The owner root view's margins rectangle as insets from the allocation's edges
+    /// (`layoutMarginsGuide`, or AppKit's margins region): its own margins, raised to the system
+    /// minimum where it respects it, with its safe area added, less Exact's own contributions to
+    /// that safe area, as the band is (D11).
     pub root: [f32; 4],
-    /// A plain view's default margins (a new `UIView`'s `layoutMargins`).
+    /// A plain view's default margins (a new `UIView`'s `layoutMargins`; on AppKit, which sets
+    /// none, the owner view's margins less its safe area).
     pub plain: [f32; 4],
-    /// The controller's `systemMinimumLayoutMargins`, which a box whose owner reports no
-    /// margins reads as unavailable.
-    pub minimum: [f32; 4],
+    /// The controller's `systemMinimumLayoutMargins`, `None` where the toolkit has none, as
+    /// AppKit has none: a box then reads it as unavailable, as it does where its owner reports
+    /// no margins.
+    pub minimum: Option<[f32; 4]>,
     /// The width `readableContentGuide` keeps text to at the owner's text size. One at least
     /// a box's margins' width leaves its guide the margins, as UIKit's is on the iPhone 18 Pro
-    /// and the Duo at the Large text size.
-    pub readable_width: f32,
+    /// and the Duo at the Large text size. `None` where the toolkit has no readable width, as
+    /// AppKit has none: a box's readable content and its guide are then its margins (D8).
+    pub readable_width: Option<f32>,
 }
 
-/// What a box reads of D8's families, in `Family::MARGINS`' order and then the system minimum,
-/// each top right bottom left, with the most each can be.
+/// What a box reads of D8's families, in `Family::MARGINS`' order, each top right bottom left,
+/// with the most each can be, and the system minimum where the owner's toolkit has one.
 pub(super) struct Regions {
-    pub(super) readings: [[f32; 4]; 7],
-    pub(super) caps: [[f32; 4]; 7],
+    pub(super) readings: [[f32; 4]; 6],
+    pub(super) caps: [[f32; 4]; 6],
+    pub(super) minimum: Option<[f32; 4]>,
 }
 
 /// What `slot` reads of its owner's margins, `owner` the owner's report, `band` its space's.
@@ -61,6 +65,14 @@ pub(super) fn regions(
     let safe = safe_area(arena, slot, space, band);
     let (own, own_cap) = own_from_safe(arena, slot, owner, safe);
     let (margins, cap) = preserved(arena, slot, space, band, owner, (own, own_cap));
+    let Some(readable_width) = owner.readable_width else {
+        // Readable content and its guide are the margins on a toolkit with no readable width
+        return Regions {
+            readings: [safe.0, margins, margins, margins, margins, margins],
+            caps: [safe.1, cap, cap, cap, cap, cap],
+            minimum: owner.minimum,
+        };
+    };
     // `.readableContent()`: as wide as the box less its own margins from the safe area, centred
     // in the box and kept inside its margins, so the smaller side rises to the mean of the two
     let mean = (own[1] + own[3]) / 2.0;
@@ -74,7 +86,7 @@ pub(super) fn regions(
     let readable_cap = [cap[0], cap[1].max(mean_cap), cap[2], cap[3].max(mean_cap)];
     // `readableContentGuide`: the readable width centred in the margins rectangle
     let width = arena.frame(slot).width;
-    let spare = ((width - margins[1] - margins[3]) - owner.readable_width).max(0.0) / 2.0;
+    let spare = ((width - margins[1] - margins[3]) - readable_width).max(0.0) / 2.0;
     // UIKit keeps the guide's frame at least empty where the margins exceed the box
     // (`design/probes/margins`: `root-large preserve-bottom`, 42 where the margins are 74)
     let height = arena.frame(slot).height;
@@ -88,24 +100,9 @@ pub(super) fn regions(
     // A corner variant is its region's plain value until the host reports the display's corners
     // (LLP 1123 Q3)
     Regions {
-        readings: [
-            safe.0,
-            margins,
-            margins,
-            readable,
-            readable,
-            guide,
-            owner.minimum,
-        ],
-        caps: [
-            safe.1,
-            cap,
-            cap,
-            readable_cap,
-            readable_cap,
-            guide_cap,
-            owner.minimum,
-        ],
+        readings: [safe.0, margins, margins, readable, readable, guide],
+        caps: [safe.1, cap, cap, readable_cap, readable_cap, guide_cap],
+        minimum: owner.minimum,
     }
 }
 
@@ -267,12 +264,13 @@ impl Kernel {
 /// Why `margins` are refused, if they are: a length that is not finite or is negative.
 pub(super) fn check(margins: &OwnerMargins) -> Result<(), KernelError> {
     let m = margins;
-    let lengths = (m.root.iter().chain(&m.plain).chain(&m.minimum)).chain([&m.readable_width]);
+    let minimum = m.minimum.iter().flatten();
+    let lengths = (m.root.iter().chain(&m.plain).chain(minimum)).chain(&m.readable_width);
     match lengths.into_iter().all(|v| v.is_finite() && *v >= 0.0) {
         true => Ok(()),
         false => Err(LayoutError::Margins(
             "a length is not finite or is negative: report each margin, the system minimum and \
-             the readable width as UIKit gives them, in points",
+             the readable width as the toolkit gives them, in points, or none where it has none",
         )
         .into()),
     }

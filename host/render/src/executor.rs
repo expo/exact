@@ -98,7 +98,7 @@ impl Executor {
     }
 
     /// Admit work, or refuse it (a limit, the core retired).
-    pub fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), &'static str> {
+    pub fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), String> {
         self.core.run_owned(request, work)
     }
 
@@ -114,7 +114,7 @@ impl Executor {
 
     /// Lift the ordered lane's fence after a refusal, admitting the ordered
     /// requests held behind it; returns those refused at a limit.
-    pub fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
+    pub fn resume_ordered(&self) -> Vec<(u64, String)> {
         self.core.resume_ordered()
     }
 
@@ -126,8 +126,8 @@ impl Executor {
     /// Settle a re-ask (`Dispatch::Again`) in its ordered place, with no
     /// work (LLP 1041 §8.4, amended 2026-10-09); kept pending while the
     /// window is full. An error is terminal, for the host to record.
-    pub fn again(&self, request: &RequestOut) -> Result<(), &'static str> {
-        self.core.again(request.ticket)
+    pub fn again(&self, request: &RequestOut) -> Result<(), String> {
+        self.core.again(request.ticket, request.class)
     }
     /// Let go of the work for tickets the runner no longer holds.
     pub fn forget(&self, held: impl Fn(u64) -> bool) {

@@ -32,11 +32,10 @@ the whole app and server to copy from.
    Google's `configURL` is `https://accounts.google.com/gsi/fedcm.json`. Show
    nothing for `NetworkError`, `NotAllowedError` or `AbortError`.
 
-4. **Verify on the server:** the signature against the provider's keys,
-   `iss`, `aud` among the audiences the build prints (natively Apple's is
-   the bundle ID, Google's the iOS client), `exp`, and `nonce` equal to the
-   one you issued to this client, once. Keep Apple's `user.name` the first
-   time: it never comes again.
+4. **Verify** the signature with the provider's keys, `iss`, `aud`, `exp`
+   and the single-use nonce issued to this client. Apple's native audience
+   is the bundle ID. Google uses the web client on Android and the iOS client
+   on Apple hosts. Keep Apple's `user.name` on the first sign-in.
 
 5. **The web's return route** on your server takes Apple's `form_post` or
    Google's redirect (exchanging the code with your secret), keeps the ID

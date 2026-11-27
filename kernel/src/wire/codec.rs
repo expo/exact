@@ -29,6 +29,9 @@ const PATH_D: u8 = Property::D as u8 + 1;
 /// `filter` (LLP 1003.002 D1): its property's code, past `d`'s.
 const FILTER: u8 = Property::Filter as u8 + 1;
 
+/// A box's `clip-path` (LLP 1003.003 D1): its property's code, past `filter`'s.
+const CLIP_PATH: u8 = Property::ClipPath as u8 + 1;
+
 /// Round `n` up to a multiple of 8.
 pub const fn align8(n: usize) -> usize {
     (n + 7) & !7
@@ -375,6 +378,7 @@ impl<'a> Reader<'a> {
                 BORDER_COLOR => TransitionProperty::BorderColor,
                 PATH_D => TransitionProperty::Property(Property::D),
                 FILTER => TransitionProperty::Property(Property::Filter),
+                CLIP_PATH => TransitionProperty::Property(Property::ClipPath),
                 p => TransitionProperty::Property(
                     Property::from_wire(p - 1)
                         .filter(|p| *p != Property::ShadowColor)
@@ -732,7 +736,7 @@ impl Writer {
     }
 }
 
-#[cfg(test)]
+#[cfg(test)] // Keep a suffix here to exercise the wire digest's test-source cutoff.
 mod tests {
     use super::*;
     use crate::style::{GridLine, GridTrack, GridTrackMax, GridTrackMin};
@@ -755,7 +759,7 @@ mod tests {
         // Recomputed when the schema changes; the digest test prints the value.
         // Apple JSON record and inline style declarations participate (LLP 1172.001 E4),
         // even when the EXWF codec bytes above stay unchanged.
-        assert_eq!(SCHEMA_DIGEST, 0x3fe3258ca982695e);
+        assert_eq!(SCHEMA_DIGEST, 0xb1a311fa28180e56);
     }
 
     #[test]

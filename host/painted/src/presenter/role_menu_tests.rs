@@ -49,6 +49,99 @@ const FORMS: &str = r#"component App
         text "Box menuitem"
 "#;
 
+#[test]
+fn a_button_shortcut_fires_with_every_authored_role() {
+    let roles = exact_kernel::ARIA_ROLES;
+    let source = format!(
+        r#"component App
+  state count = 0
+  derive roles = {roles:?}
+  derive current = match roles.at(count) {{ case some(r) => r, case none => "button" }}
+  action pick
+    count = count + 1
+  view
+    column
+      button "Pen" appearance="none" role=current aria-keyshortcuts="p" press=pick testId="choice" height=24
+"#
+    );
+    let mut p = boot(&source);
+    let choice = id(&p, "choice");
+    for (i, role) in roles.iter().copied().chain(["button"]).enumerate() {
+        if i > 0 {
+            p.key_down("p", 0.);
+            p.run_commands(|| ());
+        }
+        let button = p.host.kernel().node(choice).unwrap();
+        assert_eq!(button.props.str(PropId::AccessibilityRole), Some(role));
+    }
+}
+
+#[test]
+fn a_handlerless_button_keeps_its_focus_and_enter_under_an_authored_role() {
+    for role in ["tab", "menuitem", "none"] {
+        let mut p = boot(&format!(
+            r#"component App
+  state count = 0
+  action bump
+    count = count + 1
+  view
+    column width=480 height=400
+      button "Bare" appearance="none" role="{role}" testId="bare"
+      button "Other" aria-keyshortcuts="Enter" press=bump testId="other"
+"#
+        ));
+        let bare = id(&p, "bare");
+        key(&mut p, "Tab", "bare");
+        assert!(p.type_key(bare, "Enter", "Enter", true, false).is_ok());
+        assert!(p.type_key(bare, "Enter", "Enter", false, false).is_ok());
+        p.run_commands(|| ());
+        assert_eq!(p.focus(), Some(bare), "{role}");
+        assert_eq!(p.host.runner().slot("count"), Some(&Value::Number(0.)));
+        key(&mut p, "Tab", "other");
+        let (x, y, w, h) = p.rect_of(bare).unwrap();
+        p.pointer_down(x + w / 2., y + h / 2., 0.).unwrap();
+        p.pointer_up(x + w / 2., y + h / 2., 1.).unwrap();
+        assert_eq!(p.focus(), Some(bare), "{role}: a pointer focuses it too");
+    }
+}
+
+#[test]
+fn button_element_identity_follows_html_semantic_overrides() {
+    let mut p = boot(FORMS);
+    for name in ["button", "button-none"] {
+        let button = id(&p, name);
+        for (tag, is_button) in [("section", false), ("audio", true)] {
+            p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+                id: button,
+                prop: PropId::SemanticTag,
+                value: exact_kernel::PropValue::Str(tag.into()),
+            }]);
+            assert_eq!(
+                p.host.kernel().node(button).unwrap().is_button_element(),
+                is_button,
+                "{name}: {tag}"
+            );
+        }
+    }
+    for (name, prop, value, is_button) in [
+        ("button", PropId::Href, "/next", true),
+        ("button-none", PropId::PanelHref, "/next", false),
+        ("link-nohref", PropId::Href, "", false),
+    ] {
+        let button = id(&p, name);
+        p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+            id: button,
+            prop,
+            value: exact_kernel::PropValue::Str(value.into()),
+        }]);
+        assert_eq!(
+            p.host.kernel().node(button).unwrap().is_button_element(),
+            is_button,
+            "{name}: {prop:?}"
+        );
+    }
+}
+
 /// What each element a menu could hold lowers to, and that the kernel's
 /// members are the elements the web counts (`button`, `a[href]`,
 /// `[role^="menuitem"]`), which the web makes of these nodes as the comments say.

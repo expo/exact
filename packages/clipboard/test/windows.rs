@@ -50,6 +50,14 @@ fn item_refusals_and_text_preserve_the_clipboard_contract() {
     let text = prepare("writeText", &json!({"data":"café 🦀"}), no_file).unwrap();
     assert_eq!(text.text.as_deref(), Some("café 🦀"));
     exact_windows::clipboard::write(text, true).unwrap();
+    let rich = json!({"data": [{"text/html": "<b>note</b>", "text/plain": "note"}]});
+    assert_eq!(
+        prepare("write", &rich, no_file).err().unwrap(),
+        (
+            "NotAllowedError",
+            "Type text/html not supported on write.".into()
+        )
+    );
     let empty = prepare("write", &json!({"data":[]}), no_file).unwrap();
     exact_windows::clipboard::write(empty, true).unwrap();
     crate::clipboard::PRIVATE.with(|b| assert_eq!(b.borrow().text.as_deref(), Some("café 🦀")));
@@ -149,6 +157,10 @@ fn composed_package_dispatches_calls_and_refuses_non_app_origins() {
         ),
         (
             json!({"extension":"clipboard", "send":"write", "args":{"data":[]}}),
+            json!({"error":"NotAllowedError", "message":"person-required"}),
+        ),
+        (
+            json!({"extension":"clipboard", "send":"write", "origin":"app", "args":{"data":[]}}),
             json!({}),
         ),
     ] {

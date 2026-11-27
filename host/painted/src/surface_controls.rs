@@ -805,6 +805,7 @@ impl<D: DataSource> Presenter<D> {
                     || self.focus == Some(id) && self.alert_message(id)
                     || n.props.str(PropId::Action).is_some()
                     || n.node_type == NodeType::TextInput
+                    || n.is_button_element()
                     || self.controller(&n)
                     // A native button is a button under any role (LLP 1069.011.000 D1).
                     // Every other control is one of HTML's focusable areas

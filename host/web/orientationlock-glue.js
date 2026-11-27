@@ -21,7 +21,7 @@ const ALL = 0b1111;
 export const types = word => ({ portrait: 0b0011, landscape: 0b1100, any: ALL })[word] ?? (ORIENTATIONS.includes(word) ? 1 << ORIENTATIONS.indexOf(word) : undefined);
 export const WORDS = ["portrait", "landscape", ...ORIENTATIONS, "natural", "any", "current", "none"];
 
-const sheet = route => route.getAttribute("navigationPresentation") === "modal";
+const sheet = route => ["modal", "popover"].includes(route.getAttribute("navigationPresentation"));
 
 /** Each stack `el` lies in, by the element holding its routes, with the tier
  * of the route it lies under: its index, or the page's for the page and the

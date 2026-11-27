@@ -26,6 +26,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     private(set) var textRasterWhole = false
     var textRasterReady = false { didSet { if oldValue != textRasterReady { presenter?.noteOwedText(self) } } }
     var textRasterFailed = false { didSet { if oldValue != textRasterFailed { presenter?.noteOwedText(self) } } }
+    /// `draw(_:)` painted fallback text into this view's backing store while no raster was shown.
+    var drewFallbackText = false
     var proseMarker: CATextLayer?
     var textLayoutValid = false
     /// Whether a frame has shown it where it is (`Presenter.showed`).
@@ -130,6 +132,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             updateRefresh()
             if handlers.contains("scroll") || handlers.contains("scrollend") { needScroll() }
             #if !os(tvOS)
+            updateDiscreteSwipe()
+            updateReportingPinch()
             if handlers.contains("hover"), hoverRecognizer == nil {
                 let g = UIHoverGestureRecognizer(target: self, action: #selector(hovering(_:)))
                 // Hover observes pointer movement; it must never hold or cancel
@@ -182,6 +186,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         }
         if let reorder = presenter?.reorders.shouldBegin(self, gesture) { return reorder }
         if let drag = DragLink.installed?.shouldBegin(self, gesture) { return drag }
+        if gesture === discreteSwipe { return SwipeInput.allows(self) }
         if gesture === swipeRecognizer, let pan = gesture as? UIPanGestureRecognizer {
             let velocity = pan.velocity(in: window)
             // Where the finger landed: the translation leaves out the travel
@@ -226,6 +231,16 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if hitsNativeEditor(touch.view) { return false }
         var hit = touch.view
         while let current = hit, current !== self {
+            #if os(iOS)
+            if gestureRecognizer === heightRecognizer, let scroll = current as? UIScrollView,
+               let sheet = gestureRecognizer as? SheetScrollGesture {
+                if scroll === scrollView { return sheet.receive(touch, in: scroll) }
+                if let rail = scroll as? ScrollView, rail.scrollsX && !rail.scrollsY {
+                    hit = current.superview
+                    continue
+                }
+            }
+            #endif
             if (gestureRecognizer === heightRecognizer || gestureRecognizer === transformRecognizer || gestureRecognizer === transformContact?.pinchRecognizer), current is UIScrollView { return false }
             hit = current.superview
         }
@@ -234,7 +249,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     /// A nested editor owns its selection gestures, including read-only
     /// text. Plain gestures and native context menus use the same boundary.
-    func hitsNativeEditor(_ view: UIView?) -> Bool { Self.nativeEditor(view, below: self) }
+    package func hitsNativeEditor(_ view: UIView?) -> Bool { Self.nativeEditor(view, below: self) }
     /// Whether `view` is in a native editor's view below `boundary`, which
     /// owns its selection gestures.
     static func nativeEditor(_ view: UIView?, below boundary: UIView) -> Bool {
@@ -481,8 +496,10 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     /// A pointer over the node (an iPad's trackpad or mouse; a phone has
     /// none): `hover` in and out.
+    var hadFormActionRefs = false
+    var actionSummary: UIAccessibilityElement?
     package override var accessibilityElements: [Any]? {
-        get { textAccessibilityChildren() ?? tableElementsInDrawnOrder ?? super.accessibilityElements ?? presenter?.navigation.lifted?.accessibilityElements(of: self) ?? NodeView.emptyBoxAccessibility(of: self) }
+        get { textAccessibilityChildren() ?? childrenWithActions(tableElementsInDrawnOrder ?? super.accessibilityElements ?? presenter?.navigation.lifted?.accessibilityElements(of: self) ?? NodeView.emptyBoxAccessibility(of: self)) }
         set { super.accessibilityElements = newValue }
     }
     /// A text field's Enter as a key (its characters are its `input`, the
@@ -706,22 +723,33 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package var grid: GridPlace?
 
     package func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        #if os(iOS)
+        PinchLift.clearIfEnded(for: scrollView)
+        presenter?.textSelection.scrollWillBeginDragging(scrollView)
+        #endif
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
         presenter?.elementScrolls.userScrolled(scrollView) // its own scroller, or a grouped list's collection
         guard scrollView === self.scrollView else { return }
         followingEndAnimated = false; authoredScrollAnimating = false; pageIfPager(scrollView)
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
-        retainedScrollTop = nil; dropCarriedScroll()
+        retainedScrollTop = nil; dropCarriedScroll(); afterScrollAnimation = nil
         if handlers.contains("scrolldragstart") { presenter?.scrollDrag(id, nil) }
         #if os(iOS)
         if swipeOwner { presenter?.swipeActions.paintedBegan(self) }
         #endif
     }
 
+    /// The host is putting a scroller somewhere and back in one turn to read where UIKit lays it out (a tab's
+    /// reselect finding the top with the bar open): nothing here hears those offsets, which nothing draws.
+    package static var probingScroll = false
+
     /// A scroll under a canvas repaints it (LLP 1014 D4 c).
     package func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard scrollView === self.scrollView, let presenter else { return }
+        guard scrollView === self.scrollView, let presenter, !Self.probingScroll else { return }
+        #if os(iOS)
+        if (heightRecognizer as? SheetScrollGesture)?.correctOffset(in: scrollView) == true { return }
+        #endif
         if scrollView.scrollsItself { dropCarriedScroll() }
         let post = Presenter.signpostLog.signpostsEnabled ? Presenter.beginScrollSignpost() : nil
         #if DEBUG
@@ -742,6 +770,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         presenter.stickies.scrolled(id); presenter.collections.changed(id, user: true, sequenceAdvanced: true)
         #if os(iOS)
         if swipeOwner, scrollView.isTracking { presenter.swipeActions.paintedScrolled(self) }
+        presenter.textSelection.scrolled(scrollView)
         #endif
         presenter.transformGeometry.changed()
         presenter.tipsScrolled()
@@ -793,19 +822,6 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         }
     }
 
-    /// The direct child of a canvas this node is under, when that child is
-    /// placed by the surface: the node whose `placement` maps this subtree.
-    package var placedAncestor: NodeView? {
-        guard Self.placedViews.count > 0 else { return nil }
-        var v: UIView? = self
-        while let n = v {
-            if let node = n as? NodeView, (node.placement != nil || node.placementHidden) { return node }
-            if n.superview?.canvasOverlayOwner != nil { return nil }
-            v = n.superview
-        }
-        return nil
-    }
-
     /// A homography applied to a point (row major, projective).
     static func map(_ h: [Double], _ p: CGPoint) -> CGPoint {
         let w = h[6] * p.x + h[7] * p.y + h[8]
@@ -855,7 +871,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if placedAncestor?.placementHidden == true || hidesBack() { return nil }
         let matrix = layer.transform
         if CATransform3DIsAffine(matrix), matrix.m11 * matrix.m22 - matrix.m12 * matrix.m21 == 0 { return nil }
-        if let clipPath, !clipPath.contains(point, using: clipRule) { return nil }
+        if let clip = presentedClipPath, !clip.contains(point, using: clipRule) { return nil }
         if !fragmentHit(point) { return nil }
         if props["swipeIndicator"] == "true" { return nil }
         if isSurfaceControl, !inert, !isHidden, !cssVisibilityHidden, isUserInteractionEnabled, hitBounds.contains(point) { return self }
@@ -894,7 +910,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 // outside, a scroller) is not one, but leads to them, unless
                 // hidden or refusing input: an `auto` descendant is still a target.
                 if passesThrough, !(child is NodeView) {
-                    let holder = self.container
+                    let holder = child === self.scrollportHolder ? child : self.container
                     guard holder !== self, holder === child || holder.isDescendant(of: child) else { return nil }
                     let chain = sequence(first: holder, next: { $0 === child ? nil : $0.superview })
                     guard !chain.contains(where: { $0.isHidden || !$0.isUserInteractionEnabled }) else { return nil }
@@ -1050,9 +1066,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     func applyProps(set: [String: String], clear: [String]) {
         if clear.contains("action") { cancelSurfaceControls() }
         if clear.contains("scrollLeft") { pendingScrollLeft = nil }
-        if let raw = set["scrollLeft"], let left = Double(raw), left.isFinite { pendingScrollLeft = left }
+        if let raw = set["scrollLeft"], let left = Double(raw), left.isFinite { pendingScrollLeft = left; askedToScroll() }
         if clear.contains("scrollTop") { pendingScrollTop = nil }
-        if let raw = set["scrollTop"], let top = Double(raw), top.isFinite { pendingScrollTop = top }
+        if let raw = set["scrollTop"], let top = Double(raw), top.isFinite { pendingScrollTop = top; askedToScroll() }
         if let raw = set["scrollZoom"], let zoom = Double(raw), zoom.isFinite, zoom > 0 { more.pendingZoom = zoom }
         // One assignment: `props` tells the presenter of each.
         var next = props
@@ -1186,6 +1202,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         Self.scrollLayoutEpoch &+= 1
         if Self.containerMoves == 0 { pressEpoch &+= 1; cancelPressContact(reparenting: true); presenter?.unshown(self) } // a new parent: shown elsewhere
         super.didMoveToSuperview()
+        if superview != nil { presenter?.session?.natives.retryWaitingScreens(in: self) }
         Self.textRasterAncestryChanged(self)
         Self.extensionsUnder(self)
         ScrollMembership.epoch &+= 1
@@ -1234,13 +1251,14 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// layer's `masksToBounds`, except on a scroller drawn into a band (`clipsItself`).
     package var overflowClips: Bool {
         let ox = style["overflow_x"]?.string ?? "visible", oy = style["overflow_y"]?.string ?? "visible"
-        return ["hidden", "clip"].contains(ox) || ["hidden", "clip"].contains(oy) || scrollDormant
+        return ox == "hidden" || ox == "clip" || oy == "hidden" || oy == "clip" || scrollDormant
     }
 
     func syncScroll() {
         let ox = style["overflow_x"]?.string ?? "visible", oy = style["overflow_y"]?.string ?? "visible"
         let scrolls = !isTextControl && ((ox == "scroll" || ox == "auto") || (oy == "scroll" || oy == "auto"))
         if scrolls { syncClipBox(false) }
+        ScrollportBars.raise(in: self) // its bars' holder at its padding box as its border moves
         if scrolls && scroll == nil && !scrollWaits && !groupedOwner {
             if pageBand != .zero, extras?.nativeScrollView != nil { setPageBand(.zero) } // the list leaving keeps its scrollTop
             if reach != .zero { setReach(.zero) } // the box's own reach, or a native list's, goes as the scroll view comes
@@ -1252,12 +1270,12 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             GlassGroups.moving(in: self) {
                 // In the window first, as `syncClipBox` says.
                 let children = subviews.filter { $0 is NodeView }
-                addSubview(sv)
+                addSubview(sv); ScrollportBars.raise(in: self)
                 for child in children { sv.addSubview(child) }
             }
             scroll = sv
             applyScrollEdge(sv) // a scroll view made when first needed (`needScroll`) has no restyle to give it its edge effects
-            if pageBand != .zero || bandInset != .zero || reachGiven { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero; more.reachGiven = false } // a new scroll view reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13)
+            forgetReach()
             scrollWritten = nil
             updateRefresh()
             presenter?.navigation.scrollBackendChanged(self)
@@ -1272,7 +1290,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 if presenter?.navigation.container === self { presenter?.navigation.fitOwner() }
                 sv.removeFromSuperview()
             }
-            if pageBand != .zero || bandInset != .zero || reachGiven { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero; more.reachGiven = false }
+            forgetReach()
         }
         scroll?.scrollsX = (ox == "scroll" || ox == "auto")
         scroll?.scrollsY = (oy == "scroll" || oy == "auto")
@@ -1341,6 +1359,16 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         sv.alwaysBounceVertical = sv.scrollsY && !nested && (!fits || !carousel)
     }
 
+    // Giving the route's bottom cover to its scroller can extend the frame under
+    // the bar. With automatic adjustment off, only the safe area changes.
+    package override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        guard scrollView?.contentInsetAdjustmentBehavior == .never,
+              let route = ViewPresentation.controllers(for: self, layout: true).lazy.compactMap({ $0 as? any RouteSurface }).first,
+              route.edgeScroll === self else { return }
+        SafeAreaSteps.react(self) { [weak route] in route?.hosting?.coversChanged() }
+    }
+
     /// Its parts move with its frame: in an animation UIKit has open only if the last frame showed it (`Presenter.moveOrPlace`).
     package override func layoutSubviews() {
         HostPhases.shared.count(.nodeLayouts)
@@ -1378,6 +1406,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
 
     package override func draw(_ rect: CGRect) {
+        drewFallbackText = false
         repaintThrough(); syncDrawnRange()
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         if !cssVisibilityHidden, Capture.capturing, kind == "canvas", let picture = canvases?.picture(of: self) {
@@ -1441,8 +1470,12 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                     HostPhases.shared.end(phase)
                 }
                 let spec = paragraphSpec()
-                if let paragraph = paragraphLayout() { eachFragment(ctx) { box, at, lines in
-                    drawParagraph(ctx, paragraph: paragraph, spec: spec, in: box, dirty: rect.offsetBy(dx: -at.x, dy: -at.y), lines: lines) } }
+                if let paragraph = paragraphLayout() {
+                    drewFallbackText = true
+                    eachFragment(ctx) { box, at, lines in
+                        drawParagraph(ctx, paragraph: paragraph, spec: spec, in: box, dirty: rect.offsetBy(dx: -at.x, dy: -at.y), lines: lines)
+                    }
+                }
             }
         }
         if !cssVisibilityHidden, Capture.capturing, let picture = Capture.web[id] {

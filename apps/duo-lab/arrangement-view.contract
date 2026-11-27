@@ -1,14 +1,14 @@
-use PaneViewport, paneDirection from "./arrangement.contract"
+use PaneViewport, paneDirection, foldWidth, foldTop, foldBottom, foldSpring from "./arrangement.contract"
 
 // The Arrangement screen: a UIKit app's arrangement screen (one navigation
 // controller, a route whose `UIArrangementViewController` holds two scrolling
-// panes) written in Contract. The Layout menu picks UIKit's split or overlay
-// arrangement through the `arranged-panes` hatch. The Options menus set the
-// route's navigation item and bar scroll view through the route hatch: title
-// display, bar minimization, the safe-area adjustment and the content scroll
-// view, a pane found through the `arrangement-pane` element hatch. Next pushes
-// another screen with the same settings. Hosts without
-// UIArrangementViewController show the panes in CSS and only Next.
+// panes) written in Contract. The Layout menu picks the panes' `arrangement`,
+// UIKit's split or overlay. The Options menus set the route's navigation item
+// and bar scroll view through the route hatch: title display, bar
+// minimization, the safe-area adjustment and the content scroll view, a pane
+// found through the `arrangement-pane` element hatch. Next pushes another
+// screen with the same settings. Hosts without UIArrangementViewController
+// show the panes in CSS and only Next.
 
 shape ArrangementSettings
   layout: string
@@ -16,6 +16,9 @@ shape ArrangementSettings
   barMinimization: string
   safeAreaAdjustment: string
   contentScroll: string
+
+// The menu's choice as `arrangement` says it
+fn arrangementOf(layout: string): string = layout == "horizontal" or layout == "vertical" ? `split ${layout}` : layout
 
 // A row's number as the UIKit app prints it (`%03d`)
 fn rowNumber(n: number): string = n < 10 ? `00${n}` : n < 100 ? `0${n}` : `${n}`
@@ -37,6 +40,9 @@ component ArrangementView
   derive key = `arrangement-${routeKey}`
   derive prefix = `arrangement-${depth}`
   derive title = depth == 1 ? "Arrangement" : `Arrangement ${depth}`
+  derive across = not native and viewport.horizontalViewportSegments == 2
+  derive down = not native and viewport.verticalViewportSegments == 2
+  derive spring = native ? "none" : foldSpring(viewport)
   action layout(value: string)
     settings = ArrangementSettings(settings, layout=value)
   action titleDisplay(value: string)
@@ -48,7 +54,7 @@ component ArrangementView
   action contentScroll(value: string)
     settings = ArrangementSettings(settings, contentScroll=value)
   view
-    column navigationKey=routeKey testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${key}-${settings.contentScroll}`) position="absolute" inset=0
+    column navigationKey=routeKey -exact-safe-area=(native ? "left right" : none) testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${key}-${settings.contentScroll}`) position="absolute" inset=0
       header display="flex" align-items="center" gap=8 padding="8px 16px"
         text title role="heading" aria-level=2 flex=1 testId=`${prefix}-title`
         if native
@@ -86,10 +92,14 @@ component ArrangementView
           Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Automatic", value="automatic", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
           Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Enabled", value="enabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
           Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Disabled", value="disabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
-      // UIKit lays out the two panes where it supports arrangements; elsewhere CSS puts them side by side or stacked
-      column hatch="arranged-panes" data-pane-layout=(native ? settings.layout : "css") testId=`${prefix}-container` flex=1 min-height=0 flex-direction=paneDirection(viewport)
-        ArrangementPane(id=`${key}-primary`, name=`${prefix}-primary`, label="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band")
-        ArrangementPane(id=`${key}-secondary`, name=`${prefix}-secondary`, label="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band")
+      // UIKit lays out the two panes where it supports arrangements. Elsewhere CSS puts them side by side or stacked, clear
+      // of a fold: across it each is as wide as the narrower segment, at either end; down it the container ends with the
+      // upper segment, as the box after it takes the rest of the route, and the secondary takes the lower one
+      column arrangement=(native ? arrangementOf(settings.layout) : "none") testId=`${prefix}-container` flex=1 min-height=0 flex-direction=paneDirection(viewport) justify-content=(across ? "space-between" : "flex-start")
+        ArrangementPane(id=`${key}-primary`, name=`${prefix}-primary`, native=native, label="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=false, top="auto", spring=spring)
+        ArrangementPane(id=`${key}-secondary`, name=`${prefix}-secondary`, native=native, label="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=down, top=(down ? foldBottom(viewport) : "auto"), spring=spring)
+      if down
+        column flex="none" height=`calc(100% - ${foldTop(viewport)})`
 
 // One single-choice row of a menu: the current choice is checked
 component Choice
@@ -119,14 +129,22 @@ component ArrangementPane
   props
     id: string
     name: string
+    native: bool
     label: string
     ground: string
     stripe: string
     band: string
+    grow: number
+    width: string
+    lower: bool
+    top: string
+    spring: string
   view
-    // Fill UIKit's allocation, which is the pane's containing block, to scroll within it
-    scroll id=id hatch="arrangement-pane" testId=name flex="1 1 0%" width="100%" height="100%" min-width=0 min-height=0 background-color=ground
-      for i in range(150) key=i
-        column gap=4 padding="16px 20px" background-color=((i + 1) % 2 == 0 ? stripe : band) testId=`${name}-row-${i + 1}`
-          text `${label} ${rowNumber(i + 1)}` font="-exact-body"
-          text "Scroll this pane independently." font="-exact-subheadline" color="-exact-secondary-label"
+    // Fill UIKit's allocation, which is the pane's containing block, or the CSS row, to scroll within it
+    scroll id=id hatch="arrangement-pane" testId=name flex-grow=grow flex-shrink=1 flex-basis=(grow == 0 ? "auto" : "0%") width=width height=(lower ? "auto" : "100%") min-width=0 min-height=0 position=(lower ? "absolute" : "relative") top=top bottom=(lower ? "0px" : "auto") left=(lower ? "0px" : "auto") right=(lower ? "0px" : "auto") -exact-layout-transition=spring background-color=ground
+      // A native pane lies under the iPhone Duo's side bar, where its scroll indicator is, and its rows end at the bar
+      column margin-left=(native ? "var(--exact-safe-area-inset-left)" : "0px") margin-right=(native ? "var(--exact-safe-area-inset-right)" : "0px")
+        for i in range(150) key=i
+          column gap=4 padding="16px 20px" background-color=((i + 1) % 2 == 0 ? stripe : band) testId=`${name}-row-${i + 1}`
+            text `${label} ${rowNumber(i + 1)}` font="-exact-body"
+            text "Scroll this pane independently." font="-exact-subheadline" color="-exact-secondary-label"

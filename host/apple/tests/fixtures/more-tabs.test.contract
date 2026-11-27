@@ -1,0 +1,13 @@
+test "each tab has its drawn box before and after a switch"
+  at "/"
+  clock settle
+  expect layout "tab-home" width >= 20
+  expect layout "tab-three" height >= 20
+  tap "tab-three"
+  clock settle
+  expect state nav.tab == "three"
+  expect layout "tab-three" width >= 20
+  tap "tab-home"
+  clock settle
+  expect state nav.tab == "home"
+  expect layout "tab-home" height >= 20

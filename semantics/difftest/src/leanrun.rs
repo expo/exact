@@ -191,6 +191,41 @@ fn cache_file(dir: &Path, library: &str, c: &LeanCase) -> PathBuf {
     dir.join("cache").join(format!("{}.txt", h.hex()))
 }
 
+/// Stage `lines` to a thread-unique temp path and atomically rename into `file`.
+fn write_cache(file: &Path, lines: &[String]) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = file.with_extension(format!("{}-{serial}.tmp", std::process::id()));
+    if std::fs::write(&tmp, lines.join("\n")).is_ok() {
+        if std::fs::rename(&tmp, file).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+fn memo_with_library(
+    dir: &Path,
+    library: &str,
+    module: &str,
+    f: impl FnOnce() -> Result<Vec<String>, String>,
+) -> Result<Vec<String>, String> {
+    let mut h = Digest::default();
+    h.add(library.as_bytes());
+    h.add(module.as_bytes());
+    let file = dir.join("cache").join(format!("{}.txt", h.hex()));
+    if let Ok(t) = std::fs::read_to_string(&file) {
+        return Ok(t.lines().map(str::to_string).collect());
+    }
+    let lines = f()?;
+    write_cache(&file, &lines);
+    Ok(lines)
+}
+
 /// What `f` answers for a generated module's text, kept under `dir` with
 /// [`CACHE`] on and answered from there while the module and the library
 /// are unchanged.
@@ -202,20 +237,7 @@ pub fn memo(
     let Some(library) = caching() else {
         return f();
     };
-    let mut h = Digest::default();
-    h.add(library.as_bytes());
-    h.add(module.as_bytes());
-    let file = dir.join("cache").join(format!("{}.txt", h.hex()));
-    if let Ok(t) = std::fs::read_to_string(&file) {
-        return Ok(t.lines().map(str::to_string).collect());
-    }
-    let lines = f()?;
-    let _ = std::fs::create_dir_all(dir.join("cache"));
-    let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
-    if std::fs::write(&tmp, lines.join("\n")).is_ok() {
-        let _ = std::fs::rename(&tmp, &file);
-    }
-    Ok(lines)
+    memo_with_library(dir, library, module, f)
 }
 
 /// Run `cases` in one Lean process; each case's observation lines, in
@@ -243,13 +265,9 @@ pub fn run(cases: &[LeanCase], dir: &Path, tag: &str) -> Result<Vec<Vec<String>>
             .map(|&i| crate::clone_case(&cases[i]))
             .collect();
         let fresh = run_uncached(&todo, dir, tag)?;
-        let _ = std::fs::create_dir_all(dir.join("cache"));
         for (&i, lines) in missing.iter().zip(fresh) {
             // Whole or not at all: a reader never sees half an observation.
-            let tmp = files[i].with_extension(format!("{}.tmp", std::process::id()));
-            if std::fs::write(&tmp, lines.join("\n")).is_ok() {
-                let _ = std::fs::rename(&tmp, &files[i]);
-            }
+            write_cache(&files[i], &lines);
             results[i] = Some(lines);
         }
     }
@@ -331,6 +349,45 @@ pub fn numbers(bits: &[u64], dir: &Path) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_memo_writes_do_not_truncate_cache_or_leave_tmp_files() {
+        let dir = std::env::temp_dir().join(format!("difftest-leanrun-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let payload: Vec<String> = (0..120)
+            .map(|i| format!("line-{i:03} observation"))
+            .collect();
+        for round in 0..30 {
+            let module = format!("def round_{round} := ()");
+            let barrier = std::sync::Barrier::new(8);
+            std::thread::scope(|scope| {
+                for _ in 0..8 {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        let got =
+                            memo_with_library(&dir, "test-lib", &module, || Ok(payload.clone()))
+                                .unwrap();
+                        assert_eq!(got, payload);
+                    });
+                }
+            });
+            let cached = memo_with_library(&dir, "test-lib", &module, || {
+                panic!("cache entry for round {round} should exist")
+            })
+            .unwrap();
+            assert_eq!(cached, payload);
+        }
+        let leftover_tmp: Vec<_> = std::fs::read_dir(dir.join("cache"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "tmp"))
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            leftover_tmp.is_empty(),
+            "leftover tmp files: {leftover_tmp:?}"
+        );
+    }
 
     #[test]
     #[ignore = "async lane: needs the Lean toolchain"]

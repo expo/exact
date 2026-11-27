@@ -21,7 +21,9 @@
     "showNotification": {
       "channelId": "string",
       "category": "enum<alarm|call|email|err|event|location_sharing|message|missed_call|navigation|progress|promo|recommendation|reminder|service|social|status|stopwatch|sys|transport|workout>",
-      "number": "number"
+      "number": "number",
+      "group": "string",
+      "groupSummary": "bool"
     }
   },
   "names": [],

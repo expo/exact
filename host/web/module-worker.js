@@ -13,7 +13,8 @@ const checkpoint = () => new Promise(resolve => {
   channel.port2.postMessage(null);
 });
 let pageBase;
-let context = null, storage = null, admitted = null, tail = Promise.resolve(), stream = null;
+const hostDateNow = Date.now.bind(Date);
+let context = null, storage = null, admitted = null, tail = Promise.resolve(), stream = null, randomStream = null, randomInitStream = null, hasSeed = false, moduleClock = false, moduleEntropy = false;
 const pending = new Map();
 // Each request's owning call's map, so a withdrawal (door 16) reaches it from any turn (module-glue.js does the same).
 const requestMaps = new Map();
@@ -45,11 +46,28 @@ const presenceRead = (store, op, name) => {
 self.__exact_host = (op, name, value) => {
   // The runner's clock as the turn was dispatched: when a timer armed now is due; none outside a turn.
   if (op === 21) return context?.clock === undefined ? undefined : String(context.clock);
-  // The prelude asks at load whether this host has a local listener (LLP 1133.005): a worker never does.
+  // The prelude asks at load whether this host has a local listener (LLP 1133.005), is baking, or is dev.
   if (op === 12 && name === 'listen') return '';
+  if (op === 12 && (name === 'bake' || name === 'dev')) return undefined;
   // A fetch the app aborted: told to the page at once, in any turn, a let-go's included (module-glue.js keeps it).
   if (op === 23) { self.postMessage({ op: 'aborted', ticket: Number(name) }); return; }
   if (op === 16) { const t = Number(name), m = requestMaps.get(t); requestMaps.delete(t); m?.delete(t); return; }
+  // Virtualized clock & Math.random() (LLP 1195.000 D2): allowed at module init too.
+  if (op === 30) {
+    moduleClock = true;
+    if (context) context.clockRead = true;
+    const epoch = context?.epoch !== undefined ? context.epoch : (hasSeed ? 1767225600000 : hostDateNow());
+    return `${epoch},${context?.clock ?? 0}`;
+  }
+  if (op === 31) {
+    const s = name === 'init' ? randomInitStream : randomStream;
+    return s ? Array.from(s(7), b => b.toString(16).padStart(2, '0')).join('') : undefined;
+  }
+  if (op === 8 && name === 'ambient') {
+    moduleEntropy = true;
+    if (context) context.entropy = true;
+    return;
+  }
   if (!context) throw new Error('host call outside an answer');
   if (op === 6) {
     // A page module answers `native.later` on the page; nothing here can answer at once.
@@ -103,12 +121,12 @@ const evaluate = (indirect => source => indirect(source))(eval);
 function init(message) {
   admitted = message.admitted;
   pageBase = message.base;
-  // Disable accidental browser I/O before the module captures globals: a
-  // function, so `new WebSocket(url)` refuses by name too, as the JS target's
-  // ts-fetch.js does. The prelude refuses the clock and every timer but an
-  // answer's own (time.js `timers`), by name, as Hermes does.
+  // Remove browser-only I/O constructors across the prototype chain so
+  // `typeof WebSocket === "undefined"` matches Hermes (LLP 1195.000 D1.4).
   for (const name of ['XMLHttpRequest', 'WebSocket', 'EventSource']) {
-    Object.defineProperty(self, name, { value: function () { throw new Error(`${name} is unavailable in data sources`); }, configurable: false });
+    for (let o = self; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+      if (Object.getOwnPropertyDescriptor(o, name)?.configurable) delete o[name];
+    }
   }
   refuseCodeFromStrings(self);
   // The worker's timers, before the prelude takes them from this global: a storage lock's bound (storage-fs.js),
@@ -119,8 +137,13 @@ function init(message) {
   // may be issued in another answer's turn (one queued behind it), as in the
   // page realm.
   bindAnswerStorage(self, storage, () => context.owner);
-  // The page reads the drive's seed; this realm's stream starts here (D2b).
-  if (message.seed !== null && message.seed !== undefined) stream = agentStream(message.seed, 'typescript');
+  // The page reads the drive's seed; this realm's streams start here (D2b, LLP 1195.000 D2.5).
+  if (message.seed !== null && message.seed !== undefined) {
+    hasSeed = true;
+    stream = agentStream(message.seed, 'typescript');
+    randomStream = agentStream(message.seed, 'ts-random');
+    randomInitStream = agentStream(message.seed, 'ts-init');
+  }
   // A LAN dev page has no `crypto.subtle`: SHA-256 is the dev protocol's,
   // asked of the page (LLP 1069.005 D1).
   if (!self.crypto.subtle && message.pageDigest) {
@@ -148,7 +171,7 @@ function init(message) {
 }
 
 function begin(request) {
-  context = {owner:{}, store:new Map(request.store), grants:new Set(request.grants), reads:[], writes:[], externalRead:false,entropy:false,topics:[], requests:new Map(), clock:request.clock};
+  context = {owner:{}, store:new Map(request.store), grants:new Set(request.grants), reads:[], writes:[], externalRead:false,entropy:false,clockRead:false,topics:[], requests:new Map(), clock:request.clock, epoch:request.epoch};
   if (request.op === 'answer') return JSON.parse(self.__exact_call(request.source, JSON.stringify(request.args)));
   const parked = pending.get(key(request));
   if (!parked) throw new Error('reply for an answer not in flight');
@@ -163,7 +186,7 @@ function begin(request) {
 }
 
 function finish(answer, request) {
-  const result = {...answer, reads:context.reads, writes:context.writes, externalRead:context.externalRead,entropy:context.entropy,topics:context.topics, leaseWrites:context.leaseWrites, secretEffect:context.secretEffect};
+  const result = {...answer, reads:context.reads, writes:context.writes, externalRead:context.externalRead,entropy:context.entropy,topics:context.topics, leaseWrites:context.leaseWrites, secretEffect:context.secretEffect, ...(context.clockRead ? {clockRead:true} : {}), ...(moduleClock ? {moduleClock:true} : {}), ...(moduleEntropy ? {moduleEntropy:true} : {})};
   if (answer.tag === 1) requestMaps.delete(answer.ticket);
   if (answer.tag === 1 && answer.secret !== undefined) pending.set(key(request), {call:answer.call,secret:true,requests:context.requests,owner:context.owner});
   else if (answer.tag === 1 && answer.timer !== undefined) pending.set(key(request), {call:answer.call, ticket:0, timer:true, requests:context.requests, owner:context.owner});
@@ -178,6 +201,13 @@ function finish(answer, request) {
   return result;
 }
 
+const dropParked = (list, staying) => list.filter(p => {
+  if ((p.request.target ?? null) === null || staying.has(key(p.request))) return true;
+  unindex(p.context.requests);
+  release(p.context.owner, p.answer.call);
+  p.done.reject(new Error('the runner let this answer go'));
+  return false;
+});
 // The runner let go of every targeted call not in flight (LLP 1016 D5):
 // drop it, its storage owner, and its call in the prelude.
 async function forget(inFlight) {
@@ -188,13 +218,8 @@ async function forget(inFlight) {
   }
   // An answer parked behind another's storage is let go too, its turn
   // refused, as the page realm does.
-  parked = parked.filter(p => {
-    if ((p.request.target ?? null) === null || staying.has(key(p.request))) return true;
-    unindex(p.context.requests);
-    release(p.context.owner, p.answer.call);
-    p.done.reject(new Error('the runner let this answer go'));
-    return false;
-  });
+  parked = dropParked(parked, staying);
+  resettling = dropParked(resettling, staying);
   if (owed.size) await finishLetGo(storage, owed, letGoHooks);
 }
 const letGoHooks = {
@@ -211,7 +236,7 @@ const letGoHooks = {
 // An answer whose storage operation is queued behind another answer's waits
 // with the module (prelude.js `settle`'s `waiting`): it parks and is asked
 // again after storage delivery (LLP 1097 D3, D7), as the page realm does.
-let parked = [], deliveries = 0;
+let parked = [], resettling = [], deliveries = 0;
 async function proceed(answer, request, done) {
   for (;;) {
     // A `scheduler.yield()`: its yields resolve in a task of their own.
@@ -243,14 +268,15 @@ async function resettle() {
     const before = deliveries;
     // A let-go chain a delivery made the head, finished first.
     if (owed.size) await finishLetGo(storage, owed, letGoHooks);
-    const waiting = parked; parked = [];
-    for (const p of waiting) {
+    resettling = parked; parked = [];
+    while (resettling.length) {
+      const p = resettling.shift();
       context = p.context;
       try {
         const answer = JSON.parse(self.__exact_settle(String(p.answer.call)));
         await proceed(answer, p.request, p.done);
       }
-      catch (error) { storage.retire(context?.owner); context = null; p.done.reject(error); }
+      catch (error) { unindex(context?.requests); storage.retire(context?.owner); context = null; p.done.reject(error); }
     }
     if (deliveries === before || !(parked.length || owed.size)) break;
   }
@@ -284,8 +310,12 @@ self.onmessage = ({ data }) => {
     catch (error) { postMessage({ token: 0, error: String(error?.message ?? error) }); }
     return;
   }
-  // After the turns before it, so a call they park is dropped too.
-  if (data.op === 'forget') { tail = tail.then(() => forget(data.inFlight)).then(() => { if (parked.length || owed.size) return resettle(); }).catch(() => {}); return; }
+  // Drop any entry already waiting in an active `resettle()` before it starts, then finish after queued turns.
+  if (data.op === 'forget') {
+    if (resettling.length) resettling = dropParked(resettling, new Set(data.inFlight.map(key)));
+    tail = tail.then(() => forget(data.inFlight)).then(() => { if (parked.length || owed.size) return resettle(); }).catch(() => {});
+    return;
+  }
   if (data.op !== 'turn') return;
   const done = deferred();
   const run = tail.then(async () => {

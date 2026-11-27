@@ -26,6 +26,15 @@
   function fixed(object, name, value) {
     Object.defineProperty(object, name, { value: value, writable: false, configurable: false });
   }
+  fixed(
+    global,
+    "process",
+    Object.freeze({
+      env: Object.freeze({ NODE_ENV: host(12, "dev", "") === "1" ? "development" : "production" }),
+      versions: Object.freeze({}),
+      release: Object.freeze({}),
+    })
+  );
   // The prelude's parts, each a script of its own evaluated just before this one
   // (time.js, crypto.js, module-work.js, fetch.js, auth.js, store.js, storage.js,
   // reply.js; host/web-js/glue.mjs `MODULE_PRELUDE`), each given what it needs of
@@ -34,7 +43,16 @@
   var time = global.__exact_time;
   delete global.__exact_time;
   var tracker = global.HermesInternal;
-  time.refuseClock(tracker);
+  time.virtualClock(
+    tracker,
+    function (kind) {
+      return host(30, kind || "wall", "");
+    },
+    host(12, "bake", "") === "1",
+    function () {
+      return overlaying;
+    }
+  );
   // What the runtime itself says through `console`: natively a line that is
   // not the app's, so no host writes it to the platform's log
   // (js/src/console.js, LLP 1027.009 D1); in a browser realm, its console.
@@ -166,18 +184,15 @@
     if (!call || call.status !== "pending" || typeof work !== "function") return promise;
     call.storage++;
     storing.add(call);
-    return work(promise).then(
-      function (value) {
-        currentCall = call;
-        unstore(call);
-        return value;
-      },
-      function (error) {
-        currentCall = call;
-        unstore(call);
-        throw error;
-      }
-    );
+    return rawThen(work(promise), function (value) {
+      currentCall = call;
+      unstore(call);
+      return value;
+    }, function (error) {
+      currentCall = call;
+      unstore(call);
+      throw error;
+    });
   }
   // `crypto` (crypto.js), whose kept keys the store keeps (store.js).
   var keys = global.__exact_crypto({
@@ -192,12 +207,21 @@
     overlaying: function () {
       return overlaying;
     },
+    initializing: function () {
+      return initializing;
+    },
     inOverlay: inOverlay,
     store: function () {
       return store;
     },
   });
   delete global.__exact_crypto;
+  // Blob, File, FormData, Request (blob.js, LLP 1195.000 D5 P0a) — after virtualClock.
+  var blobHelpers = global.__exact_blob
+    ? global.__exact_blob({ DateNow: function () { return global.Date.now(); }, copyBytes: copyBytes })
+    : null;
+  delete global.__exact_blob;
+  if (global.__exact_set_blob_clone) { global.__exact_set_blob_clone(blobHelpers && blobHelpers.cloneBlob); delete global.__exact_set_blob_clone; }
   // --- fetch: a request the host runs; a Promise for its reply (fetch.js) --
   // Native ids survive runtime retirement and are shared across modules.
   var nextLocalId = 1;
@@ -286,21 +310,11 @@
     head = null;
   function issue(op) {
     head = op;
-    var promise;
-    try {
-      promise = op.run();
-    } catch (e) {
-      promise = Promise.reject(e);
-    }
+    var promise, saved = currentCall;
+    currentCall = null;
+    try { promise = op.run(); } catch (e) { promise = Promise.reject(e); } finally { currentCall = saved; }
     op.promise = promise;
-    promise.then(
-      function (value) {
-        landed(op, true, value);
-      },
-      function (error) {
-        landed(op, false, error);
-      }
-    );
+    rawThen(promise, function (value) { landed(op, true, value); }, function (error) { landed(op, false, error); });
   }
   function landed(op, ok, value) {
     // A revoked image's late completion must not clear the next head.
@@ -375,7 +389,7 @@
       },
     })
   );
-  var responses = binary.responses(),
+  var responses = binary.responses(blobHelpers),
     Response = responses.Response,
     hostReply = responses.reply;
 
@@ -417,6 +431,7 @@
     bytesDoor: bytesDoor,
     sockets: sockets,
     Response: Response,
+    blob: blobHelpers,
     FetchError: FetchError,
     conflict: SOCKET_AND_FETCH,
     errors: errors,
@@ -458,9 +473,17 @@
   global.__exact_auth({ host: host, answerOnly: answerOnly });
   delete global.__exact_auth;
 
+  var calls = new Map(), gcOwed = false, owedStamp = null;
+  var rawThen = global.__exact_promise_context({
+    calls: calls, background: background, work: work,
+    current: function () { return currentCall; },
+    setCurrent: function (call) { currentCall = call; },
+  });
+  delete global.__exact_promise_context;
   // --- the store (store.js) and storage (storage.js) ------------------------
   var storeEnv = {
     host: host,
+    rawThen: rawThen,
     presence: binary.presence,
     browserSecrets: browserSecrets,
     keys: keys,
@@ -482,6 +505,7 @@
   delete global.__exact_store;
   var storageCalls = global.__exact_storage_calls({
     host: host,
+    rawThen: rawThen,
     journal: journal,
     errorText: errorText,
     background: background,
@@ -522,9 +546,6 @@
     freeLocks = storageCalls.freeLocks;
 
   // --- the seam ------------------------------------------------------------
-  var calls = new Map(),
-    gcOwed = false, // calls: id -> { id, status, value, error, tickets }
-    owedStamp = null; // pending calls to re-stamp with the epoch after an owed collection
   // Large native strings travel beside the JSON skeleton by explicit paths (no property
   // spelling reserved); the serializer owns getters, toJSON, omissions and cycles. One
   // whose answer outlived a collection owes a full one on the reply, re-stamping pending
@@ -686,6 +707,7 @@
       } finally {
         endYields(call); // a branch its value did not wait for goes on, as a browser's does
         timers.drop(call); // its timers are its own (time.js `timers`)
+        call.value = call.error = call.more = undefined;
         call.replied = true;
         calls.delete(call.id);
         cleanUp();
@@ -732,6 +754,7 @@
     if (moduleWide && moving && due !== undefined && later && host(21, "", "") !== undefined)
       return JSON.stringify({ tag: 1, call: call.id, ticket: 0, waiting: true, timer: due });
     if (due !== undefined) return JSON.stringify({ tag: 1, call: call.id, ticket: 0, timer: due });
+    call.value = call.error = call.more = undefined;
     call.replied = true;
     calls.delete(call.id);
     cleanUp();
@@ -780,6 +803,7 @@
     try {
       return JSON.parse(host(6, "call", JSON.stringify(request)));
     } catch (e) {
+      if (e && /^NotSupportedError: /.test(e.message)) e.name = "NotSupportedError";
       // at bake, no module: storage's refusal (LLP 1067 D4)
       throw e && e.message === "bake"
         ? storageError("native.call() is unavailable during bake: the build links no native module", "bake")
@@ -792,8 +816,9 @@
   // outcomeJson)` resolves that fetch; drain and settle again. `__exact_settle(id, "final")` refuses an answer still
   // waiting on nothing of its own.
   // A handler a module calls back (LLP 1133.016 D9): the `tools` export's, its value as JSON text.
-  function tool(name, args) {
-    var handlers = global.exact.tools,
+  function tool(source, args) {
+    var name = source.slice(source.indexOf(":") + 1),
+      handlers = name !== "script.message" || source === "event:script.message" ? global.exact.tools : undefined,
       f = handlers && Object.prototype.hasOwnProperty.call(handlers, name) ? handlers[name] : undefined,
       text = function (v) {
         return JSON.stringify(v === undefined ? null : v);
@@ -866,25 +891,35 @@
                     return Promise.reject(e);
                   }
                 }
-                return global
-                  .fetch("exact-native:", {
+                return rawThen(
+                  global.fetch("exact-native:", {
                     method: "POST",
                     body: JSON.stringify(request),
                     exactIndependentHttp: { maxResponseBytes: 1048576 },
-                  })
-                  .then(function (r) {
-                    return r.text().then(function (t) {
+                  }),
+                  function (r) {
+                    return rawThen(r.text(), function (t) {
                       if (r.status === 200) return JSON.parse(t);
+                      if ((r.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase() === "application/json") {
+                        var refusal;
+                        try { refusal = JSON.parse(t); } catch (_) {}
+                        if (refusal && typeof refusal.error === "string") {
+                          var error = new Error(refusal.message || refusal.error);
+                          error.name = refusal.error;
+                          throw error;
+                        }
+                      }
                       throw new Error(t || "native call failed");
                     });
-                  });
+                  }
+                );
               },
             });
       call.sync = true;
       try {
         result =
           mutation === "tool"
-            ? tool(source.slice(5), JSON.parse(JSON.parse(argsJson)[0]))
+            ? tool(source, JSON.parse(JSON.parse(argsJson)[0]))
             : global.exact.answer(source, JSON.parse(argsJson), store, storage, native);
       } finally {
         call.sync = false;
@@ -894,7 +929,7 @@
       // 2026-10-18).
       if (call.socketOps && call.tickets.length) call.socketConflict = true;
       if (call.socketConflict) {
-        if (result && typeof result.then === "function") result.then(undefined, function () {});
+        if (result && typeof result.then === "function") rawThen(result, undefined, function () {});
         throw new Error(SOCKET_AND_FETCH);
       }
       if (call.socketOps && result && typeof result.then === "function") handSocketOps(call, 17);
@@ -912,10 +947,9 @@
       return JSON.stringify({ tag: 3, call: call.id });
     }
     if (result && typeof result.then === "function") {
-      result.then(
-        function (v) {
-          if (call.lost) return;
-          call.status = "done";
+      rawThen(result, function (v) {
+        if (call.lost) return;
+        call.status = "done";
           call.value = v;
         },
         function (e) {
@@ -1040,6 +1074,7 @@
         : "";
     timers.drop(call);
     if (call.storage > 0 && !call.lost) return "storage" + rejected;
+    call.value = call.error = call.more = undefined;
     call.replied = true;
     calls.delete(call.id);
     cleanUp();
@@ -1060,6 +1095,7 @@
       if (!c.letGo) return;
       if (c.storage > 0 && !c.lost) owed = true;
       else {
+        c.value = c.error = c.more = undefined;
         c.replied = true;
         calls.delete(c.id);
       }
@@ -1156,6 +1192,9 @@
           epoch: syncEpoch(),
         }
       : call;
+    var prevCall = currentCall,
+      prevInMapper = inMapper,
+      prevMapping = mapping;
     currentCall = mine;
     inMapper = true;
     if (mine !== call) work.setTurn(mine);
@@ -1187,9 +1226,8 @@
         return ok(value);
       }
       calls.set(mine.id, mine);
-      value.then(
-        function (v) {
-          mine.status = "done";
+      rawThen(value, function (v) {
+        mine.status = "done";
           mine.value = v;
         },
         function (e) {
@@ -1208,9 +1246,9 @@
       // A synchronous mapper has no drain: its queued reactions still need a waiter's turn (LLP 1162 D3).
       if (mine !== call && mine.replied) readyAll();
       mine.sync = false;
-      currentCall = null;
-      mapping = null;
-      inMapper = false;
+      currentCall = prevCall;
+      mapping = prevMapping;
+      inMapper = prevInMapper;
       if (turn) handSocketOps(turn);
     }
   };

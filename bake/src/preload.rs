@@ -317,6 +317,9 @@ fn check(
             return Err(fail("method", "expected an HTTP token"));
         }
         let method = method.to_ascii_uppercase();
+        if ["CONNECT", "TRACE", "TRACK"].contains(&method.as_str()) {
+            return Err(fail("method", "fetch forbids this method"));
+        }
         let body = string("body")?
             .map(|text| {
                 if ["GET", "HEAD"].contains(&method.as_str()) {

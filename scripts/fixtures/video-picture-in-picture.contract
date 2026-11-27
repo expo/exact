@@ -1,0 +1,36 @@
+shape Page
+  pictureInPictureEnabled: bool
+
+component App
+  resource page = exactPage() as shape Page
+  state status = "Closed"
+  state enters = 0
+  state leaves = 0
+  state shown = true
+  action start
+    requestPictureInPicture("clip")
+  action stop
+    exitPictureInPicture()
+  action entered
+    enters = enters + 1
+    status = "Started"
+  action left
+    leaves = leaves + 1
+    status = "Stopped"
+  action refused(reason: string)
+    status = reason
+  action remove
+    shown = false
+  view
+    column
+      if shown
+        video "assets/motion.mp4" id="clip" testId="clip" controls=true playsinline=true allowsPictureInPicturePlayback=true width=240 height=135 enterpictureinpicture=entered leavepictureinpicture=left pictureinpictureerror=refused
+      button press=start testId="start"
+        text "Start picture in picture"
+      button press=stop testId="stop"
+        text "Stop picture in picture"
+      button press=remove testId="remove"
+        text "Remove video"
+      text status testId="status"
+      text `Entries ${enters}, exits ${leaves}` font-variant-numeric="tabular-nums" testId="events"
+      text `Available ${page.pictureInPictureEnabled}` testId="available"

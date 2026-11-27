@@ -133,24 +133,58 @@ pub(super) fn plan(
     }
 }
 
-/// Whether a box's new size wants another picture: either axis past a 25%
-/// band of the drawn one (under `fill` a ratio change is a different
-/// picture), as a raster's re-ask is judged on its longest side.
+/// Canonical display scale carried in an SVG's `RasterKey::crop`: SVGs decode
+/// whole, so `full` stays zero (`crop.whole() == true`) while `x` keys the
+/// cache by scale and passes it to workers without a sidecar table.
+pub(super) fn scale_crop(scale: f32) -> exact_raster::Crop {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    exact_raster::Crop {
+        x: scale.to_bits(),
+        y: 0,
+        full: PixelSize::default(),
+    }
+}
+
+pub(super) fn scale_from_crop(crop: exact_raster::Crop) -> f32 {
+    if crop.whole() && crop.x != 0 {
+        let scale = f32::from_bits(crop.x);
+        if scale.is_finite() && scale > 0.0 {
+            return scale;
+        }
+    }
+    1.0
+}
+
+/// Whether a box's new size, scale or fit wants another picture: a scale change
+/// resolves the SVG at a different CSS size, a fit change asks again whenever
+/// the planned pixels differ, and a resize past a 25% band on either axis asks
+/// again (under `fill` a ratio change is a different picture).
 pub(super) fn resize_changes(
     header: Header,
-    ask: Ask,
+    previous_ask: Ask,
     previous: (f32, f32),
+    next_ask: Ask,
     next: (f32, f32),
 ) -> bool {
-    if previous == next {
+    if previous_ask.scale != next_ask.scale {
+        return true;
+    }
+    if previous_ask == next_ask && previous == next {
         return false;
     }
     let (Ok(before), Ok(after)) = (
-        plan(header, previous, ask, exact_raster::SESSION_BYTES),
-        plan(header, next, ask, exact_raster::SESSION_BYTES),
+        plan(header, previous, previous_ask, exact_raster::SESSION_BYTES),
+        plan(header, next, next_ask, exact_raster::SESSION_BYTES),
     ) else {
         return false;
     };
+    if previous_ask.fit != next_ask.fit {
+        return before.pixels != after.pixels;
+    }
     let past =
         |b: u32, a: u32| u64::from(a) * 4 > u64::from(b) * 5 || u64::from(a) * 2 < u64::from(b);
     past(before.pixels.width, after.pixels.width) || past(before.pixels.height, after.pixels.height)

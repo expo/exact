@@ -897,9 +897,14 @@ fn frame_tasks_fire_every_frame_while_a_next_is_stalled() {
         r.act("pair", vec![]).unwrap();
         r.source::<Desk>().fail_check = true;
         for k in 1..=5 {
-            let a = r.frame(k as f64 * 16.0);
-            // Each frame's own frame task fires, whatever its prelude met.
-            assert!(!a.receipts.is_empty(), "frame {k} ({task}): {:?}", a.error);
+            let (a, ran) = r.trace_commits(|r| r.frame(k as f64 * 16.0));
+            // Each frame's own frame task fires, whatever its prelude met
+            // (one that changes nothing leaves no receipt).
+            assert!(
+                ran.contains(&format!("ran task {task} ok")),
+                "frame {k} ({task}): {:?}",
+                a.error
+            );
         }
         let checks = r.source::<Desk>().checks;
         r.frame(100.0);

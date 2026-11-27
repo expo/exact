@@ -11,7 +11,26 @@ use crate::members::MembersLine;
 impl Parser {
     pub(super) fn component(&mut self) -> R<Component> {
         let from = self.hidden.len();
+        self.platform_matches.clear();
         let c = self.component_body("component")?;
+        // An imported members file can supply the resource after parsing.
+        if c.members.lines.is_empty() {
+            for (name, span) in self.platform_matches.drain(..) {
+                if !c
+                    .resources
+                    .iter()
+                    .any(|r| r.name == name && r.source == "exactPage")
+                {
+                    return Err(SyntaxError {
+                        id: "contract-match-platform",
+                        message: format!(
+                            "quoted platform cases require {name} to be bound to exactPage()"
+                        ),
+                        span,
+                    });
+                }
+            }
+        }
         // A component whose `members` lines name other files has members
         // read there too, so its refused members' names are not scoped.
         if c.members.lines.is_empty() {

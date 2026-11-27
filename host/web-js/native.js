@@ -6,11 +6,14 @@
 // TypeScript source's `native` (ts-data.js); an app without modules never
 // has it. The build may preload the chunk without evaluating it.
 import './native-glue.js';
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 
 // The runner's dispatch codes (native-glue.js `DISPATCH`) as the runtime's
 // handler kinds; hover's over and off are its true and false.
 const KINDS = [['press'], ['change'], ['hover', true], ['hover', false], ['focus'], ['blur'], ['key'], ['submit'], ['load'], ['message']];
-let views = null, page = null;
+let views = null;
 
 /** The module elements' host: a module's event is an `exact-native` event
  * on its element, which the handlers take (rt.js `on`). `appId` is the app's,
@@ -37,8 +40,7 @@ export const pageTable = () => globalThis.exact.nativeModule();
  * `later(request)`, and its `connect` announcements, each re-asking the
  * resources whose answers watched the topic (`changed`). */
 export function pageModule({ changed, agent, now }) {
-  page ??= globalThis.exact.pageNative(true, { changed, ready: () => true, generation: () => 0, agent, now });
-  return page.then(p => ({
+  return loadOnce(loads, 'page', () => globalThis.exact.pageNative(true, { changed, ready: () => true, generation: () => 0, agent, now })).then(p => ({
     later: request => p.later(base64(new TextEncoder().encode(JSON.stringify(request)))).then(JSON.parse),
   }));
 }

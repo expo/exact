@@ -110,6 +110,7 @@ package protocol Canvases: AnyObject {
     var lifecycleNeedsRetry: Bool { get }
     // The agent's seams (LLP 1046.001).
     func waitUntilReady() -> Bool
+    func sampledFrame(of view: NodeView) -> CGImage?
     func decorate(_ request: [String: Any], _ reply: [String: Any]) -> [String: Any]
     func worlds(_ request: [String: Any]) -> [[String: Any]]
     func restoreReply(_ reply: [String: Any]) -> [String: Any]
@@ -153,6 +154,7 @@ package protocol Canvas2DCanvases: AnyObject {
     /// to the content edge's `radii`; every later bitmap shows there too.
     func place(_ id: UInt32, in box: CGRect, radii: [CGSize], placement: @escaping (CGSize) -> CGRect)
     func forget(_ id: UInt32)
+    func reset()
     func load(_ srcs: [String])
     /// Lets go handles no mounted canvas asks for any more.
     func drop(_ srcs: [String])
@@ -251,6 +253,7 @@ final class NoCanvases: Canvases {
     func lifecycleFrame() {}
     var lifecycleNeedsRetry: Bool { false }
     func waitUntilReady() -> Bool { true }
+    func sampledFrame(of view: NodeView) -> CGImage? { nil }
     func decorate(_ request: [String: Any], _ reply: [String: Any]) -> [String: Any] { reply }
     func worlds(_ request: [String: Any]) -> [[String: Any]] { [] }
     func restoreReply(_ reply: [String: Any]) -> [String: Any] { reply }
@@ -282,6 +285,7 @@ final class NoCanvas2D: Canvas2DCanvases {
     func apply(_ id: UInt32, _ payload: [String: Any], layer parent: CALayer?) {}
     func place(_ id: UInt32, in box: CGRect, radii: [CGSize], placement: @escaping (CGSize) -> CGRect) {}
     func forget(_ id: UInt32) {}
+    func reset() {}
     func load(_ srcs: [String]) {}
     func drop(_ srcs: [String]) {}
     func pictureChanged(_ src: String) {}

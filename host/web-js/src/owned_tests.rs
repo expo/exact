@@ -263,3 +263,57 @@ fn a_use_outside_every_region_sends_as_the_root() {
     assert!(declared < made, "{js}");
     assert!(js.contains("m_0.then=()=>a_2(\"9\");"), "{js}");
 }
+
+/// A virtualized list inside a child component reads its enclosing instance's
+/// owned resources and mutations in `inputs`, never the throwing root stubs.
+#[test]
+fn virtualized_list_row_inputs_read_owned_resources_on_their_instance() {
+    let single = r#"shape Feed
+  prefix: string
+
+component App
+  state show = true
+  view
+    column
+      if show
+        Screen()
+
+component Screen
+  resource feed = getFeed() as shape Feed else empty(prefix="")
+  mutation save as shape Feed
+  state ids = [1, 2]
+  action run
+    send save = saveFeed()
+  view
+    list virtualized=true height=200
+      for x in ids key=x
+        text `${feed.prefix}:${pending(feed)}:${failed(feed)}:${pending(save)}:${x}`
+"#;
+    let two_uses = single
+        .replace("state show = true", "state a = true\n  state b = false")
+        .replace(
+            "      if show\n        Screen()",
+            "      if a\n        Screen()\n      if b\n        Screen()",
+        );
+    for source in [single, &two_uses] {
+        let plan = contract::compile(source).unwrap();
+        for dev_reload in [false, true] {
+            let js = crate::emit::emit(&plan, false, dev_reload).unwrap().js;
+            let inputs_at = js.find("inputs:()=>[").unwrap_or_else(|| panic!("{js}"));
+            let inputs_end = js[inputs_at..].find("],opaque:").unwrap() + inputs_at + 1;
+            let inputs = &js[inputs_at..inputs_end];
+            assert!(!inputs.contains("r_0"), "must not read root stub: {inputs}");
+            assert!(!inputs.contains("r_1"), "must not read root stub: {inputs}");
+            assert!(
+                inputs.contains(r#"["r0"]()"#)
+                    || inputs.contains(".r0()")
+                    || inputs.contains("]()"),
+                "expected owned resource read: {inputs}"
+            );
+            assert!(
+                inputs.contains(".p()") && inputs.contains(".e()"),
+                "expected pending/failed reads on owned resource/mutation: {inputs}"
+            );
+        }
+    }
+}

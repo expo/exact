@@ -1330,3 +1330,182 @@ fn a_dialogs_header_is_read_as_a_routes() {
     assert_eq!(shape.trailing, vec![41]);
     assert_eq!(shape.items, vec![20, 41]);
 }
+
+#[test]
+fn header_badge_recognizes_single_filled_box_faces_and_rejects_ordinary_buttons() {
+    let mut k = kernel(view(
+        1,
+        vec![
+            // 2: button(initial badge) -> 3: filled box -> 4: text "CC"
+            Node(
+                2,
+                NodeType::Pressable,
+                &[],
+                vec![view(3, vec![text(4, &[(PropId::Text, "CC")])])],
+            ),
+            // 5: button(image + initial fallback) -> [6: filled box -> [7: image, 8: text "AB"], 9: hidden box]
+            Node(
+                5,
+                NodeType::Pressable,
+                &[],
+                vec![
+                    view(
+                        6,
+                        vec![
+                            Node(
+                                7,
+                                NodeType::Image,
+                                &[(PropId::ImageSource, "https://example.test/a.png")],
+                                vec![],
+                            ),
+                            text(8, &[(PropId::Text, "AB")]),
+                        ],
+                    ),
+                    view(9, vec![]),
+                ],
+            ),
+            // 10: button(symbol badge) -> 11: filled box -> 12: symbol image
+            Node(
+                10,
+                NodeType::Pressable,
+                &[],
+                vec![view(
+                    11,
+                    vec![Node(
+                        12,
+                        NodeType::Image,
+                        &[(PropId::ImageSource, "symbol:person")],
+                        vec![],
+                    )],
+                )],
+            ),
+            // 13: ordinary symbol button (no filled box) -> 14: symbol image
+            Node(
+                13,
+                NodeType::Pressable,
+                &[],
+                vec![Node(
+                    14,
+                    NodeType::Image,
+                    &[(PropId::ImageSource, "symbol:more")],
+                    vec![],
+                )],
+            ),
+            // 15: unfilled box button (transparent background) -> 16: box -> 17: text "NO"
+            Node(
+                15,
+                NodeType::Pressable,
+                &[],
+                vec![view(16, vec![text(17, &[(PropId::Text, "NO")])])],
+            ),
+            // 18: two displayed children -> not a constrained badge
+            Node(
+                18,
+                NodeType::Pressable,
+                &[],
+                vec![view(19, vec![]), text(20, &[(PropId::Text, "Extra")])],
+            ),
+            // 21: filled box -> visibility:hidden wrapper -> hidden image + visible text
+            Node(
+                21,
+                NodeType::Pressable,
+                &[],
+                vec![view(
+                    22,
+                    vec![view(
+                        23,
+                        vec![
+                            Node(
+                                24,
+                                NodeType::Image,
+                                &[(PropId::ImageSource, "https://example.test/hidden.png")],
+                                vec![],
+                            ),
+                            text(25, &[(PropId::Text, "OK")]),
+                        ],
+                    )],
+                )],
+            ),
+        ],
+    ));
+    let mut filled = StyleProps::default();
+    filled
+        .set_dynamic(
+            StyleId::BackgroundColor,
+            &StyleValue::Text("#2563eb".into()),
+        )
+        .unwrap();
+    let mut hidden = StyleProps::default();
+    hidden
+        .set_dynamic(StyleId::Display, &StyleValue::Text("none".into()))
+        .unwrap();
+    let mut vis_hidden = StyleProps::default();
+    vis_hidden
+        .set_dynamic(StyleId::Visibility, &StyleValue::Text("hidden".into()))
+        .unwrap();
+    let mut vis_visible = StyleProps::default();
+    vis_visible
+        .set_dynamic(StyleId::Visibility, &StyleValue::Text("visible".into()))
+        .unwrap();
+    let mut styles = Vec::new();
+    for id in [3, 6, 11, 19, 22] {
+        styles.push(Op::SetStyle {
+            id,
+            patch: Box::new(filled.clone()),
+        });
+    }
+    styles.push(Op::SetStyle {
+        id: 9,
+        patch: Box::new(hidden),
+    });
+    styles.push(Op::SetStyle {
+        id: 23,
+        patch: Box::new(vis_hidden),
+    });
+    styles.push(Op::SetStyle {
+        id: 25,
+        patch: Box::new(vis_visible),
+    });
+    k.apply(0, 2, &styles).unwrap();
+
+    let b1 = k.header_badge(2).expect("filled box + initials");
+    assert_eq!(b1.box_node, 3);
+    assert_eq!(b1.picture, None);
+    assert_eq!(b1.symbol, None);
+    assert_eq!(b1.text, "CC");
+    assert_eq!(b1.ink_node, Some(4));
+
+    let b2 = k
+        .header_badge(5)
+        .expect("filled box + image + fallback text + hidden sibling");
+    assert_eq!(b2.box_node, 6);
+    assert_eq!(b2.picture, Some(7));
+    assert_eq!(b2.symbol, None);
+    assert_eq!(b2.text, "AB");
+    assert_eq!(b2.ink_node, Some(8));
+
+    let b3 = k.header_badge(10).expect("filled box + symbol");
+    assert_eq!(b3.box_node, 11);
+    assert_eq!(b3.picture, None);
+    assert_eq!(b3.symbol.as_deref(), Some("person"));
+    assert_eq!(b3.ink_node, Some(12));
+
+    let b4 = k
+        .header_badge(21)
+        .expect("inherited visibility:hidden skips image while keeping visible text");
+    assert_eq!(b4.picture, None);
+    assert_eq!(b4.text, "OK");
+    assert_eq!(b4.ink_node, Some(25));
+
+    assert_eq!(
+        k.header_badge(13),
+        None,
+        "plain symbol button is not a badge"
+    );
+    assert_eq!(k.header_badge(15), None, "unfilled box is not a badge");
+    assert_eq!(
+        k.header_badge(18),
+        None,
+        "button with two visible children is not a badge"
+    );
+}

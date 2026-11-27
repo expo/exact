@@ -3,14 +3,14 @@
 //! widgets: each bar is a view of the reader's, and what is in it is drawn
 //! here from the reference's own metrics, the Compose Material 3 library's
 //! (1.4: `TopAppBar` with `TopAppBarSmallTokens`, `NavigationBar` and
-//! `NavigationBarItem` with `NavigationBarTokens`), in the device's colours.
+//! `NavigationBarItem` with `NavigationBarTokens`), using device roles wherever the bar leaves its colours unsaid.
 //!
 //! Lengths are dp, which are this host's points. Type is sp, a point times
 //! the person's font scale, taken linearly, as the top layer's is
 //! (`top/look.rs`).
 //!
 //! **The top app bar** is 64 tall under the status bar, whose area it
-//! fills with its own colour: `surface`, and `surfaceContainer` once the
+//! fills with its own colour. The defaults are `surface` and `surfaceContainer` once the
 //! route's content has scrolled under it (Material's "on scroll" colour).
 //! It does not collapse. The Up arrow is a 24 icon in a 48 target, 4 from
 //! the edge; the title is title-large, 16 from the edge, or 4 after what
@@ -19,7 +19,7 @@
 //! symbol, else a text button. Its numbers are the `top-` rows.
 //!
 //! **The navigation bar** is 80 tall over the gesture bar, whose area it
-//! fills with its own colour, `surfaceContainer`. Its destinations share
+//! fills with its own colour, by default `surfaceContainer`. Its destinations share
 //! its width, 8 apart: a 24 symbol with its label under it (label-medium),
 //! and behind the selected one's symbol the active indicator, a 56 by 32
 //! pill in `secondaryContainer`. The selected destination's symbol is
@@ -28,6 +28,8 @@
 //! (`NavigationBarItemDefaults.colors`). Its numbers are the schema's
 //! Material column (the `nav-` rows; `host/android/reference/rows.json`
 //! names each one's symbol).
+use super::badge::DrawnBadge;
+pub use super::badge::{Badge, BadgePicture};
 use crate::paint::{Backend, Rect4, Shape};
 use crate::presenter::palette::{material, Material};
 use crate::presenter::top::look::{
@@ -37,16 +39,28 @@ use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::generated::metric;
 use exact_kernel::style::metrics::{self, Column};
 use exact_kernel::{Direction, ViewId};
+use material_colors::{color::Rgb, dynamic_color::DynamicScheme, scheme::variant::SchemeTonalSpot};
 use std::rc::Rc;
 use tiny_skia::Transform;
+
+pub(in crate::presenter) mod ink;
+use ink::Accent;
 
 const TITLE_LARGE: Type = Type(22.0, 28.0, 400, 0.0);
 const LABEL_MEDIUM: Type = Type(12.0, 16.0, 500, 0.5);
 const LABEL_SMALL: Type = Type(11.0, 16.0, 500, 0.5);
 
-/// The top app bar's height, under the status bar.
+/// The top app bar's default height, under the status bar.
 pub fn top_height() -> f32 {
     dp(metric::TOP_HEIGHT)
+}
+
+/// The top app bar's content height under the status bar at `font_scale`
+/// (LLP 1115.001 D11): 64 dp (`AppBarSmallTokens.ContainerHeight`), or the
+/// scaled title (and optional subtitle) line heights when larger.
+pub fn top_content_height(font_scale: f32, subtitled: bool) -> f32 {
+    let lines = TITLE_LARGE.1 + if subtitled { LABEL_MEDIUM.1 } else { 0.0 };
+    top_height().max(lines * font_scale)
 }
 
 /// A badge with text: its least size, its text's inset, and where it sits
@@ -110,6 +124,11 @@ fn told(role: Material, dark: bool, light: u32, night: u32) -> [u8; 4] {
     })
 }
 
+fn disabled(mut ink: [u8; 4]) -> [u8; 4] {
+    ink[3] = (f32::from(ink[3]) * 0.38).round() as u8;
+    ink
+}
+
 /// A header's button as the top bar shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Button {
@@ -121,6 +140,8 @@ pub struct Button {
     pub direction: Direction,
     /// Its symbol role, which makes it an icon button.
     pub symbol: Option<String>,
+    /// Its constrained badge face (filled box holding a picture, text or symbol).
+    pub badge: Option<Badge>,
     /// Not `disabled`.
     pub enabled: bool,
     /// `destructive`.
@@ -142,6 +163,12 @@ pub struct Top {
     pub title: String,
     /// The heading's computed text direction, independent of the header's placement.
     pub title_direction: Direction,
+    /// The supporting subtitle node, when the header supplies one (LLP 1115.001 D11).
+    pub subtitle_node: Option<ViewId>,
+    /// The supporting subtitle text, empty when absent.
+    pub subtitle: String,
+    /// The subtitle's computed text direction, independent of the header's placement.
+    pub subtitle_direction: Direction,
     /// Whether it has the Up arrow: the route is pushed.
     pub up: bool,
     /// The buttons before the heading, and those after it.
@@ -182,9 +209,37 @@ pub struct Bottom {
     pub tabs: Vec<Tab>,
 }
 
-/// What a bar's look depends on besides what it says.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Inputs {
+pub(super) struct BarFill {
+    pub paint: [u8; 4],
+    /// The fill over the window, as seen through the system band.
+    pub ground: [u8; 4],
+}
+
+/// CSS written on the element the bar replaces (LLP 1115.001 D11).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(super) struct BarColors {
+    pub container: Option<BarFill>,
+    pub ink: Option<[u8; 4]>,
+    pub seed: Option<([u8; 3], f32)>,
+}
+
+impl BarColors {
+    fn accent(self, dark: bool) -> Option<DynamicScheme> {
+        let ([r, g, b], contrast) = self.seed?;
+        Some(SchemeTonalSpot::new(Rgb::new(r, g, b).into(), dark, Some(f64::from(contrast))).scheme)
+    }
+}
+
+fn opaque(color: Rgb) -> [u8; 4] {
+    [color.red, color.green, color.blue, 255]
+}
+
+/// What a bar's look depends on besides what it says.
+#[derive(Clone, Copy)]
+pub struct Inputs<'a> {
+    pub(super) device_inks: &'a ink::DeviceInks,
+    pub(super) colors: BarColors,
     /// The scheme is dark.
     pub dark: bool,
     /// The person's font scale.
@@ -236,10 +291,22 @@ impl Target {
     }
 }
 
-enum Item {
-    Text(Rc<Paragraph>, (f32, f32), [u8; 4], ViewId),
+pub(super) enum Item {
+    Text(Rc<Paragraph>, (f32, f32), [u8; 4], ViewId, Option<Rect4>),
     Fill(Shape, [u8; 4]),
     Symbol(String, Rect4, [u8; 4]),
+    Badge(DrawnBadge),
+}
+
+fn clip_rect(r: Rect4, clip: Option<Rect4>) -> Rect4 {
+    let Some(c) = clip else {
+        return r;
+    };
+    let x0 = r.0.max(c.0);
+    let y0 = r.1.max(c.1);
+    let x1 = (r.0 + r.2).min(c.0 + c.2);
+    let y1 = (r.1 + r.3).min(c.1 + c.3);
+    (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
 
 /// Resolve inline positions into physical boxes without reflecting glyphs.
@@ -247,12 +314,16 @@ fn mirror(items: &mut [Item], targets: &mut [Target], width: f32) {
     let rect = |r: &mut Rect4| r.0 = width - r.0 - r.2;
     for item in items {
         match item {
-            Item::Text(p, at, ..) => {
+            Item::Text(p, at, _, _, clip) => {
                 let bounds = text_rect(p, *at);
                 at.0 = label_x(p, width - bounds.0, 1.);
+                if let Some(c) = clip {
+                    rect(c);
+                }
             }
             Item::Fill(shape, _) => rect(&mut shape.rect),
             Item::Symbol(_, r, _) => rect(r),
+            Item::Badge(badge) => badge.mirror(width),
         }
     }
     for target in targets {
@@ -267,7 +338,7 @@ pub struct Layout {
     pub size: (f32, f32),
     container: [u8; 4],
     direction: Direction,
-    items: Vec<Item>,
+    pub(super) items: Vec<Item>,
     /// What can be touched, in order.
     pub targets: Vec<Target>,
 }
@@ -301,7 +372,9 @@ impl Layout {
     pub fn texts(&self) -> Vec<(ViewId, Rect4)> {
         (self.items.iter())
             .filter_map(|item| match item {
-                Item::Text(p, at, _, source) => Some((*source, text_rect(p, *at))),
+                Item::Text(p, at, _, source, clip) => {
+                    Some((*source, clip_rect(text_rect(p, *at), *clip)))
+                }
                 _ => None,
             })
             .collect()
@@ -322,10 +395,13 @@ impl Layout {
         let ts = Transform::identity();
         let all = Shape::rect((0.0, 0.0, self.size.0, self.size.1));
         backend.fill(&all, self.container, ts);
-        // The indicator is under the state layer, and both under the symbol.
+        // The indicator and authored badge faces are under the state layer,
+        // and symbols/labels above it.
         for item in &self.items {
-            if let Item::Fill(shape, color) = item {
-                backend.fill(shape, *color, ts);
+            match item {
+                Item::Fill(shape, color) => backend.fill(shape, *color, ts),
+                Item::Badge(badge) => badge.paint(backend, engine, ts),
+                _ => {}
             }
         }
         if let Some((target, ripple)) = lit.and_then(|(i, r)| Some((self.targets.get(i)?, r))) {
@@ -343,14 +419,20 @@ impl Layout {
         }
         for item in &self.items {
             match item {
-                Item::Text(paragraph, at, color, source) => {
+                Item::Text(paragraph, at, color, source, clip) => {
                     let paint = [RunPaint {
                         color: *color,
                         source: *source,
                     }];
+                    if let Some(c) = clip {
+                        backend.push_clip(&Shape::rect(*c), ts);
+                    }
                     backend.text(engine, paragraph, &paint, *at, ts);
+                    if clip.is_some() {
+                        backend.pop_clip();
+                    }
                 }
-                Item::Fill(..) => {}
+                Item::Fill(..) | Item::Badge(..) => {}
                 // Material's shapes (D14): the Up arrow is its `back`.
                 Item::Symbol(role, rect, color) => symbol(
                     backend,
@@ -376,7 +458,11 @@ impl Layout {
             inputs
         };
         let (dark, scale) = (inputs.dark, inputs.font_scale);
-        let (y0, h) = (inputs.edge, top_height());
+        let has_subtitle = top.heading.is_some()
+            && !top.title.is_empty()
+            && top.subtitle_node.is_some()
+            && !top.subtitle.is_empty();
+        let (y0, h) = (inputs.edge, top_content_height(scale, has_subtitle));
         // What leads and what trails keep `edge` from the bar's sides, and
         // the title has `edge` of its own either side (`TopAppBarLayout`).
         let (edge, icon) = (dp(metric::TOP_EDGE), dp(metric::TOP_ICON));
@@ -388,8 +474,19 @@ impl Layout {
         };
         let mut left = inputs.sides.0 + edge;
         let mut right = inputs.width - inputs.sides.1 - edge;
+        let base = if top.scrolled {
+            Role::SurfaceContainer
+        } else {
+            Role::Surface
+        };
+        let container = inputs
+            .colors
+            .container
+            .map_or_else(|| base.color(dark), |f| f.paint);
+        let content = inputs.colors.ink;
+        let title_ink = content.unwrap_or_else(|| Role::OnSurface.color(dark));
         if top.up {
-            let ink = Role::OnSurface.color(dark);
+            let ink = title_ink;
             let at = (left + (ICON_BUTTON - icon) / 2.0, middle(icon), icon, icon);
             items.push(Item::Symbol("back".into(), at, ink));
             targets.push(Target {
@@ -401,15 +498,34 @@ impl Layout {
             left += ICON_BUTTON;
         }
         // A button's box is its 48 target; what it draws sits in the middle.
+        let primary = std::cell::LazyCell::new(|| {
+            inputs.accent_ink(
+                inputs.colors.accent(dark).as_ref(),
+                Accent::Primary,
+                inputs.colors.container.map(|f| f.ground),
+                ink::TEXT,
+            )
+        });
         let mut button = |b: &Button, x: Option<f32>, right: &mut f32, left: &mut f32| {
-            let ink = match (b.enabled, b.destructive, b.tint, b.symbol.is_some()) {
+            let ink = match (b.enabled, b.tint, b.symbol.is_some(), content) {
+                (false, _, true, Some(ink)) => disabled(ink),
                 (false, ..) => Role::Disabled.color(dark),
-                (true, _, Some(tint), _) => tint,
-                (true, true, ..) => Role::Error.color(dark),
-                (true, false, None, true) => Role::OnSurfaceVariant.color(dark),
-                (true, false, None, false) => Role::Primary.color(dark),
+                (true, Some(tint), ..) => tint,
+                (true, _, true, Some(ink)) => ink,
+                _ if b.destructive => inputs.accent_ink(
+                    None,
+                    Accent::Error,
+                    inputs.colors.container.map(|f| f.ground),
+                    if b.symbol.is_some() {
+                        ink::SYMBOL
+                    } else {
+                        ink::TEXT
+                    },
+                ),
+                (_, _, true, _) => Role::OnSurfaceVariant.color(dark),
+                _ => *primary,
             };
-            let label = (b.symbol.is_none()).then(|| {
+            let label = (b.badge.is_none() && b.symbol.is_none()).then(|| {
                 let room = (inputs.width / 2.0 - 2.0 * TEXT_BUTTON_PADDING).max(1.0);
                 line(engine, &b.title, LABEL_LARGE, scale, room, b.direction)
             });
@@ -429,25 +545,40 @@ impl Layout {
                     *right
                 }
             };
-            let layer = match (&b.symbol, &label) {
-                (Some(role), _) => {
+            let (layer, layer_ink) = match (&b.badge, &b.symbol, &label) {
+                (Some(badge), _, _) => {
+                    let rect = (
+                        at + (ICON_BUTTON - badge.size) / 2.0,
+                        middle(badge.size),
+                        badge.size,
+                        badge.size,
+                    );
+                    items.push(Item::Badge(DrawnBadge::layout(
+                        engine, badge, rect, b.enabled, scale,
+                    )));
+                    (circle(at), title_ink)
+                }
+                (None, Some(role), _) => {
                     let rect = (at + (ICON_BUTTON - icon) / 2.0, middle(icon), icon, icon);
                     items.push(Item::Symbol(role.clone(), rect, ink));
-                    circle(at)
+                    (circle(at), ink)
                 }
-                (None, Some(p)) => {
+                (None, None, Some(p)) => {
                     let tall = (p.height + 20.0).max(TEXT_BUTTON.1);
                     let text = (label_x(p, at + w / 2.0, 0.5), middle(p.height));
-                    items.push(Item::Text(p.clone(), text, ink, b.node));
-                    Shape::new((at, middle(tall), w, tall), [tall / 2.0; 4])
+                    items.push(Item::Text(p.clone(), text, ink, b.node, None));
+                    (
+                        Shape::new((at, middle(tall), w, tall), [tall / 2.0; 4]),
+                        ink,
+                    )
                 }
-                (None, None) => circle(at),
+                (None, None, None) => (circle(at), ink),
             };
             targets.push(Target {
                 rect: (at, middle(ICON_BUTTON), w, ICON_BUTTON),
                 what: What::Item(b.node),
                 enabled: b.enabled,
-                layer: (layer, ink),
+                layer: (layer, layer_ink),
             });
         };
         for b in &top.leading {
@@ -475,25 +606,55 @@ impl Layout {
                 room,
                 top.title_direction,
             );
-            let x = (inputs.sides.0 + dp(metric::TOP_TITLE_INSET)).max(left) + edge;
             let bounds = text_rect(&p, (0., 0.));
-            let at = (
-                label_x(&p, x.min(right - edge - bounds.2), 0.),
-                middle(p.height),
-            );
-            items.push(Item::Text(p, at, Role::OnSurface.color(dark), heading));
+            let sub = has_subtitle.then(|| {
+                let sub_p = line(
+                    engine,
+                    &top.subtitle,
+                    LABEL_MEDIUM,
+                    scale,
+                    room,
+                    top.subtitle_direction,
+                );
+                let sub_bounds = text_rect(&sub_p, (0., 0.));
+                (top.subtitle_node.unwrap(), sub_p, sub_bounds)
+            });
+            let col_w = sub
+                .as_ref()
+                .map_or(bounds.2, |(_, _, sub_bounds)| bounds.2.max(sub_bounds.2));
+            let x = ((inputs.sides.0 + dp(metric::TOP_TITLE_INSET)).max(left) + edge)
+                .min(right - edge - col_w)
+                .max(left + edge);
+            let slot = Some((left + edge, y0, room, h));
+            if let Some((sub_node, sub_p, _)) = sub {
+                let sub_ink = content.unwrap_or_else(|| Role::OnSurfaceVariant.color(dark));
+                let col_y = middle(p.height + sub_p.height);
+                items.push(Item::Text(
+                    p.clone(),
+                    (label_x(&p, x, 0.), col_y),
+                    title_ink,
+                    heading,
+                    slot,
+                ));
+                items.push(Item::Text(
+                    sub_p.clone(),
+                    (label_x(&sub_p, x, 0.), col_y + p.height),
+                    sub_ink,
+                    sub_node,
+                    slot,
+                ));
+            } else {
+                let at = (label_x(&p, x, 0.), middle(p.height));
+                items.push(Item::Text(p, at, title_ink, heading, slot));
+            }
         }
         if top.direction == Direction::Rtl {
             mirror(&mut items, &mut targets, inputs.width);
         }
-        let container = match top.scrolled {
-            true => Role::SurfaceContainer,
-            false => Role::Surface,
-        };
         Layout {
             size: (inputs.width, y0 + h),
             direction: top.direction,
-            container: container.color(dark),
+            container,
             items,
             targets,
         }
@@ -529,7 +690,7 @@ impl Layout {
             label_x(&p, pill.0 + w / 2.0, 0.5),
             pill.1 + (h - p.height) / 2.0,
         );
-        items.push(Item::Text(p, at, ink, node));
+        items.push(Item::Text(p, at, ink, node, None));
     }
 
     /// Material's navigation bar for `bottom`.
@@ -551,27 +712,68 @@ impl Layout {
         let span = (inputs.width - inputs.sides.0 - inputs.sides.1).max(0.0);
         let count = bottom.tabs.len().max(1) as f32;
         let cell = ((span - nav.item_gap * (count - 1.0)) / count).max(0.0);
-        let inactive = told(Material::OnSurfaceVariant, dark, 0xFF49_454F, 0xFFCA_C4D0);
+        let container = inputs
+            .colors
+            .container
+            .map_or_else(|| Role::SurfaceContainer.color(dark), |f| f.paint);
+        let accent = inputs.colors.accent(dark);
+        let indicator = accent.as_ref().map_or_else(
+            || Role::SecondaryContainer.color(dark),
+            |s| opaque(s.secondary_container()),
+        );
+        let inactive = inputs
+            .colors
+            .ink
+            .unwrap_or_else(|| told(Material::OnSurfaceVariant, dark, 0xFF49_454F, 0xFFCA_C4D0));
         let (mut items, mut targets) = (Vec::new(), Vec::new());
         for (index, tab) in bottom.tabs.iter().enumerate() {
             let x = inputs.sides.0 + (cell + nav.item_gap) * index as f32;
             let middle = x + cell / 2.0;
-            let (ink, text) = match (tab.enabled, tab.selected) {
-                (false, _) => {
-                    let mut faded = inactive;
-                    faded[3] = (255.0 * 0.38f32).round() as u8;
-                    (faded, faded)
+            let (ink, text) = if tab.selected && (tab.enabled || accent.is_some()) {
+                let bar_ground = inputs.colors.container.map(|f| f.ground);
+                // A translucent ButtonFace exposes the authored bar through the indicator.
+                let pill_ground = bar_ground
+                    .filter(|_| indicator[3] < 255)
+                    .map(|bar| ink::over(indicator, bar));
+                let symbol = inputs.accent_ink(
+                    accent.as_ref(),
+                    Accent::OnSecondaryContainer,
+                    pill_ground,
+                    ink::SYMBOL,
+                );
+                let label_ground = if tab.symbol.is_some() {
+                    bar_ground
+                } else {
+                    pill_ground
+                };
+                let mut label = inputs.accent_ink(
+                    accent.as_ref(),
+                    Accent::Secondary,
+                    label_ground.filter(|_| tab.enabled),
+                    ink::TEXT,
+                );
+                // On an opaque seeded indicator a lone label may need the pill's own on-colour.
+                if accent.is_some()
+                    && tab.symbol.is_none()
+                    && material_colors::contrast::ratio_of_tones(
+                        Rgb::new(label[0], label[1], label[2]).as_lstar(),
+                        Rgb::new(indicator[0], indicator[1], indicator[2]).as_lstar(),
+                    ) < f64::from(ink::TEXT)
+                {
+                    label = symbol;
                 }
-                (true, true) => (
-                    told(
-                        Material::OnSecondaryContainer,
-                        dark,
-                        0xFF1D_192B,
-                        0xFFE8_DEF8,
-                    ),
-                    told(Material::Secondary, dark, 0xFF62_5B71, 0xFFCC_C2DC),
-                ),
-                (true, false) => (inactive, inactive),
+                if tab.enabled {
+                    (symbol, label)
+                } else {
+                    (disabled(symbol), disabled(label))
+                }
+            } else {
+                let ink = if tab.enabled {
+                    inactive
+                } else {
+                    disabled(inactive)
+                };
+                (ink, ink)
             };
             let label = (!tab.label.is_empty())
                 .then(|| line(engine, &tab.label, LABEL_MEDIUM, scale, cell, tab.direction));
@@ -585,8 +787,7 @@ impl Layout {
             match (&tab.symbol, &label) {
                 (Some(role), _) => {
                     if tab.selected {
-                        let fill = Role::SecondaryContainer.color(dark);
-                        items.push(Item::Fill(layer, fill));
+                        items.push(Item::Fill(layer, indicator));
                     }
                     let icon = (middle - nav.icon / 2.0, padding, nav.icon, nav.icon);
                     items.push(Item::Symbol(role.clone(), icon, ink));
@@ -600,6 +801,7 @@ impl Layout {
                             (label_x(p, middle, 0.5), y),
                             text,
                             tab.node,
+                            None,
                         ));
                     }
                 }
@@ -615,10 +817,9 @@ impl Layout {
                     );
                     layer = Shape::new(around, [around.3 / 2.0; 4]);
                     if tab.selected {
-                        let fill = Role::SecondaryContainer.color(dark);
-                        items.push(Item::Fill(layer, fill));
+                        items.push(Item::Fill(layer, indicator));
                     }
-                    items.push(Item::Text(p.clone(), at, text, tab.node));
+                    items.push(Item::Text(p.clone(), at, text, tab.node, None));
                     // A destination of a label alone: the label is the badge's anchor, as the icon is.
                     if let Some(badge) = &tab.badge {
                         let anchor = text_rect(p, at);
@@ -639,7 +840,17 @@ impl Layout {
                 rect: (start, 0.0, end - start, h),
                 what: What::Tab(tab.node),
                 enabled: tab.enabled,
-                layer: (layer, Role::OnSurface.color(dark)),
+                layer: (
+                    layer,
+                    if tab.selected {
+                        Role::OnSurface.color(dark)
+                    } else {
+                        inputs
+                            .colors
+                            .ink
+                            .unwrap_or_else(|| Role::OnSurface.color(dark))
+                    },
+                ),
             });
         }
         if bottom.direction == Direction::Rtl {
@@ -648,7 +859,7 @@ impl Layout {
         Layout {
             size: (inputs.width, h + inputs.edge),
             direction: bottom.direction,
-            container: Role::SurfaceContainer.color(dark),
+            container,
             items,
             targets,
         }
@@ -656,412 +867,7 @@ impl Layout {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod ink_tests;
 
-    /// Three destinations, the first selected and the last disabled, in a
-    /// 412 wide window under the light scheme, no palette told.
-    fn bar() -> Layout {
-        badged(None)
-    }
-
-    /// `bar()`, its second destination holding `badge`.
-    fn badged(badge: Option<&str>) -> Layout {
-        labelled(badge, true)
-    }
-
-    /// `badged`, its destinations' symbols left out where `symbols` is false.
-    fn labelled(badge: Option<&str>, symbols: bool) -> Layout {
-        let mut engine = TextEngine::from_font_files(
-            &[std::path::Path::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/fixtures/fonts/assets"
-            ))],
-            "DejaVu Sans",
-        );
-        let tab = |node, label: &str, selected, enabled| Tab {
-            node,
-            label: label.into(),
-            direction: Direction::Ltr,
-            symbol: symbols.then(|| "star".into()),
-            selected,
-            enabled,
-            badge: badge.filter(|_| node == 3).map(Into::into),
-        };
-        let bottom = Bottom {
-            tablist: 1,
-            direction: Direction::Ltr,
-            tabs: vec![
-                tab(2, "Home", true, true),
-                tab(3, "Starred", false, true),
-                tab(4, "Settings", false, false),
-            ],
-        };
-        let inputs = Inputs {
-            dark: false,
-            font_scale: 1.0,
-            width: 412.0,
-            edge: 0.0,
-            sides: (0.0, 0.0),
-        };
-        Layout::bottom(&mut engine, &bottom, &inputs)
-    }
-
-    #[test]
-    fn truncated_rtl_bar_labels_fit_and_center_in_their_targets() {
-        let mut engine = TextEngine::from_font_files(
-            &[std::path::Path::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/fixtures/fonts/assets"
-            ))],
-            "DejaVu Sans",
-        );
-        let title = "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة";
-        let top = Top {
-            route: 1,
-            heading: Some(2),
-            direction: Direction::Rtl,
-            title: title.into(),
-            title_direction: Direction::Rtl,
-            up: false,
-            leading: vec![],
-            trailing: vec![Button {
-                node: 3,
-                title: title.into(),
-                direction: Direction::Rtl,
-                symbol: None,
-                enabled: true,
-                destructive: false,
-                tint: None,
-            }],
-            scrolled: false,
-        };
-        for font_scale in [1., 2.] {
-            let inputs = Inputs {
-                dark: false,
-                font_scale,
-                width: 300.,
-                edge: 0.,
-                sides: (0., 0.),
-            };
-            for symbol in [None, Some("star".into())] {
-                let bottom = Bottom {
-                    tablist: 4,
-                    direction: Direction::Rtl,
-                    tabs: vec![Tab {
-                        node: 5,
-                        label: title.repeat(2),
-                        direction: Direction::Rtl,
-                        symbol,
-                        selected: true,
-                        enabled: true,
-                        badge: None,
-                    }],
-                };
-                let layout = Layout::bottom(&mut engine, &bottom, &inputs);
-                for item in &layout.items {
-                    let Item::Text(p, at, ..) = item else {
-                        continue;
-                    };
-                    assert!(p
-                        .layout_runs()
-                        .flat_map(|r| r.glyphs)
-                        .any(|g| g.start == g.end));
-                    let (left, _, width, _) = text_rect(p, *at);
-                    assert!(left >= -0.01 && left + width <= inputs.width + 0.01);
-                    assert!((left + width / 2. - inputs.width / 2.).abs() < 0.01);
-                }
-            }
-            let layout = Layout::top(&mut engine, &top, &inputs);
-            for item in &layout.items {
-                let Item::Text(p, at, _, node) = item else {
-                    continue;
-                };
-                assert!(p
-                    .layout_runs()
-                    .flat_map(|r| r.glyphs)
-                    .any(|g| g.start == g.end));
-                let (left, _, width, _) = text_rect(p, *at);
-                let target = layout.targets[0].rect;
-                if *node == 3 {
-                    assert!(
-                        (left + width / 2. - (target.0 + target.2 / 2.)).abs() < 0.01,
-                        "button label must be centered at scale {font_scale}"
-                    );
-                    assert!(left >= target.0 + TEXT_BUTTON_PADDING - 0.01);
-                    assert!(left + width <= target.0 + target.2 - TEXT_BUTTON_PADDING + 0.01);
-                } else {
-                    assert!(left >= target.0 + target.2 + dp(metric::TOP_EDGE) - 0.01);
-                    assert!(left + width <= inputs.width - 2. * dp(metric::TOP_EDGE) + 0.01);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn rtl_bars_keep_each_labels_authored_direction() {
-        let source = r#"routes nav
-  tab home "/"
-  tab other "/other"
-component App
-  state edited = false
-  action edit
-    edited = !edited
-  view
-    main navigationKey=`${top(nav).id}` direction="rtl"
-      column role="tabpanel" id="panel-home"
-        column navigationKey=`${top(nav).id}`
-          header
-            text "Beginning of a very long English heading ending here" role="heading" direction="ltr"
-            button press=edit
-              text "Beginning of a very long English action ending here" direction="ltr"
-          text "Body"
-      column role="tabpanel" id="panel-other"
-        text "Other body"
-      row role="tablist"
-        button role="tab" aria-controls="panel-home" aria-selected=true
-          text "Beginning of a very long English destination ending here" direction="ltr"
-        button "Other" role="tab" aria-controls="panel-other" aria-selected=false
-"#;
-        for rtl in [false, true] {
-            let source = if rtl {
-                ["heading", "action", "destination"]
-                    .into_iter()
-                    .fold(source.to_string(), |s, kind| {
-                        s.replace(
-                            &format!("Beginning of a very long English {kind} ending here"),
-                            "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة",
-                        )
-                    })
-                    .replace("direction=\"ltr\"", "direction=\"rtl\"")
-            } else {
-                source.to_string()
-            };
-            let (mut p, error) = crate::presenter::Presenter::boot_with(
-                &crate::test_plan(&source),
-                (),
-                (300., 600.),
-                1.,
-                std::path::PathBuf::new(),
-                crate::presenter::PainterChoice::Cpu,
-            )
-            .unwrap();
-            assert!(error.is_none(), "{error:?}");
-            p.host.set_bar_room(Some((64., 80., 80.))).unwrap();
-            let (top, bottom) = p.read_bars();
-            let inputs = Inputs {
-                dark: false,
-                font_scale: 1.,
-                width: 300.,
-                edge: 0.,
-                sides: (0., 0.),
-            };
-            let mut engine = TextEngine::from_font_files(
-                &[std::path::Path::new(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/fixtures/fonts/assets"
-                ))],
-                "DejaVu Sans",
-            );
-            let top = Layout::top(&mut engine, &top.unwrap(), &inputs);
-            let bottom = Layout::bottom(&mut engine, &bottom.unwrap(), &inputs);
-            let mut checked = 0;
-            for layout in [&top, &bottom] {
-                let texts = layout.texts();
-                for item in &layout.items {
-                    if let Item::Text(p, at, _, node) = item {
-                        let rect = texts.iter().find(|(id, _)| id == node).unwrap().1;
-                        for glyph in p.layout_runs().flat_map(|r| r.glyphs) {
-                            assert!(at.0 + glyph.x >= rect.0 - 0.01);
-                            assert!(at.0 + glyph.x + glyph.w <= rect.0 + rect.2 + 0.01);
-                        }
-                        for run in p.layout_runs() {
-                            if !run
-                                .text
-                                .starts_with(if rtl { "بداية" } else { "Beginning" })
-                            {
-                                continue;
-                            }
-                            assert_eq!(run.rtl, rtl, "the label keeps its authored direction");
-                            let first = run
-                                .glyphs
-                                .iter()
-                                .find(|g| g.start == 0 && g.end > 0)
-                                .expect("the first cluster survives truncation");
-                            let ellipsis = run
-                                .glyphs
-                                .iter()
-                                .find(|g| g.start == g.end)
-                                .expect("the long label has an ellipsis");
-                            for glyph in run.glyphs {
-                                if rtl {
-                                    assert!(glyph.x <= first.x, "first cluster at the right");
-                                    assert!(glyph.x >= ellipsis.x, "ellipsis at the left");
-                                } else {
-                                    assert!(glyph.x >= first.x, "first cluster at the left");
-                                    assert!(glyph.x <= ellipsis.x, "ellipsis at the right");
-                                }
-                            }
-                            checked += 1;
-                        }
-                    }
-                }
-            }
-            assert_eq!(checked, 3);
-            assert!(bottom.targets[0].rect.0 > bottom.targets[1].rect.0);
-        }
-    }
-
-    #[test]
-    fn a_title_has_the_room_what_leads_and_trails_leave_it() {
-        let mut engine = TextEngine::from_font_files(
-            &[std::path::Path::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/fixtures/fonts/assets"
-            ))],
-            "DejaVu Sans",
-        );
-        let title = "A title nearly as wide as its bar";
-        let wide =
-            crate::presenter::top::look::paragraph(&mut engine, title, TITLE_LARGE, 1.0, None)
-                .width;
-        let button = Button {
-            node: 3,
-            title: "Star".into(),
-            direction: Direction::Ltr,
-            symbol: Some("star".into()),
-            enabled: true,
-            destructive: false,
-            tint: None,
-        };
-        let top = Top {
-            route: 1,
-            heading: Some(2),
-            direction: Direction::Ltr,
-            title: title.into(),
-            title_direction: Direction::Ltr,
-            up: false,
-            leading: Vec::new(),
-            trailing: vec![button],
-            scrolled: false,
-        };
-        // Compose's room: the bar less 4 and a 48 button at its end, 4 at
-        // its start, and the title's own 4 either side; 2 to spare. From
-        // the inset (16) instead, the title would be cut.
-        let width = wide + 4.0 + 48.0 + 4.0 + 8.0 + 2.0;
-        let inputs = Inputs {
-            dark: false,
-            font_scale: 1.0,
-            width,
-            edge: 0.0,
-            sides: (0.0, 0.0),
-        };
-        let bar = Layout::top(&mut engine, &top, &inputs);
-        let (p, at) = (bar.items.iter())
-            .find_map(|item| match item {
-                Item::Text(p, at, _, 2) => Some((p.clone(), *at)),
-                _ => None,
-            })
-            .expect("the title");
-        assert_eq!(p.width, wide, "not cut");
-        // Moved back from the button: it ends 4 before the button's target.
-        let bounds = text_rect(&p, at);
-        assert!((bounds.0 + bounds.2 - (width - 4.0 - 48.0 - 4.0)).abs() < 0.01);
-    }
-
-    #[test]
-    fn the_navigation_bar_has_materials_indicator_and_colours() {
-        let bar = bar();
-        let mut texts = Vec::new();
-        let mut symbols = Vec::new();
-        let mut fills = Vec::new();
-        for item in &bar.items {
-            match item {
-                Item::Text(_, _, color, node) => texts.push((*node, *color)),
-                Item::Symbol(_, rect, color) => symbols.push((*rect, *color)),
-                Item::Fill(shape, _) => fills.push(shape.rect),
-            }
-        }
-        // Where no palette was told, Material's baseline: the selected
-        // label `secondary`, its symbol `onSecondaryContainer`; the others
-        // `onSurfaceVariant`, at 38 % when disabled.
-        let variant = [0x49, 0x45, 0x4F, 0xFF];
-        assert_eq!(
-            texts,
-            [
-                (2, [0x62, 0x5B, 0x71, 0xFF]),
-                (3, variant),
-                (4, [0x49, 0x45, 0x4F, 97])
-            ]
-        );
-        assert_eq!(symbols[0].1, [0x1D, 0x19, 0x2B, 0xFF]);
-        assert_eq!(symbols[1].1, variant);
-        // One indicator, 56 by 32, behind the first symbol: the first cell
-        // is (412 − 16) / 3 = 132 wide.
-        assert_eq!(fills.len(), 1);
-        let (x, _, w, h) = fills[0];
-        assert_eq!((w, h), (56.0, 32.0));
-        assert_eq!(x + w / 2.0, 66.0);
-        assert_eq!(symbols[2].0 .0 + 12.0, 280.0 + 66.0);
-    }
-
-    #[test]
-    fn a_destinations_badge_is_materials_large_badge_on_its_icon() {
-        let bar = badged(Some("12"));
-        let icon = bar
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                Item::Symbol(_, rect, _) => Some(*rect),
-                _ => None,
-            })
-            .nth(1)
-            .expect("the second destination's icon");
-        let pill = bar
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Fill(shape, color) if *color == [0xB3, 0x26, 0x1E, 0xFF] => Some(shape.rect),
-                _ => None,
-            })
-            .expect("one badge, in `error`");
-        // 12 before the icon's end, 14 into it, 16 tall, wider for two digits.
-        assert_eq!(
-            (pill.0, pill.1 + pill.3, pill.3),
-            (icon.0 + icon.2 - 12.0, icon.1 + 14.0, 16.0)
-        );
-        assert!(pill.2 > 16.0, "{pill:?}");
-        assert!(
-            bar.items
-                .iter()
-                .any(|item| matches!(item, Item::Text(_, _, [255, 255, 255, 255], 3))),
-            "its count in `onError`"
-        );
-    }
-    #[test]
-    fn a_destination_of_a_label_alone_keeps_its_badge_on_the_label() {
-        let bar = labelled(Some("3"), false);
-        let label = bar
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Text(p, at, color, 3) if *color != [255, 255, 255, 255] => {
-                    Some(text_rect(p, *at))
-                }
-                _ => None,
-            })
-            .expect("the label");
-        let pill = bar
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Fill(shape, color) if *color == [0xB3, 0x26, 0x1E, 0xFF] => Some(shape.rect),
-                _ => None,
-            })
-            .expect("its badge");
-        assert_eq!(
-            (pill.0, pill.1 + pill.3),
-            (label.0 + label.2 - 12.0, label.1 + 14.0)
-        );
-    }
-}
+#[cfg(test)]
+mod tests;

@@ -32,6 +32,7 @@ extension NSWindow {
 }
 
 public final class ExactWindowPlacement: NSObject {
+    var requestedFloating = false
     private var expected: NSRect?
     private var animation: FrameAnimation?
     private var request = 0
@@ -136,7 +137,7 @@ public enum ExactWindowCommands {
             }
             if name == "setWindowIgnoreMouseEvents" { window.ignoresMouseEvents = n.boolValue }
             else {
-                (window as? ExactSessionWindow)?.requestedFloating = n.boolValue
+                window.requestedFloating = n.boolValue
                 window.level = AgentLink.windowsBehind ? .agentBehind : n.boolValue ? .floating : .normal
             }
         case "setAspectRatio":

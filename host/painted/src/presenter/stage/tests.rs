@@ -220,6 +220,88 @@ fn a_modal_route_with_detents_is_a_bottom_sheet_over_the_page() {
     assert_eq!(p.reader_bars(1.0), Some(vec![0]));
 }
 
+fn grip(p: &mut Presenter<()>, top: f32) -> bool {
+    let y = (top + 24.) as u32;
+    red(p, 206, y) != red(p, 170, y)
+}
+
+#[test]
+fn a_new_sheet_reads_its_grabber_before_its_first_presentation() {
+    for (attribute, band) in [
+        (r#"navigationGrabber="hidden""#, 0.),
+        (r#"navigationGrabber="auto""#, SHEET_HANDLE),
+        ("", SHEET_HANDLE),
+    ] {
+        let source = APP.replace(
+            r#"testId="route-info""#,
+            &format!(r#"{attribute} testId="route-info""#),
+        );
+        let mut p = phone_source(&source);
+        tap(&mut p, "open-info");
+        after(&mut p, 1000.);
+        let top = p.top_sheet().unwrap().1 .1;
+        assert!(near(rect(&mut p, "info-body").1, top + band), "{attribute}");
+        assert_eq!(grip(&mut p, top), band > 0., "{attribute}");
+    }
+}
+
+#[test]
+fn a_sheet_updates_its_grabber_and_keeps_it_through_dismissal() {
+    let source = APP
+        .replace("  action open(", "  action follow(url: string)\n    nav = go(nav, url)\n  action open(")
+        .replace("navigationBack=\"back\"", "navigationBack=\"back\" navigate=follow")
+        .replace("  action back", "  state hidden = false\n  action toggle\n    hidden = !hidden\n  action back")
+        .replace("testId=\"route-info\"", "navigationGrabber=(hidden ? \"hidden\" : \"visible\") testId=\"route-info\"")
+        .replace("text \"About\" testId=\"info-body\"", "button press=toggle testId=\"toggle\" width=70 height=44\n              text \"Toggle\"");
+    let mut p = phone_source(&source);
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.);
+    let top = p.top_sheet().unwrap().1 .1;
+    assert!(grip(&mut p, top));
+    assert!(near(rect(&mut p, "toggle").1, top + SHEET_HANDLE));
+
+    let layouts = p.host.layout_calls;
+    let toggle = id(&p, "toggle");
+    assert_eq!(p.host.dispatch_at(toggle, Event::Press, p.host.now()), None);
+    assert_eq!(p.after_commit(), None);
+    after(&mut p, 0.);
+    assert!(near(rect(&mut p, "toggle").1, top));
+    assert_eq!(p.host.layout_calls, layouts + 1);
+    assert!(!grip(&mut p, top));
+    // The button now occupies the old handle band.
+    let now = p.host.now();
+    p.pointer_down(35., top + 20., now).unwrap();
+    p.pointer_up(35., top + 20., now + 16.).unwrap();
+    p.run_commands(|| ());
+    after(&mut p, 0.);
+    assert!(grip(&mut p, top));
+
+    for hidden in [true, false] {
+        if hidden {
+            tap(&mut p, "toggle");
+        }
+        after(&mut p, 0.);
+        tap(&mut p, "open-settings");
+        after(&mut p, 1000.);
+        let band = if hidden { 0. } else { SHEET_HANDLE };
+        assert!(near(rect(&mut p, "settings-body").1, top + band));
+        assert_eq!(grip(&mut p, top), !hidden);
+        let now = p.host.now();
+        p.pointer_down(206., top - 20., now).unwrap();
+        p.pointer_up(206., top - 20., now + 16.).unwrap();
+        p.run_commands(|| ());
+        after(&mut p, 60.);
+        let exiting = p.stage.closing.first().unwrap().top.at(p.host.now());
+        assert_eq!(grip(&mut p, exiting), !hidden);
+        if hidden {
+            after(&mut p, 1000.);
+            tap(&mut p, "open-info");
+            after(&mut p, 1000.);
+            tap(&mut p, "toggle");
+        }
+    }
+}
+
 #[test]
 fn a_modal_route_with_no_detent_rests_below_the_status_bar() {
     let mut p = phone();
@@ -242,7 +324,8 @@ fn a_sheet_drags_to_its_tallest_detent_and_down_out_of_the_window() {
     // From the handle, up past half way to the top: it rests at the top.
     let y = frame.1 + 10.0;
     p.pointer_down(200., y, t).unwrap();
-    for (k, dy) in [-4.0, -100.0, -250.0, -300.0].iter().enumerate() {
+    // The sheet moves from the sample that crosses the slop.
+    for (k, dy) in [-4.0, -10.0, -100.0, -250.0, -300.0].iter().enumerate() {
         p.pointer_move(200., y + dy, t + 50. * (k + 1) as f64)
             .unwrap();
     }
@@ -254,6 +337,7 @@ fn a_sheet_drags_to_its_tallest_detent_and_down_out_of_the_window() {
     let t = p.host().now();
     let y = frame.1 + 10.0;
     p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 10., t + 10.).unwrap();
     p.pointer_move(200., y + 200., t + 50.).unwrap();
     p.pointer_move(200., y + 500., t + 100.).unwrap();
     p.pointer_up(200., y + 520., t + 110.).unwrap();
@@ -292,6 +376,40 @@ component App
             native-menu width="100%" height=400 testId="map"
             box pan=drag touch-action="none" width="100%" height=40 testId="strip"
 "##;
+
+#[test]
+fn a_hidden_grabber_leaves_a_drag_in_the_first_row_to_its_gesture() {
+    let source = PICKER
+        .replace(
+            "closedby=\"none\"",
+            "closedby=\"none\" navigationGrabber=\"hidden\"",
+        )
+        .replace(
+            "            native-menu width=\"100%\" height=400 testId=\"map\"\n",
+            "",
+        );
+    let mut p = phone_source(&source);
+    tap(&mut p, "open-pick");
+    after(&mut p, 1000.);
+    let top = p.top_sheet().unwrap().1 .1;
+    assert!(near(rect(&mut p, "strip").1, top));
+    let y = top + 15.;
+    let now = p.host.now();
+    p.pointer_down(200., y, now).unwrap();
+    p.pointer_move(200., y + 50., now + 32.).unwrap();
+    assert!(!p.stage_follows_finger());
+    p.pointer_move(200., y + 65., now + 40.).unwrap();
+    p.pointer_up(200., y + 65., now + 48.).unwrap();
+    assert!(
+        p.host
+            .runner()
+            .slot("n")
+            .and_then(exact_plan::Value::as_number)
+            .unwrap()
+            > 0.
+    );
+    assert!(p.top_sheet().is_some());
+}
 
 /// The sheet takes a drag as a parent intercepts one, so the reader is
 /// told when the claim on up and down is the sheet's alone: it leaves that
@@ -364,6 +482,55 @@ fn a_sheets_drag_and_a_back_preview_follow_the_finger() {
     assert!(p.back_progress(0, 0.0, 1, t));
     assert!(p.back_progress(1, 0.2, 1, t + 8.));
     assert!(p.stage_follows_finger(), "Back's preview");
+}
+
+/// A sheet dragged directly moves from the event that crossed the slop, as
+/// Material's `ViewDragHelper` captures its view there: that event moves
+/// nothing, however far past the slop it lands, and the sheet follows the
+/// finger one to one after it (expo/exact#656).
+#[test]
+fn a_sheets_drag_starts_from_the_event_that_crossed_the_slop() {
+    let mut p = phone();
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.0);
+    let (_, rest) = p.top_sheet().unwrap();
+    let top = |p: &Presenter<()>| p.top_sheet().unwrap().1 .1;
+    // Down, from just past the slop, then on.
+    let t = p.host().now();
+    let y = rest.1 + 10.0;
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 12., t + 16.).unwrap();
+    assert!(p.stage_follows_finger(), "past the slop");
+    assert!(
+        near(top(&p), rest.1),
+        "the crossing moves nothing: {}",
+        top(&p)
+    );
+    p.pointer_move(200., y + 30., t + 32.).unwrap();
+    assert!(near(top(&p), rest.1 + 18.), "then 1:1: {}", top(&p));
+    p.pointer_cancel(t + 40.).unwrap();
+    after(&mut p, 1000.0);
+    assert!(near(top(&p), rest.1), "back at rest: {}", top(&p));
+    // A first sample 100 points down is no jump either.
+    let t = p.host().now();
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 100., t + 16.).unwrap();
+    assert!(
+        near(top(&p), rest.1),
+        "a large crossing moves nothing: {}",
+        top(&p)
+    );
+    p.pointer_move(200., y + 120., t + 32.).unwrap();
+    assert!(near(top(&p), rest.1 + 20.), "{}", top(&p));
+    p.pointer_cancel(t + 40.).unwrap();
+    after(&mut p, 1000.0);
+    // Upward, the same.
+    let t = p.host().now();
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y - 60., t + 16.).unwrap();
+    assert!(near(top(&p), rest.1), "{}", top(&p));
+    p.pointer_move(200., y - 70., t + 32.).unwrap();
+    assert!(near(top(&p), rest.1 - 10.), "{}", top(&p));
 }
 
 #[test]
@@ -457,6 +624,31 @@ fn a_sheet_dragged_fast_then_held_before_release_stays_open() {
     assert!(has(&p, "route-form"), "a held finger flings nothing");
     let (_, rest) = p.top_sheet().unwrap();
     assert!(near(rest.1, frame.1), "{rest:?} {frame:?}");
+}
+
+#[test]
+fn the_sheet_keeps_its_back_callback_while_a_push_covers_it() {
+    let mut p = phone();
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.);
+    let sheet = id(&p, "route-info");
+    assert_eq!(p.back_layers().sheet, sheet);
+    tap(&mut p, "open-settings");
+    after(&mut p, 1000.);
+    let layers = p.back_layers();
+    assert!(layers.route);
+    assert_eq!(layers.sheet, 0);
+    assert_eq!(layers.stacked_sheets, [sheet]);
+    assert!(!p.dispatched_progress(2, sheet, 0, 0.0, 0, p.host.now()));
+    assert!(!p.dispatched_progress(2, sheet, 1, 0.5, 0, p.host.now()));
+    assert_eq!(p.dispatched_back(2, sheet, p.host.now()), -1);
+    assert!(has(&p, "route-settings"));
+    p.dispatched_back(1, 1, p.host.now());
+    p.run_commands(|| ());
+    assert_eq!(p.back_layers().sheet, sheet);
+    p.dispatched_back(2, sheet, p.host.now());
+    p.run_commands(|| ());
+    assert!(p.back_layers().stacked_sheets.is_empty());
 }
 
 #[test]

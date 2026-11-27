@@ -126,6 +126,10 @@ fn an_overlapping_hit_uses_no_transport_or_place_when_both_lanes_are_full() {
         assert!(state.jobs[0].is_empty());
     }
     assert_eq!(script.wait(0), IN_FLIGHT + 1);
+    let drained = core.drain();
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].0, 101);
+    assert!(drained[0].2.unwrap().cached);
     assert!(core.drain().is_empty());
     core.retire();
     zero(&core);
@@ -191,14 +195,15 @@ fn an_overlapping_redirected_revalidation_retries_in_its_original_place() {
             retry.sink.end(Ok(()));
             drop(retry);
             wait(&core, |s| s.completed[0].iter().any(|d| d.ticket == 3));
-            assert!(core.drain().is_empty());
-            script.answer(B, b"first");
-            let done = drain(&core, &woke, 2);
-            assert_eq!(done.iter().map(|d| d.0).collect::<Vec<_>>(), [2, 3]);
+            let first_done = drain(&core, &woke, 1);
+            assert_eq!(first_done[0].0, 3);
             assert!(
-                matches!(&done[1].1, Outcome::Response(r) if r.status == 200 && r.body == b"new")
+                matches!(&first_done[0].1, Outcome::Response(r) if r.status == 200 && r.body == b"new")
             );
-            assert!(!done[1].2);
+            assert!(!first_done[0].2);
+            script.answer(B, b"first");
+            let second_done = drain(&core, &woke, 1);
+            assert_eq!(second_done[0].0, 2);
         }
         zero(&core);
     }

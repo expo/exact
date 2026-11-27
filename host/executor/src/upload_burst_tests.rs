@@ -174,3 +174,53 @@ fn an_upload_waits_for_a_reader_place_and_starts_when_one_is_given_back() {
     while !matches!(next(&core, &woke), (2, Outcome::Response(_))) {}
     assert_eq!(core.shared.uploads.waiting(), (0, 0));
 }
+
+#[test]
+fn take_place_racing_reader_drops_never_stalls_an_upload() {
+    let _turn = crate::tests::one_at_a_time();
+    crate::body::settle_readers();
+    let (core, script, woke) = setup_with("net.fetch https://example.test\nfs.read app:/tmp");
+    let files = AppFiles::new("a.bin", &[7; 4096]);
+    core.set_app_roots(files.roots());
+    // Open app roots once so each round contends only on reader places.
+    core.run_owned(file_upload(1, "/upload", "a.bin"), None)
+        .unwrap();
+    let first = feed(&script, 0);
+    for _ in 0..3 {
+        first.send(Vec::new()).unwrap();
+    }
+    while !matches!(next(&core, &woke), (1, Outcome::Response(_))) {}
+    crate::body::settle_readers();
+
+    for round in 0..40u64 {
+        let ticket = round + 2;
+        let ready = Arc::new(std::sync::Barrier::new(crate::body::MAX_READERS + 1));
+        let go = Arc::new(std::sync::Barrier::new(crate::body::MAX_READERS + 1));
+        let holders: Vec<_> = (0..crate::body::MAX_READERS)
+            .map(|_| {
+                let ready = ready.clone();
+                let go = go.clone();
+                crate::body::reader(move || {
+                    ready.wait();
+                    go.wait();
+                })
+                .expect("a free place")
+            })
+            .collect();
+        ready.wait();
+        // Release all reader places as the upload enters `take_place`.
+        go.wait();
+        core.run_owned(file_upload(ticket, "/upload", "a.bin"), None)
+            .unwrap();
+        let next_feed = feed(&script, (round + 1) as usize);
+        for _ in 0..3 {
+            next_feed.send(Vec::new()).unwrap();
+        }
+        while !matches!(next(&core, &woke), (t, Outcome::Response(_)) if t == ticket) {}
+        for holder in holders {
+            holder.join().unwrap();
+        }
+        crate::body::settle_readers();
+    }
+    assert_eq!(core.shared.uploads.waiting(), (0, 0));
+}

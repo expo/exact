@@ -12,7 +12,7 @@
 use super::{Carried, CommitReceipt, DataSource, Event, Runner, RunnerError};
 use exact_kernel::{SortedSet, ViewId};
 use exact_plan::{EventKind, Plan, SlotsId, Stdlib, TypeKind, TypesId, Value};
-use exact_route::{Entry, Router, Tab, Table};
+use exact_route::{Destination, Entry, Router, Tab, Table};
 use std::cell::RefCell;
 
 /// The selected visit and all visit ids removed from any retained tab.
@@ -37,6 +37,12 @@ pub struct RouterChange {
     pub removed: Vec<u64>,
     /// Every retained visit's canonical location, in tab/stack order.
     pub visits: Vec<(u64, String)>,
+    /// Each tab's root visit, in tab order: a tab switch from a step in one.
+    pub roots: Vec<u64>,
+    /// The selected tab's name: the top's tab.
+    pub tab: String,
+    /// What the route table resolves the top's location to (`Table::chain`).
+    pub chain: Vec<exact_route::Destination>,
     /// The top's route pattern (`/post/:id`), which navigation metrics group
     /// by. Empty when the table has no such route.
     pub pattern: String,
@@ -189,14 +195,23 @@ struct Reads {
     top: Option<Value>,
 }
 
+/// Each tab's root visit, in tab order (`RouterChange::roots`).
+fn roots(r: &Router) -> Vec<u64> {
+    r.tabs
+        .iter()
+        .filter_map(|t| t.stack.first())
+        .map(|e| e.id)
+        .collect()
+}
+
 fn invalid(message: impl Into<String>) -> RunnerError {
     RunnerError::Router(message.into())
 }
 
 impl RouterContext {
-    /// The top's route pattern (`/post/:id`) and its bound parameters, in
-    /// the table's order: what navigation metrics group a change by.
-    fn route_facts(&self, top: &Entry) -> (String, Vec<(String, String)>) {
+    /// The top's route pattern (`/post/:id`), its bound parameters in table
+    /// order (navigation metrics group by both), and its chain's addresses.
+    fn route_facts(&self, top: &Entry) -> (String, Vec<(String, String)>, Vec<Destination>) {
         let pattern = self
             .table
             .routes
@@ -215,7 +230,7 @@ impl RouterContext {
                     .map(|v| (n.to_string(), v.clone()))
             })
             .collect();
-        (pattern, params)
+        (pattern, params, self.table.chain(&top.url))
     }
 
     pub(super) fn from_plan(plan: &Plan) -> Result<Option<Self>, RunnerError> {
@@ -800,7 +815,7 @@ impl Routing for RouterContext {
             .filter(|e| !ids.contains(&e.id))
             .map(|e| e.id)
             .collect();
-        let (pattern, params) = self.route_facts(top);
+        let (pattern, params, chain) = self.route_facts(top);
         Ok(Some(RouterChange {
             top: top.id,
             url: top.url.clone(),
@@ -814,6 +829,9 @@ impl Routing for RouterContext {
                 .flat_map(|t| &t.stack)
                 .map(|e| (e.id, e.url.clone()))
                 .collect(),
+            roots: roots(&r),
+            tab: r.tab.clone(),
+            chain,
             pattern,
             params,
             due: false,
@@ -839,7 +857,7 @@ impl Routing for RouterContext {
         let change = change.or_else(|| {
             let r = self.router(&value)?;
             let top = exact_route::top(&r)?;
-            let (pattern, params) = self.route_facts(top);
+            let (pattern, params, chain) = self.route_facts(top);
             self.activates(&value, top).then(|| RouterChange {
                 top: top.id,
                 url: top.url.clone(),
@@ -850,6 +868,9 @@ impl Routing for RouterContext {
                 visits: (r.tabs.iter().flat_map(|t| &t.stack))
                     .map(|e| (e.id, e.url.clone()))
                     .collect(),
+                roots: roots(&r),
+                tab: r.tab.clone(),
+                chain,
                 pattern,
                 params,
                 due: false,
@@ -1134,6 +1155,13 @@ impl<D: DataSource> Runner<D> {
         self.router
             .as_ref()
             .is_some_and(|r| r.matches_pattern(location))
+    }
+
+    /// Whether the router takes `location`, including its `notfound` fallback.
+    /// `false` without a router.
+    pub fn route_accepts(&self, location: &str) -> bool {
+        self.router.is_some()
+            && (self.route_matches(location) || self.plan.routes.iter().any(|r| r.notfound))
     }
 
     /// Whether the route table declares one location besides `notfound`

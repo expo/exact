@@ -28,8 +28,8 @@ static LEAN: std::sync::LazyLock<bool> =
 pub(super) struct ModelScroll {
     pub(super) key: NodeKey,
     pub(super) sequence: u64,
-    top: f32,
-    left: Option<f32>,
+    pub(super) top: f32,
+    pub(super) left: Option<f32>,
     /// Cumulative anchor correction on this input sequence, acknowledged with its pixels.
     rebase: f32,
     /// The offset it was planned from: a list's own position is its change from here.
@@ -377,7 +377,14 @@ fn containing_width(kernel: &Kernel, view: ViewId, viewport: f64) -> f64 {
         })
 }
 
-fn geometry(kernel: &Kernel, snapshot: &CollectionSnapshot, viewport: f64) -> Option<Geometry> {
+/// Under a scroller claim (LLP 1123 D14), `claim`, the port on the main axis is the reached scrollport, the insets lie
+/// in the padding before and after the content, and the range follows from both.
+fn geometry(
+    kernel: &Kernel,
+    snapshot: &CollectionSnapshot,
+    viewport: f64,
+    claim: Option<crate::safe_area::ScrollClaim>,
+) -> Option<Geometry> {
     let node = kernel.node(snapshot.view)?;
     let [top, right, bottom, left] = node.style.border_widths();
     let width = (node.frame.width - left - right).max(0.) as f64;
@@ -396,19 +403,28 @@ fn geometry(kernel: &Kernel, snapshot: &CollectionSnapshot, viewport: f64) -> Op
     };
     let s = node.style;
     let axis = snapshot.axis;
+    let c = claim.unwrap_or_default();
+    let (lead, trail, before, after) = match axis {
+        ListAxis::Vertical => (c.reach[0], c.reach[2], c.insets[0], c.insets[2]),
+        ListAxis::Horizontal => (c.reach[3], c.reach[1], c.insets[3], c.insets[1]),
+    };
+    let (height, width) = match axis {
+        ListAxis::Vertical => (height + f64::from(lead + trail), width),
+        ListAxis::Horizontal => (height, width + f64::from(lead + trail)),
+    };
     // Main-axis padding before and after the content, the cross-axis padding
     // pair, and the inner port along each axis.
     let (origin, end, cross_pad, main, port_cross) = match axis {
         ListAxis::Vertical => (
-            pad(s.padding_top.clone()),
-            pad(s.padding_bottom.clone()),
+            pad(s.padding_top.clone()) + f64::from(before),
+            pad(s.padding_bottom.clone()) + f64::from(after),
             pad(s.padding_left.clone()) + pad(s.padding_right.clone()),
             height,
             width,
         ),
         ListAxis::Horizontal => (
-            pad(s.padding_left.clone()),
-            pad(s.padding_right.clone()),
+            pad(s.padding_left.clone()) + f64::from(before),
+            pad(s.padding_right.clone()) + f64::from(after),
             pad(s.padding_top.clone()) + pad(s.padding_bottom.clone()),
             width,
             height,
@@ -440,7 +456,7 @@ fn geometry(kernel: &Kernel, snapshot: &CollectionSnapshot, viewport: f64) -> Op
         origin,
         // Native layout may omit the trailing border from content_size. The
         // scroll range must still reach the index's end through the inner port.
-        max: (content - frame)
+        max: (content - frame + before + after - lead - trail)
             .max((snapshot.total_extent + origin + end - main) as f32)
             .max(0.),
         padding: [origin, end],
@@ -467,6 +483,12 @@ fn pin_owner(
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// The claim of the list `snapshot` shows, while it has one (LLP 1123 D14).
+    fn list_claim(&self, snapshot: &CollectionSnapshot) -> Option<crate::safe_area::ScrollClaim> {
+        let key = self.host.kernel().node(snapshot.view)?.key;
+        self.host.safe_area.scroll_claim(key)
+    }
+
     /// Ordinary scroll containers consume changed requests after layout, just
     /// like the browser's prop writes. The existing picture receipt also owns
     /// these offsets: an in-flight frame cannot move the input base early.
@@ -768,11 +790,19 @@ impl<D: DataSource> Presenter<D> {
         let Some(node) = self.host.kernel().node_by_key(facts.list) else {
             return false;
         };
+        if node.props.str(PropId::ListStyle).is_some() {
+            return true;
+        }
         let snapshots = self.host.collections_shallow();
         let Some(snapshot) = snapshots.iter().find(|s| s.view == node.id) else {
             return false;
         };
-        let Some(g) = geometry(self.host.kernel(), snapshot, self.viewport.0 as f64) else {
+        let Some(g) = geometry(
+            self.host.kernel(),
+            snapshot,
+            self.viewport.0 as f64,
+            self.list_claim(snapshot),
+        ) else {
             return false;
         };
         // Native scroll offsets include leading padding; feedback starts at
@@ -825,8 +855,13 @@ impl<D: DataSource> Presenter<D> {
             .collections_shallow()
             .iter()
             .filter_map(|snapshot| {
-                geometry(self.host.kernel(), snapshot, self.viewport.0 as f64)
-                    .map(|g| (snapshot.view, g.max))
+                geometry(
+                    self.host.kernel(),
+                    snapshot,
+                    self.viewport.0 as f64,
+                    self.list_claim(snapshot),
+                )
+                .map(|g| (snapshot.view, g.max))
             })
             .collect()
     }
@@ -882,6 +917,12 @@ impl<D: DataSource> Presenter<D> {
 
     pub(super) fn collection_scroll_input(&mut self, view: ViewId, before: (f32, f32)) {
         self.collection_scroll_turn(view, false, self.scroll_of(view) != before);
+    }
+
+    /// The person moves `view` by a glide the presenter runs (a destination
+    /// tapped again): its earlier requests give way, as to any reader's move.
+    pub(super) fn collection_reader_moves(&mut self, view: ViewId) {
+        self.collection_scroll_turn(view, false, true);
     }
 
     /// A wheel moved `view`: its collection turn now, or after the frame
@@ -1025,7 +1066,12 @@ impl<D: DataSource> Presenter<D> {
         let Some(snapshot) = self.host.collection(view) else {
             return;
         };
-        let Some(g) = geometry(self.host.kernel(), &snapshot, self.viewport.0 as f64) else {
+        let Some(g) = geometry(
+            self.host.kernel(),
+            &snapshot,
+            self.viewport.0 as f64,
+            self.list_claim(&snapshot),
+        ) else {
             return;
         };
         let main = self
@@ -1161,7 +1207,9 @@ impl<D: DataSource> Presenter<D> {
                 // relabel old accepted height with current row epochs.
                 continue;
             }
-            let Some(g) = geometry(self.host.kernel(), snapshot, self.viewport.0 as f64) else {
+            let claim = self.host.safe_area.scroll_claim(key);
+            let Some(g) = geometry(self.host.kernel(), snapshot, self.viewport.0 as f64, claim)
+            else {
                 continue;
             };
             let planned = cursor.sequence;
@@ -1408,6 +1456,7 @@ impl<D: DataSource> Presenter<D> {
                 animating: gliding.is_some(),
                 ..CollectionFill::default()
             };
+            self.tell_covered(view, g.axis);
             match self.host.collection_feedback_filled(feedback, fill) {
                 Ok(true) => {
                     let after = self.sync_commit();

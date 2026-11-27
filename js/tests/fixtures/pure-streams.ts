@@ -248,3 +248,47 @@ export async function streamUpload(): Promise<string> {
   }
   return JSON.stringify(results);
 }
+
+export async function codecLimits(): Promise<string> {
+  // 1. A small deflate payload that expands past the module's memory ceiling rejects with TypeError.
+  const cs = new CompressionStream('deflate'), cw = cs.writable.getWriter();
+  const writeZeros = (async () => {
+    const chunk = new Uint8Array(64 * 1024);
+    for (let i = 0; i < 32; i++) await cw.write(chunk); // 2 MiB of zeros -> ~2 KiB compressed
+    await cw.close();
+  })();
+  const bomb = new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  await writeZeros;
+  let bombError = '';
+  try {
+    await decompress('deflate', bomb);
+    bombError = 'ok';
+  } catch (e: any) {
+    bombError = `${errorName(e)}: ${e.message}`;
+  }
+
+  // 2. An unterminated gzip FNAME header is bounded and rejects with TypeError.
+  let headerError = '';
+  try {
+    const gz = new DecompressionStream('gzip'), w = gz.writable.getWriter();
+    const reading = new Response(gz.readable).arrayBuffer();
+    reading.catch(() => {});
+    await w.write(new Uint8Array([0x1f, 0x8b, 8, 8, 0, 0, 0, 0, 0, 3]));
+    const fill = new Uint8Array(8192).fill(97);
+    for (let i = 0; i < 20; i++) await w.write(fill);
+    headerError = 'ok';
+  } catch (e: any) {
+    headerError = `${errorName(e)}: ${e.message}`;
+  }
+
+  // 3. Opening too many concurrent codecs rejects with TypeError.
+  const held: DecompressionStream[] = [];
+  let capError = '';
+  try {
+    for (let i = 0; i < 100; i++) held.push(new DecompressionStream('deflate'));
+    capError = 'ok';
+  } catch (e: any) {
+    capError = `${errorName(e)}: ${e.message}`;
+  }
+  return JSON.stringify({ bombBytes: bomb.byteLength, bombError, headerError, opened: held.length, capError });
+}

@@ -5,10 +5,11 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { admitHead, authenticatedReleaseFloor, cohortFiles, cohortReceipt, keepRecord, latestRecord, nextSeq } from './deploy-heads.mjs';
+import { admitHead, authenticatedReleaseFloor, binaryInputFile, cohortFiles, cohortReceipt, keepRecord, latestRecord, nextSeq, sameCohortPayload } from './deploy-heads.mjs';
+import { binarySourceInputs } from './cargo-dep-info.mjs';
 import { canonicalBytes, classify } from './deploy.mjs';
 import { envelopeBytes } from './deploy-signing.mjs';
-import { publishStream, streamHead } from './publisher.mjs';
+import { publishStream, readBinaryInputFile, streamHead } from './publisher.mjs';
 import { blobPath, DirectoryOrigin, HttpsOrigin, sha256, streamPath } from './origin.mjs';
 
 const cache = mkdtempSync(join(tmpdir(), 'exact-release-seqs-'));
@@ -203,4 +204,60 @@ test('a signed cohort card can spell the same IPv6 address differently from the 
   }));
   const bytes = Buffer.from(JSON.stringify(envelope));
   expect(await admitHead(remote, { bytes, json: envelope }, app, stream)).toMatchObject({ usable: true, cohort });
+});
+
+test('binarySourceInputs produces identical binary-inputs and cohort digests regardless of Cargo build-script arrival order', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-binary-source-order-'));
+  try {
+    const roots = [{ name: 'exact', path: dir }];
+    const kernelDir = join(dir, 'kernel/build');
+    const jsDir = join(dir, 'vendor/ibex/crates/ibex2/include');
+    const fileA = { path: join(dir, 'kernel/src/lib.rs'), sha256: 'a'.repeat(64) };
+    const fileB = { path: join(dir, 'js/src/lib.rs'), sha256: 'b'.repeat(64) };
+    const dirKernel = [kernelDir, { path: kernelDir, names: ['tables.rs'] }];
+    const dirJs = [jsDir, { path: jsDir, names: ['ibex.h'] }];
+    const absentKernel = [join(dir, 'kernel/optional'), join(dir, 'kernel/optional')];
+    const absentJs = [join(dir, 'js/optional'), join(dir, 'js/optional')];
+    const linkKernel = [join(dir, 'kernel/link'), { path: join(dir, 'kernel/link'), target: 'a' }];
+    const linkJs = [join(dir, 'js/link'), { path: join(dir, 'js/link'), target: 'b' }];
+    const invA = { path: join(dir, 'modules/a'), kind: 'swift-package', identity: { directory: 'a' } };
+    const invB = { path: join(dir, 'modules/b'), kind: 'notification-service', identity: { tree: '1'.repeat(64) } };
+    const metadata = { delivery: { channel: 'prod' }, store: { L: 'A' }, keys: {} };
+
+    const makeBuild = reverse => {
+      const pair = (first, second) => reverse ? [second, first] : [first, second];
+      const sourceInputs = binarySourceInputs({
+        files: pair(fileA, fileB),
+        directories: new Map(pair(dirKernel, dirJs)),
+        absent: new Map(pair(absentKernel, absentJs)),
+        links: new Map(pair(linkKernel, linkJs)),
+        inventories: pair(invA, invB),
+        metadata,
+      }, roots, []);
+      return {
+        version: 1,
+        compat: { id: stream.compatibilityId, target: 'aarch64-apple-ios', inputs: { platform: 'ios' } },
+        graph: { version: 1, sources: {}, artifacts: [] },
+        binary: { sha256: 'c'.repeat(64), sourceInputs },
+      };
+    };
+
+    const first = makeBuild(false);
+    const second = makeBuild(true);
+    const firstFile = binaryInputFile(first);
+    const secondFile = binaryInputFile(second);
+    expect(secondFile.bytes).toEqual(firstFile.bytes);
+    expect(secondFile.sha256).toBe(firstFile.sha256);
+
+    const firstCohort = cohortReceipt(first);
+    const secondCohort = cohortReceipt(second);
+    expect(secondCohort).toEqual(firstCohort);
+    expect(sameCohortPayload(cohortFiles(firstCohort)[0].card, cohortFiles(secondCohort)[0].card)).toBe(true);
+
+    // Local build with reversed arrival order still restores a missing origin binary-inputs blob.
+    const emptyOrigin = origin('directory', {});
+    const restored = await readBinaryInputFile(emptyOrigin, firstCohort, second);
+    expect(restored.bytes).toEqual(firstFile.bytes);
+    expect(restored.restore.sha256).toBe(firstFile.sha256);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

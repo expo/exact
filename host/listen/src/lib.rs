@@ -278,8 +278,16 @@ impl Loop {
             hold::Start::Wait => {
                 self.emit(Event::Standing("waiting"));
             }
-            hold::Start::Bind => self.bind(false),
-            hold::Start::TakeOver => self.bind(true),
+            hold::Start::Bind => {
+                if !self.bind(false) {
+                    self.emit(Event::Standing("waiting"));
+                }
+            }
+            hold::Start::TakeOver => {
+                if !self.bind(true) {
+                    self.emit(Event::Standing("waiting"));
+                }
+            }
         }
         while !self.stopped && !signal.stop.load(Ordering::SeqCst) {
             self.turn();
@@ -289,9 +297,18 @@ impl Loop {
 
     /// Bind as the process's holder (`over` the one it displaced): the
     /// first `listening`, or `holding` once it has listened before. A first
-    /// bind that fails ends it.
-    fn bind(&mut self, over: bool) {
-        match bind::publish(&self.config.path, self.config.takeover, over) {
+    /// bind that fails ends it. Returns `false` without publishing if another
+    /// listener in the process already took over the hold.
+    fn bind(&mut self, over: bool) -> bool {
+        let Some(hold) = self.hold.as_ref() else {
+            return false;
+        };
+        let Some(result) = hold.publish_if_holding(&self.shared.signal, || {
+            bind::publish(&self.config.path, self.config.takeover, over)
+        }) else {
+            return false;
+        };
+        match result {
             Ok(bound) => {
                 let took_over = bound.took_over;
                 self.bound = Some(bound);
@@ -317,6 +334,7 @@ impl Loop {
             // Held again only when the path is free: otherwise it stays displaced.
             Err(_) => {}
         }
+        true
     }
 
     /// No new connections: a newer listener holds the address.
@@ -331,27 +349,52 @@ impl Loop {
     /// The directory changed: when this listener holds the address in the
     /// process, see whether its path is still its socket.
     fn look(&mut self) {
-        if !self.hold.as_ref().is_some_and(hold::Hold::holding) {
-            return;
+        enum Action {
+            None,
+            Displace,
+            EmitDisplaced,
+            Bind,
         }
-        let now = bind::identity(&self.config.path);
-        match &self.bound {
-            Some(bound) if now == Some(bound.identity) => {}
-            // Removed under it: bound again where it can be.
-            Some(bound) if now.is_none() => {
-                bind::forget(&self.config.path, bound.identity);
-                self.bound = None;
-                if let Ok(bound) = bind::publish(&self.config.path, false, false) {
-                    self.bound = Some(bound);
-                } else {
-                    self.emit(Event::Standing("displaced"));
-                }
+        let Some(hold) = self.hold.as_ref() else {
+            return;
+        };
+        let path = &self.config.path;
+        let bound_slot = &mut self.bound;
+        let ever_bound = self.ever_bound;
+        let action = hold.with_publish(|| {
+            if !hold.holding() {
+                return Action::None;
             }
-            // Another process took it over.
-            Some(_) => self.displace(),
-            // That process let go: take it back while it is free.
-            None if now.is_none() && self.ever_bound => self.bind(false),
-            None => {}
+            let now = bind::identity(path);
+            match bound_slot {
+                Some(bound) if now == Some(bound.identity) => Action::None,
+                // Removed under it: bound again where it can be.
+                Some(bound) if now.is_none() => {
+                    bind::forget(path, bound.identity);
+                    *bound_slot = None;
+                    if let Ok(bound) = bind::publish(path, false, false) {
+                        *bound_slot = Some(bound);
+                        Action::None
+                    } else {
+                        Action::EmitDisplaced
+                    }
+                }
+                // Another process took it over.
+                Some(_) => Action::Displace,
+                // That process let go: take it back while it is free.
+                None if now.is_none() && ever_bound => Action::Bind,
+                None => Action::None,
+            }
+        });
+        match action {
+            Action::None => {}
+            Action::Displace => self.displace(),
+            Action::EmitDisplaced => {
+                self.emit(Event::Standing("displaced"));
+            }
+            Action::Bind => {
+                self.bind(false);
+            }
         }
     }
 
@@ -437,11 +480,19 @@ impl Loop {
         }
         at += 1;
         let signal = self.shared.signal.clone();
-        if signal.displaced.swap(false, Ordering::SeqCst) {
+        let displaced = signal.displaced.swap(false, Ordering::SeqCst);
+        let acquire = signal.acquire.swap(false, Ordering::SeqCst);
+        if displaced {
             self.displace();
         }
-        if signal.acquire.swap(false, Ordering::SeqCst) {
-            self.bind(false);
+        if displaced || acquire {
+            if self.hold.as_ref().is_some_and(hold::Hold::holding) {
+                if self.bound.is_none() {
+                    self.bind(false);
+                }
+            } else {
+                self.displace();
+            }
         }
         if watched {
             if fds[at].revents != 0 {
@@ -650,7 +701,11 @@ impl Loop {
         }
         self.shared.out.lock().unwrap().clear();
         if let Some(bound) = self.bound.take() {
-            bind::unpublish(&self.config.path, bound.identity);
+            if let Some(hold) = &self.hold {
+                hold.with_publish(|| bind::unpublish(&self.config.path, bound.identity));
+            } else {
+                bind::unpublish(&self.config.path, bound.identity);
+            }
         }
         self.watch = None;
         if let Some(hold) = self.hold.take() {

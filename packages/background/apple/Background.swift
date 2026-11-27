@@ -40,6 +40,7 @@ public final class BackgroundModule: NSObject, ExactPackage {
 
     private let context: ExactPackageContext
     private let epochAtZero: Double
+    private let wallClock: () -> Double
     /// By kind (`sync`, `periodicsync`), then tag.
     private var tags: [String: [String: Registration]] = [:]
     /// Platform tasks waiting for each invocation, by `kind tag`.
@@ -50,9 +51,14 @@ public final class BackgroundModule: NSObject, ExactPackage {
     private let monitor = NWPathMonitor()
     private var timer: Timer?
 
-    public required init(context: ExactPackageContext) {
+    public required convenience init(context: ExactPackageContext) {
+        self.init(context: context, wallClock: { Date().timeIntervalSince1970 * 1000 })
+    }
+
+    init(context: ExactPackageContext, wallClock: @escaping () -> Double) {
         self.context = context
-        epochAtZero = Date().timeIntervalSince1970 * 1000 - context.now()
+        self.wallClock = wallClock
+        epochAtZero = wallClock() - context.now()
         super.init()
         if let data = UserDefaults.standard.data(forKey: Self.key),
            let kept = try? JSONDecoder().decode([String: [String: Registration]].self, from: data) {
@@ -97,7 +103,10 @@ public final class BackgroundModule: NSObject, ExactPackage {
     }
 
     public func foreground(_ shown: Bool) {
-        if shown { context.changed("background.backgroundSyncStatus") }
+        if shown {
+            context.changed("background.backgroundSyncStatus")
+            fire()
+        }
     }
 
     // MARK: the fact
@@ -145,9 +154,10 @@ public final class BackgroundModule: NSObject, ExactPackage {
         guard !context.agent else { return }
         let wakes = context.wakes
         #if os(iOS)
+        let now = now()
         let waiting = (tags["sync"] ?? [:]).filter { raised["sync " + $0.key] == nil }
         if let soonest = waiting.values.map({ $0.notBefore ?? 0 }).min() {
-            let at = max(soonest, now()) - epochAtZero
+            let at = sessionTime(for: max(soonest, now))
             wakes.request(kind: "refresh", at: at, key: "sync")
             wakes.request(kind: "processing", at: at, key: "sync processing", power: waiting.values.contains { $0.power == true })
         } else {
@@ -156,12 +166,16 @@ public final class BackgroundModule: NSObject, ExactPackage {
         }
         #endif
         for (tag, r) in tags["periodicsync"] ?? [:] {
-            wakes.request(kind: r.task == "processing" ? "processing" : "refresh", at: due(r) - epochAtZero, key: "periodicsync " + tag, power: r.power == true)
+            wakes.request(kind: r.task == "processing" ? "processing" : "refresh", at: sessionTime(for: due(r)), key: "periodicsync " + tag, power: r.power == true)
         }
     }
 
-    // Persist epoch times: the session clock starts over on each launch.
-    private func now() -> Double { epochAtZero + context.now() }
+    // Persist epoch times: outside the agent read live wall time so sleep-pausing
+    // monotonic clocks do not lag behind real deadlines.
+    private func now() -> Double { context.agent ? epochAtZero + context.now() : wallClock() }
+
+    /// Convert an epoch deadline (ms) to the session clock using the current offset so sleep drift is excluded.
+    private func sessionTime(for epoch: Double) -> Double { context.now() + (epoch - now()) }
 
     private func due(_ r: Registration) -> Double { (r.lastRun ?? r.registered) + (r.minInterval ?? 900_000) }
 

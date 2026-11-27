@@ -302,6 +302,7 @@ fn a_hosted_field_is_measured_by_the_shell_during_layout() {
     let device = Device {
         night: false,
         font_scale: 1.5,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,
@@ -500,6 +501,37 @@ fn an_edit_is_the_fields_text_and_the_app_answers_it_by_its_number() {
     assert_eq!((after[0].generation, after[0].seq), (1, 0));
     let heard = "ab|abc||[ab 2-2]<0-2><1-2>";
     assert_eq!(log(&p), heard, "the command's `select`, and no `input`");
+}
+
+#[test]
+fn a_presenter_edit_tells_the_hosted_field_where_to_put_the_caret() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(FORM);
+    p.serve_requests();
+    p.reader_fields(1.0);
+    let name = id(&p, "name");
+    for (value, end) in [("Fern", 4), ("🍃ab", 4), ("", 0)] {
+        let packet = |p: &mut Presenter<()>| told(p).into_iter().find(|f| f.id == name).unwrap();
+        let rev = packet(&mut p).look[15];
+        p.type_text(name, value).unwrap();
+        let field = packet(&mut p);
+        assert_eq!(field.value, value);
+        assert_eq!(field.look[15], rev + 2);
+        assert_eq!(&field.look[16..], &[end, end]);
+    }
+}
+
+#[test]
+fn an_input_handler_can_replace_the_value_before_the_reader_takes_the_caret() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(&FORM.replace("name = value", "name = `!${value}`"));
+    p.serve_requests();
+    p.reader_fields(1.);
+    let name = id(&p, "name");
+    p.type_text(name, "Fern").unwrap();
+    let field = told(&mut p).into_iter().find(|f| f.id == name).unwrap();
+    assert_eq!(field.value, "!Fern");
+    assert_eq!(&field.look[16..], &[5, 5]);
 }
 
 /// LLP 1115.000 §5, ruling 6: the app hears `input` at every change, the
@@ -971,4 +1003,189 @@ fn rtl_hosted_fields_carry_direction_and_physical_alignment() {
         assert_eq!(fields[2].look[0] & 512 != 0, rtl);
         assert_eq!(fields[2].look[5], 0);
     }
+}
+
+/// Replacing the host can retain view ids, so hosted fields advance their
+/// generation, clear pending composition, and reject old-tree callbacks while
+/// still emitting an empty statement when the new tree has no fields.
+#[test]
+fn reloading_a_host_advances_hosted_field_generations_and_clears_composing() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(FORM);
+    p.serve_requests();
+    p.reader_fields(1.0);
+    let name = id(&p, "name");
+    p.reader_field_focused(name, 0, true, 1.0);
+    p.reader_field_edited(name, (0, 1), "before", (6, 6), 2.0);
+    tap(&mut p, "jump");
+    p.run_commands(<()>::default);
+    let before = told(&mut p);
+    assert_eq!(
+        (before[0].id, before[0].generation, before[0].seq),
+        (name, 0, 1)
+    );
+    assert_eq!(&before[0].look[15..], &[1, 1, 2]);
+    // Reload the same component so `RetainedViews` keeps `name`'s ViewId.
+    let next_plan =
+        crate::test_plan(&FORM.replace("placeholder=\"Name\"", "placeholder=\"Updated\""));
+    assert_eq!(
+        p.reload_module(&next_plan, (), None, false).unwrap(),
+        ReloadResult::Applied(None)
+    );
+    settle(&mut p);
+    assert_eq!(
+        id(&p, "name"),
+        name,
+        "reload retains the hosted field's ViewId"
+    );
+    // In-flight callbacks from the old tree carry generation 0 and are dropped.
+    p.reader_field_composing(name, 0, true, "stale");
+    p.reader_field_edited(name, (0, 2), "stale", (5, 5), 3.0);
+    p.reader_field_focused(name, 0, true, 3.0);
+    p.reader_field_selected(name, 0, (0, 5), 3.0);
+    p.reader_field_action(name, 0, field_action::NEXT, 3.0);
+    assert!(!p.hosted_composing());
+    assert_eq!(p.field_text(name), "before");
+    // Without clearing `hosted.last`, the bumped generation emits a statement
+    // so the shell renews its EditText and resets seq/selection.
+    let words = p
+        .reader_fields(1.0)
+        .expect("generation bump emits statement");
+    let after = read(&words);
+    assert_eq!(
+        (
+            after[0].id,
+            after[0].generation,
+            after[0].seq,
+            after[0].value.as_str()
+        ),
+        (name, 1, 0, "before")
+    );
+    assert_eq!(&after[0].look[15..], &[0, 0, 0]);
+    // Callbacks carrying the new generation are accepted.
+    p.reader_field_composing(name, 1, true, "wip");
+    assert!(p.hosted_composing());
+    p.reader_field_edited(name, (1, 1), "wip", (3, 3), 4.0);
+    assert_eq!(p.field_text(name), "wip");
+    // Direct `replaced()` clears any active composition and bumps generation again.
+    p.replaced();
+    assert!(!p.hosted_composing());
+    let words = p.reader_fields(1.0).expect("second bump emits statement");
+    let after = read(&words);
+    assert_eq!(
+        (after[0].generation, after[0].seq, after[0].value.as_str()),
+        (2, 0, "wip")
+    );
+    // Reloading to a tree with no fields still tells the shell to release them.
+    let empty_plan = crate::test_plan("component Empty\n  view\n    text \"done\"\n");
+    assert_eq!(
+        p.reload_module(&empty_plan, (), None, false).unwrap(),
+        ReloadResult::Applied(None)
+    );
+    settle(&mut p);
+    assert_eq!(p.reader_fields(1.0), Some(vec![0]));
+}
+
+/// Explicit `color="inherit"` / `color="unset"` on native fields overrides
+/// `FieldText` and `GrayText` across hosted `EditText`, Material value fields
+/// (`select`), and disabled painted fields.
+#[test]
+fn native_fields_honor_explicit_color_inherit_and_unset() {
+    if !crate::presenter::control::material_tests::material_process() {
+        return;
+    }
+    const SOURCE: &str = r##"component App
+  view
+    column width=320 height=600 background-color="#ffffff" color="#cc0000"
+      input value="IIIIIIII" disabled=true font-size=24 testId="off-def"
+      input value="IIIIIIII" disabled=true color="inherit" font-size=24 testId="off-inh"
+      input value="IIIIIIII" disabled=true color="unset" font-size=24 testId="off-uns"
+      select value="a" font-size=24 testId="sel-def"
+        option value="a" "IIIIIIII"
+      select value="a" disabled=true font-size=24 testId="sel-off-def"
+        option value="a" "IIIIIIII"
+      select value="a" color="inherit" font-size=24 testId="sel-inh"
+        option value="a" "IIIIIIII"
+      select value="a" disabled=true color="inherit" font-size=24 testId="sel-off-inh"
+        option value="a" "IIIIIIII"
+      select value="a" color="unset" font-size=24 testId="sel-uns"
+        option value="a" "IIIIIIII"
+"##;
+    let mut painted = boot(SOURCE);
+    let shot = painted.frame();
+    let mut has_red = |name: &str| {
+        let view = id(&painted, name);
+        let (x, y, w, h) = painted.rect_of(view).unwrap();
+        let (x0, y0) = (x.max(0.0) as u32, y.max(0.0) as u32);
+        let (x1, y1) = (
+            ((x + w) as u32).min(shot.width()),
+            ((y + h) as u32).min(shot.height()),
+        );
+        (y0..y1).any(|py| {
+            (x0..x1).any(|px| {
+                let c = shot.pixel(px, py).unwrap();
+                c.red() > c.blue().saturating_add(60)
+            })
+        })
+    };
+    assert!(
+        !has_red("off-def"),
+        "omitted color on disabled input uses GrayText"
+    );
+    assert!(
+        has_red("off-inh"),
+        "disabled input with color=inherit keeps ancestor ink"
+    );
+    assert!(
+        has_red("off-uns"),
+        "disabled input with color=unset keeps ancestor ink"
+    );
+    assert!(
+        !has_red("sel-def"),
+        "omitted color on Material select uses FieldText"
+    );
+    assert!(
+        !has_red("sel-off-def"),
+        "omitted color on disabled Material select uses GrayText"
+    );
+    assert!(
+        has_red("sel-inh"),
+        "Material select with color=inherit keeps ancestor ink"
+    );
+    assert!(
+        has_red("sel-off-inh"),
+        "disabled Material select with color=inherit keeps ancestor ink"
+    );
+    assert!(
+        has_red("sel-uns"),
+        "Material select with color=unset keeps ancestor ink"
+    );
+    drop(has_red);
+    drop(painted);
+
+    // Hosted Android `EditText` ink words.
+    let (_shell, _hosting) = shell();
+    let mut hosted = boot(
+        r##"component App
+  view
+    column width=320 height=480 color="#cc0000"
+      input value="a" testId="h-def"
+      input value="b" disabled=true testId="h-off-def"
+      input value="c" color="inherit" testId="h-inh"
+      input value="d" disabled=true color="inherit" testId="h-off-inh"
+      input value="e" color="unset" testId="h-uns"
+"##,
+    );
+    let fields = told(&mut hosted);
+    let _roles = hosted.host.runner().bind_roles();
+    let role_argb = |name: &str| {
+        let c = crate::paint::rgba(ColorValue::Role(roles::role(name).unwrap()).resolve(false));
+        argb(c)
+    };
+    let red = argb([0xcc, 0x00, 0x00, 0xff]);
+    assert_eq!(fields[0].look[6], role_argb("FieldText"));
+    assert_eq!(fields[1].look[6], role_argb("GrayText"));
+    assert_eq!(fields[2].look[6], red);
+    assert_eq!(fields[3].look[6], red);
+    assert_eq!(fields[4].look[6], red);
 }

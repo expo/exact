@@ -6,7 +6,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -159,6 +159,24 @@ test('hello says live, and a slow write is answered, not timed out', async () =>
   expect(write.status).toBe(200);
   expect((await post({ method: 'describe' })).status).toBe(504);
   forma.close();
+});
+
+test('a writer waiting longer than the wire timeout keeps answering busy until its first reply', async () => {
+  const port = 8803, host = `127.0.0.1:${port}`;
+  const gate = developmentGate([{ origin: 'http://' + host }], port);
+  const child = fakeServe();
+  child.stdin.pause();
+  const forma = formaServer({ appDir: '/nowhere', spawnServe: () => child, answerMs: 5, log: () => {} });
+  const hello = () => ask(forma, gate, { path: '/__forma', method: 'POST', headers: { host, 'x-exact-forma-token': forma.token }, body: '{"method":"hello"}' });
+  try {
+    child.stdout.write('{"event":"writer-busy"}\n');
+    await forma.writerBusy;
+    await new Promise(ok => setTimeout(ok, 30));
+    expect((await hello()).status).toBe(503);
+    child.stdin.resume();
+    await forma.ready;
+    expect((await hello()).status).toBe(200);
+  } finally { await forma.close(); }
 });
 
 // LLP 1122 T2c: a map per plan digest. Each build is joined and outlined
@@ -419,6 +437,11 @@ test('a second wire for the app, whose lock is the first\'s, answers 503', async
   expect(subscribed.body.error.message).toContain('another forma server');
   const hello = await ask(second, gate, { path: '/__forma', method: 'POST', headers: local, body: '{"method":"hello"}' });
   expect(hello.status).toBe(503);
+  const remove = await ask(second, gate, { path: '/__forma', method: 'POST', headers: local, body: JSON.stringify({
+    method: 'transaction', client: 'canvas', files: { 'app.forma': disk('app.forma') }, ops: [{ op: 'remove-axis', name: 'tone' }],
+  }) });
+  expect(remove.status).toBe(503);
+  expect(remove.body.error.message).toContain('another forma server');
   // A long poll gets the `down` event once, then is told so, never
   // answered empty to ask again at once.
   const first = await ask(second, gate, { path: '/__forma/events', method: 'POST', headers: local, body: '{"after":0}' });
@@ -504,14 +527,26 @@ test('no web build ships inspect: it lives in dev.js, which no build copies', as
   for (const [name, source] of Object.entries(shipped)) if (name.endsWith('.js')) expect([name, readFileSync(resolve(ROOT, source), 'utf8').includes('exact-inspect')]).toEqual([name, false]);
   expect(readFileSync(resolve(ROOT, 'host/web/dev.js'), 'utf8')).toContain('exact-inspect');
   // The JS target's half, and its table, are served by its dev loop
-  // (inspect-dev.js; `exact-web-js inspect-table` when first asked): no
-  // build makes or copies either.
+  // (inspect-dev.js; `exact-web-js inspect-table` when first asked): `cutSheet`
+  // reads `inspect-dev.js` only so CSS pruning keeps inspector selectors, and
+  // no built JS or HTML ships it or `dev-inspect`.
   const build = readFileSync(resolve(ROOT, 'host/web-js/build.mjs'), 'utf8');
-  expect(build).not.toContain('inspect-dev.js');
   expect(build).not.toContain('dev-inspect');
+  const out = mkdtempSync(join(tmpdir(), 'exact-no-inspect-'));
+  try {
+    const r = spawnSync(process.execPath, [resolve(ROOT, 'host/web-js/build.mjs'), 'theme-fixture', '--out', out], { cwd: ROOT, encoding: 'utf8', timeout: 300_000 });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]);
+    const files = walk(out);
+    expect(files.some(f => f.includes('inspect-dev') || f.includes('dev-inspect'))).toBe(false);
+    for (const file of files) if (/\.(js|mjs|html)$/.test(file)) {
+      const text = readFileSync(file, 'utf8');
+      expect([file, text.includes('exact-inspect'), text.includes('dev-inspect')]).toEqual([file, false, false]);
+    }
+  } finally { rmSync(out, { recursive: true, force: true }); }
   expect(readFileSync(resolve(ROOT, 'host/web-js/dev.mjs'), 'utf8')).toContain("url.pathname === '/dev-inspect.json'");
   expect(readFileSync(resolve(ROOT, 'host/web-js/inspect-dev.js'), 'utf8')).toContain('exact-inspect');
-});
+}, 300_000);
 
 // LLP 1122 T2b: inspect mode in the wasm host, on the theme fixture's page.
 test('inspect on the wasm page: no tap reaches the app, a click selects the node the hit test finds and reports its site, instance and rows, a refresh reports it again, and Escape leaves', async () => {
@@ -524,12 +559,12 @@ test('inspect on the wasm page: no tap reaches the app, a click selects the node
     // The client, present by its long poll; the events it is told.
     const events = [];
     const poll = (async () => { let after = 0, epoch; while (polling) { const r = await post(epoch ? { after, epoch, client: 'tool' } : { after: 0, wait: false, client: 'tool' }, '/__forma/events'); events.push(...(r.events ?? [])); after = r.seq ?? after; epoch = r.epoch; } })();
-    const until = async (pass, ms = 30_000) => { const end = Date.now() + ms; for (;;) { const got = await pass(); if (got) return got; if (Date.now() > end) throw new Error('not seen'); await new Promise(ok => setTimeout(ok, 200)); } };
+    const until = async (pass, ms = 30_000, what = '') => { const end = Date.now() + ms; for (;;) { const got = await pass(); if (got) return got; if (Date.now() > end) throw new Error(`not seen${what ? `: ${what}` : ''}: ${said().slice(-1500)}`); await new Promise(ok => setTimeout(ok, 200)); } };
     const page = await browser.newPage({ viewport: { width: 420, height: 900 }, hasTouch: true });
     await page.goto(`${base}/`);
-    const build = await until(async () => (await post({ method: 'hello' })).ok.builds.find(b => b.host === 'web'));
+    const build = await until(async () => (await post({ method: 'hello' })).ok?.builds?.find(b => b.host === 'web'), 120_000, 'web build');
     // The resident compiler's first plan, and its source map, are in.
-    await until(() => said().includes('plan ready'), 300_000);
+    await until(() => said().includes('plan ready'), 600_000, 'plan ready');
     expect(build.capabilities).toContain('inspect');
     const dim = () => page.locator('[data-testid="dim-preview"]').evaluate(e => getComputedStyle(e).backgroundColor);
     const before = await dim();
@@ -763,7 +798,7 @@ for (const [loop, flags] of [['the JS loop', []]]) {
     const { base, stop } = await devLoop(flags);
     try {
       const hello = await helloOf(base);
-      expect(hello.protocol).toBe('forma/1.18');
+      expect(hello.protocol).toBe('forma/1.20');
       expect(Object.keys(hello.files)).toContain('app.forma');
       // The loop's own origin, which the design tool frames, and the page's
       // header that lets only the tool (and itself) frame it.

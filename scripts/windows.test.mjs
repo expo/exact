@@ -21,6 +21,7 @@ import {buildTreeFile, serveBuildTree, listPublicFiles, publicFileCards, readSta
 import {gameShells} from '../game/app/shells.mjs';
 import {formatProofError, proofFailureRow} from '../game/proof.mjs';
 import {pendingBuildInputs, readManifest} from './app.mjs';
+import {noWindowsHost} from '../host/windows/build.mjs';
 
 test('TypeScript captures accept physical path aliases and reject declarations outside them', async () => {
   const {check, configure} = await import('../js/bake/src/typescript.mjs');
@@ -132,6 +133,13 @@ test('ordinary Windows host manifests admit only the empty host settings object'
     write({});
     expect(readManifest(root,'fixture').host.windows).toBeUndefined();
   } finally { rmSync(root,{recursive:true,force:true}); }
+});
+
+test('a Windows build refuses an app whose app.json names no windows host', () => {
+  const app=(name,manifest)=>({name,manifest});
+  expect(noWindowsHost(app('caltrain',{host:{ios:{},linux:{}}}))).toBe("caltrain's app.json names no windows host, so it has no Windows build (apps/shelf/app.json names one)");
+  expect(noWindowsHost(app('shelf',{host:{windows:{}}}))).toBeNull();
+  expect(noWindowsHost(app('greybox',{game:{}}))).toBeNull();
 });
 
 test('storage error numbers retain platform meaning and require an exact typed suffix', () => {
@@ -777,9 +785,9 @@ test('trusted browser modifier events retain both sides and reach following keys
     const tail=state.events.slice(16);
     expect(tail.map(e=>[e.type,e.code??null,e.ctrl])).toEqual([
       ['keydown','ControlLeft',true],['keydown','ControlRight',true],['keyup','ControlLeft',true],
-      // Chrome opens a context menu at the press on macOS and at the release elsewhere.
+      // Chrome opens a context menu at the press on macOS and Linux and at the release on Windows.
       ['keydown','Digit1',true],['keyup','Digit1',true],['pointerdown',null,true],
-      ...(process.platform==='darwin'?[['contextmenu',null,true],['pointerup',null,true]]:[['pointerup',null,true],['contextmenu',null,true]]),
+      ...(process.platform==='win32'?[['pointerup',null,true],['contextmenu',null,true]]:[['contextmenu',null,true],['pointerup',null,true]]),
       ['keyup','ControlRight',false],['keydown','Digit2',false],['keyup','Digit2',false],
     ]);
     expect(tail.every(e=>e.trusted)).toBe(true);

@@ -6,15 +6,19 @@
 // reports; under the agent the request is held (D7) and `tap @t cancel` or
 // `type @t <callback URL>` answers it (agent.js). Bundled only for an app
 // whose grants name `auth.session`, `auth.apple` or `auth.google`.
-import { journal, clock, nextTicket } from "./rt.js";
+import { journal, clock, nextTicket, Origin, Invocation } from "./rt.js";
 import { trimGrant, grantWords } from "./admission.js";
+import { loadOnce } from '../web/load-once.js';
 
 const say = line => journal.push(`t=${clock.now} ${line}`);
+const RANK = ["device", "wake", "tool", "action", "app"];
+const foldOrigin = (a, b) => (RANK.indexOf(b) >= 0 && (RANK.indexOf(a) < 0 || RANK.indexOf(b) < RANK.indexOf(a)) ? b : a);
 const CALLBACK = "/.exact/auth/callback";
 const authWindowName = () => 'exact-auth-' + Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
 const AUTH_RESERVATION_MS = 10 * 60 * 1000;
 const authReservations = () => ((globalThis.exact ??= {}).authReservations ??= new Map());
 const prepareAuthWindow = () => {
+  if ((Origin?.now?.() ?? "app") !== "app") return null;
   if (navigator.userActivation && !navigator.userActivation.isActive) return null;
   const id = authWindowName(), popup = window.open('about:blank', id, 'popup,width=520,height=680');
   if (!popup) return null;
@@ -126,6 +130,8 @@ const fixtureOrigin = () => { const o = clock.agent && typeof location === "obje
 /** Live sessions: { ticket, target, session, done(status, body), held }. */
 const Live = [];
 let Glue = null;
+const loads = {};
+const loadAuth = () => loadOnce(loads, 'auth', () => import('./auth-glue.js').then(() => Glue = globalThis.exact.authHost), error => say(`auth: unavailable: ${error.message}`));
 function settle(ticket, status, body) {
   const at = Live.findIndex(l => l.ticket === ticket);
   if (at < 0) return say(`auth ${ticket}: a late completion, dropped`);
@@ -138,14 +144,14 @@ function settle(ticket, status, body) {
  * `target()` names the resource or mutation whose answer is running. */
 const bent = s => /^\s*https?:/i.test(s) && /[\\\t\n\r]/.test(s);
 
-export function install(grants, target) {
+export function install(grants, target, callOf) {
   (globalThis.exact ??= {}).auth = { holds, answer };
   globalThis.authCallback = () => location.origin + CALLBACK;
   globalThis.prepareAuthSession = () => prepareAuthWindow();
   globalThis.cancelAuthSession = prepared => { if (typeof prepared === "string" && prepared) cancelAuthWindow(prepared); };
   if (!clock.agent && typeof requestAnimationFrame === "function") {
     // The glue is in the page before any press: the popup opens in the press's own call stack.
-    requestAnimationFrame(() => setTimeout(() => { Glue = import("./auth-glue.js").then(() => globalThis.exact.authHost); Glue.then(g => { Glue = g; }); }));
+    requestAnimationFrame(() => setTimeout(loadAuth));
   }
   // Counted on its answer as an ordinary fetch is (ts-fetch.js `ordinary`, LLP 1016.000 D9) until it settles, a
   // refusal included, or is superseded, whose promise never settles (the runner drops that ticket).
@@ -159,6 +165,15 @@ export function install(grants, target) {
     const ticket = nextTicket();
     const done = (status, body) => { if (status === 200) resolve(body); else { const e = new Error(body || "the auth session failed"); Object.defineProperty(e, "status", { value: status, enumerable: true }); reject(e); } };
     const refuse = (status, why) => { say(`auth ${ticket}: answered ${status}: ${why}`); done(status, why); };
+    const active = callOf?.();
+    const originNow = foldOrigin(Origin?.now?.() ?? "app", active?.origin ?? "app");
+    if (originNow !== "app") {
+      const id = Invocation?.id || active?.invocation || 0;
+      if (id) Origin?.personRequired?.(id);
+      return refuse(403, originNow === "action"
+        ? "auth sessions are refused during a background action"
+        : `person-required (${originNow} origin)`);
+    }
     const s = { url: String(url), callback: o.callback, state: o.state, logout: !!o.logout, prepared: o.prepared, ephemeral: !!o.ephemeral };
     // A browser reads a backslash in an http(s) URL as a slash and drops tabs
     // and newlines, so such a URL can hide userinfo from parse(): refuse it unechoed.
@@ -184,7 +199,7 @@ export function install(grants, target) {
     // The implementation's call ended (its task superseded): the session is forgotten, its popup closed.
     cancelled?.(() => { const at = Live.indexOf(l); if (at < 0) return; Live.splice(at, 1); say(`auth ${ticket}: cancelled by its call's end`); l.close?.(); release(); done(499, "cancelled"); });
     if (clock.agent) { l.held = true; say(`device auth ${ticket} held (agent)`); return; }
-    if (!Glue || typeof Glue.arm !== "function") return settle(ticket, 501, "no system browser on this host");
+    if (!Glue || typeof Glue.arm !== "function") { loadAuth(); return settle(ticket, 501, "no system browser on this host"); }
     say(`auth ${ticket}: opened`);
     // The glue's words (auth-glue.js `arm`): the runner's `exact_auth`, here.
     let report = null;

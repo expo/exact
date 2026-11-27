@@ -1,6 +1,6 @@
 // @exact/global-shortcuts on macOS (LLP 1133.025 D3): a chord registered
 // system-wide with Carbon's `RegisterEventHotKey` while something reads it,
-// and a modifier pair (`Shift+Shift`) heard by a `.flagsChanged` monitor.
+// and modifier shortcuts heard by a `.flagsChanged` monitor.
 // The app's composed module calls it outside the agent; under the agent the
 // runner's substitute answers, unless the drive binds it.
 //
@@ -51,33 +51,40 @@ public final class GlobalShortcutsModule: ExactPackage {
     }
 
     private func status() -> [String: Any] {
-        ["available": true, "apple": ["accessibilityTrusted": AXIsProcessTrusted()]]
+        ["available": true, "releaseEvents": true, "apple": ["accessibilityTrusted": AXIsProcessTrusted()]]
     }
 
     /// No reader asks with these arguments any longer: this session's
     /// reading of that chord for that id ends.
     public func release(_ name: String, args: [String: Any]) {
-        guard name == "globalShortcut", let id = args["id"] as? String, let keys = args["keys"] as? String,
-              reading.remove(Reading(id: id, keys: keys)) != nil else { return }
-        HotKeys.shared.release(keys, id: id, by: self)
-        context.log("global-shortcuts: \(keys) for \(id): released")
+        guard name == "globalShortcut", let id = args["id"] as? String, let keys = args["keys"] as? String else { return }
+        DispatchQueue.main.async { [self] in
+            guard reading.remove(Reading(id: id, keys: keys)) != nil else { return }
+            HotKeys.shared.release(keys, id: id, by: self)
+            context.log("global-shortcuts: \(keys) for \(id): released")
+        }
     }
 
     /// No reader of `globalShortcut` is left in this session.
     public func release(_ name: String) {
         guard name == "globalShortcut" else { return }
+        DispatchQueue.main.async { [self] in releaseAll() }
+    }
+
+    private func releaseAll() {
         for read in reading { HotKeys.shared.release(read.keys, id: read.id, by: self) }
         reading = []
     }
 
     public func destroy(_ done: @escaping () -> Void) {
-        release("globalShortcut")
-        done()
+        DispatchQueue.main.async { [self] in
+            releaseAll()
+            done()
+        }
     }
 
-    /// A press of `keys`, heard by this session for `ids`.
-    fileprivate func pressed(_ keys: String, ids: [String]) {
-        for id in ids { context.emit("globalshortcut", [id, ["id": id, "keys": keys]]) }
+    fileprivate func shortcut(_ event: String, keys: String, id: String) {
+        context.emit(event, [id, ["id": id, "keys": keys]])
     }
 
     /// Whether this session's window is the key window.
@@ -85,22 +92,24 @@ public final class GlobalShortcutsModule: ExactPackage {
 }
 
 /// The process's hot keys: one Carbon registration per chord, one monitor
-/// for every pair, and the readers of each.
+/// shared by the modifier shortcuts, and the readers of each.
 private final class HotKeys {
     static let shared = HotKeys()
 
-    private struct Reader { weak var module: GlobalShortcutsModule?; let id: String; let order: Int }
+    private struct Reader { weak var module: GlobalShortcutsModule?; let id: String }
     private final class Chord {
         var ref: EventHotKeyRef?
         let number: UInt32
         var readers: [Reader] = []
+        // A focus change during a hold must restore the window that received the press.
+        var pressed: [Reader]?
         init(number: UInt32) { self.number = number }
     }
     private var chords: [String: Chord] = [:]
     private var next: UInt32 = 1
-    private var order = 0
     private var handler: EventHandlerRef?
     private var monitors: [Any] = []
+    private var lastFlagsEvent: NSEvent?
     private static let signature: OSType = 0x4558_4354 // 'EXCT'
 
     /// `keys` read for `id` by `module`: registered, or why not.
@@ -112,15 +121,17 @@ private final class HotKeys {
         let number = next
         next += 1
         let chord = Chord(number: number)
-        if let pair = Self.pair(keys) {
+        if Self.modifier(keys) != nil {
             guard AXIsProcessTrusted() else { return (false, "not-allowed") }
-            _ = pair
-            installMonitors()
+            guard installMonitors() else { return (false, "unsupported") }
         } else {
             let (ref, reason) = register(keys, number: number)
             guard let ref else { return (false, reason) }
+            guard installHandler() else {
+                UnregisterEventHotKey(ref)
+                return (false, "unsupported")
+            }
             chord.ref = ref
-            installHandler()
         }
         chords[keys] = chord
         add(chord, id: id, by: module)
@@ -128,35 +139,55 @@ private final class HotKeys {
     }
 
     private func add(_ chord: Chord, id: String, by module: GlobalShortcutsModule) {
-        order += 1
-        chord.readers.append(Reader(module: module, id: id, order: order))
+        chord.readers.append(Reader(module: module, id: id))
     }
 
     /// Whether `keys` could be registered now, keeping nothing.
     func check(_ keys: String) -> (Bool, String?) {
         if chords[keys] != nil { return (true, nil) }
-        if Self.pair(keys) != nil { return AXIsProcessTrusted() ? (true, nil) : (false, "not-allowed") }
+        if Self.modifier(keys) != nil {
+            guard AXIsProcessTrusted() else { return (false, "not-allowed") }
+            let installed = !monitors.isEmpty
+            guard installMonitors() else { return (false, "unsupported") }
+            if !installed { removeMonitors() }
+            return (true, nil)
+        }
         let (ref, reason) = register(keys, number: 0)
-        if let ref { UnregisterEventHotKey(ref); return (true, nil) }
+        if let ref {
+            UnregisterEventHotKey(ref)
+            return installHandler() ? (true, nil) : (false, "unsupported")
+        }
         return (false, reason)
     }
 
     func release(_ keys: String, id: String, by module: GlobalShortcutsModule) {
         guard let chord = chords[keys] else { return }
+        if let held = chord.pressed, held.contains(where: { $0.module === module && $0.id == id }) {
+            chord.pressed = held.filter { !($0.module === module && $0.id == id) }
+            module.shortcut("globalshortcutup", keys: keys, id: id)
+        }
         chord.readers.removeAll { $0.module == nil || ($0.module === module && $0.id == id) }
         guard chord.readers.isEmpty else { return }
         if let ref = chord.ref { UnregisterEventHotKey(ref) }
         chords[keys] = nil
-        if !chords.keys.contains(where: { Self.pair($0) != nil }) { removeMonitors() }
+        if !chords.keys.contains(where: { Self.modifier($0) != nil }) { removeMonitors() }
     }
 
-    /// A press of `chord`: once, to one session's readers.
-    private func deliver(_ keys: String) {
-        guard let chord = chords[keys] else { return }
+    private func press(_ keys: String, _ chord: Chord) {
+        // Carbon reports distinct presses. Either input path can miss a lift across sleep.
+        lift(keys, chord)
         chord.readers.removeAll { $0.module == nil }
-        let byOrder = chord.readers.sorted { $0.order < $1.order }
-        guard let target = byOrder.first(where: { $0.module?.isKey == true })?.module ?? byOrder.first?.module else { return }
-        target.pressed(keys, ids: byOrder.filter { $0.module === target }.map(\.id))
+        guard let target = chord.readers.first(where: { $0.module?.isKey == true })?.module
+                ?? chord.readers.first?.module else { return }
+        let recipients = chord.readers.filter { $0.module === target }
+        chord.pressed = recipients
+        for reader in recipients { target.shortcut("globalshortcut", keys: keys, id: reader.id) }
+    }
+
+    private func lift(_ keys: String, _ chord: Chord) {
+        let recipients = chord.pressed ?? []
+        chord.pressed = nil
+        for reader in recipients { reader.module?.shortcut("globalshortcutup", keys: keys, id: reader.id) }
     }
 
     // MARK: Carbon
@@ -176,27 +207,42 @@ private final class HotKeys {
         }
     }
 
-    private func installHandler() {
-        guard handler == nil else { return }
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+    private func installHandler() -> Bool {
+        if handler != nil { return true }
+        let events = [kEventHotKeyPressed, kEventHotKeyReleased].map {
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32($0))
+        }
+        let callback: EventHandlerUPP = { _, event, _ in
             var key = EventHotKeyID()
-            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
-                              nil, MemoryLayout<EventHotKeyID>.size, nil, &key)
-            guard key.signature == HotKeys.signature else { return OSStatus(eventNotHandledErr) }
-            let shared = HotKeys.shared
-            if let keys = shared.chords.first(where: { $0.value.number == key.id })?.key {
-                DispatchQueue.main.async { shared.deliver(keys) }
+            guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                    nil, MemoryLayout<EventHotKeyID>.size, nil, &key) == noErr,
+                  key.signature == HotKeys.signature else { return OSStatus(eventNotHandledErr) }
+            let number = key.id
+            let isRelease = GetEventKind(event) == UInt32(kEventHotKeyReleased)
+            DispatchQueue.main.async {
+                let shared = HotKeys.shared
+                guard let (keys, chord) = shared.chords.first(where: { $0.value.number == number }) else { return }
+                if isRelease {
+                    shared.lift(keys, chord)
+                } else {
+                    shared.press(keys, chord)
+                }
             }
             return noErr
-        }, 1, &spec, nil, &handler)
+        }
+        return events.withUnsafeBufferPointer {
+            InstallEventHandler(GetApplicationEventTarget(), callback, $0.count, $0.baseAddress, nil, &handler) == noErr
+        }
     }
 
-    // MARK: Pairs
+    // MARK: Modifier shortcuts
 
-    /// The key codes and device flag mask of a modifier pair (`Shift+Shift`), or nil.
-    private static func pair(_ keys: String) -> (left: UInt16, right: UInt16, mask: UInt)? {
+    private static func modifier(_ keys: String) -> (first: UInt16, second: UInt16?, mask: UInt)? {
         switch keys {
+        case "MetaRight":
+            (UInt16(kVK_RightCommand), nil, UInt(NX_DEVICERCMDKEYMASK))
+        case "AltRight":
+            (UInt16(kVK_RightOption), nil, UInt(NX_DEVICERALTKEYMASK))
         case "Shift+Shift":
             (UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt(NX_DEVICELSHIFTKEYMASK | NX_DEVICERSHIFTKEYMASK))
         case "Control+Control":
@@ -211,25 +257,37 @@ private final class HotKeys {
 
     /// `.flagsChanged` only, in this app and in others: which modifier keys
     /// are down, and nothing else.
-    private func installMonitors() {
-        guard monitors.isEmpty else { return }
+    private func installMonitors() -> Bool {
+        if !monitors.isEmpty { return true }
         let heard: (NSEvent) -> Void = { [weak self] event in self?.flags(event) }
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: heard) { monitors.append(global) }
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { heard($0); return $0 }) { monitors.append(local) }
+        guard let global = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: heard) else { return false }
+        guard let local = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { heard($0); return $0 }) else {
+            NSEvent.removeMonitor(global)
+            return false
+        }
+        monitors = [global, local]
+        return true
     }
 
     private func removeMonitors() {
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
+        lastFlagsEvent = nil
     }
 
     private func flags(_ event: NSEvent) {
+        if let last = lastFlagsEvent, last.timestamp == event.timestamp, last.keyCode == event.keyCode,
+           last.modifierFlags == event.modifierFlags { return }
+        lastFlagsEvent = event
         let code = event.keyCode
         // Device flags describe both sides at this event, even if the monitor missed an earlier change.
-        for keys in chords.keys {
-            guard let pair = Self.pair(keys), code == pair.left || code == pair.right,
-                  event.modifierFlags.rawValue & pair.mask == pair.mask else { continue }
-            deliver(keys)
+        for (keys, chord) in chords {
+            guard let modifier = Self.modifier(keys) else { continue }
+            if event.modifierFlags.rawValue & modifier.mask != modifier.mask {
+                lift(keys, chord)
+            } else if code == modifier.first || code == modifier.second {
+                press(keys, chord)
+            }
         }
     }
 

@@ -62,13 +62,7 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         return ExitCode::from(2);
     }
-    let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-        .args(["run", "-q", "-p", "contract-difftest", "--manifest-path"])
-        .arg(root.join("Cargo.toml"))
-        .args(["--", "verify"])
-        .arg(&file)
-        .args(&rest)
-        .status();
+    let status = difftest_command(&root, &file, &rest).status();
     match status {
         Ok(s) if s.success() => ExitCode::SUCCESS,
         Ok(s) => ExitCode::from(s.code().map_or(1, |c| c.clamp(1, 255) as u8)),
@@ -76,5 +70,50 @@ pub fn run(args: &[String]) -> ExitCode {
             eprintln!("contract verify: cargo: {e}");
             ExitCode::from(2)
         }
+    }
+}
+
+/// Build the `cargo run` command for `contract-difftest` from `root` so
+/// rustup picks up `root/rust-toolchain.toml` even when invoked from an
+/// app directory outside the checkout.
+fn difftest_command(root: &Path, file: &Path, rest: &[String]) -> Command {
+    let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    cmd.current_dir(root)
+        .args(["run", "-q", "-p", "contract-difftest", "--manifest-path"])
+        .arg(root.join("Cargo.toml"))
+        .args(["--", "verify"])
+        .arg(file)
+        .args(rest);
+    cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::difftest_command;
+    use std::path::Path;
+
+    #[test]
+    fn runs_cargo_from_the_sdk_root_so_the_toolchain_pin_applies() {
+        let root = Path::new("/sdk/exact");
+        let file = Path::new("/tmp/app/app.contract");
+        let rest = vec!["--runner-only".into()];
+        let cmd = difftest_command(root, file, &rest);
+        assert_eq!(cmd.get_current_dir(), Some(root));
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy()).collect();
+        assert_eq!(
+            args,
+            [
+                "run",
+                "-q",
+                "-p",
+                "contract-difftest",
+                "--manifest-path",
+                "/sdk/exact/Cargo.toml",
+                "--",
+                "verify",
+                "/tmp/app/app.contract",
+                "--runner-only",
+            ]
+        );
     }
 }

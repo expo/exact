@@ -15,6 +15,8 @@ The crypto list benchmark (`../SPEC.md`) on exact2, built from the checkout this
 - `data/` is the DataSource: the 5,000 coins (`data/coins.json`, copied by `../prepare.sh`, not committed,
   `include_bytes!`'d), `config()` (`BENCH_LIVE` / `BENCH_SCENARIO=rest` / `BENCH_FREEZE`), `tick()` (the SPEC's live
   ticks; unchanged rows keep their `Rc` records). Prices are formatted here; the series stays numbers.
+- `task launch mount` / `after(100, ask)` sends `config()` once. `task producer when live` / `every(100, tick)` is
+  armed only in live mode, so a still list has no timer.
 - `apple/` is the static library, whose `build.rs` bakes the plan (the coins are the resource's compiled boot value)
   and the compatibility id. `apple/tests/points.rs` checks every coin's `chartPoints` against the Rust `{:.2}`
   string the first SVG app formatted (the same coordinates, so the same pixels).

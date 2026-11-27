@@ -110,10 +110,14 @@ export function roleIndex(text, roles) {
   const t = text.replace(EDGES, ""), lower = ascii(t);
   // The tint as the web writes it, `var(--exact-accent, <role>)`, is that role if it is drawn in the accent.
   if (lower.startsWith("var(--exact-accent,") && lower.endsWith(")")) {
-    const i = roleIndex(lower.slice("var(--exact-accent,".length, -1), roles);
+    const i = roleFlat(lower.slice("var(--exact-accent,".length, -1), roles);
     return i >= 0 && roles[i][3] ? i : -1;
   }
-  if (lower.replace(SPACES, "") === "var(--exact-accent-text,accentcolortext)") return roleIndex("AccentColorText", roles);
+  if (lower.replace(SPACES, "") === "var(--exact-accent-text,accentcolortext)") return roleFlat("AccentColorText", roles);
+  return roleFlat(t, roles);
+}
+function roleFlat(text, roles) {
+  const lower = ascii(text.replace(EDGES, ""));
   const v = lower.startsWith("var(--exact-") ? lower.slice("var(--exact-".length) : null;
   const end = v?.search(/[,)]/);
   if (end < 0) return -1;

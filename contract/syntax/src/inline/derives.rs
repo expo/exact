@@ -17,9 +17,15 @@ use crate::ast::{BinOp, Binding, Component, Expr, Node, Stmt, TemplatePart};
 use crate::parser::SyntaxError;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The derives reachable from `c`'s view, states, or actions, each with
-/// its resolved expression. Dependencies also remain available to lowering
-/// as shared bodies when nothing outside another derive reads them.
+/// Bounds expanded child-derive expressions to stay within parser-depth and
+/// linear-size budgets across downstream recursive passes.
+const MAX_DERIVE_DEPTH: usize = 100;
+const MAX_DERIVE_NODES: usize = 4_096;
+
+/// The derives reachable from `c`'s view, states, provides, actions,
+/// resources, or tasks, each with its resolved expression. Dependencies also
+/// remain available to lowering as shared bodies when nothing outside another
+/// derive reads them.
 pub fn resolved_derives(c: &Component) -> Result<Vec<(&Binding, Expr)>, SyntaxError> {
     let mut indices = BTreeMap::new();
     for (i, derive) in c.derives.iter().enumerate() {
@@ -66,6 +72,7 @@ pub fn resolved_derives(c: &Component) -> Result<Vec<(&Binding, Expr)>, SyntaxEr
         summaries[i] = summarize(&bodies[i], &indices, &summaries);
     }
     let cx = Cx {
+        component: &c.name,
         indices: &indices,
         names: c.derives.iter().map(|d| d.name.as_str()).collect(),
         bodies: &bodies,
@@ -86,12 +93,16 @@ pub fn resolved_derives(c: &Component) -> Result<Vec<(&Binding, Expr)>, SyntaxEr
             }
         }
     }
-    Ok(c.derives
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| reachable[*i])
-        .map(|(i, derive)| (derive, cx.place(&bodies[i], &mut Vec::new(), true)))
-        .collect())
+    let mut out = Vec::new();
+    for (i, derive) in c.derives.iter().enumerate() {
+        if !reachable[i] {
+            continue;
+        }
+        let mut nodes = 0;
+        let placed = cx.place(&bodies[i], &mut Vec::new(), true, 0, &mut nodes)?;
+        out.push((derive, placed));
+    }
+    Ok(out)
 }
 
 /// Bind repeated prop reads within one evaluation, preserving its lazy parts.
@@ -114,6 +125,7 @@ pub(super) fn share_props(e: &Expr, names: &BTreeSet<String>) -> Expr {
         .collect();
     let rank: Vec<_> = (0..n).collect();
     let cx = Cx {
+        component: "",
         indices: &indices,
         names: names.iter().map(String::as_str).collect(),
         bodies: &bodies,
@@ -121,38 +133,50 @@ pub(super) fn share_props(e: &Expr, names: &BTreeSet<String>) -> Expr {
         rank: &rank,
         resolve: false,
     };
-    cx.place(&e, &mut Vec::new(), true)
+    cx.place(&e, &mut Vec::new(), true, 0, &mut 0)
+        .unwrap_or_else(|_| e.clone())
 }
 
 /// Depth-first dependency order (dependencies first); a cycle is refused
-/// at the derive where it closes.
+/// at the derive where it closes. Iterative so long chains fit a small stack.
 fn visit(
-    i: usize,
+    start: usize,
     c: &Component,
     reads: &[BTreeSet<usize>],
     state: &mut [u8],
     order: &mut Vec<usize>,
 ) -> Result<(), SyntaxError> {
-    match state[i] {
-        2 => return Ok(()),
-        1 => {
-            return err(
-                "type-derive-cycle",
-                format!(
-                    "cannot resolve `{}`: it depends on itself through other derives",
-                    c.derives[i].name
-                ),
-                c.derives[i].span,
-            )
+    if state[start] == 2 {
+        return Ok(());
+    }
+    state[start] = 1;
+    let mut stack = vec![(start, reads[start].iter())];
+    while let Some((node, iter)) = stack.last_mut() {
+        if let Some(&dep) = iter.next() {
+            match state[dep] {
+                2 => {}
+                1 => {
+                    return err(
+                        "type-derive-cycle",
+                        format!(
+                            "cannot resolve `{}`: it depends on itself through other derives",
+                            c.derives[dep].name
+                        ),
+                        c.derives[dep].span,
+                    )
+                }
+                _ => {
+                    state[dep] = 1;
+                    stack.push((dep, reads[dep].iter()));
+                }
+            }
+        } else {
+            let node = *node;
+            stack.pop();
+            state[node] = 2;
+            order.push(node);
         }
-        _ => {}
     }
-    state[i] = 1;
-    for &dependency in &reads[i] {
-        visit(dependency, c, reads, state, order)?;
-    }
-    state[i] = 2;
-    order.push(i);
     Ok(())
 }
 
@@ -191,6 +215,16 @@ impl Summary {
 /// Summarize `e`, whose derive reads are summarized in `summaries`.
 fn summarize(e: &Expr, indices: &BTreeMap<&str, usize>, summaries: &[Summary]) -> Summary {
     let mut out = Summary::new(summaries.len());
+    summarize_into(e, indices, summaries, &mut out);
+    out
+}
+
+fn summarize_into(
+    e: &Expr,
+    indices: &BTreeMap<&str, usize>,
+    summaries: &[Summary],
+    out: &mut Summary,
+) {
     let part = |x: &Expr| summarize(x, indices, summaries);
     match e {
         Expr::Ident(name, _) => {
@@ -201,12 +235,12 @@ fn summarize(e: &Expr, indices: &BTreeMap<&str, usize>, summaries: &[Summary]) -
             }
         }
         Expr::Binary(BinOp::And | BinOp::Or, a, b, _) => {
-            out.add(&part(a));
+            summarize_into(a, indices, summaries, out);
             out.add_sometimes(&part(b));
         }
         Expr::Ternary(c, a, b, _) => {
-            out.add(&part(c));
-            branches(&mut out, &part(a), &part(b));
+            summarize_into(c, indices, summaries, out);
+            branches(out, &part(a), &part(b));
         }
         Expr::Match {
             subject,
@@ -214,14 +248,15 @@ fn summarize(e: &Expr, indices: &BTreeMap<&str, usize>, summaries: &[Summary]) -
             none,
             ..
         } => {
-            out.add(&part(subject));
-            branches(&mut out, &part(some), &part(none));
+            summarize_into(subject, indices, summaries, out);
+            branches(out, &part(some), &part(none));
         }
         // A callback runs once per item, perhaps never (LLP 1017.003).
         Expr::Arrow { body, .. } => out.add_sometimes(&part(body)),
-        _ => e.operands().for_each(|child| out.add(&part(child))),
+        _ => e
+            .operands()
+            .for_each(|child| summarize_into(child, indices, summaries, out)),
     }
-    out
 }
 
 /// Two exclusive branches: every read counts, and what both always read is
@@ -235,6 +270,7 @@ fn branches(out: &mut Summary, a: &Summary, b: &Summary) {
 }
 
 struct Cx<'a> {
+    component: &'a str,
     indices: &'a BTreeMap<&'a str, usize>,
     names: Vec<&'a str>,
     bodies: &'a [Expr],
@@ -243,12 +279,66 @@ struct Cx<'a> {
     resolve: bool,
 }
 
-impl Cx<'_> {
+impl<'a> Cx<'a> {
+    fn too_deep(&self, span: crate::Span) -> SyntaxError {
+        SyntaxError {
+            id: "syntax-derive-depth",
+            message: format!(
+                "derives in `{}` expand more than {MAX_DERIVE_DEPTH} levels deep: shorten the chain or lift shared derives to the parent",
+                self.component
+            ),
+            span,
+        }
+    }
+
+    fn too_large(&self, span: crate::Span) -> SyntaxError {
+        SyntaxError {
+            id: "syntax-derive-size",
+            message: format!(
+                "derives in `{}` expand past {MAX_DERIVE_NODES} expressions: reduce repeated conditional reads or lift shared derives to the parent",
+                self.component
+            ),
+            span,
+        }
+    }
+
     /// `e` with every derive it reads resolved; `bound` are the derives an
     /// enclosing `let` binds. `whole` is true where no enclosing part of the
     /// same body always evaluates `e` (the body itself, a branch, the right
     /// of `and`/`or`): only there can a derive first qualify to be bound.
-    fn place(&self, e: &Expr, bound: &mut Vec<usize>, whole: bool) -> Expr {
+    fn place(
+        &self,
+        mut e: &'a Expr,
+        bound: &mut Vec<usize>,
+        mut whole: bool,
+        depth: usize,
+        nodes: &mut usize,
+    ) -> Result<Expr, SyntaxError> {
+        // Chase direct derive aliases iteratively so alias chains take no
+        // native stack frames.
+        if self.resolve {
+            while let Expr::Ident(name, _) = e {
+                let Some(&d) = self.indices.get(name.as_str()) else {
+                    break;
+                };
+                if bound.contains(&d) {
+                    *nodes += 1;
+                    if *nodes > MAX_DERIVE_NODES {
+                        return Err(self.too_large(e.span()));
+                    }
+                    return Ok(e.clone());
+                }
+                e = &self.bodies[d];
+                whole = true;
+            }
+        }
+        if depth > MAX_DERIVE_DEPTH {
+            return Err(self.too_deep(e.span()));
+        }
+        *nodes += 1;
+        if *nodes > MAX_DERIVE_NODES {
+            return Err(self.too_large(e.span()));
+        }
         let mut lets = Vec::new();
         if whole {
             let s = summarize(e, self.indices, self.summaries);
@@ -256,9 +346,16 @@ impl Cx<'_> {
                 .filter(|&d| s.reads[d] >= 2 && s.always[d] && !bound.contains(&d))
                 .collect();
             shared.sort_by_key(|&d| self.rank[d]);
-            for d in shared {
+            if depth + shared.len() > MAX_DERIVE_DEPTH {
+                return Err(self.too_deep(e.span()));
+            }
+            *nodes += shared.len();
+            if *nodes > MAX_DERIVE_NODES {
+                return Err(self.too_large(e.span()));
+            }
+            for (k, d) in shared.into_iter().enumerate() {
                 let value = if self.resolve {
-                    self.place(&self.bodies[d], bound, true)
+                    self.place(&self.bodies[d], bound, true, depth + k + 1, nodes)?
                 } else {
                     self.bodies[d].clone()
                 };
@@ -266,56 +363,56 @@ impl Cx<'_> {
                 bound.push(d);
             }
         }
+        let next_depth = depth + lets.len() + 1;
         let body = match e {
-            Expr::Ident(name, _) => match self.indices.get(name.as_str()) {
-                Some(d) if self.resolve && !bound.contains(d) => {
-                    self.place(&self.bodies[*d], bound, true)
-                }
-                _ => e.clone(),
-            },
-            Expr::Binary(op @ (BinOp::And | BinOp::Or), a, b, span) => Expr::Binary(
+            Expr::Ident(..) => Ok(e.clone()),
+            Expr::Binary(op @ (BinOp::And | BinOp::Or), a, b, span) => Ok(Expr::Binary(
                 *op,
-                Box::new(self.place(a, bound, false)),
-                Box::new(self.place(b, bound, true)),
+                Box::new(self.place(a, bound, false, next_depth, nodes)?),
+                Box::new(self.place(b, bound, true, next_depth, nodes)?),
                 *span,
-            ),
-            Expr::Ternary(c, a, b, span) => Expr::Ternary(
-                Box::new(self.place(c, bound, false)),
-                Box::new(self.place(a, bound, true)),
-                Box::new(self.place(b, bound, true)),
+            )),
+            Expr::Ternary(c, a, b, span) => Ok(Expr::Ternary(
+                Box::new(self.place(c, bound, false, next_depth, nodes)?),
+                Box::new(self.place(a, bound, true, next_depth, nodes)?),
+                Box::new(self.place(b, bound, true, next_depth, nodes)?),
                 *span,
-            ),
+            )),
             Expr::Match {
                 subject,
                 var,
                 some,
                 none,
                 span,
-            } => Expr::Match {
-                subject: Box::new(self.place(subject, bound, false)),
+            } => Ok(Expr::Match {
+                subject: Box::new(self.place(subject, bound, false, next_depth, nodes)?),
                 var: var.clone(),
-                some: Box::new(self.place(some, bound, true)),
-                none: Box::new(self.place(none, bound, true)),
+                some: Box::new(self.place(some, bound, true, next_depth, nodes)?),
+                none: Box::new(self.place(none, bound, true, next_depth, nodes)?),
                 span: *span,
-            },
+            }),
             // Evaluated once per item, perhaps never: a part of its own.
-            Expr::Arrow { params, body, span } => Expr::Arrow {
+            Expr::Arrow { params, body, span } => Ok(Expr::Arrow {
                 params: params.clone(),
-                body: Box::new(self.place(body, bound, true)),
+                body: Box::new(self.place(body, bound, true, next_depth, nodes)?),
                 span: *span,
-            },
-            _ => map_children(e, &mut |child| self.place(child, bound, false)),
+            }),
+            _ => try_map_children(e, &mut |child| {
+                self.place(child, bound, false, next_depth, nodes)
+            }),
         };
         bound.truncate(bound.len() - lets.len());
+        let body = body?;
         let span = e.span();
-        lets.into_iter()
+        Ok(lets
+            .into_iter()
             .rev()
             .fold(body, |body, (d, value)| Expr::Let {
                 name: self.names[d].to_owned(),
                 value: Box::new(value),
                 body: Box::new(body),
                 span,
-            })
+            }))
     }
 }
 
@@ -377,8 +474,8 @@ fn dependencies(expr: &Expr, indices: &BTreeMap<&str, usize>, out: &mut BTreeSet
         .for_each(|child| dependencies(child, indices, out));
 }
 
-/// Every name written in the component's view, states and actions: the
-/// derives any of them may read.
+/// Every name written outside `c`'s derives: the derives any of its view,
+/// states, provides, actions, resources, or tasks may read.
 fn read_outside_derives(c: &Component) -> BTreeSet<&str> {
     fn expr<'a>(e: &'a Expr, out: &mut BTreeSet<&'a str>) {
         if let Expr::Ident(name, _) | Expr::Call(name, _, _) = e {
@@ -434,27 +531,43 @@ fn read_outside_derives(c: &Component) -> BTreeSet<&str> {
     for a in &c.actions {
         stmts(&a.body, &mut out);
     }
-    // A child's own request reads its derives (LLP 1035.005.004 D1).
+    // A child's own requests and tasks read its derives (LLP 1035.005.004 D1).
     for r in &c.resources {
         r.args.iter().chain(&r.gate).for_each(|e| expr(e, &mut out));
+        if let Some(each) = &r.each {
+            expr(&each.list, &mut out);
+            if let Some(key) = &each.key {
+                expr(key, &mut out);
+            }
+        }
+    }
+    for t in &c.tasks {
+        t.gate.iter().chain(&t.key).for_each(|e| expr(e, &mut out));
     }
     out
 }
 
 fn map_children(e: &Expr, f: &mut dyn FnMut(&Expr) -> Expr) -> Expr {
-    match e {
-        Expr::Some(x, s) => Expr::Some(Box::new(f(x)), *s),
-        Expr::Unary(op, x, s) => Expr::Unary(*op, Box::new(f(x)), *s),
-        Expr::Member(x, field, s) => Expr::Member(Box::new(f(x)), field.clone(), *s),
-        Expr::NamedArg(n, x, s) => Expr::NamedArg(n.clone(), Box::new(f(x)), *s),
-        Expr::Typed(x, t, s) => Expr::Typed(Box::new(f(x)), t.clone(), *s),
+    try_map_children(e, &mut |child| Ok(f(child))).unwrap()
+}
+
+fn try_map_children(
+    e: &Expr,
+    f: &mut dyn FnMut(&Expr) -> Result<Expr, SyntaxError>,
+) -> Result<Expr, SyntaxError> {
+    Ok(match e {
+        Expr::Some(x, s) => Expr::Some(Box::new(f(x)?), *s),
+        Expr::Unary(op, x, s) => Expr::Unary(*op, Box::new(f(x)?), *s),
+        Expr::Member(x, field, s) => Expr::Member(Box::new(f(x)?), field.clone(), *s),
+        Expr::NamedArg(n, x, s) => Expr::NamedArg(n.clone(), Box::new(f(x)?), *s),
+        Expr::Typed(x, t, s) => Expr::Typed(Box::new(f(x)?), t.clone(), *s),
         Expr::Binary(op, x, y, s) => {
-            let x = Box::new(f(x));
-            Expr::Binary(*op, x, Box::new(f(y)), *s)
+            let x = Box::new(f(x)?);
+            Expr::Binary(*op, x, Box::new(f(y)?), *s)
         }
         Expr::Ternary(x, y, z, s) => {
-            let (x, y) = (Box::new(f(x)), Box::new(f(y)));
-            Expr::Ternary(x, y, Box::new(f(z)), *s)
+            let (x, y) = (Box::new(f(x)?), Box::new(f(y)?));
+            Expr::Ternary(x, y, Box::new(f(z)?), *s)
         }
         Expr::Match {
             subject,
@@ -463,12 +576,12 @@ fn map_children(e: &Expr, f: &mut dyn FnMut(&Expr) -> Expr) -> Expr {
             none,
             span,
         } => {
-            let (subject, some) = (Box::new(f(subject)), Box::new(f(some)));
+            let (subject, some) = (Box::new(f(subject)?), Box::new(f(some)?));
             Expr::Match {
                 subject,
                 var: var.clone(),
                 some,
-                none: Box::new(f(none)),
+                none: Box::new(f(none)?),
                 span: *span,
             }
         }
@@ -478,31 +591,37 @@ fn map_children(e: &Expr, f: &mut dyn FnMut(&Expr) -> Expr) -> Expr {
             body,
             span,
         } => {
-            let value = Box::new(f(value));
+            let value = Box::new(f(value)?);
             Expr::Let {
                 name: name.clone(),
                 value,
-                body: Box::new(f(body)),
+                body: Box::new(f(body)?),
                 span: *span,
             }
         }
         Expr::Arrow { params, body, span } => Expr::Arrow {
             params: params.clone(),
-            body: Box::new(f(body)),
+            body: Box::new(f(body)?),
             span: *span,
         },
-        Expr::Call(n, args, s) => Expr::Call(n.clone(), args.iter().map(&mut *f).collect(), *s),
-        Expr::List(items, s) => Expr::List(items.iter().map(&mut *f).collect(), *s),
-        Expr::Template(parts, s) => Expr::Template(
-            parts
+        Expr::Call(n, args, s) => {
+            let args: Result<Vec<_>, SyntaxError> = args.iter().map(&mut *f).collect();
+            Expr::Call(n.clone(), args?, *s)
+        }
+        Expr::List(items, s) => {
+            let items: Result<Vec<_>, SyntaxError> = items.iter().map(&mut *f).collect();
+            Expr::List(items?, *s)
+        }
+        Expr::Template(parts, s) => {
+            let parts: Result<Vec<_>, SyntaxError> = parts
                 .iter()
                 .map(|p| match p {
-                    TemplatePart::Expr(x) => TemplatePart::Expr(f(x)),
-                    TemplatePart::Text(t) => TemplatePart::Text(t.clone()),
+                    TemplatePart::Expr(x) => Ok(TemplatePart::Expr(f(x)?)),
+                    TemplatePart::Text(t) => Ok(TemplatePart::Text(t.clone())),
                 })
-                .collect(),
-            *s,
-        ),
+                .collect();
+            Expr::Template(parts?, *s)
+        }
         leaf => leaf.clone(),
-    }
+    })
 }

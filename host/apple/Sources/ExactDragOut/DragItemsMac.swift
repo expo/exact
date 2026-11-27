@@ -1,7 +1,8 @@
-// What a Mac drag carries (LLP 1094.000 D5): the node's admitted
-// `dataTransferFiles`, `dataTransferUrl` and `dataTransferText`, read when the
-// drag begins. Each file is a promise (`NSFilePromiseProvider`), written
-// where a destination asks, and `url` and `text` are each a pasteboard item
+// What a Mac drag carries (LLP 1094.000 D5, D14): the node's admitted
+// `dataTransferFiles` with their `dataTransferNames`, `dataTransferUrl` and
+// `dataTransferText`, read when the drag begins. Each file is a promise
+// (`NSFilePromiseProvider`), written where a destination asks under the name
+// it is offered under, and `url` and `text` are each a pasteboard item
 // of its own after them, since a destination usually reads one of an item's types;
 // with no file one pasteboard item carries both. Each item's image is the
 // node as drawn when AppKit asks for it.
@@ -14,13 +15,12 @@ import UniformTypeIdentifiers
 enum DragItemsMac {
     /// Each `app:/` file is opened when a destination asks, through `open`.
     static func items(of node: NodeView, in session: ExactSession?, open: @escaping DragFiles.Opener = DragFiles.open) -> [NSDraggingItem] {
-        let files = (node.props["dataTransferFiles"] ?? "").split(separator: "\n").map(String.init)
+        let files = DragFiles.files(of: node)
         let url = node.props["dataTransferUrl"].flatMap { $0.isEmpty ? nil : $0 }
         let text = node.props["dataTransferText"].flatMap { $0.isEmpty ? nil : $0 }
         let journal = DragFiles.Journal(session: session)
-        var writers: [NSPasteboardWriting] = files.map { entry in
-            let name = (entry as NSString).lastPathComponent
-            let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
+        var writers: [NSPasteboardWriting] = files.map { entry, name in
+            let type = UTType(filenameExtension: (entry as NSString).pathExtension) ?? .data
             let writer = PromiseWriter(entry: entry, name: name, resolver: session?.app.resolver, journal: journal)
             writer.open = open
             let promise = NSFilePromiseProvider(fileType: type.identifier, delegate: writer)

@@ -36,10 +36,11 @@ private struct ChordIOS {
         else if let part = parts.popLast() { last = part } else { return nil }
         let function = Int(last.dropFirst()).map { (13...24).contains($0) && last == "F\($0)" } == true
         guard last.count == 1 || Self.named[String(last)] != nil || function else { return nil }
+        if parts.contains("Mod"), parts.contains("Control") || parts.contains("Meta") { return nil }
         var flags: UIKeyModifierFlags = []
         for part in parts {
             switch part {
-            case "Meta": flags.insert(.command)
+            case "Mod", "Meta": flags.insert(.command)
             case "Control": flags.insert(.control)
             case "Alt": flags.insert(.alternate)
             case "Shift": flags.insert(.shift)

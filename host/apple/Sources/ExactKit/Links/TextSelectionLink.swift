@@ -24,17 +24,35 @@ package protocol TextSelecting: AnyObject {
     func remove(_ node: NodeView)
     /// A batch was applied.
     func batchEnded()
-    /// Whether text of `node` is selected.
-    func hasSelection(in node: NodeView) -> Bool
+    /// A scroll view moved; shared documents whose owner or parts live under it
+    /// sync their surface extent and invalidate selection geometry.
+    func scrolled(_ scrollView: UIScrollView)
+    /// A scroll view began dragging; dismiss any floating edit menu while keeping the selection.
+    func scrollWillBeginDragging(_ scrollView: UIScrollView)
+    /// Whether text of `view` is selected.
+    func hasSelection(in view: UIView) -> Bool
+    /// Whether any selectable text on the page holds a non-empty selection.
+    var hasActiveSelection: Bool { get }
+    /// Whether `touch` just dismissed a selection covering the touched target,
+    /// so `touchesEnded` suppresses its press instead of activating it.
+    func dismissedSelection(for touch: UITouch) -> Bool
+    /// Whether `view` belongs to the active selection (its text input view,
+    /// handles, or one of its selected paragraphs).
+    func owns(_ view: UIView) -> Bool
+    /// Whether Select All is offered for `node`'s active selection.
+    func canSelectAll(in node: NodeView) -> Bool
+    /// Select all selectable text in `node` (or its shared selection document).
+    @discardableResult
+    func selectAll(_ node: NodeView) -> Bool
     /// Copy: `node`'s selected text to the pasteboard. False with nothing selected.
     @discardableResult
     func copy(_ node: NodeView) -> Bool
     /// Whether `gesture` is one of the text interaction's on `paragraph`,
     /// which waits for the long press of the menu above `paragraph` to fail.
     func interactionHolds(_ gesture: UIGestureRecognizer, on paragraph: NodeView) -> Bool
-    #if EXACT_AGENT
     /// Nothing selected any more.
     func clear()
+    #if EXACT_AGENT
     /// The agent's `tap <id> dblclick` or `contextmenu` on selectable text,
     /// `point` in the window: the word there is selected, as a double tap
     /// or a long press selects it, and the reply's `selection` says what
@@ -53,18 +71,26 @@ package final class NoTextSelection: TextSelecting {
     package func routesToSurface(_ node: NodeView) -> Bool { false }
     package func remove(_ node: NodeView) {}
     package func batchEnded() {}
-    package func hasSelection(in node: NodeView) -> Bool { false }
+    package func scrolled(_ scrollView: UIScrollView) {}
+    package func scrollWillBeginDragging(_ scrollView: UIScrollView) {}
+    package func hasSelection(in view: UIView) -> Bool { false }
+    package var hasActiveSelection: Bool { false }
+    package func dismissedSelection(for touch: UITouch) -> Bool { false }
+    package func owns(_ view: UIView) -> Bool { false }
+    package func canSelectAll(in node: NodeView) -> Bool { false }
+    package func selectAll(_ node: NodeView) -> Bool { false }
     package func copy(_ node: NodeView) -> Bool { false }
     package func interactionHolds(_ gesture: UIGestureRecognizer, on paragraph: NodeView) -> Bool { false }
-    #if EXACT_AGENT
     package func clear() {}
+    #if EXACT_AGENT
     package func agentSelect(_ hit: UIView, at point: CGPoint, event: String) -> [String: Any]? { nil }
     #endif
 }
 
-/// The view a selectable container's paragraphs share, behind their ink:
-/// hit testing sends their text touches to it, and the pointer events of a
-/// touch on it are its paragraph's.
+/// The view a selectable container's paragraphs share, painted over its
+/// children with pass-through hit testing: UIKit's selection highlights and
+/// handles paint above child backgrounds while paragraph touches route to it,
+/// and pointer events of touches on it belong to its paragraph.
 package protocol SharedSelectionSurface: UIView {
     /// The container whose paragraphs share it.
     var owner: NodeView? { get }

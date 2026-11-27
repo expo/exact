@@ -204,8 +204,20 @@ fn auto_height_hidden_unsupported_and_nonabsolute_exclusions() {
     assert_eq!(shape(&k, 2).len(), 1);
     assert!(r.flow_skipped.is_empty());
     // A flex context does not: the leaf keeps ordinary layout and says why.
-    k.apply(0, 0, &[patch(1, &[(StyleId::Display, t("flex"))])])
-        .unwrap();
+    // `align-items: flex-start` leaves the leaf auto-height so flex probes its
+    // intrinsic height rather than stretching it to the definite container height.
+    k.apply(
+        0,
+        0,
+        &[patch(
+            1,
+            &[
+                (StyleId::Display, t("flex")),
+                (StyleId::AlignItems, t("flex-start")),
+            ],
+        )],
+    )
+    .unwrap();
     let r = layout(&mut k);
     assert!(shape(&k, 2).is_empty());
     assert_eq!(r.flow_skipped, vec![k.node(2).unwrap().key]);
@@ -371,10 +383,14 @@ fn stretched_height_proof_survives_cache_hits_and_changed_parent_constraints() {
     )
     .unwrap();
     layout(&mut k);
+    // A stretched item in a single-line flex container with a definite cross
+    // size takes that size directly without an intrinsic height probe (CSS
+    // Flexbox §9.4), so its height does not depend on text reflow.
     assert!(
-        k.node(2).unwrap().flow_refusal().is_some(),
-        "this flex algorithm probes intrinsic height before stretching"
+        k.node(2).unwrap().flow_refusal().is_none(),
+        "stretched item in definite single-line flex skips intrinsic height probe"
     );
+    assert_eq!(shape(&k, 2).len(), 1);
     for align in ["flex-start", "stretch", "flex-start", "stretch"] {
         k.apply(0, 0, &[patch(1, &[(StyleId::AlignItems, t(align))])])
             .unwrap();

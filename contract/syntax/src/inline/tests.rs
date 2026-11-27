@@ -5,7 +5,7 @@
 use super::subst::substituted;
 use crate::ast::{BinOp, Expr};
 use crate::Span;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const NAMES: [&str; 4] = ["a", "b", "o", "p"];
 
@@ -512,6 +512,53 @@ fn shared_prop_reads_preserve_substitution_under_branches_and_binders() {
 }
 
 #[test]
+fn derive_alias_chains_stop_at_values_and_non_derive_names() {
+    let env = BTreeMap::from([("p".to_owned(), V::Num(7.0))]);
+    for (terminal, expected) in [("p", 7.0), ("7", 7.0), ("p + p", 14.0)] {
+        let mut src = String::from("component C\n  props\n    p: number\n");
+        for i in 0..256 {
+            src.push_str(&format!("  derive d{i} = d{}\n", i + 1));
+        }
+        src.push_str(&format!(
+            "  derive d256 = {terminal}\n  view\n    text d0\n"
+        ));
+        let file = crate::parse(&src).unwrap();
+        let resolved = super::resolved_derives(&file.components[0]).unwrap();
+        assert_eq!(resolved.len(), 257);
+        for (_, body) in resolved {
+            assert_eq!(run(&body, &env, &BTreeMap::new()), Ok(V::Num(expected)));
+        }
+    }
+}
+
+#[test]
+fn prop_sharing_keeps_the_prop_as_its_value() {
+    let span = Span::default();
+    let prop = Expr::Ident("p".into(), span);
+    let names = BTreeSet::from(["p".to_owned()]);
+    assert_eq!(super::derives::share_props(&prop, &names), prop);
+    let sum = Expr::Binary(
+        BinOp::Add,
+        Box::new(prop.clone()),
+        Box::new(prop.clone()),
+        span,
+    );
+    let shared = super::derives::share_props(&sum, &names);
+    let Expr::Let {
+        name, value, body, ..
+    } = shared
+    else {
+        panic!("{shared:?}");
+    };
+    assert_eq!(*value, prop);
+    let bound = Expr::Ident(name, span);
+    assert_eq!(
+        *body,
+        Expr::Binary(BinOp::Add, Box::new(bound.clone()), Box::new(bound), span)
+    );
+}
+
+#[test]
 fn a_shared_derive_is_evaluated_exactly_where_its_readers_evaluated_it() {
     let mut rng = Rng(0x2545_f491_4f6c_dd1d);
     let (mut shared, mut traps) = (0, 0);
@@ -694,4 +741,47 @@ fn a_renamed_expression_let_preserves_call_heads_and_renames_value_references() 
         substituted(&call("pick", vec![id("extra")]), &map, &records),
         call("choose", vec![Expr::Number(3.0, span), id("pick")])
     );
+}
+
+#[test]
+fn gated_device_fact_is_lifted_per_instance_and_hoisted_refreshes_rewrite() {
+    let gated = crate::parse(
+        "shape VP\n  width: number\ncomponent App\n  state flag = true\n  view\n    Child(active=flag)\ncomponent Child\n  props\n    active: bool\n  resource vp = exactViewport() when active as shape VP\n  view\n    text `${vp.width}`\n",
+    )
+    .unwrap();
+    let expanded = super::expand(&gated).unwrap();
+    assert!(!expanded.root.resources.iter().any(|r| r.name == "vp@Child"));
+    assert_eq!(expanded.root.resources.len(), 1);
+    assert_eq!(expanded.resource_owners, vec![super::Owner::Instance]);
+    assert!(matches!(
+        expanded.root.resources[0].gate.as_ref(),
+        Some(Expr::Ident(name, _)) if name == "flag"
+    ));
+
+    let refreshed = crate::parse(
+        "shape VP\n  width: number\ncomponent App\n  view\n    Child()\ncomponent Child\n  resource vp = exactViewport() as shape VP\n  mutation save as shape number refreshes vp\n  view\n    text `${vp.width}`\n",
+    )
+    .unwrap();
+    let expanded = super::expand(&refreshed).unwrap();
+    assert!(expanded.root.resources.iter().any(|r| r.name == "vp@Child"));
+    assert_eq!(expanded.root.mutations.len(), 1);
+    assert_eq!(expanded.root.mutations[0].refreshes[0].0, "vp@Child");
+}
+
+#[test]
+fn child_task_gate_and_key_resolve_derives_read_nowhere_else() {
+    let parsed = crate::parse(
+        "component App\n  view\n    Child(open=true)\ncomponent Child\n  props\n    open: bool\n  state ticks = 0\n  derive under = ticks < 3\n  derive armed = open and under\n  derive tag = `${ticks}`\n  action tick\n    ticks = ticks + 1\n  task pulse when armed key=tag\n    after(1, tick)\n  view\n    text `${ticks}`\n",
+    )
+    .unwrap();
+    let names: BTreeSet<&str> = super::resolved_derives(&parsed.components[1])
+        .unwrap()
+        .into_iter()
+        .map(|(b, _)| b.name.as_str())
+        .collect();
+    assert_eq!(names, BTreeSet::from(["under", "armed", "tag"]));
+    let expanded = super::expand(&parsed).unwrap();
+    assert_eq!(expanded.root.tasks.len(), 1);
+    assert!(expanded.root.tasks[0].gate.is_some());
+    assert!(expanded.root.tasks[0].key.is_some());
 }

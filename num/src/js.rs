@@ -109,11 +109,18 @@ fn step(digits: &str, up: bool) -> Option<String> {
     (d[0] != b'0').then(|| String::from_utf8(d).expect("ascii"))
 }
 
+/// For `mantissa × 2^e`, `-e` fractional digits suffice when `e` is negative:
+/// the denominator is a power of two, which divides the same power of ten.
+fn fractional_places(v: f64) -> usize {
+    let exponent = ((v.to_bits() >> 52) & 0x7ff) as usize;
+    // Subnormals use the same exponent as the smallest normal value.
+    (1023_usize + 52).saturating_sub(exponent.max(1))
+}
+
 /// The exact decimal value of a positive double as (significant digits
 /// without trailing zeros, exponent of the first).
 fn exact(v: f64) -> (String, i32) {
-    // 1074 fractional digits hold every double exactly.
-    let text = Fixed(v, 1100).to_string();
+    let text = Fixed(v, fractional_places(v)).to_string();
     let (int, frac) = text.split_once('.').unwrap_or((&text, ""));
     let int = int.trim_start_matches('0');
     if int.is_empty() {
@@ -152,7 +159,28 @@ fn even_of_tie(v: f64, digits: &str, exponent: i32) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::js;
+    use super::{fractional_places, js, Fixed};
+
+    #[test]
+    fn the_fractional_places_hold_the_exact_value() {
+        for n in [
+            f64::from_bits(1),
+            f64::MIN_POSITIVE.next_down(),
+            f64::MIN_POSITIVE,
+            0.1,
+            1.0,
+            1.5,
+            // 1469358899709795.25, exactly: a rounding tie
+            f64::from_bits(0x4314_e17f_1d0f_1d8d),
+            (1u64 << 52) as f64,
+            f64::MAX,
+        ] {
+            let needed = Fixed(n, fractional_places(n)).to_string();
+            let padded = Fixed(n, 1100).to_string();
+            let rest = padded.strip_prefix(&needed).unwrap();
+            assert!(rest.trim_start_matches('.').bytes().all(|b| b == b'0'));
+        }
+    }
 
     #[test]
     fn prints_as_javascript_does() {

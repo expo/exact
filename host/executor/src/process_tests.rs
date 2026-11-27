@@ -3,6 +3,7 @@
 //! origin rule, release and its escalation, and the refusals that come
 //! before anything runs.
 use super::super::Core;
+use super::{admit_one_shot, ONE_SHOT_BYTES};
 use exact_runner::{
     CallOrigin, FailureKind, Outcome, ProcessOp, Request, RequestOut, SocketOp, SocketOrigin,
     SocketSend, WorkClock,
@@ -61,6 +62,10 @@ fn request(ticket: u64, body: &str, stream: bool) -> RequestOut {
     // The app's own child process (`process.rs` refuses another origin's start).
     let mut request = Request::process(body.as_bytes().to_vec(), stream, 1 << 20);
     request.reach.origin = exact_runner::CallOrigin::App;
+    outgoing(ticket, request)
+}
+
+fn outgoing(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
         completion: None,
         class: exact_runner::RequestClass::Ordered,
@@ -737,6 +742,147 @@ fn the_host_refuses_what_the_binding_never_sends() {
     }
 }
 
+fn held_network(core: Core) -> (Core, std::sync::Arc<crate::tests::Fixture>) {
+    let fixture = std::sync::Arc::new(crate::tests::Fixture::default());
+    let held = fixture.clone();
+    let core = core.streams_on(move || {
+        ibex2::host::Host::with_transport(Box::new(crate::tests::Fake(held.clone())))
+    });
+    (core, fixture)
+}
+
+fn feed(ticket: u64, upload: bool) -> RequestOut {
+    let mut req = Request::get("http://127.0.0.1/hold").independent_http(4096);
+    if upload {
+        req = req.upload_progress();
+        req.method = "POST".into();
+        req.body = vec![0];
+    }
+    let exact_runner::Answer::Later(req) = exact_runner::Answer::stream(req) else {
+        unreachable!()
+    };
+    outgoing(ticket, req)
+}
+
+#[test]
+fn streaming_children_and_network_streams_hold_separate_slots() {
+    use crate::{STREAMING_CHILDREN, STREAMS};
+    assert_eq!(STREAMING_CHILDREN, 16);
+    let script = script(
+        r#"{"incarnations":[{"pid":51,"steps":[{"at":10,"stdout":"up"}]}],
+        "execFile":{"stdout":"","stderr":"","code":0,"after":5000}}"#,
+    );
+    let (core, woke) = setup(&[("path:t3", &format!("script:{script}"))]);
+    let (core, fixture) = held_network(core);
+    let child = |ticket| {
+        let mut r = request(ticket, r#"{"kind":"spawn","program":"path:t3"}"#, true);
+        r.request.http = exact_runner::HttpScheduling::Independent {
+            max_response_bytes: 4096,
+        };
+        r
+    };
+    for ticket in 1..=STREAMS as u64 {
+        core.run(feed(ticket, false), None).unwrap();
+    }
+    fixture.wait_held(STREAMS);
+    for ticket in 100..100 + STREAMING_CHILDREN as u64 {
+        core.run(child(ticket), None).unwrap();
+    }
+    for _ in 0..STREAMING_CHILDREN {
+        assert!(matches!(next(&core, &woke), Outcome::Message(m) if m.event == "spawn"));
+    }
+    clock(&core).advance(10.0);
+    for _ in 0..STREAMING_CHILDREN {
+        assert!(matches!(next(&core, &woke), Outcome::Message(m) if m.event == "stdout"));
+    }
+    assert_eq!(
+        core.run(feed(80, false), None).unwrap_err(),
+        "17 network streams requested (16 in use, maximum 16). Long polls, event feeds, WebSockets, listeners and running uploads each use a network slot"
+    );
+    assert_eq!(
+        core.run(child(200), None).unwrap_err(),
+        "17 streaming child processes requested (16 in use, maximum 16)"
+    );
+    let shot = |ticket| request(ticket, r#"{"kind":"execFile","program":"path:t3"}"#, false);
+    for ticket in 700..716 {
+        core.run(shot(ticket), None).unwrap();
+    }
+    assert_eq!(
+        core.run(shot(716), None).unwrap_err(),
+        "17 one-shot child processes requested (16 in use, maximum 16)"
+    );
+    // Undrained replies keep their independent request slots even when the
+    // transport has already refused the ungranted origin.
+    let read = |ticket| {
+        outgoing(
+            ticket,
+            Request::get("https://read.invalid/").independent_http(4096),
+        )
+    };
+    for ticket in 400..400 + crate::COUNTS[1] as u64 {
+        core.run(read(ticket), None).unwrap();
+    }
+    assert_eq!(
+        core.run(read(600), None).unwrap_err(),
+        "129 independent requests requested (128 in use, maximum 128)"
+    );
+    core.forget(|ticket| ticket < 400);
+    core.run(feed(300, true), None).unwrap();
+    assert_eq!(core.shared.uploads.waiting().0, 1);
+    core.forget(|ticket| ticket != 100);
+    let deadline = Instant::now() + BOUND;
+    while core.shared.state.lock().unwrap().streams.len() == STREAMS + STREAMING_CHILDREN {
+        assert!(Instant::now() < deadline, "the child slot was not released");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    core.run(child(201), None).unwrap();
+    assert!(core
+        .run(feed(81, false), None)
+        .unwrap_err()
+        .starts_with("17 network streams requested (16 in use, maximum 16)"));
+    assert_eq!(
+        core.shared.uploads.waiting().0,
+        1,
+        "a child slot cannot start an upload"
+    );
+    core.forget(|ticket| ticket != 1);
+    fixture.wait_held(STREAMS + 1);
+    assert_eq!(core.shared.uploads.waiting().0, 0);
+    core.forget(|_| false);
+    ended(&core);
+    assert_eq!(core.shared.state.lock().unwrap().streams.len(), 0);
+}
+
+#[test]
+fn draining_an_earlier_child_does_not_release_a_network_slot() {
+    let (core, woke) = setup(&[]);
+    let (core, fixture) = held_network(core);
+    let child = request(1, r#"{"kind":"spawn","program":"ungranted"}"#, true);
+    core.run(child, None).unwrap();
+    let by = Instant::now() + BOUND;
+    while !core.shared.state.lock().unwrap().completed[1]
+        .iter()
+        .any(|d| !d.message)
+    {
+        assert!(Instant::now() < by);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    core.run(feed(1, false), None).unwrap();
+    fixture.wait_held(1);
+    {
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!((state.streams.len(), state.streams.network), (2, 1));
+    }
+    let _ = next(&core, &woke);
+    let (total, network) = {
+        let state = core.shared.state.lock().unwrap();
+        (state.streams.len(), state.streams.network)
+    };
+    assert_eq!((total, network), (1, 1));
+    core.forget(|_| false);
+    ended(&core);
+}
+
 #[test]
 fn one_shots_have_room_of_their_own() {
     let file = script(r#"{"execFile":{"stdout":"","stderr":"","code":0,"after":5000}}"#);
@@ -752,11 +898,23 @@ fn one_shots_have_room_of_their_own() {
     };
     assert_eq!(lane(&core), (0, 0));
     let refused = core.run(request(17, body, false), None).unwrap_err();
-    assert!(refused.contains("process limit"), "{refused}");
+    assert_eq!(
+        refused,
+        "17 one-shot child processes requested (16 in use, maximum 16)"
+    );
     core.forget(|_| false);
     ended(&core);
     assert_eq!(lane(&core), (0, 0));
     core.run(request(18, body, false), None).unwrap();
+}
+
+#[test]
+fn a_sole_one_shot_can_exceed_the_byte_limit_until_it_releases_its_room() {
+    let (core, _woke) = setup(&[]);
+    let held = ONE_SHOT_BYTES + 1;
+    admit_one_shot(&core.shared, 1, held).unwrap();
+    assert_eq!(admit_one_shot(&core.shared, 2, 0).unwrap_err(),
+        format!("{held} one-shot child process bytes requested ({held} in use, maximum {ONE_SHOT_BYTES})"));
 }
 
 /// A one-shot never waits in its lane's queue, so its `timeout_ms` arms no

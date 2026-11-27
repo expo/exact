@@ -24,6 +24,7 @@ test('structural selectors retain the front modal and later popovers, with modal
     </main><script type="module">
       import { x_querySelectorAll } from '/dataset.js';
       window.read = () => x_querySelectorAll('[data-mood~="accent"]');
+      window.readWord = selector => x_querySelectorAll(selector);
     </script>`, { headers: { 'content-type': 'text/html' } });
   } });
   let browser;
@@ -32,6 +33,10 @@ test('structural selectors retain the front modal and later popovers, with modal
     const page = await browser.newPage();
     await page.goto(server.url.href);
     await page.waitForFunction(() => !!window.read);
+    expect(await page.evaluate(() => ['v-2', 'v--2', 'v-', 'v--'].map(word => {
+      document.getElementById('page').setAttribute('data-' + word, 'accent');
+      return window.readWord('[data-' + word + '~="accent"]');
+    }))).toEqual([['page'], ['page'], ['page'], ['page']]);
     const snapshots = await page.evaluate(() => {
       const el = id => document.getElementById(id), snapshots = { page: read() };
       el('lower').showModal();

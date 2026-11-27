@@ -123,6 +123,15 @@ fn a_collision_after_mapping_is_refused() {
         !dir.join(".exact/forma/forma.ts").exists(),
         "nothing written"
     );
+    let path = dir.join("app.contract");
+    let (_, _, names) = contract::forma_gen::compile_path_swift(&path, true).unwrap();
+    assert!(
+        names.is_none(),
+        "a collision must fall back to the CLI diagnostic"
+    );
+    let (ok, said) = gen("swift", &dir);
+    assert!(!ok && said.contains("surfaceCard"), "{said}");
+    assert!(!dir.join(".exact/forma/forma.swift").exists());
     let _ = std::fs::remove_dir_all(&dir);
     let dir = app(
         "reserved",
@@ -314,6 +323,14 @@ fn swift_names_each_token_as_a_member() {
     let (ok, said) = gen("swift", &dir);
     assert!(ok, "{said}");
     let swift = std::fs::read_to_string(dir.join(".exact/forma/forma.swift")).unwrap();
+    let path = dir.join("app.contract");
+    for mapped in [true, false] {
+        let (plan, map, names) = contract::forma_gen::compile_path_swift(&path, mapped).unwrap();
+        let (ordinary, _) = contract::compile_path_all(&path, mapped).unwrap();
+        assert_eq!(ordinary.encode(), plan.encode());
+        assert_eq!(mapped, map.is_some());
+        assert_eq!(Some(swift.as_str()), names.as_deref());
+    }
     assert!(
         swift.contains("public extension ExactFormaToken {"),
         "{swift}"
@@ -332,6 +349,15 @@ fn swift_names_each_token_as_a_member() {
     }
     let (ok, said) = gen("swift", &dir);
     assert!(ok && said.is_empty(), "unchanged, not written: {said}");
+    let design = dir.join("app.forma");
+    std::fs::write(&design, "forma t\n\ntheme\n  changed = #ffffff\n").unwrap();
+    let (_, _, names) = contract::forma_gen::compile_path_swift(&path, true).unwrap();
+    assert!(names.unwrap().contains("changed"));
+    std::fs::remove_file(&design).unwrap();
+    let (_, _, names) = contract::forma_gen::compile_path_swift(&path, true).unwrap();
+    assert!(names.is_none());
+    std::fs::write(&path, "invalid contract").unwrap();
+    assert!(contract::forma_gen::compile_path_swift(&path, true).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

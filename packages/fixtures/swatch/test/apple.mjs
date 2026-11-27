@@ -9,7 +9,13 @@
 // tool door yet), and answers what it heard, with what it read of its
 // configuration (`ExactPackageContext.config`), as `swatchReports`. The key the
 // configuration carries is in no build output, tree, state or log, and a
-// production build without it is refused `swatch-key-missing`.
+// production build without it is refused `swatch-key-missing`. On iOS each
+// view is a view controller's view (`ExactPackageView.controller`), which the
+// host contains. The box is in its route's controller. A second view is made
+// in the batch that pushes the route it fills, and goes to that route's
+// controller once it loads. A third, in that route's dialog, is in the
+// sheet's controller while the dialog shows and in the route's once it
+// closes, with UIKit's animations on (`timing: 'platform'`).
 //
 // usage: bun packages/fixtures/swatch/test/apple.mjs [macos] [ios] [host] [--sim <name|udid>]
 import { rmSync } from 'node:fs';
@@ -51,7 +57,8 @@ async function drive(s, where) {
   const none = await heard(s, () => true, 0);
   check(where, 'nothing is reported before the view is placed', none.length === 0, none.join('; '));
   await s.tap('show');
-  const shown = await heard(s, (l) => l.some((x) => x.startsWith('made ')) && l.some((x) => x.startsWith('displayed ')) && l.some((x) => x.startsWith('bound ')));
+  const shown = await heard(s, (l) => l.some((x) => x.startsWith('made ')) && l.some((x) => x.startsWith('displayed ')) && l.some((x) => x.startsWith('bound ')) &&
+    (where !== 'ios-simulator' || l.some((x) => x.startsWith('held '))));
   const id = shown.find((x) => x.startsWith('made '))?.split(' ')[1];
   check(where, "the session's instance made the view", Boolean(id), shown.join('; '));
   const box = (await s.tree()).nodes.find((n) => n.props?.testId === 'box');
@@ -80,9 +87,53 @@ async function drive(s, where) {
   await s.tap('show');
   const removed = await heard(s, (l) => count(l, `displayed ${id} false app`) === 2);
   check(where, 'a shown view leaving the tree is reported hidden', count(removed, `displayed ${id} false app`) === 2, removed.join('; '));
+  if (where === 'ios-simulator') check(where, "the box's controller is held by a controller whose view holds the box", shown.includes(`held ${id} true`), shown.join('; '));
   const said = JSON.stringify([await s.tree(), await s.state(), await s.logs({ all: true })]);
   check(where, 'the key is in no tree, state or log', !said.includes(LEAK), "the key is in the drive's output");
   return id;
+}
+
+/** Views made with the route one fills, pushed; the route's dialog shown
+ * and closed; the route popped. */
+async function screen(s, where) {
+  const ios = where === 'ios-simulator';
+  const before = await heard(s, () => true, 0);
+  await s.tap('open');
+  await s.clock('settle');
+  const node = async (testId) => String((await s.tree()).nodes.find((n) => n.props?.testId === testId)?.id);
+  const id = await node('screen-box'), sheet = await node('sheet-box');
+  const pushed = await heard(s, (l) => l.includes(`displayed ${id} true app`) && (!ios || l.includes(`held ${id} true`)));
+  check(where, 'the route and its dialog make their views', !before.includes(`made ${id}`) && pushed.includes(`made ${id}`) && pushed.includes(`made ${sheet}`), pushed.join('; '));
+  check(where, "the route's view is shown", pushed.includes(`displayed ${id} true app`), pushed.join('; '));
+  const holders = async () => [...JSON.stringify(await s.logs({ all: true })).matchAll(new RegExp(`#${sheet}: a screen in (\\w+)`, 'g'))].map((m) => m[1]);
+  if (ios) {
+    check(where, "its controller is held by a controller whose view holds it", pushed.includes(`held ${id} true`), pushed.join('; '));
+    const logs = JSON.stringify(await s.logs({ all: true }));
+    check(where, "the route's controller holds it", logs.includes(`#${id}: a screen in RouteController`), logs.slice(-1500));
+    check(where, "the dialog's view starts in the route's controller", (await holders()).join() === 'RouteController', (await holders()).join());
+  }
+  /** The host's moves of the dialog's view once there are `n`, or the last seen. */
+  const moves = async (n) => {
+    for (const end = Date.now() + 10000; ; await s.clock('+100 real')) {
+      await s.clock('settle');
+      const now = await holders();
+      if (now.length >= n || Date.now() >= end) return now;
+    }
+  };
+  const consistent = async () => !(await heard(s, () => true, 0)).some((x) => x.startsWith('held ') && x.endsWith(' false'));
+  await s.tap('open-sheet');
+  if (ios) {
+    const open = await moves(2);
+    check(where, "the dialog's view moves into the sheet's controller", open.join() === 'RouteController,DialogSheetController' && await consistent(), `${open.join()} / ${(await heard(s, () => true, 0)).join('; ')}`);
+  }
+  await s.tap('close-sheet');
+  if (ios) {
+    const closed = await moves(3);
+    check(where, "the closed dialog's view moves back to the route's controller", closed.join() === 'RouteController,DialogSheetController,RouteController' && await consistent(), `${closed.join()} / ${(await heard(s, () => true, 0)).join('; ')}`);
+  }
+  await s.back();
+  const popped = await heard(s, (l) => l.includes(`displayed ${id} false app`));
+  check(where, 'a popped route is reported hidden', popped.includes(`displayed ${id} false app`), popped.join('; '));
 }
 
 for (const host of hosts.length ? hosts : ['macos', 'ios', 'host']) {
@@ -98,7 +149,12 @@ for (const host of hosts.length ? hosts : ['macos', 'ios', 'host']) {
   if (host !== 'host') {
     // A view's recognizers take only a real touch on iOS (`--touch platform`).
     const s = await open({ host, app: name, ...(host === 'ios' ? { touch: 'platform' } : {}) });
-    try { await drive(s, where); } finally { await s.close(); }
+    try { await drive(s, where); if (host !== 'ios') await screen(s, where); } finally { await s.close(); }
+    if (host === 'ios') {
+      // UIKit's animations on: a sheet's dismissal ends after its view has left the window.
+      const animated = await open({ host, app: name, touch: 'platform', timing: 'platform' });
+      try { await screen(animated, where); } finally { await animated.close(); }
+    }
     continue;
   }
   // Two sessions of the one plan in one process, each its own instance: a's

@@ -180,7 +180,9 @@ class ExactMap {
     const was = this.parts ?? new Map();
     this.parts = new Map();
     this.layer.replaceChildren(...this.markers.map(m => {
-      const [x, y] = project(m.latitude, m.longitude, z), b = was.get(m.id) ?? doc.createElement('button'), on = m.id === this.selected;
+      const [px, y] = project(m.latitude, m.longitude, z), b = was.get(m.id) ?? doc.createElement('button'), on = m.id === this.selected;
+      // The tiles repeat the world east and west; the marker goes on the copy nearest the centre.
+      const x = px + Math.round((cx - px) / (TILE * n)) * TILE * n;
       b.type = 'button';
       b.className = 'marker';
       b.dataset.marker = m.id;

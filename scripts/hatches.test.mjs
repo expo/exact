@@ -2,6 +2,11 @@
 // words a platform's module handles, and the delivery check over them.
 // `bun test ./scripts/hatches.test.mjs`.
 import { test } from 'bun:test';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { writeDataKeys } from '../host/apple/data-keys.mjs';
 import assert from 'node:assert/strict';
 import { classifyArtifacts, hatchWords } from './app.mjs';
 
@@ -51,4 +56,53 @@ test('a requirement the cohort\'s receipt does not meet is a proof; evidence the
   assert.equal(unsigned.missing.length, 2);
   assert.deepEqual(classifyArtifacts(candidate({ hatches: ['avatar'] }), { binary: 'same' }).needsBinary ?? [], []);
   assert.deepEqual(classifyArtifacts(candidate({ hatches: ['avatar'] }), cohort({ hatches: [] }, '0')).needsBinary, []);
+});
+
+test('data and hatch declarations accept digits and hyphens after their first letter', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-data-names-'));
+  const words = ['v-2', 'v--2', 'v-', 'v--'];
+  try {
+    for (const hatches of [words, Object.fromEntries(words.map(w => [w, ['ios', 'android']]))]) {
+      writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Data', app: { id: 'dev.exact.data', name: 'Data' }, data: words, hatches }));
+      assert.deepEqual(readManifest(dir, 'data').data, words);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform !== 'darwin')('typed Swift data and hatch keys keep every admitted word distinct', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'data-keys-'));
+  const words = ['v2', 'v-2', 'v--2', 'v-', 'v--'];
+  try {
+    const file = resolve(dir, 'Keys.swift');
+    writeDataKeys({ manifest: { data: words, hatches: words } }, file, 'ios');
+    const text = readFileSync(file, 'utf8');
+    for (const [word, key] of [['v2', 'v2'], ['v-2', 'v_2'], ['v--2', 'v__2'], ['v-', 'v_'], ['v--', 'v__']]) {
+      assert.ok(text.includes('`' + key + '` = ExactDataKey("' + word + '")'), text);
+      assert.ok(text.includes('`' + key + '` = ExactHatchKey("' + word + '")'), text);
+    }
+    const result = spawnSync('swiftc', ['-typecheck', file], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30000);
+
+test('hatch stubs preserve digits and trailing or repeated hyphens on every host', async () => {
+  const { hatch } = await import('./exact.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'hatch-word-stubs-')), was = process.env.EXACT_APP_DIR;
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "word"\n');
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Words', app: { id: 'dev.exact.words', name: 'Words' }, host: { web: {}, ios: {}, macos: {}, linux: {}, android: {} } }));
+    process.env.EXACT_APP_DIR = dir;
+    for (const [word, key] of [['v-2', 'v_2'], ['v--2', 'v__2'], ['v-', 'v_'], ['v--', 'v__']]) {
+      assert.deepEqual(hatch([word], () => {}).todo, []);
+      const text = path => readFileSync(resolve(dir, path), 'utf8');
+      assert.ok(text('modules/apple/Hatches.swift').includes('element.hatch == .' + key));
+      assert.ok(text('modules/android/Hatches.kt').includes('private fun ' + key + '('));
+      assert.ok(text('modules/web/index.js').includes('import * as ' + key + 'Hatch'));
+      assert.ok(text('modules/linux/hatches.rs').includes('#[allow(non_snake_case)]\nfn ' + word.replaceAll('-', '_') + '_hatch<'));
+    }
+  } finally {
+    if (was === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = was;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

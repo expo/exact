@@ -150,11 +150,15 @@ extension NodeView {
     package override func copy(_ sender: Any?) { if !clipboard(#selector(copy(_:))) { copySelectedText() } }
     package override func cut(_ sender: Any?) { clipboard(#selector(cut(_:))) }
     package override func paste(_ sender: Any?) { clipboard(#selector(paste(_:))) }
-    /// A copy, cut or paste is this node's only while a node hears it, and
-    /// a copy while text of it is selected; UIResponder's default would
-    /// claim it because the class implements it.
+    package override func selectAll(_ sender: Any?) { selectAllSelectedText() }
+    /// Dispatch a `copy` handler on this node or an ancestor; true when heard.
+    package func dispatchCopy() -> Bool { clipboard(#selector(copy(_:))) }
+    /// A copy, cut or paste is this node's only while a node hears it, a copy
+    /// while text of it is selected, and Select All while a partial text
+    /// selection is active; UIResponder's default would otherwise claim them.
     package override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         if action == #selector(copy(_:)), hasSelectedText { return true }
+        if action == #selector(selectAll(_:)) { return canSelectAllText }
         if [#selector(copy(_:)), #selector(cut(_:)), #selector(paste(_:))].contains(action) { return clipboardTarget(action) != nil }
         return super.canPerformAction(action, withSender: sender)
     }
@@ -168,10 +172,14 @@ extension NodeView {
         return board.hasImages || (board.hasURLs && board.urls?.contains(where: \.isFileURL) == true)
     }
     private var hasSelectedText: Bool { presenter?.textSelection.hasSelection(in: self) == true }
+    private var canSelectAllText: Bool { presenter?.textSelection.canSelectAll(in: self) == true }
     private func copySelectedText() { presenter?.textSelection.copy(self) }
+    private func selectAllSelectedText() { presenter?.textSelection.selectAll(self) }
     #else
     private var hasSelectedText: Bool { false } // tvOS has no text selection
+    private var canSelectAllText: Bool { false }
     private func copySelectedText() {}
+    private func selectAllSelectedText() {}
     #endif
     #endif
 }

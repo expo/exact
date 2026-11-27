@@ -31,6 +31,7 @@ const LOCKED: &str = "exact.presence.agent";
 pub type KeystoreFn = fn(op: u32, request: &str, value: &str) -> Result<String, String>;
 
 static KEYSTORE: OnceLock<KeystoreFn> = OnceLock::new();
+static MEMORY: OnceLock<MemoryVault> = OnceLock::new();
 
 /// Install the reader's Keystore hook, once a process (the JNI attach).
 pub fn on_keystore(keystore: KeystoreFn) {
@@ -193,19 +194,56 @@ pub struct Installed {
     pub snapshot: Vec<(String, Vec<u8>)>,
 }
 
-/// The backend for an app with a presence line, else `None`. A drive with no
-/// scratch store keeps its locked items in this process's memory.
-pub fn backend(app_id: &str, grants: &str) -> Option<Installed> {
-    let lines = lines(grants);
-    if !lines.iter().any(|(_, p)| p.is_some()) {
-        return None;
+fn stale_names_kv(
+    kv: &ibex2::kv::FileStore,
+    locked: &Locked,
+) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for key in kv.keys(RECORDS).unwrap_or_default() {
+        names.insert(key);
     }
+    let accounts = match locked {
+        Locked::Agent => kv.keys(LOCKED).unwrap_or_default(),
+        Locked::Keystore(dir) => std::fs::read_dir(dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect(),
+        Locked::None => Vec::new(),
+    };
+    for account in accounts {
+        if let Some((name, generation)) = account.split_once('#') {
+            if generation.parse::<u64>().is_ok() {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    names
+}
+
+fn stale_names_memory(vault: &MemoryVault) -> std::collections::BTreeSet<String> {
+    let memory = vault.memory();
+    let mut names: std::collections::BTreeSet<String> = memory.records.keys().cloned().collect();
+    names.extend(memory.locked.keys().map(|(n, _)| n.clone()));
+    names
+}
+
+type OpenedVault = (
+    Box<dyn Vault>,
+    Option<String>,
+    bool,
+    std::collections::BTreeSet<String>,
+);
+
+fn open_vault(app_id: &str, check_capable: bool) -> Option<OpenedVault> {
     // A drive that asks for the platform's stores (`EXACT_STORE=real`) keeps
     // locked items in the Keystore, behind the prompt it binds: the
     // conformance suite's mode, as on Apple.
     let real = std::env::var("EXACT_STORE").as_deref() == Ok("real");
     let agent = exact_runner::agent::carried() && !real;
-    let (backend, keystore, capable) = match crate::picker::secret_root(app_id) {
+    match crate::picker::secret_root(app_id) {
         Ok(Some(root)) => {
             let reader = !agent && KEYSTORE.get().is_some();
             let dir = std::env::var_os("HOME")
@@ -213,9 +251,10 @@ pub fn backend(app_id: &str, grants: &str) -> Option<Installed> {
             let (locked, capable) = match (agent, reader, dir) {
                 (true, ..) => (Locked::Agent, true),
                 (false, true, Some(dir)) => {
-                    let capable = KEYSTORE
-                        .get()
-                        .is_some_and(|k| k(5, "{}", "").is_ok_and(|s| s == "1"));
+                    let capable = check_capable
+                        && KEYSTORE
+                            .get()
+                            .is_some_and(|k| k(5, "{}", "").is_ok_and(|s| s == "1"));
                     (Locked::Keystore(dir), capable)
                 }
                 _ => (Locked::None, false),
@@ -224,20 +263,57 @@ pub fn backend(app_id: &str, grants: &str) -> Option<Installed> {
                 Locked::Keystore(dir) => Some(dir.to_string_lossy().into_owned()),
                 _ => None,
             };
+            let kv = ibex2::kv::FileStore::new(root.join("kv"));
+            let stale = stale_names_kv(&kv, &locked);
             let vault = HostVault {
                 secrets: plain_backend(&root),
-                kv: ibex2::kv::FileStore::new(root.join("kv")),
+                kv,
                 locked,
             };
-            (Backend::new(Box::new(vault), lines), keystore, capable)
+            Some((Box::new(vault), keystore, capable, stale))
         }
         _ if agent => {
-            static MEMORY: OnceLock<MemoryVault> = OnceLock::new();
             let vault = MEMORY.get_or_init(MemoryVault::default).clone();
-            (Backend::new(Box::new(vault), lines), None, true)
+            let stale = stale_names_memory(&vault);
+            Some((Box::new(vault), None, true, stale))
         }
-        _ => return None,
+        _ => None,
+    }
+}
+
+/// Read-only occupancy snapshot for uncommitted cold boots, without mutating
+/// the vault or pumping moves.
+pub fn snapshot(app_id: &str, grants: &str) -> Vec<(String, Vec<u8>)> {
+    let lines = lines(grants);
+    if !lines.iter().any(|(_, p)| p.is_some()) {
+        return Vec::new();
+    }
+    let Some((vault, _, capable, _)) = open_vault(app_id, true) else {
+        return Vec::new();
     };
+    Backend::preview_snapshot_entries(&*vault, &lines, capable)
+}
+
+/// The backend for an app with a presence line, else `None` (after tearing down
+/// any stale locked items and records when the last presence policy was removed).
+/// A drive with no scratch store keeps its locked items in this process's memory.
+pub fn backend(app_id: &str, grants: &str) -> Option<Installed> {
+    let mut lines = lines(grants);
+    let has_presence = lines.iter().any(|(_, p)| p.is_some());
+    let (vault, keystore, capable, stale) = open_vault(app_id, has_presence)?;
+    if !has_presence {
+        if !stale.is_empty() {
+            let teardown = stale.into_iter().map(|n| (n, None)).collect();
+            let _ = Backend::new(vault, teardown);
+        }
+        return None;
+    }
+    for name in stale {
+        if !lines.iter().any(|(existing, _)| existing == &name) {
+            lines.push((name, None));
+        }
+    }
+    let backend = Backend::new(vault, lines);
     let snapshot = backend.snapshot_entries(capable);
     Some(Installed {
         backend,

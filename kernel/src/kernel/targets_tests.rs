@@ -8,6 +8,7 @@ fn native(id: u64, top: f32) -> NativeTarget {
         id,
         generation: 1,
         insets: Some([top, 0.0, 0.0, 0.0]),
+        frame: None,
     }
 }
 
@@ -203,6 +204,7 @@ fn a_registered_target_reads_anywhere_and_follows_its_replacement() {
             id,
             generation,
             insets: Some([top, 0.0, 0.0, 0.0]),
+            frame: None,
         })
     };
     assert!(k.set_registered_target("map", view(1, 1, 12.0)).unwrap());
@@ -380,6 +382,27 @@ fn a_report_is_refused_whole() {
         },
         controller(1, f32::NAN),
         controller(1, f32::INFINITY),
+        // A frame that is nonfinite or of negative size
+        NativeTargets {
+            chain: Vec::new(),
+            relations: vec![(
+                Relation::Window,
+                NativeTarget {
+                    frame: Some([0.0, f32::NAN, 1.0, 1.0]),
+                    ..native(2, 1.0)
+                },
+            )],
+        },
+        NativeTargets {
+            chain: Vec::new(),
+            relations: vec![(
+                Relation::Window,
+                NativeTarget {
+                    frame: Some([0.0, 0.0, -1.0, 1.0]),
+                    ..native(2, 1.0)
+                },
+            )],
+        },
         NativeTargets {
             chain: vec![older],
             relations: Vec::new(),

@@ -259,12 +259,21 @@ pub(crate) fn node_site(
     }
 }
 
-/// The style rows of `bindings`, each with its origin.
+/// The style rows of `bindings`, each with its winning origin.
 pub(crate) fn style_rows(bindings: &[BindingsRow], origins: &[Origin]) -> Vec<(StyleId, Origin)> {
-    bindings
-        .iter()
-        .zip(origins)
-        .filter(|(b, _)| b.kind == BindingKind::Style)
-        .filter_map(|(b, o)| StyleId::from_bit(b.id as u32).map(|row| (row, o.clone())))
-        .collect()
+    let mut out: Vec<(StyleId, Origin)> = Vec::new();
+    for (b, o) in bindings.iter().zip(origins) {
+        if b.kind != BindingKind::Style {
+            continue;
+        }
+        let Some(row) = StyleId::from_bit(b.id as u32) else {
+            continue;
+        };
+        if let Some((_, existing)) = out.iter_mut().find(|(r, _)| *r == row) {
+            *existing = o.clone();
+        } else {
+            out.push((row, o.clone()));
+        }
+    }
+    out
 }

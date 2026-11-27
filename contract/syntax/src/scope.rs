@@ -462,6 +462,9 @@ impl Rewriter<'_> {
             if let Some(inner) = inner {
                 self.unbind(inner);
             }
+            if let Some(gate) = &mut res.gate {
+                self.expr(gate)?;
+            }
             self.ty(&mut res.shape)?;
             if let Some(p) = &mut res.placeholder {
                 self.source(&p.source);
@@ -822,7 +825,7 @@ impl Rewriter<'_> {
         let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
         for (at, decl) in split_top(&combined, ',', 0) {
             // As `motion` reads it: each animation trimmed, then split at
-            // spaces alone.
+            // white space.
             let lead = decl.len() - decl.trim_start().len();
             let tokens: Vec<(usize, &str)> = split_top(decl.trim(), ' ', at + lead)
                 .into_iter()
@@ -1155,7 +1158,8 @@ fn literal_roles(tokens: &[(usize, &str)], hole: char) -> Vec<(bool, bool)> {
 }
 
 /// `s` split at `sep` outside parentheses, each piece with its byte offset
-/// (plus `base`), as `motion`'s `split_top_level` splits.
+/// (plus `base`), as `motion`'s `split_top_level` splits: a space stands for
+/// any CSS white space (tab, line feed, carriage return, form feed).
 fn split_top(s: &str, sep: char, base: usize) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let (mut depth, mut start) = (0i32, 0);
@@ -1163,7 +1167,9 @@ fn split_top(s: &str, sep: char, base: usize) -> Vec<(usize, &str)> {
         match c {
             '(' => depth += 1,
             ')' => depth -= 1,
-            c if c == sep && depth == 0 => {
+            c if depth == 0
+                && (c == sep || (sep == ' ' && matches!(c, '\t' | '\n' | '\r' | '\u{c}'))) =>
+            {
                 out.push((base + start, &s[start..i]));
                 start = i + c.len_utf8();
             }

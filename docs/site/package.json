@@ -7,7 +7,7 @@
     "test:pages": "bun run build:pages && bun test --timeout 20000 ./tests/pages.test.ts ./tests/descriptions.test.ts",
     "gen": "bun tools/gen.ts",
     "build": "bun tools/gen.ts && bun exact.mjs web-build --out dist && bun tools/postbuild.ts dist && bun tools/seo-check.ts dist && bun tools/markdown-check.ts dist",
-    "build:pages": "bun run build && bun tools/pages.ts dist dist.pages",
+    "build:pages": "SITE_PUBLISH=1 bun run build && bun tools/pages.ts dist dist.pages",
     "start": "bun exact.mjs serve dist"
   },
   "dependencies": {},

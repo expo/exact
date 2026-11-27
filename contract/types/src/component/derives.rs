@@ -155,14 +155,23 @@ impl Dependencies {
     }
 }
 
-fn visit(i: usize, reads: &[Vec<usize>], seen: &mut [bool], order: &mut Vec<usize>) {
-    if std::mem::replace(&mut seen[i], true) {
+fn visit(start: usize, reads: &[Vec<usize>], seen: &mut [bool], order: &mut Vec<usize>) {
+    if std::mem::replace(&mut seen[start], true) {
         return;
     }
-    for &d in &reads[i] {
-        visit(d, reads, seen, order);
+    let mut stack = vec![(start, 0usize)];
+    while let Some((node, next)) = stack.last_mut() {
+        if let Some(&dep) = reads[*node].get(*next) {
+            *next += 1;
+            if !std::mem::replace(&mut seen[dep], true) {
+                stack.push((dep, 0));
+            }
+        } else {
+            let node = *node;
+            stack.pop();
+            order.push(node);
+        }
     }
-    order.push(i);
 }
 
 fn untyped_literal_in(

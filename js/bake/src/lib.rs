@@ -375,6 +375,12 @@ fn build_sources(
     replace_changed(&out.join("module.rs"), metadata.as_bytes())?;
     contract::native::write_desktop_packages(platform, app, &baked.plan, &target, &out)?;
     contract::native::write_desktop_hatches(platform, app, &target, &out)?;
+    if platform == "linux" {
+        let main = compat.linux_main(
+            "exact_painted::Composed { packages: exact_packages(), hatches: exact_hatches() }",
+        );
+        replace_changed(&out.join("linux.rs"), main.as_bytes())?;
+    }
     {
         let mode = compat.inputs["rustMode"]
             .as_str()

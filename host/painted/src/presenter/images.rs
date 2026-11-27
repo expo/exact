@@ -271,8 +271,9 @@ impl<D: DataSource> Presenter<D> {
         // painted box (not painted yet, or under `display: none`).
         let boot_visible_only = self.images.boot_visible_only;
         let status_sizes = self.images.status_sizes.clone();
+        let bar_sizes = self.images.bar_sizes.clone();
         let placed = |id: ViewId| -> Option<bool> {
-            if status_sizes.contains_key(&id) {
+            if status_sizes.contains_key(&id) || bar_sizes.contains_key(&id) {
                 return Some(true);
             }
             if hidden(id) {
@@ -291,11 +292,22 @@ impl<D: DataSource> Presenter<D> {
             };
             let (mut x, mut y, mut w, mut h) = b.rect;
             let mut clip = b.clip;
-            if let Some((_, _, d, port)) = shifts.iter().find(|(a, e, _, _)| (*a..*e).contains(&i))
+            let mut moved_any = false;
+            for (_, _, d, port) in shifts
+                .iter()
+                .rev()
+                .filter(|(a, e, _, _)| (*a..*e).contains(&i))
             {
                 x += d.0;
                 y += d.1;
-                clip = *port;
+                if moved_any {
+                    clip = clip.map(|(cx, cy, cw, ch)| (cx + d.0, cy + d.1, cw, ch));
+                }
+                clip = match (moved_any.then_some(clip).flatten(), *port) {
+                    (Some(c), Some(p)) => Some(crate::paint::intersect(c, p)),
+                    (c, p) => p.or(c),
+                };
+                moved_any = true;
             }
             // An auto-sized first load has no natural dimensions yet. Permit
             // that point to load; its accepted backing will supply geometry.

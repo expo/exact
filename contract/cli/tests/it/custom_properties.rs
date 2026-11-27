@@ -97,6 +97,59 @@ fn a_fallback_of_an_undeclared_name_is_admitted_and_warned() {
 }
 
 #[test]
+fn a_fallback_carried_by_an_argument_is_warned_at_the_argument() {
+    let card = "\n\ncomponent Card\n  props\n    w: string\n  view\n    column width=w height=10 testId=\"card\"\n\ncomponent Label\n  props\n    words: string\n  view\n    text words\n";
+    let app = format!("component App\n  view\n    column height=844\n      Card(w=\"var(--missing, 1px)\")\n      Label(words=\"var(--other, 2px)\"){card}");
+    let (plan, warnings) = contract::compile_warned(&app);
+    let undeclared: Vec<_> = (warnings.iter())
+        .filter(|w| w.to_string().contains("lower-var-undeclared"))
+        .collect();
+    // At the argument a length reads, as the same value written on `width` is warned
+    assert_eq!(undeclared.len(), 1, "{warnings:?}");
+    let w = undeclared[0];
+    assert!(w.to_string().contains("--missing"), "{w}");
+    assert_eq!((w.span.line, w.span.col), (4, 14), "{w}");
+    assert_eq!(frame(&boot_plan(&plan.unwrap()), "card").width, 1.0);
+    // A row's own `var()` is warned once, by the loader
+    let direct = app.replace(
+        "column width=w",
+        "column width=w min-height=\"var(--direct, 2px)\"",
+    );
+    let (_, warnings) = contract::compile_warned(&direct);
+    let mut undeclared: Vec<_> = (warnings.iter())
+        .filter(|w| w.to_string().contains("lower-var-undeclared"))
+        .map(|w| (w.span.line, w.span.col))
+        .collect();
+    undeclared.sort();
+    assert_eq!(undeclared, [(4, 14), (11, 31)], "{warnings:?}");
+    // A row's own literal over several lines, alone or in a ternary, is the loader's alone
+    for (value, at) in [
+        ("(\n      \"var(--missing, 1px)\"\n    )", (5, 7)),
+        (
+            "(on\n      ? \"var(--missing, 1px)\"\n      : \"2px\")",
+            (5, 9),
+        ),
+    ] {
+        let own = format!(
+            "component App\n  state on = true\n  view\n    column width={value} height=10\n"
+        );
+        let (_, warnings) = contract::compile_warned(&own);
+        let undeclared: Vec<_> = (warnings.iter())
+            .filter(|w| w.to_string().contains("lower-var-undeclared"))
+            .map(|w| (w.span.line, w.span.col))
+            .collect();
+        assert_eq!(undeclared, [at], "{value}: {warnings:?}");
+    }
+    // A declared name is not warned through an argument either
+    let declared = app.replace("column height=844", "column height=844 --missing=\"3px\"");
+    let (_, warnings) = contract::compile_warned(&declared);
+    assert!(
+        !warnings.iter().any(|w| w.to_string().contains("--missing")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
 fn the_compiler_refuses_what_cannot_resolve() {
     let refused = |source: &str, says: &str| {
         let e = contract::compile(source)

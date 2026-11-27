@@ -14,9 +14,9 @@ use exact_kernel::{NodeKey, NodeType, Op, PropId};
 
 /// One gesture's session; `group` is `None` for a list without one, whose
 /// reorder stays within it (LLP 1041 §8.5).
-#[derive(Debug)]
 pub(crate) struct Session {
     pub(super) token: ReorderToken,
+    pub(super) section: Option<Box<super::mounted_reorder::MountedSection>>,
     /// The list a drop lands in, the source's own at first.
     pub(super) target: NodeKey,
     pub(super) group: Option<String>,
@@ -117,6 +117,9 @@ impl<D: DataSource> Runner<D> {
         geometry: ReorderGeometry,
         ghost: bool,
     ) -> Result<Option<ReorderStart>, RunnerError> {
+        if binding.unwrapped() {
+            return self.begin_session(binding, geometry, None, ghost);
+        }
         let Some(group) = self.reorder_group(binding.list) else {
             return Ok(None);
         };
@@ -126,7 +129,7 @@ impl<D: DataSource> Runner<D> {
     /// The active grouped session `token` names.
     fn grouped(&self, token: ReorderToken) -> Option<&Session> {
         self.session()
-            .filter(|s| s.token == token && s.group.is_some())
+            .filter(|s| s.token == token && (s.group.is_some() || s.section.is_some()))
     }
 
     /// Move the gap to `y` in `target`'s unpreviewed content coordinates
@@ -156,6 +159,21 @@ impl<D: DataSource> Runner<D> {
             return Err(group_error("invalid reorder coordinate"));
         }
         let source = token.list;
+        if s.section.is_some() {
+            if target != source {
+                return Ok(ReorderProgress::Stale);
+            }
+            let ghost = s.ghost;
+            let ops = self
+                .edit_section(|section, k| {
+                    section.preview(k, y);
+                    section.paint(k, true, ghost)
+                })
+                .unwrap();
+            return Ok(ReorderProgress::Accepted {
+                receipt: self.apply_reorder_ops(ops)?,
+            });
+        }
         if target != source {
             if self.reorder_group(target) != group {
                 return Ok(ReorderProgress::Stale);
@@ -287,7 +305,12 @@ impl<D: DataSource> Runner<D> {
             return Ok(None);
         }
         let source = token.list;
-        let (item, before) = if target == source {
+        let (item, before) = if let Some(section) = s.section.as_ref() {
+            let Some(before) = section.before(true) else {
+                return Ok(None);
+            };
+            (key, before)
+        } else if target == source {
             let (drop, _) =
                 self.edit_reorder(source, |c, u, _| c.hold_drop(&geometry, u.env.now_ms))?;
             let Some(Some((item, before))) = drop else {
@@ -309,7 +332,8 @@ impl<D: DataSource> Runner<D> {
         let place = self
             .reorder_collection(source)
             .and_then(|c| c.place_of(&format!("s:{item}")))
-            .map(|(a, b)| (source, a, b));
+            .map(|(a, b)| (source, a, b))
+            .or_else(|| self.mounted_section()?.place(self, &item));
         let deadline = self.now_ms + HOLD_MS;
         if let Some(s) = self.session_mut() {
             s.phase = ReorderPhase::Holding;
@@ -342,6 +366,9 @@ impl<D: DataSource> Runner<D> {
             if after == s.before {
                 return Some(ReorderEnding::Landed);
             }
+        }
+        if s.section.is_some() {
+            return self.mounted_outcome(s);
         }
         let group = s.group.as_deref()?;
         let found = self.group_lists(group).into_iter().find_map(|list| {
@@ -377,20 +404,27 @@ impl<D: DataSource> Runner<D> {
             s.phase == ReorderPhase::Holding,
         );
         let mut ops = Vec::new();
-        let (_, o) = self.edit_reorder(source, |c, u, _| c.end_hold(u, instant))?;
-        ops.extend(o);
-        if target != source {
-            let (_, o) = self.edit_reorder(target, |c, u, _| c.close_incoming(u, instant))?;
+        if s.section.is_some() {
+            ops.extend(
+                self.edit_section(|section, k| section.paint(k, false, ghost))
+                    .unwrap(),
+            );
+        } else {
+            let (_, o) = self.edit_reorder(source, |c, u, _| c.end_hold(u, instant))?;
             ops.extend(o);
-        }
-        for list in touched {
-            let hide = (ghost
-                && self
-                    .reorder_collection(list)
-                    .is_some_and(|c| c.holds(&item)))
-            .then(|| item.clone());
-            let (_, o) = self.edit_reorder(list, |c, u, _| c.set_hidden(u, hide.clone()))?;
-            ops.extend(o);
+            if target != source {
+                let (_, o) = self.edit_reorder(target, |c, u, _| c.close_incoming(u, instant))?;
+                ops.extend(o);
+            }
+            for list in touched {
+                let hide = (ghost
+                    && self
+                        .reorder_collection(list)
+                        .is_some_and(|c| c.holds(&item)))
+                .then(|| item.clone());
+                let (_, o) = self.edit_reorder(list, |c, u, _| c.set_hidden(u, hide.clone()))?;
+                ops.extend(o);
+            }
         }
         if let Some(s) = self.session_mut() {
             s.phase = if dropped || ending.is_some() {
@@ -409,7 +443,10 @@ impl<D: DataSource> Runner<D> {
     /// target went goes home, and a hold ends at the first commit that
     /// shows the move or loses the row.
     pub(super) fn reconcile_group(&mut self) -> Result<Vec<Op>, RunnerError> {
-        let Some(s) = self.session().filter(|s| s.group.is_some()) else {
+        let Some(s) = self
+            .session()
+            .filter(|s| s.group.is_some() || s.section.is_some())
+        else {
             return Ok(Vec::new());
         };
         let (token, target, phase) = (s.token, s.target, s.phase);
@@ -419,7 +456,7 @@ impl<D: DataSource> Runner<D> {
                 None => Ok(Vec::new()),
             },
             ReorderPhase::Active => {
-                if self.reorder_collection(token.list).is_none() {
+                if s.section.is_none() && self.reorder_collection(token.list).is_none() {
                     return Ok(Vec::new());
                 }
                 if !self.has_reorder(token) {
@@ -469,10 +506,25 @@ impl<D: DataSource> Runner<D> {
         let Some(s) = self.grouped(token) else {
             return Ok(Vec::new());
         };
-        let (group, item, current) = (s.group.clone().unwrap(), s.item.clone(), s.target);
         if s.phase != ReorderPhase::Active || !self.has_reorder(token) {
             return Ok(Vec::new());
         }
+        if let Some(section) = &s.section {
+            let Some(by) = step.along() else {
+                return Ok(Vec::new());
+            };
+            let ghost = s.ghost;
+            let ops = if let Some((current, _)) =
+                super::mounted_reorder::MountedSection::new(self, section.binding)
+            {
+                self.edit_section(|section, k| section.step(current, by, k, ghost))
+                    .unwrap()
+            } else {
+                self.end_session(None, false)?
+            };
+            return Ok(self.apply_reorder_ops(ops)?.into_iter().collect());
+        }
+        let (group, item, current) = (s.group.clone().unwrap(), s.item.clone(), s.target);
         let source = token.list;
         let Some((slot, _)) = self.reorder_collection(current).and_then(|c| c.step_slot()) else {
             return Ok(Vec::new());
@@ -555,6 +607,12 @@ impl<D: DataSource> Runner<D> {
             return "null".into();
         };
         let before = match s.phase {
+            ReorderPhase::Active if s.section.is_some() => s
+                .section
+                .as_ref()
+                .and_then(|s| s.before(false))
+                .flatten()
+                .map(|k| format!("s:{k}")),
             ReorderPhase::Active => self
                 .reorder_collection(s.target)
                 .and_then(|c| c.gap_before(s.target == s.token.list)),

@@ -285,6 +285,8 @@ pub struct Deps {
     pub(crate) derives: Vec<Reads>,
     /// Each resource's arguments together.
     pub(crate) resource_args: Vec<Reads>,
+    /// Whether any body above reads the clock.
+    pub(crate) reads_clock: bool,
 }
 
 /// One input a settlement body reads, decoded from [`Reads::bits`].
@@ -401,7 +403,19 @@ impl Deps {
                     reads
                 })
                 .collect(),
+            reads_clock: false,
         };
+        deps.reads_clock = [
+            &deps.bindings,
+            &deps.surface_args,
+            &deps.subjects,
+            &deps.keys,
+        ]
+        .into_iter()
+        .flat_map(|table| &table.reads)
+        .chain(&deps.derives)
+        .chain(&deps.resource_args)
+        .any(|reads| reads.bits.get(layout.clock()));
         // Post-order over the site tree without recursing to the plan's depth;
         // the sites' reads are tabled once every one is known.
         let mut nodes = vec![Reads::default(); plan.nodes.len()];

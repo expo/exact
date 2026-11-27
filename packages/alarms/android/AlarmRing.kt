@@ -59,6 +59,9 @@ internal object AlarmRing {
     /** Whether a ring's notification, which carries its Stop, can be shown: no sound starts or continues without it (D7). */
     fun stoppable(c: Context): Boolean = notices(c).areNotificationsEnabled() && !channelBlocked(c)
 
+    /** Whether exact alarms are permitted (D7); also the prerequisite for `FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED` on API 34+. */
+    fun exact(c: Context): Boolean = Build.VERSION.SDK_INT < 31 || alarms(c).canScheduleExactAlarms()
+
     private fun fire(c: Context, r: AlarmRecord): PendingIntent = PendingIntent.getBroadcast(c, r.code,
         Intent(c, AlarmReceiver::class.java).setAction(FIRE).putExtra("tag", r.tag), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
@@ -81,7 +84,7 @@ internal object AlarmRing {
     /** The system alarm at `r.at`, a fresh anchor, the record, and a countdown's notification. */
     private fun arm(c: Context, r: AlarmRecord) {
         // Revoked since (D7): the system holds no alarm for the app, and the record goes with it.
-        if (Build.VERSION.SDK_INT >= 31 && !alarms(c).canScheduleExactAlarms()) return AlarmRecords.remove(c, r.tag)
+        if (!exact(c)) return AlarmRecords.remove(c, r.tag)
         val at = r.at!!.toLong()
         r.anchorWall = System.currentTimeMillis()
         r.anchorElapsed = SystemClock.elapsedRealtime()
@@ -176,11 +179,11 @@ internal object AlarmRing {
 
     /**
      * A boot (or the package replaced): the system dropped every alarm, so each is set again from its record with a
-     * fresh anchor; one that fell due while the phone was off rings at once (D9). With no Stop to show, every alarm
-     * ends instead, as at a status read while `denied` (D7).
+     * fresh anchor; one that fell due while the phone was off rings at once (D9). With no Stop to show or exact-alarm
+     * permission revoked, every held alarm ends instead, as at a status read while `denied` (D7).
      */
     fun restore(c: Context) {
-        if (!stoppable(c)) {
+        if (!stoppable(c) || !exact(c)) {
             dropHeld(c)
             AlarmsModule.changed()
             return
@@ -205,7 +208,12 @@ internal object AlarmRing {
             arm(c, r)
             return
         }
-        // No ring that cannot be stopped (D7): with notifications off or the channel blocked there is no Stop.
+        // Revocation ends every held alarm (D7); without notifications or the alarm channel there is no Stop.
+        if (!exact(c)) {
+            dropHeld(c)
+            AlarmsModule.changed()
+            return
+        }
         if (!stoppable(c)) {
             cancel(c, tag)
             AlarmsModule.changed()

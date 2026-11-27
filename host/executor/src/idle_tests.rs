@@ -66,7 +66,10 @@ fn an_independent_test_can_admit_work_while_another_reserves_every_worker() {
             Box::new(|| {}),
             Arc::new(ibex2::host::Host::new),
         );
-        assert!(!full.disabled, "the fixture must reserve every worker");
+        assert!(
+            full.worker_refusal.is_none(),
+            "the fixture must reserve every worker"
+        );
         reserved.send(()).unwrap();
         let _ = released.recv_timeout(Duration::from_secs(60));
         drop(full);
@@ -102,11 +105,16 @@ fn cores_in_one_test_share_the_worker_limit_and_return_slots_to_their_owner() {
         Box::new(|| {}),
         Arc::new(ibex2::host::Host::new),
     );
-    assert!(!full.disabled);
+    assert!(full.worker_refusal.is_none());
     let (refused, _) = core();
     assert_eq!(
         refused.run(tests::job(1, Request::continuation::<TestWork>(1)), None),
-        Err("native executor worker limit reached")
+        Err(format!(
+            "At executor startup, {} native workers were needed ({} already reserved, maximum {})",
+            MAX_WORKERS + WORKERS,
+            MAX_WORKERS,
+            MAX_WORKERS
+        ))
     );
     assert_eq!(budget.load(Ordering::Acquire), MAX_WORKERS);
     // Releasing on another thread must credit the creating test's budget.

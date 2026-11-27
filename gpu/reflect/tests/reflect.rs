@@ -289,6 +289,18 @@ fn colliding_generated_names_are_refused_by_name() {
 }
 
 #[test]
+fn an_override_sized_workgroup_is_refused_rather_than_reflected_as_one() {
+    // naga keeps 1 in `workgroup_size` for an `override` dimension; a const
+    // `[1, 2, 1]` would be wrong for every value the pipeline gives `N`.
+    let r = reflect(
+        "wg",
+        "override N: u32 = 64;\n@compute @workgroup_size(N, 2) fn cs() {}",
+    );
+    let e = r.expect_err("an override-sized workgroup has no Rust const");
+    assert!(e.contains("`cs`") && e.contains("override"), "{e}");
+}
+
+#[test]
 fn a_bad_shader_is_refused_with_its_line() {
     let e = reflect(
         "bad",

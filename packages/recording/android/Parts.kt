@@ -90,16 +90,38 @@ internal class PartWriter(app: Context, val file: File, admit: (() -> Unit)? = n
     /** The take ended: its frames made an MP4 at `<path>`, the part deleted. */
     fun finish() {
         out.close()
-        mux(part, file)
-        ledger.edit().remove(file.path).commit()
+        val ok = mux(part, file)
+        if (ok || !part.exists()) ledger.edit().remove(file.path).commit()
+        if (!ok) throw java.io.IOException("the take could not be muxed to ${file.path}")
     }
 
     /** The take failed before [finish]: the part stays in the ledger for a later process to recover. */
     fun close() = out.close()
 }
 
+/** Muxer operations [mux] drives, so tests can inject write, stop and release failures. */
+internal interface SampleMuxer {
+    fun addTrack(format: MediaFormat): Int
+    fun start()
+    fun writeSampleData(trackIndex: Int, byteBuf: ByteBuffer, bufferInfo: MediaCodec.BufferInfo)
+    fun stop()
+    fun release()
+}
+
+private fun mp4Muxer(path: String): SampleMuxer {
+    val muxer = MediaMuxer(path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    return object : SampleMuxer {
+        override fun addTrack(format: MediaFormat) = muxer.addTrack(format)
+        override fun start() = muxer.start()
+        override fun writeSampleData(trackIndex: Int, byteBuf: ByteBuffer, bufferInfo: MediaCodec.BufferInfo) =
+            muxer.writeSampleData(trackIndex, byteBuf, bufferInfo)
+        override fun stop() = muxer.stop()
+        override fun release() = muxer.release()
+    }
+}
+
 /** Make [part]'s ADTS frames the MP4 [file], through `<file>.mp4.tmp`; a part with no whole frame makes none. */
-internal fun mux(part: File, file: File): Boolean {
+internal fun mux(part: File, file: File, openMuxer: (String) -> SampleMuxer = ::mp4Muxer): Boolean {
     val bytes = part.readBytes()
     val frames = ArrayList<IntArray>()
     var at = 0
@@ -124,7 +146,8 @@ internal fun mux(part: File, file: File): Boolean {
     format.setByteBuffer("csd-0", csd)
     val tmp = File(file.path + ".mp4.tmp")
     tmp.delete()
-    val muxer = MediaMuxer(tmp.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    val muxer = openMuxer(tmp.path)
+    var muxed = false
     try {
         val track = muxer.addTrack(format)
         muxer.start()
@@ -138,10 +161,19 @@ internal fun mux(part: File, file: File): Boolean {
             muxer.writeSampleData(track, all, info)
         }
         muxer.stop()
+        muxed = true
     } finally {
-        muxer.release()
+        try {
+            // A muxer that was not stopped stops as it is released, which can fail too: the first failure is the answer.
+            try { muxer.release() } catch (e: IllegalStateException) {}
+        } finally {
+            if (!muxed) tmp.delete()
+        }
     }
-    if (!tmp.renameTo(file)) return false
+    if (!tmp.renameTo(file)) {
+        tmp.delete()
+        return false
+    }
     part.delete()
     return true
 }

@@ -27,6 +27,7 @@ extension Picker {
         let view = (ruling["view"] as? NSNumber)?.uint32Value
         if ruling["refused"] != nil { if let view { saveCancelled(view) }; return }
         guard ruling["present"] as? Bool == true, let view, let name = ruling["suggestedName"] as? String else { return }
+        let issued = SessionLease(session)
         let startIn = startFolder(ruling["startIn"] as? String, "saveFile")
         if let text = ruling["text"] as? String {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("exact-text-\(UUID().uuidString)", isDirectory: true)
@@ -41,7 +42,7 @@ extension Picker {
                 session.log("saveFile: refused: \(error.localizedDescription)"); saveCancelled(view); return
             }
             do {
-                presentSave(view: view, file: try FileHandle(forReadingFrom: file), name: name, startIn: startIn, done: discard)
+                presentSave(view: view, file: try FileHandle(forReadingFrom: file), name: name, startIn: startIn, issued: issued, done: discard)
             } catch {
                 discard()
                 session.log("saveFile: refused: \(error.localizedDescription)"); saveCancelled(view)
@@ -52,7 +53,7 @@ extension Picker {
         guard let file = appFile(from) else {
             session.log("saveFile: refused: \(from) is not a readable app file"); saveCancelled(view); return
         }
-        presentSave(view: view, file: file, name: name, startIn: startIn)
+        presentSave(view: view, file: file, name: name, startIn: startIn, issued: issued)
     }
 
     /// The agent's answer to a held export (LLP 1069.007 D4): the copy goes
@@ -114,7 +115,7 @@ extension Picker {
 
 #if os(tvOS)
 extension Picker {
-    func presentSave(view: UInt32, file _: FileHandle, name _: String, startIn _: URL?, done: () -> Void = {}) {
+    func presentSave(view: UInt32, file _: FileHandle, name _: String, startIn _: URL?, issued _: SessionLease? = nil, done: () -> Void = {}) {
         // tvOS has no document picker to export through.
         done()
         session.log("saveFile: refused: no document picker"); saveCancelled(view)
@@ -125,8 +126,9 @@ extension Picker {
     /// iOS: a scratch copy under the suggested name, handed to the
     /// exporting document picker, which moves a copy where the person says.
     /// `done` runs once `file` is copied or refused: the picker reads only its copy.
-    func presentSave(view: UInt32, file: FileHandle, name: String, startIn: URL?, done: () -> Void = {}) {
+    func presentSave(view: UInt32, file: FileHandle, name: String, startIn: URL?, issued: SessionLease? = nil, done: () -> Void = {}) {
         defer { done() }
+        let issued = issued ?? SessionLease(session)
         guard let controller = ViewPresentation.presenter(for: session.presenter.views[view] ?? session.presenter.root) else {
             session.log("saveFile: refused: no window"); saveCancelled(view); return
         }
@@ -142,24 +144,36 @@ extension Picker {
         let picker = UIDocumentPickerViewController(forExporting: [staged], asCopy: true)
         picker.directoryURL = startIn
         picker.delegate = self
-        exports[ObjectIdentifier(picker)] = (view, dir)
+        exports[ObjectIdentifier(picker)] = (view: view, dir: dir, issued: issued)
         controller.present(picker, animated: true)
     }
 
     /// The exporting picker's outcome; `false` when `controller` is not one.
     func exportFinished(_ controller: UIDocumentPickerViewController, urls: [URL]?) -> Bool {
-        guard let (view, dir) = exports.removeValue(forKey: ObjectIdentifier(controller)) else { return false }
-        try? FileManager.default.removeItem(at: dir)
-        if let url = urls?.first { saved(view, name: url.lastPathComponent) } else { saveCancelled(view) }
+        guard let entry = exports.removeValue(forKey: ObjectIdentifier(controller)) else { return false }
+        try? FileManager.default.removeItem(at: entry.dir)
+        guard entry.issued.session === session else { return true }
+        if let url = urls?.first { saved(entry.view, name: url.lastPathComponent) } else { saveCancelled(entry.view) }
         return true
     }
 }
 #else
 extension Picker {
+    /// Complete a macOS save panel: always runs `done()`, and writes or dispatches only while `issued` owns this session.
+    func finishSave(view: UInt32, file: FileHandle, to url: URL?, issued: SessionLease, done: () -> Void = {}) {
+        defer { done() }
+        guard issued.session === session else { return }
+        guard let url else { saveCancelled(view); return }
+        let scoped = url.startAccessingSecurityScopedResource()
+        copyOut(view: view, file: file, to: url)
+        if scoped { url.stopAccessingSecurityScopedResource() }
+    }
+
     /// macOS: an NSSavePanel sheet on the window, typed by the suggested
     /// name's extension; the copy replaces what the person agreed to replace.
     /// `done` runs when the panel ends, saved or cancelled.
-    func presentSave(view: UInt32, file: FileHandle, name: String, startIn: URL?, done: @escaping () -> Void = {}) {
+    func presentSave(view: UInt32, file: FileHandle, name: String, startIn: URL?, issued: SessionLease? = nil, done: @escaping () -> Void = {}) {
+        let issued = issued ?? SessionLease(session)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = name
         if let startIn { panel.directoryURL = startIn }
@@ -167,12 +181,8 @@ extension Picker {
         let ext = (name as NSString).pathExtension
         if !ext.isEmpty, let type = UTType(filenameExtension: ext) { panel.allowedContentTypes = [type] }
         let finish: (NSApplication.ModalResponse) -> Void = { [weak self, weak panel] response in
-            defer { done() }
-            guard let self else { return }
-            guard response == .OK, let url = panel?.url else { self.saveCancelled(view); return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            self.copyOut(view: view, file: file, to: url)
-            if scoped { url.stopAccessingSecurityScopedResource() }
+            guard let self else { done(); return }
+            self.finishSave(view: view, file: file, to: response == .OK ? panel?.url : nil, issued: issued, done: done)
         }
         if let window = session.presenter.root.window { panel.beginSheetModal(for: window, completionHandler: finish) }
         else { panel.begin(completionHandler: finish) }

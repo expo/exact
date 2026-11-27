@@ -1,7 +1,7 @@
 //! Shared resolution logic for sizing keywords (`min-content`, `max-content`, `fit-content`,
 //! `fit-content(...)`, and `stretch`) on the `width`/`height` style properties
 use crate::geometry::{AbsoluteAxis, Line, Rect, Size};
-use crate::style::{AvailableSpace, CoreStyle};
+use crate::style::{AvailableSpace, CalcHandle, CoreStyle};
 use crate::tree::{LayoutPartialTree, LayoutPartialTreeExt, NodeId, SizingMode};
 use crate::util::sys::f32_max;
 use crate::{CompactLength, Dimension};
@@ -92,7 +92,10 @@ pub(crate) fn resolve_sizing_keyword(
     style: Dimension,
     stretch_size: Option<f32>,
     percent_resolution_basis: Option<f32>,
+    calc_resolver: impl Fn(CalcHandle, f32) -> f32,
 ) -> Option<SizingKeywordResolution> {
+    #[cfg(not(feature = "calc"))]
+    let _ = &calc_resolver;
     match style.tag() {
         CompactLength::MIN_CONTENT_TAG => Some(SizingKeywordResolution::Measure(AvailableSpace::MinContent)),
         CompactLength::MAX_CONTENT_TAG => Some(SizingKeywordResolution::Measure(AvailableSpace::MaxContent)),
@@ -102,6 +105,10 @@ pub(crate) fn resolve_sizing_keyword(
         CompactLength::FIT_CONTENT_PERCENT_TAG => percent_resolution_basis
             .map(|basis| SizingKeywordResolution::Measure(AvailableSpace::Definite(basis * style.value()))),
         CompactLength::FIT_CONTENT_KEYWORD_TAG => stretch_size.map(SizingKeywordResolution::Fit),
+        #[cfg(feature = "calc")]
+        _ if style.is_fit_content_calc() => percent_resolution_basis.map(|basis| {
+            SizingKeywordResolution::Measure(AvailableSpace::Definite(calc_resolver(style.calc_value(), basis)))
+        }),
         CompactLength::STRETCH_TAG => stretch_size.map(SizingKeywordResolution::Exact),
         _ => None,
     }
@@ -146,13 +153,17 @@ pub(crate) fn resolve_absolute_sizing_keywords(
     };
 
     let keyword_width = if known_dimensions.width.is_none() {
-        resolve_sizing_keyword(size_style.width, Some(stretch_size.width), Some(area_size.width))
+        resolve_sizing_keyword(size_style.width, Some(stretch_size.width), Some(area_size.width), |val, basis| {
+            tree.calc(val, basis)
+        })
     } else {
         None
     };
     let keyword_height = if known_dimensions.height.is_none() {
-        resolve_sizing_keyword(size_style.height, Some(stretch_size.height), Some(area_size.height))
-            .map(SizingKeywordResolution::block_axis)
+        resolve_sizing_keyword(size_style.height, Some(stretch_size.height), Some(area_size.height), |val, basis| {
+            tree.calc(val, basis)
+        })
+        .map(SizingKeywordResolution::block_axis)
     } else {
         None
     };

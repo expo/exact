@@ -363,7 +363,7 @@ fn a_painting_hosts_entry_includes_the_apps_hatches_with_its_platforms_typed_key
         .unwrap()
         .unwrap();
     assert!(
-        windows.contains("    Self_,\n") && windows.contains(r#""self" => Some(HatchKey::Self_),"#),
+        windows.contains("    _Self,\n") && windows.contains(r#""self" => Some(HatchKey::_Self),"#),
         "{windows}"
     );
     assert!(!windows.contains("Dot"), "{windows}");
@@ -468,4 +468,95 @@ fn a_word_added_to_a_game_app_json_after_its_shells_names_the_stale_copy() {
     std::fs::copy(app.0.join("app.json"), generated.join("app.json")).unwrap();
     record(&app);
     app.compile().unwrap_or_else(|e| panic!("{e:?}"));
+}
+
+#[test]
+fn data_names_with_hyphens_and_digits_compile_and_match_their_dataset() {
+    for word in ["v-2", "v--2", "v-", "v--"] {
+        let src = format!(
+            r#"component A
+  state hits = []
+  action probe
+    hits = querySelectorAll("[data-{word}~=\"accent\"]")
+  view
+    text "word" id="word" testId="word" data-{word}="accent"
+"#
+        );
+        let mut r = boot(&src);
+        assert_eq!(
+            dataset(&r, "word"),
+            Some(format!(r#"{{"{word}":"accent"}}"#))
+        );
+        r.act("probe", vec![]).unwrap();
+        assert_eq!(
+            r.slot("hits"),
+            Some(&exact_plan::Value::list(vec![exact_plan::Value::str(
+                "word"
+            )]))
+        );
+        let app = App::new(
+            "hyphen-digits",
+            &format!(r#", "data":["{word}"], "hatches":{{"{word}":["ios","android"]}}"#),
+            &format!(r#"text "word" data-{word}="accent" hatch="{word}""#),
+        );
+        app.compile().unwrap_or_else(|e| panic!("{word}: {e:?}"));
+    }
+}
+
+#[test]
+fn typed_rust_hatch_keys_keep_every_admitted_word_distinct() {
+    let app = App::new(
+        "rust-word-keys",
+        r#", "hatches":["v2", "v-2", "v--2", "v-", "v--", "self", "self-"]"#,
+        r#"text "word""#,
+    );
+    let modules = app.0.join("modules/linux");
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::write(modules.join("hatches.rs"), "pub type ExactHatches = ();\n").unwrap();
+    let text = contract::native::rust_hatches(&app.0, &app.manifest(), "android")
+        .unwrap()
+        .unwrap();
+    for (word, key) in [
+        ("v2", "V2"),
+        ("v-2", "V_2"),
+        ("v--2", "V__2"),
+        ("v-", "V_"),
+        ("v--", "V__"),
+        ("self", "_Self"),
+        ("self-", "Self_"),
+    ] {
+        assert!(
+            text.contains(&format!("{word:?} => Some(HatchKey::{key}),")),
+            "{text}"
+        );
+    }
+    let file = app.0.join("keys.rs");
+    std::fs::write(&file, text).unwrap();
+    let output = std::process::Command::new("rustc")
+        .arg("-Dwarnings")
+        .arg("--crate-type=lib")
+        .arg("--out-dir")
+        .arg(&app.0)
+        .arg(file)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_data_attribute_name_cannot_shadow_subtraction_in_a_template() {
+    let ambiguous =
+        "component App\n  state data-v = 4\n  state data-v-2 = 9\n  view\n    text `${data-v-2}`\n";
+    let error = contract::compile(ambiguous).unwrap_err();
+    assert!(error.id.starts_with("syntax-expected"), "{error}");
+    let r = boot("component App\n  state data-v = 4\n  view\n    text `${data-v-2}` testId=\"result\" data-v-2=\"word\"\n");
+    let key = r.kernel().find_by_test_id("result")[0];
+    assert_eq!(
+        r.kernel().node_by_key(key).unwrap().props.str(PropId::Text),
+        Some("2")
+    );
 }

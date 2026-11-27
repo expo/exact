@@ -39,8 +39,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod admit;
 mod agent;
+pub use agent::check_source_substitute;
 mod answered;
 mod arrival;
+pub use arrival::check_arrival_field;
 mod bound;
 mod ceremony;
 mod declared;
@@ -61,6 +63,8 @@ mod poll;
 mod samples;
 mod seam;
 pub(in crate::runner) use seam::LinkedModules;
+#[cfg(test)]
+mod grant_scope_tests;
 mod services;
 mod sheet;
 mod spans;
@@ -184,6 +188,8 @@ pub(super) struct Extensions {
     /// the request that made them (`letgo.rs`).
     arrivals: arrival::Arrivals,
     letgo: letgo::LetGo,
+    /// Narrowed grants active while admitting a mixed-app data-code call.
+    call_grants: Option<String>,
 }
 
 /// A Contract read or send of a module's name, as admission saw it.
@@ -314,6 +320,11 @@ impl Extensions {
     /// Whether `token` is a held module request (not I/O: no clock waits).
     pub(super) fn holds_token(&self, token: Option<u64>) -> bool {
         token.is_some_and(|t| self.held.iter().any(|h| h.token == t))
+    }
+
+    /// Whether pending request `ticket` is waiting on a held data-code module call.
+    pub(super) fn holds_data_request(&self, ticket: u64) -> bool {
+        self.letgo.holds_ticket(ticket, &self.held)
     }
 }
 
@@ -601,23 +612,29 @@ impl<D: DataSource> Runner<D> {
         }
         let sub = self.substitute_for(row, args);
         let permission = &sub["permission"];
-        let name = permission["name"].as_str()?;
-        let state = self.permission_state(name);
-        if !send && permission["status"].as_str() == Some(self.plan.str(row.declared)) {
+        let status_source = permission["status"] == self.plan.str(row.declared)
+            || self.extensions.preferred.contains_key(&self.key(row));
+        let statuses = if !send && status_source {
+            self.statuses_of(row)
+        } else {
+            Vec::new()
+        };
+        if !statuses.is_empty() {
             let mut status = self.value_of(row).unwrap_or(json!({}));
-            // Each permission this source answers the state of, in its field:
-            // a path into a record the status has (`android.notifications`).
-            // A target whose restriction makes the module absent keeps its
-            // own answer (`unknown`, LLP 1133.030 D7).
-            let absent =
-                self.substitute(row)["targets"][self.host_target()]["available"] == json!(false);
-            for p in self.statuses_of(row).into_iter().filter(|_| !absent) {
-                if let (Some(field), Some(name)) = (p["field"].as_str(), p["name"].as_str()) {
-                    set_path(&mut status, field, json!(self.permission_state(name)));
+            if error_code(&status).is_none() {
+                for p in statuses {
+                    if let (Some(field), Some(name)) = (p["field"].as_str(), p["name"].as_str()) {
+                        let state = permits::fixed_state(&sub, self.host_target(), field)
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| self.permission_state(name));
+                        set_path(&mut status, field, state.into());
+                    }
                 }
             }
             return Some(Decision::Now(status));
         }
+        let name = permission["name"].as_str()?;
+        let state = self.permission_state(name);
         // A name admitted with no permission is never held or refused, and
         // a request answers the status in every state but `prompt` (LLP
         // 1133.004 §7).
@@ -1025,7 +1042,7 @@ impl<D: DataSource> Runner<D> {
         let handler = self.native_slot().extension_handler();
         Dispatch::Run(Work::Later(Box::new(move |reply| match handler {
             Some(handler) => handler(body, reply),
-            None => reply.send(response(&json!({ "error": "NotSupportedError" }))),
+            None => reply.send(Outcome::module_refusal("NotSupportedError", None)),
         })))
     }
 
@@ -1034,6 +1051,7 @@ impl<D: DataSource> Runner<D> {
             return;
         };
         let held = self.extensions.held.remove(at);
+        self.extensions.letgo.release(token);
         let answer = self.ceremony_ended(&held, answer);
         match held.reply {
             Some(slot) => {
@@ -1054,6 +1072,7 @@ impl<D: DataSource> Runner<D> {
             return;
         };
         let held = self.extensions.held.remove(at);
+        self.extensions.letgo.release(token);
         let Some(body) = held.forward else {
             return;
         };
@@ -1078,11 +1097,7 @@ impl<D: DataSource> Runner<D> {
         let body = &native.body;
         let v: Json = serde_json::from_slice(body).ok()?;
         let extension = v.get("extension")?.as_str()?;
-        let (declared, send) = match (v["source"].as_str(), v["send"].as_str()) {
-            (Some(name), None) => (name, false),
-            (None, Some(name)) => (name, true),
-            _ => return None,
-        };
+        let (declared, send) = super::module_seam::declared_call(&v)?;
         let owner = v["owner"]
             .as_str()
             .map(|s| format!("#{s}"))
@@ -1097,160 +1112,168 @@ impl<D: DataSource> Runner<D> {
             .cloned()
         else {
             self.log(format!("{key}: not a module this app's plan names"));
-            return Some(now(json!({ "error": "NotSupportedError" })));
+            return Some(super::module_seam::unsupported_call());
         };
         if row.send != send {
-            return Some(now(json!({ "error": "NotSupportedError" })));
+            return Some(super::module_seam::unsupported_call());
         }
         let mut args = v.get("args").cloned().unwrap_or(json!({}));
         self.clamp_bounds(&row, &mut args);
         self.resolve_of(&row, &mut args);
-        let cause = self.arriving_data_cause();
-        // A send that answers nothing (LLP 1133.004 D5) settles once done,
-        // as does one that lists what it answers (`region_list.rs`).
-        if self.is_effect(&row) || self.lists_answer(&row) {
-            return Some(self.effect_call(&row, args, cause));
-        }
-        let held_args = args.clone();
-        let timeout = self.timeout(&row, &args);
-        let route = self.route(&row);
-        let reader = self.data_reader(&row, &args);
-        self.extensions.samples.asking = Some((reader.clone(), cause));
-        self.sampled_ask(&row, &args);
-        // The call's request, when its reply carries handles (`handles.rs`).
-        let request = self.claim_request(body);
-        let decision = self.admitted(&row, &args, cause, send, timeout);
-        let out = match decision {
-            Decision::Forward => {
-                if !send {
-                    self.bound_read(&key);
-                }
-                let sampled = self.samples_of(&row);
-                // The implementation hears the origin admission read, and a
-                // Contract send keeps the number it went out with (`bound.rs`).
-                let mut body = self.as_cause(cause, |r| r.forward_body(&row, args, None));
-                // A send starts work that may outlive the call, so it names
-                // the grants it was admitted under: the scope of a mixed
-                // app's source, else the app's.
-                if send {
-                    let scope = native
-                        .grants
-                        .clone()
-                        .unwrap_or_else(|| self.data.grants().to_string());
-                    body = bound::with_authority(&body, &scope);
-                }
-                if let Some(n) = v["request"].as_u64() {
-                    body = numbered(&body, n);
-                    let ticket = self
-                        .extensions
-                        .sent
-                        .iter()
-                        .find_map(|(t, (_, sent))| (*sent == n).then_some(*t));
-                    if let Some(ticket) = ticket {
-                        self.note_send(ticket, &body);
-                    }
-                }
-                let anchored = self.anchor_body(&row, &body, cause);
-                // A reply carrying handles grants them the handlers its call
-                // listed (`invoke.rs`); a watched one's `watched` grants them.
-                let work = match request {
-                    Some(ticket) => self.watched(body, ticket, cause),
-                    None => {
-                        let work = self.to_implementation(body.clone());
-                        self.granting(&row, &body, cause, work)
-                    }
-                };
-                let work = self.unanchoring(anchored, work);
-                Some(match (sampled, reader) {
-                    (Some(decl), samples::Reader::Data(id)) => {
-                        self.cursored(work, id, decl["cursor"].as_str().unwrap_or("sequence"))
-                    }
-                    _ => work,
-                })
+        let cause = self.arriving_data_cause().with_input_from(
+            native
+                .mutation_ticket
+                .map(|t| self.ticket_cause(t))
+                .unwrap_or(Cause::none()),
+        );
+        self.with_module_grants(native.grants.as_deref(), |this| {
+            // A send that answers nothing (LLP 1133.004 D5) settles once done,
+            // as does one that lists what it answers (`region_list.rs`).
+            if this.is_effect(&row) || this.lists_answer(&row) {
+                return Some(this.effect_call(&row, args, cause));
             }
-            Decision::Now(answer) => {
-                let how = if route == Route::Substitute || error_code(&answer).is_none() {
-                    "substituted"
-                } else {
-                    "refused"
-                };
-                self.log(format!("native {key} ({how})"));
-                if error_code(&answer).is_none() {
-                    self.sampled_answered(&row, &answer);
+            let held_args = args.clone();
+            let timeout = this.timeout(&row, &args);
+            let route = this.route(&row);
+            let reader = this.data_reader(&row, &args);
+            this.extensions.samples.asking = Some((reader.clone(), cause));
+            this.sampled_ask(&row, &args);
+            // The call's request, when its reply carries handles (`handles.rs`).
+            let request = this.claim_request(body);
+            let decision = this.admitted(&row, &args, cause, send, timeout);
+            let out = match decision {
+                Decision::Forward => {
+                    if !send {
+                        this.bound_read(&key);
+                    }
+                    let sampled = this.samples_of(&row);
+                    // The implementation hears the origin admission read, and a
+                    // Contract send keeps the number it went out with (`bound.rs`).
+                    let mut body = this.as_cause(cause, |r| r.forward_body(&row, args, None));
+                    // A send starts work that may outlive the call, so it names
+                    // the grants it was admitted under: the scope of a mixed
+                    // app's source, else the app's.
+                    if send {
+                        body = bound::with_authority(&body, this.module_grants());
+                    }
+                    if let Some(n) = v["request"].as_u64() {
+                        body = numbered(&body, n);
+                        let ticket = this
+                            .extensions
+                            .sent
+                            .iter()
+                            .find_map(|(t, (_, sent))| (*sent == n).then_some(*t));
+                        if let Some(ticket) = ticket {
+                            this.note_send(ticket, &body);
+                        }
+                    }
+                    let anchored = this.anchor_body(&row, &body, cause);
+                    // A reply carrying handles grants them the handlers its call
+                    // listed (`invoke.rs`); a watched one's `watched` grants them.
+                    let work = match request {
+                        Some(ticket) => this.watched(body, ticket, cause),
+                        None => {
+                            let work = this.to_implementation(body.clone());
+                            this.granting(&row, &body, cause, work)
+                        }
+                    };
+                    let work = this.unanchoring(anchored, work);
+                    Some(match (sampled, reader) {
+                        (Some(decl), samples::Reader::Data(id)) => {
+                            this.cursored(work, id, decl["cursor"].as_str().unwrap_or("sequence"))
+                        }
+                        _ => work,
+                    })
                 }
-                let sub = self.substitute(&row);
-                if sub["ceremony"].is_object() || sub["records"] == true {
-                    let token = TOKENS.start + self.extensions.next;
-                    self.extensions.next += 1;
-                    let outcome = error_code(&answer).unwrap_or("recorded").to_owned();
-                    self.record_ceremony(token, &row, &args, &outcome);
+                Decision::Now(answer) => {
+                    let how = if route == Route::Substitute || error_code(&answer).is_none() {
+                        "substituted"
+                    } else {
+                        "refused"
+                    };
+                    this.log(format!("native {key} ({how})"));
+                    if error_code(&answer).is_none() {
+                        this.sampled_answered(&row, &answer);
+                    }
+                    let sub = this.substitute(&row);
+                    if sub["ceremony"].is_object() || sub["records"] == true {
+                        let token = TOKENS.start + this.extensions.next;
+                        this.extensions.next += 1;
+                        let outcome = error_code(&answer).unwrap_or("recorded").to_owned();
+                        this.record_ceremony(token, &row, &args, &outcome);
+                    }
+                    Some(now(this.completed(&row, answer)))
                 }
-                Some(now(self.completed(&row, answer)))
-            }
-            Decision::Hold(waits) => {
-                let token = TOKENS.start + self.extensions.next;
-                self.extensions.next += 1;
-                let permission = self.permission_name(&row, &args);
-                // One sheet at a time (`ceremony.rs`): behind a modal one, no ticket yet.
-                let queued = waits == Waits::Ceremony && self.ceremony_begins(&row);
-                let hold = match queued || waits == Waits::Span {
-                    true => u64::MAX,
-                    false => self.device_hold(&row, key, waits, cause, &permission, &args),
-                };
-                let slot = Arc::new(Mutex::new(Pending::default()));
-                let deadline = match waits {
-                    Waits::Span => Some(self.span_deadline(&row, &args)),
-                    _ => timeout
-                        .filter(|_| waits == Waits::Value)
-                        .map(|t| self.now_ms + t),
-                };
-                let forward = (route == Route::Agent)
-                    .then(|| self.as_cause(cause, |r| r.forward_body(&row, args, None)));
-                let invocation = self.invocation_id();
-                self.extensions.held.push(Held {
-                    token,
-                    reply: Some(slot.clone()),
-                    hold,
-                    source: self
-                        .plan
-                        .str(self.plan.sources[row.source.0 as usize].name)
-                        .to_owned(),
-                    send,
-                    waits,
-                    dispatched: true,
-                    timeout,
-                    deadline,
-                    forward,
-                    cause: cause.owned_by(invocation),
-                    args: held_args.clone(),
-                    permission,
-                    request,
-                    queued,
-                });
-                self.note_data_hold(token, body);
-                self.arrival_claimed(&row);
-                if waits == Waits::Ceremony {
-                    self.record_ceremony(
+                Decision::Hold(waits) => {
+                    let token = TOKENS.start + this.extensions.next;
+                    this.extensions.next += 1;
+                    let permission = this.permission_name(&row, &args);
+                    // One sheet at a time (`ceremony.rs`): behind a modal one, no ticket yet.
+                    let queued = waits == Waits::Ceremony && this.ceremony_begins(&row);
+                    let hold = match queued || waits == Waits::Span {
+                        true => u64::MAX,
+                        false => this.device_hold(&row, key, waits, cause, &permission, &args),
+                    };
+                    let slot = Arc::new(Mutex::new(Pending::default()));
+                    let deadline = match waits {
+                        Waits::Span => Some(this.span_deadline(&row, &args)),
+                        _ => timeout
+                            .filter(|_| waits == Waits::Value)
+                            .map(|t| this.now_ms + t),
+                    };
+                    let forward = (route == Route::Agent).then(|| {
+                        let mut body = this.as_cause(cause, |r| r.forward_body(&row, args, None));
+                        if send {
+                            body = bound::with_authority(&body, this.module_grants());
+                        }
+                        body
+                    });
+                    let invocation = this.invocation_id();
+                    this.extensions.held.push(Held {
                         token,
-                        &row,
-                        &held_args,
-                        if queued { "queued" } else { "held" },
-                    );
-                    if !queued {
-                        self.sheet_opened(token);
+                        reply: Some(slot.clone()),
+                        hold,
+                        source: this
+                            .plan
+                            .str(this.plan.sources[row.source.0 as usize].name)
+                            .to_owned(),
+                        send,
+                        waits,
+                        dispatched: true,
+                        timeout,
+                        deadline,
+                        forward,
+                        cause: cause.owned_by(invocation),
+                        args: held_args.clone(),
+                        permission,
+                        request,
+                        queued,
+                    });
+                    this.note_data_hold(token, body);
+                    this.arrival_claimed(&row);
+                    if waits == Waits::Ceremony {
+                        this.record_ceremony(
+                            token,
+                            &row,
+                            &held_args,
+                            if queued { "queued" } else { "held" },
+                        );
+                        if !queued {
+                            this.sheet_opened(token);
+                        }
                     }
+                    Some(Dispatch::Run(Work::Later(Box::new(move |reply| {
+                        let mut s = slot.lock().unwrap_or_else(|e| e.into_inner());
+                        match s.outcome.take() {
+                            Some(outcome) => reply.send(outcome),
+                            None => s.reply = Some(reply),
+                        }
+                    }))))
                 }
-                Some(Dispatch::Run(Work::Later(Box::new(move |reply| {
-                    let mut s = slot.lock().unwrap_or_else(|e| e.into_inner());
-                    match s.outcome.take() {
-                        Some(outcome) => reply.send(outcome),
-                        None => s.reply = Some(reply),
-                    }
-                }))))
-            }
-        };
-        self.extensions.samples.asking = None;
-        out
+            };
+            this.extensions.samples.asking = None;
+            out
+        })
     }
 
     /// `work`, a data-code read of a sampled source, whose reply sets its
@@ -1380,13 +1403,6 @@ impl<D: DataSource> Runner<D> {
         self.answer_json(ty, &key, &filled)
             .map_err(|e| e.to_string())?;
         Ok(value)
-    }
-
-    fn retire_hold(&mut self, ticket: u64) {
-        if let Some(at) = self.device_holds.iter().position(|h| h.ticket == ticket) {
-            let hold = self.device_holds.remove(at);
-            self.log(format!("device {} {ticket} retired", hold.capability));
-        }
     }
 
     /// Held module requests whose request is gone (superseded, its reader

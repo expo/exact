@@ -24,7 +24,7 @@ impl<D: DataSource> Presenter<D> {
                 .zip(n(&v[1]))
                 .ok_or_else(|| format!("scroll drag: {name} needs two finite numbers"))
         };
-        let id = r["id"]
+        let target = r["id"]
             .as_u64()
             .and_then(|id| u32::try_from(id).ok())
             .ok_or("scroll drag: id needs a live view")?;
@@ -33,11 +33,21 @@ impl<D: DataSource> Presenter<D> {
             .as_f64()
             .filter(|ms| ms.is_finite() && (0.0..=2000.0).contains(ms))
             .ok_or("scroll drag: duration must be 0–2000 ms")?;
+        let press = r
+            .get("press")
+            .map_or(Some(0.), |v| v.as_f64())
+            .filter(|v| v.is_finite() && *v >= 0.)
+            .ok_or("invalid press duration")?;
+        let hold = r
+            .get("hold")
+            .map_or(Some(0.), |v| v.as_f64())
+            .filter(|hold| hold.is_finite() && *hold >= 0. && press + ms + hold <= 10000.)
+            .ok_or("scroll drag: move and hold must fit in 10000 ms")?;
         if self.contact_position().is_some() {
             return Err("scroll drag: another contact is down".into());
         }
         let (x, y, w, h) = self
-            .rect_of(id)
+            .rect_of(target)
             .ok_or("scroll drag: target has no painted box")?;
         let start = if r.get("from").is_some() {
             pair("from")?
@@ -47,22 +57,90 @@ impl<D: DataSource> Presenter<D> {
         let hit = self
             .hit(start.0, start.1)
             .ok_or("scroll drag: start is not visible")?;
-        if !self.is_inside(hit, id) || !self.alert_allows(id) || self.host.route_visibility(id).1 {
-            return Err("scroll drag: target is hidden, inert or covered".into());
+        if !self.alert_allows(target) || self.host.route_visibility(target).1 {
+            return Err("scroll drag: target is hidden or inert".into());
         }
         let limits = self.collection_scroll_limits();
-        let scroller = self
-            .scroller(id, &limits)
-            .ok_or("scroll drag: target is not a scroller")?;
         let under = self.scrollers_at(start.0, start.1);
-        // These are reader samples, not sheet input. Only authored gestures refuse them.
-        let claims = (under.claims.0, under.claims.1 && !under.sheet);
-        let primary_claimed = if dx.abs() > dy.abs() {
-            claims.0
-        } else {
-            claims.1
+        let named = self.scroller(target, &limits);
+        // An explicit scroller receives its own samples. Content in a sheet
+        // follows the sheet first when this direction can move its detent.
+        let sheet = named.is_none()
+            && if dy < 0. {
+                under.sheet_directions.0
+            } else {
+                under.sheet_directions.1
+            };
+        let claims = (under.claims.0, (under.claims.1 && !under.sheet) || sheet);
+        let across = dx.abs() > dy.abs();
+        let primary_claimed = if across { claims.0 } else { claims.1 };
+        // Scrolling.decide gives the other axis a turn if the primary one has
+        // no scroller and the movement on the other has crossed the touch slop.
+        let available = |under: &Under, horizontal| {
+            under
+                .chain
+                .iter()
+                .copied()
+                .find(|s| if horizontal { s.axes.0 } else { s.axes.1 })
         };
-        if primary_claimed && r["probe"] == true {
+        let slop = self.slop as f32;
+        let other_allowed = if across {
+            dy.abs() > slop && !claims.1
+        } else {
+            dx.abs() > slop && !claims.0
+        };
+        let horizontal = across ^ (available(&under, across).is_none() && other_allowed);
+        let owner = named
+            .filter(|s| if horizontal { s.axes.0 } else { s.axes.1 })
+            .or_else(|| available(&under, horizontal))
+            .or(named);
+        if hit != target && !self.is_inside(hit, target) {
+            // A target-relative offset can start beside a text line. Both points must
+            // reach the same scroll owner, and the named content must still be exposed.
+            let outside = start.0 < x || start.1 < y || start.0 >= x + w || start.1 >= y + h;
+            let center = (x + w / 2., y + h / 2.);
+            if named.is_some()
+                || !outside
+                || owner.is_none()
+                || !self
+                    .hit(center.0, center.1)
+                    .is_some_and(|h| h == target || self.is_inside(h, target))
+                || available(&self.scrollers_at(center.0, center.1), horizontal).map(|s| s.id)
+                    != owner.map(|s| s.id)
+            {
+                return Err("scroll drag: target is hidden, inert or covered".into());
+            }
+        }
+        let distance = dx.abs().max(dy.abs()) as f64;
+        let (dx, dy) = match (named, horizontal) {
+            (None, true) => (dx, 0.),
+            (None, false) => (0., dy),
+            _ => (dx, dy),
+        };
+        let reorder_grip = (r["probe"] == true || press > 0.)
+            && under.field.is_none()
+            && self.arrange_hold_at(start.0, start.1).is_some();
+        if reorder_grip && r["probe"] == true {
+            if let Some(deadline) = r["longPressMs"].as_f64() {
+                let travel = (deadline - press).max(0.);
+                if deadline <= press
+                    || (ms > 0. && travel <= ms && distance * travel / ms <= self.slop)
+                {
+                    return Ok(
+                        serde_json::json!({"scrollDrag": "presenter", "liftAt": deadline})
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        if r["probe"] == true
+            && (primary_claimed
+                || owner.is_none()
+                || named.is_none()
+                    && (dx.abs().max(dy.abs()) <= slop
+                        || under.field.is_some()
+                        || self.canvas_contact_target(hit).is_some()))
+        {
             return Ok(serde_json::json!({"scrollDrag": "presenter"}).to_string());
         }
         if (dx != 0. && claims.0) || (dy != 0. && claims.1) {
@@ -71,6 +149,8 @@ impl<D: DataSource> Presenter<D> {
         if under.field.is_some() {
             return Err("scroll drag: a native text field owns the start; use native input".into());
         }
+        let scroller = owner.ok_or("scroll drag: no scroller owns this axis")?;
+        let id = scroller.id;
         if scroller.axes.0 || scroller.axes.1 {
             let target = under
                 .chain
@@ -83,19 +163,64 @@ impl<D: DataSource> Presenter<D> {
                 return Err("scroll drag: a nested scroller contains this axis".into());
             }
         }
-        if r["probe"] == true {
-            return Ok(serde_json::json!({"scrollDrag": "reader"}).to_string());
+        let seek = self.live_time().is_none();
+        if !seek && (hold > 0. || press > 0.) {
+            return Err("scroll drag: a timed hold needs the agent clock or native input".into());
         }
-        if scroller.axes.0 || scroller.axes.1 {
-            self.reader_under(start.0, start.1, 1.);
-            if let Some(error) = self.reader_drag_began(id) {
+        if r["probe"] == true {
+            return Ok(
+                serde_json::json!({"scrollDrag": "reader", "reorderGrip": reorder_grip})
+                    .to_string(),
+            );
+        }
+        if press > 0. {
+            if !reorder_grip {
+                return Err("scroll drag: the press no longer starts on a reorder grip".into());
+            }
+            if let Some(error) = crate::agent::hold_framed(self, self.host.now() + press).1 {
                 return Err(error);
             }
-            let steps = ((ms / 16.).ceil() as usize).clamp(1, 128);
-            for _ in 0..steps {
-                self.reader_wheel(id, -dx / steps as f32, -dy / steps as f32)?;
+            // Recheck the hit and the scroll chain after timers have run.
+            let mut move_only = r.clone();
+            move_only.as_object_mut().unwrap().remove("press");
+            return self.agent_scroll_drag(&move_only);
+        }
+        let travels = scroller.axes.0 || scroller.axes.1;
+        let began = self.host.now();
+        if travels {
+            self.reader_under(start.0, start.1, 1.);
+            if let Some(error) = self.reader_drag_began(id) {
+                self.scroll_end_release(id);
+                return Err(error);
+            }
+            let advance = |p: &mut Self, elapsed| {
+                if seek {
+                    if let Some(error) = crate::agent::hold_framed(p, began + elapsed).1 {
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            };
+            let sample = |p: &mut Self| -> Result<(), String> {
+                let steps = ((ms / 16.).ceil() as usize).clamp(1, 128);
+                for step in 1..=steps {
+                    p.reader_wheel(id, -dx / steps as f32, -dy / steps as f32)?;
+                    advance(p, ms * step as f64 / steps as f64)?;
+                }
+                if hold > 0. {
+                    advance(p, ms + hold)?;
+                }
+                Ok(())
+            };
+            if let Err(error) = sample(self) {
+                self.scroll_end_release(id);
+                return Err(error);
             }
             if let Some(error) = self.reader_drag_ended(id, (0., 0.), None, false) {
+                return Err(error);
+            }
+        } else if seek {
+            if let Some(error) = crate::agent::hold_framed(self, began + ms + hold).1 {
                 return Err(error);
             }
         }
@@ -104,7 +229,7 @@ impl<D: DataSource> Presenter<D> {
             .ok_or("scroll drag: target was removed while scrolling")?
             .offset;
         Ok(serde_json::json!({
-            "tapped": id, "at": [start.0, start.1],
+            "tapped": target, "at": [start.0, start.1],
             "scrolledBy": [after.0 - scroller.offset.0, after.1 - scroller.offset.1],
             "delivery": "presenter", "native": "Presenter.reader_*",
             "timing": "deterministic scroll samples; native touch and fling unobserved"
@@ -117,9 +242,14 @@ impl<D: DataSource> Presenter<D> {
     /// throws, is over, the scroller's moves owe no `scrollend`
     /// (`scroll_end.rs`). Errors are the action's.
     pub fn reader_drag_began(&mut self, id: ViewId) -> Option<String> {
-        if self.reader_knows(id) {
-            self.scroll_end_hold(id);
+        if !self.reader_knows(id) {
+            return None;
         }
+        self.list_drag_began(id)
+    }
+
+    pub(super) fn list_drag_began(&mut self, id: ViewId) -> Option<String> {
+        self.scroll_end_hold(id);
         self.scroll_drag(id, Event::Scrolldragstart)
     }
 
@@ -146,6 +276,27 @@ impl<D: DataSource> Presenter<D> {
         {
             return Some(format!("scroll drag {id}: refused, not finite"));
         }
+        let shared = self.reader.pending_height_end.is_some_and(|key| {
+            self.host
+                .kernel()
+                .node_by_key(key)
+                .is_some_and(|n| n.id == id)
+        });
+        if shared {
+            self.reader.pending_height_end = None;
+        } else if !self.reader_knows(id) {
+            return None;
+        }
+        self.list_drag_ended(id, velocity, rest, flings)
+    }
+
+    pub(super) fn list_drag_ended(
+        &mut self,
+        id: ViewId,
+        velocity: (f64, f64),
+        rest: Option<(f32, f32)>,
+        flings: bool,
+    ) -> Option<String> {
         if !flings {
             self.scroll_end_release(id);
         }
@@ -194,15 +345,13 @@ impl<D: DataSource> Presenter<D> {
         error.or(self.after_commit())
     }
 
-    /// Dispatch a drag's event at `id`, a scroller the reader knows that
-    /// hears it and is shown.
+    /// Dispatch a drag's event to a visible scroller with a handler.
     fn scroll_drag(&mut self, id: ViewId, event: Event) -> Option<String> {
         let kind = match event {
             Event::Scrolldragstart => EventKind::Scrolldragstart,
             _ => EventKind::Scrolldragend,
         };
         if id == PAGE
-            || !self.reader_knows(id)
             || self.host.route_visibility(id).1
             || !self.host.runner().handlers_of(id).contains(&kind)
         {

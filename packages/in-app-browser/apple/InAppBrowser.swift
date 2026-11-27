@@ -73,7 +73,7 @@ public final class InAppBrowserModule: NSObject, ExactPackage {
             return reply(["error": "TypeError", "message": "openBrowser takes an absolute http or https URL; open any other with openURL"])
         }
         if context.agent {
-            let action = tap ?? (Self.overApp ? "dismissed" : "opened")
+            let action = tap == "cancel" ? "dismissed" : (tap ?? (Self.overApp ? "dismissed" : "opened"))
             say("\(action == "dismissed" ? "dismissed" : "opened") \(Self.origin(url))")
             return reply(["action": action])
         }

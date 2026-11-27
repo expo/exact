@@ -22,6 +22,9 @@ package struct CssAnimation {
     var keyTimes: [NSNumber] { track.keyTimes }
     var timing: [CAMediaTimingFunction]? { track.timing }
     let duration: Double, repeatCount: Double, fill: Int, start: Double, delay: Double
+    /// Each key holds to the next (`kCAAnimationDiscrete`): a `steps()` a
+    /// path plays as whole paths (LLP 1003.003 D7).
+    let discrete: Bool
     /// The local time an authored pause holds it at, in seconds.
     let held: Double?
 
@@ -36,7 +39,7 @@ package struct CssAnimation {
         signature = h.finalize()
         track = LoweredTrack.shared(spec)
         duration = num(spec["d"]); repeatCount = num(spec["n"]); fill = Int(num(spec["fill"]))
-        start = num(spec["s"]); delay = num(spec["dl"])
+        start = num(spec["s"]); delay = num(spec["dl"]); discrete = num(spec["m"]) == 1
         held = (spec["h"] as? NSNumber)?.doubleValue
     }
 

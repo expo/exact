@@ -103,7 +103,7 @@ impl<D: DataSource> Presenter<D> {
         let name = kernel.node(id)?.props.str(PropId::Popovertarget)?;
         let key = self.element(name).filter(|_| !name.is_empty())?;
         let pop = kernel.node_by_key(key)?.id;
-        matches!(self.surface_plan(pop, false), Some(Plan::Menu(_))).then_some(key)
+        matches!(self.surface_plan(pop, false), Some(Plan::Menu { .. })).then_some(key)
     }
 
     /// Whether the root's `-exact-menu-remove` names `status-quit`.
@@ -124,22 +124,28 @@ impl<D: DataSource> Presenter<D> {
         let status = self.top.status.as_ref().filter(|s| s.exit);
         let root = status.and_then(|s| self.host.kernel().node_by_key(s.root));
         match plan {
-            Some(Plan::Menu(mut entries)) if root.is_some_and(|n| n.id == pop) => {
+            Some(Plan::Menu {
+                mut entries,
+                surface,
+            }) if root.is_some_and(|n| n.id == pop) => {
                 if !entries.is_empty() {
                     entries.push(Entry::Separator);
                 }
                 entries.push(Entry::Item(Row {
                     node: EXIT,
                     title: "Exit".into(),
+                    menu_label: None,
+                    subtitle: None,
                     direction: exact_kernel::Direction::Ltr,
                     symbol: None,
                     destructive: false,
                     enabled: true,
                     cancel: false,
                     checked: false,
+                    checkable: false,
                     opens: None,
                 }));
-                Some(Plan::Menu(entries))
+                Some(Plan::Menu { entries, surface })
             }
             plan => plan,
         }

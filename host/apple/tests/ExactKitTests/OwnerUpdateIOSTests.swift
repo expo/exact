@@ -32,12 +32,33 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let first = try XCTUnwrap(update.chain.first)
         XCTAssertEqual(first.target.insets, view.safeAreaInsets)
         XCTAssertEqual(first.target.id, TargetIds.id(of: view))
+        // Each target's frame is its bounds in its window, the window's its own
+        XCTAssertEqual(first.target.frame, view.convert(view.bounds, to: nil))
+        // And the window map takes a point of the owner's block, from its origin, where UIKit puts it
+        let map = try XCTUnwrap(update.windowMap)
+        let point = CGPoint(x: 30, y: 50), origin = view.bounds.origin
+        let mapped = point.applying(map), converted = view.convert(CGPoint(x: origin.x + 30, y: origin.y + 50), to: nil)
+        XCTAssertEqual(mapped.x, converted.x, accuracy: 0.01)
+        XCTAssertEqual(mapped.y, converted.y, accuracy: 0.01)
         let navigation = try XCTUnwrap(route.navigationController?.view)
         let named = update.chain.first { $0.kinds & OwnerUpdateIOS.Kind.navigation != 0 }
         XCTAssertEqual(named?.target.insets, navigation.safeAreaInsets)
         let window = try XCTUnwrap(view.window)
         let windowTarget = update.relations.first { $0.relation == OwnerUpdateIOS.Relation.window }
         XCTAssertEqual(windowTarget?.target.insets, window.safeAreaInsets)
+        XCTAssertEqual(windowTarget?.target.frame, window.bounds)
+        // Its reserved regions from iOS 27.1, each keeping its identity from one sample to the next
+        if #available(iOS 27.1, *) {
+            let regions = try XCTUnwrap(update.regions)
+            let again = OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).regions
+            XCTAssertEqual(again?.map(\.id), regions.map(\.id))
+            // The divisions among them are the view's division regions, from its bounds' origin
+            let origin = view.bounds.origin
+            let divisions = (ReservedRegions.divisions(of: view) ?? []).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
+            XCTAssertEqual(regions.filter { $0.kind == 0 }.map(\.frame), divisions)
+        } else {
+            XCTAssertNil(update.regions)
+        }
         let margins = try XCTUnwrap(update.margins)
         XCTAssertEqual(margins.root, view.layoutMargins)
         XCTAssertEqual(margins.plain, UIView().layoutMargins)
@@ -58,6 +79,17 @@ final class OwnerUpdateIOSTests: XCTestCase {
         probe.removeFromSuperview()
         let minimum = route.systemMinimumLayoutMargins
         XCTAssertEqual([margins.minimum.left, margins.minimum.right], [minimum.leading, minimum.trailing])
+        // Each edge's bar region, its distance from that edge and its sides in order, as UIKit gives it
+        if #available(iOS 27.1, *) {
+            for (i, edge) in [UIRectEdge.top, .right, .bottom, .left].enumerated() {
+                let u = view.edgeInsets(for: .bar(onEdge: edge, extent: 50)), region = try XCTUnwrap(update.barRegions[i])
+                let (distance, sides) = edge == .top ? (u.top, (u.left, u.right)) : edge == .right ? (u.right, (u.top, u.bottom))
+                    : edge == .bottom ? (u.bottom, (u.left, u.right)) : (u.left, (u.top, u.bottom))
+                XCTAssertEqual(region, .init(distance: distance, sides: sides), "edge \(i)")
+            }
+        } else {
+            XCTAssertTrue(update.barRegions.allSatisfy { $0 == nil }, "no bar region before iOS 27.1")
+        }
     }
 
     func testTheKernelTakesAnEncodedUpdateAndRefusesATruncatedOne() throws {
@@ -93,7 +125,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
 
     func testTheKernelTakesARegistrationAndRefusesATruncatedOne() throws {
         let session = try fixture()
-        let target = OwnerUpdateIOS.target(window)
+        let target = OwnerUpdateIOS.wire(OwnerUpdateIOS.target(window))
         let record = ExactNativeTarget.encode(name: "map", target: target)
         XCTAssertNil(session.runtime.ownerReports(registrations: [record]).error)
         XCTAssertNil(session.runtime.ownerReports(registrations: [ExactNativeTarget.encode(name: "map", target: nil)]).error)
@@ -126,8 +158,37 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(update.band)
         XCTAssertNil(update.margins)
         XCTAssertNil(update.segments)
+        XCTAssertTrue(update.barRegions.allSatisfy { $0 == nil })
         XCTAssertEqual(update.chain.count, 1)
         XCTAssertNil(update.chain[0].target.insets)
+        XCTAssertNil(update.chain[0].target.frame)
+        XCTAssertNil(update.chrome)
+        XCTAssertNil(update.windowMap)
+        XCTAssertNil(update.configuration)
+        XCTAssertNil(update.regions)
+        XCTAssertEqual(update.keyboard, .unreported)
+    }
+
+    /// D8 and D11: UIKit moves the root's margins one for one with Exact's contribution, which the update takes off, as
+    /// it does the band's.
+    func testTheRootsMarginsAreTheirsLessExactsContribution() throws {
+        let session = try fixture()
+        let (route, _) = try firstRoute(session)
+        let root = try XCTUnwrap(window?.rootViewController)
+        let before = try XCTUnwrap(OwnerUpdateIOS.sample(controller: root, view: root.view, session: nil).margins).root
+        let given = root.view.layoutMargins
+        let ledger = ContributionsIOS.of(root)
+        let identity = ContributionsIOS.Identity(node: route.node.id, operation: .additionalInsets)
+        ledger.set(identity, UIEdgeInsets(top: 0, left: 20, bottom: 10, right: 0), generation: 1)
+        let update = OwnerUpdateIOS.sample(controller: root, view: root.view, session: nil)
+        XCTAssertEqual(root.view.layoutMargins.left, given.left + 20, accuracy: 0.5, "UIKit moves the margin with the contribution")
+        XCTAssertEqual(root.view.layoutMargins.bottom, given.bottom + 10, accuracy: 0.5)
+        let after = try XCTUnwrap(update.margins).root
+        XCTAssertEqual(after.left, before.left, accuracy: 0.5, "the update takes it off")
+        XCTAssertEqual(after.bottom, before.bottom, accuracy: 0.5)
+        XCTAssertEqual(after.top, before.top, accuracy: 0.5)
+        ledger.set(identity, nil, generation: 2)
+        ledger.apply()
     }
 
     func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
@@ -144,6 +205,90 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(batch.error, "\(update.margins.map { "margins \($0)" } ?? "no margins")")
         ledger.set(identity, nil, generation: 2)
         ledger.apply()
+    }
+
+    /// A controller in a tab controller reads that controller's content guide as `tab-content` (D9): the
+    /// guide's edges' distances from the tab controller's view, which clear its tab bar, under the guide's
+    /// identity and with that view's frame in its window.
+    func testATabControllersContentGuideIsTheTabContentTarget() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("UIKit has the tab content guide from iOS 26") }
+        let scene = hostedWindowScene()
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        let tabs = UITabBarController(), inner = UIViewController()
+        tabs.viewControllers = [UINavigationController(rootViewController: inner)]
+        window.rootViewController = tabs
+        window.makeKeyAndVisible()
+        self.window = window
+        window.layoutIfNeeded()
+        let update = OwnerUpdateIOS.sample(controller: inner, view: inner.view, session: nil)
+        let content = try XCTUnwrap(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.tabContent }?.target)
+        let guide = tabs.contentLayoutGuide
+        XCTAssertEqual(content.id, TargetIds.id(of: guide))
+        XCTAssertEqual(content.frame, window.convert(tabs.view.bounds, from: tabs.view))
+        let insets = try XCTUnwrap(content.insets)
+        let (frame, bounds) = (guide.layoutFrame, tabs.view.bounds)
+        XCTAssertEqual(insets, UIEdgeInsets(top: frame.minY, left: frame.minX, bottom: bounds.maxY - frame.maxY, right: bounds.maxX - frame.maxX))
+        // It clears the tab bar, above the tab view's own safe bottom
+        XCTAssertGreaterThan(insets.bottom, tabs.view.safeAreaInsets.bottom, "guide \(frame), tab bar \(tabs.tabBar.frame)")
+        // And the chrome says whether the tab controller's sidebar is available
+        if #available(iOS 27.0, *) { XCTAssertEqual(update.chrome?.sidebarAvailable, tabs.sidebar.isAvailable) }
+    }
+
+    /// A scrolled owner's window map starts at its bounds' origin, where its block's space does, so the
+    /// block's top left maps to the view's top left in its window whatever it scrolled to.
+    func testAScrolledOwnersWindowMapStartsAtItsBoundsOrigin() throws {
+        let scene = hostedWindowScene()
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let controller = UIViewController(), scroll = UIScrollView(frame: CGRect(x: 10, y: 80, width: 300, height: 400))
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.contentSize = CGSize(width: 300, height: 2000)
+        controller.view.addSubview(scroll)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        self.window = window
+        scroll.contentOffset = CGPoint(x: 0, y: 100)
+        let map = try XCTUnwrap(OwnerUpdateIOS.sample(controller: controller, view: scroll, session: nil).windowMap)
+        let top = CGPoint.zero.applying(map), frame = scroll.convert(scroll.bounds, to: nil)
+        XCTAssertEqual(top.x, frame.minX, accuracy: 0.01)
+        XCTAssertEqual(top.y, frame.minY, accuracy: 0.01)
+    }
+
+    /// A route's configuration stays while nothing of it changes and moves when its navigation bar
+    /// hides, coming back when the bar does (D9, "Moving edges").
+    func testARoutesConfigurationMovesWithItsBars() throws {
+        let session = try fixture()
+        let (route, view) = try firstRoute(session)
+        let navigation = try XCTUnwrap(route.navigationController)
+        let sample = { OwnerUpdateIOS.sample(controller: route, view: view, session: self.sessionView).configuration }
+        let first = try XCTUnwrap(sample())
+        XCTAssertEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertNotEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertEqual(sample(), first)
+    }
+
+    /// A tab's configuration moves when its tab bar hides through `setTabBarHidden`, which on iPadOS's
+    /// floating tab bar leaves `tabBar.isHidden` as it was (D9, "Moving edges").
+    func testATabsConfigurationMovesWithItsTabBar() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a configuration is a window's") }
+        guard #available(iOS 18, *) else { throw XCTSkip("setTabBarHidden is iOS 18's") }
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let tab = UIViewController(), tabs = UITabBarController()
+        tab.tabBarItem = UITabBarItem(title: "One", image: nil, tag: 0)
+        tabs.viewControllers = [tab, UIViewController()]
+        window.rootViewController = tabs
+        window.makeKeyAndVisible()
+        self.window = window
+        tabs.view.layoutIfNeeded()
+        let sample = { OwnerUpdateIOS.sample(controller: tab, view: tab.view, session: nil).configuration }
+        let first = try XCTUnwrap(sample())
+        tabs.setTabBarHidden(true, animated: false)
+        XCTAssertNotEqual(sample(), first, "hidden, tabBar.isHidden \(tabs.tabBar.isHidden)")
+        tabs.setTabBarHidden(false, animated: false)
+        XCTAssertEqual(sample(), first)
     }
 
     func testATargetsIdentityIsItsViewsForLife() {
@@ -173,6 +318,15 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let kind = OwnerUpdateIOS.Kind.self
         XCTAssertEqual(update.chain.map(\.kinds), [0, kind.navigation | kind.column, kind.split])
         XCTAssertEqual(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.root }?.target.id, TargetIds.id(of: split.view))
+        XCTAssertNil(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.tabContent }, "no tab controller contains it")
+        // Its chrome: no sidebar outside a tab controller, and the vertical bar's edge from iOS 27.1,
+        // unspecified where the device places none
+        XCTAssertNil(update.chrome?.sidebarAvailable)
+        if #available(iOS 27.1, *) {
+            XCTAssertEqual(update.chrome?.verticalBarEdge == 0, !inner.view.traitCollection.placesVerticalBar)
+        } else {
+            XCTAssertNil(try XCTUnwrap(update.chrome).verticalBarEdge)
+        }
         // A controller presented from it: a chain of one, and the presenter a relation
         let presented = UIViewController()
         split.present(presented, animated: false)
@@ -190,26 +344,109 @@ final class OwnerUpdateIOSTests: XCTestCase {
         var update = OwnerUpdateIOS()
         update.band = UIEdgeInsets(top: 1, left: 4, bottom: 3, right: 2)
         update.chain = [.init(target: .init(id: 5, generation: 6, insets: nil), kinds: OwnerUpdateIOS.Kind.navigation)]
-        update.relations = [.init(relation: OwnerUpdateIOS.Relation.window, target: .init(id: 7, generation: 1, insets: UIEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)))]
+        update.relations = [.init(relation: OwnerUpdateIOS.Relation.window, target: .init(id: 7, generation: 1, insets: UIEdgeInsets(top: 8, left: 0, bottom: 0, right: 0),
+                                                                                       frame: CGRect(x: 0, y: 0, width: 402, height: 874)))]
         update.margins = .init(root: UIEdgeInsets(top: 9, left: 12, bottom: 11, right: 10), plain: UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8),
                                minimum: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16), readableWidth: 672)
+        update.keyboard = .shown(.init(frame: CGRect(x: 0, y: 538, width: 402, height: 336), docked: true))
+        update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
+        update.chrome = .init(verticalBarEdge: 2, sidebarAvailable: false)
+        update.windowMap = CGAffineTransform(a: 0.9, b: 0.1, c: 0.2, d: 0.8, tx: 5, ty: 62)
+        update.configuration = 7
+        update.regions = [.init(id: 11, kind: 0, frame: CGRect(x: 175, y: 0, width: 40, height: 844), margins: UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10), active: false)]
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
         func u64(_ v: UInt64) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
         w.append(1); f(1, 2, 3, 4)
         u32(0)
-        u32(1); u64(5); u64(6); w.append(0); w.append(1 << 2)
-        u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0)
-        w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); f(0, 16, 0, 16); f(672)
+        u32(1); u64(5); u64(6); w.append(0); w.append(0); w.append(1 << 2)
+        u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0); w.append(1); f(0, 0, 402, 874)
+        w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); w.append(1); f(0, 16, 0, 16); w.append(1); f(672)
+        w.append(2); f(0, 538, 402, 336); w.append(1)
         w.append(0)
-        w.append(0)
+        w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
+        w += [1, 1, 2, 1, 0, 0, 0]
+        w.append(1); f(0.9, 0.1, 0.2, 0.8, 5, 62)
+        w.append(1); u64(7)
+        w.append(1); u32(1); u64(11); w.append(0); f(175, 0, 40, 844); f(0, 10, 0, 10); w.append(0)
         XCTAssertEqual([UInt8](update.encode()), w)
+        // The keyboard's state, after an empty update's band, lists and margins: 0 unreported, 1 dismissed
+        XCTAssertEqual([UInt8](OwnerUpdateIOS().encode())[14], 0)
+        XCTAssertEqual([UInt8](OwnerUpdateIOS(keyboard: .dismissed).encode())[14], 1)
         // A registration: the name's length and bytes, then the target after a presence byte
-        let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
+        let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: .init(top: 30, right: 0, bottom: 0, left: 0), frame: nil))
         w = [3] + Array("map".utf8) + [1]
-        u64(9); u64(2); w.append(1); f(30, 0, 0, 0)
+        u64(9); u64(2); w.append(1); f(30, 0, 0, 0); w.append(0)
         XCTAssertEqual([UInt8](registration), w)
+    }
+
+    /// An owner's keyboard is its window's, as UIKit reports it, converted into the owner's view, whether or not the
+    /// owner holds the editor; the session's view installs the window's sampler with its first keyboard editor, and
+    /// the keyboard goes from the update once it hides (LLP 1123 D7).
+    func testAnOwnersKeyboardIsItsWindowsInItsView() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the software keyboard shows only for a scene window's editor") }
+        let session = try fixture()
+        let (route, view) = try firstRoute(session)
+        let window = try XCTUnwrap(view.window), host = try XCTUnwrap(window.rootViewController)
+        let field = UITextField(frame: CGRect(x: 20, y: 80, width: 180, height: 40))
+        host.view.addSubview(field)
+        session.presenter.keyboardPrompt = field
+        var shown: CGRect?
+        let observer = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidShowNotification, object: nil, queue: .main) { note in
+            shown = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        XCTAssertTrue(field.becomeFirstResponder())
+        until("the keyboard shows and is sampled") { shown != nil && KeyboardSampleIOS.existing(in: window)?.sample != nil }
+        let keys = window.convert(try XCTUnwrap(shown), from: window.screen.coordinateSpace)
+        let origin = view.bounds.origin
+        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard.shown)
+        XCTAssertTrue(keyboard.docked)
+        XCTAssertEqual(keyboard.frame.minY, view.convert(keys, from: window).minY - origin.y, accuracy: 0.5, "the route holds no editor and is told the keyboard")
+        XCTAssertEqual(keyboard.frame.height, keys.height, accuracy: 0.5)
+        field.resignFirstResponder()
+        until("the update says the keyboard is dismissed") { OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard == .dismissed }
+    }
+
+    /// A sheet scaled behind the sheet over it reads the window's keyboard converted into its own view, where its own
+    /// guide would end short of the keyboard (LLP 1123 D7, measured on the iPhone 18 Pro).
+    func testAScaledSheetsKeyboardIsTheWindowsInItsView() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the software keyboard shows only for a scene window's editor") }
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let root = UIViewController(), under = UIViewController(), over = UIViewController()
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        self.window = window
+        KeyboardSampleIOS.install(in: window)
+        root.present(under, animated: false)
+        under.present(over, animated: false)
+        until("the lower sheet is scaled behind the upper") { under.view.window != nil && over.view.window != nil && under.view.convert(under.view.bounds, to: window).width < window.bounds.width - 1 }
+        let field = UITextField(frame: CGRect(x: 20, y: 80, width: 180, height: 40))
+        over.view.addSubview(field)
+        var shown: CGRect?
+        let observer = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidShowNotification, object: nil, queue: .main) { note in
+            shown = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        }
+        defer {
+            NotificationCenter.default.removeObserver(observer)
+            field.resignFirstResponder()
+            root.dismiss(animated: false)
+        }
+        XCTAssertTrue(field.becomeFirstResponder())
+        until("the keyboard shows and is sampled") { shown != nil && KeyboardSampleIOS.existing(in: window)?.sample != nil }
+        let keys = window.convert(try XCTUnwrap(shown), from: window.screen.coordinateSpace)
+        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: under, view: under.view, session: nil).keyboard.shown)
+        let expected = under.view.convert(keys, from: window).offsetBy(dx: -under.view.bounds.minX, dy: -under.view.bounds.minY)
+        XCTAssertEqual(keyboard.frame.minY, expected.minY, accuracy: 0.5)
+        XCTAssertEqual(keyboard.frame.height, expected.height, accuracy: 0.5)
+    }
+
+    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(done(), what)
     }
 
     /// The native fixture booted in a window of the test host's scene, 402 by 874.
@@ -217,15 +454,15 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         let path = try XCTUnwrap(env["EXACT_FIXTURE_PLAN"], "build.mjs --test --ios compiles EXACT_FIXTURE_PLAN")
         let plan = try Data(contentsOf: URL(fileURLWithPath: path))
-        let size = CGSize(width: 402, height: 874)
         let session = ExactApp.shared.makeSession(label: "owner-update")
         sessions.append(session)
         let view = ExactView(session: session)
         sessionView = view
         let host = UIViewController()
         let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(origin: .zero, size: size))
-        window.frame = CGRect(origin: .zero, size: size)
+        // A scene's window fills its scene, as an app's does, so the keyboard's guides end where the screen does
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let size = window.bounds.size
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)

@@ -7,6 +7,8 @@ pub(crate) fn similar_attr(name: &str, style_only: bool) -> Option<String> {
     similar(name, |candidate| match attr(candidate) {
         // Lowering's own row for `:active`'s opacity (LLP 1121 D8).
         _ if candidate == crate::states::PRESS_OPACITY_TO => false,
+        // A retired swipe name (LLP 1057.001 §8).
+        _ if crate::handlers::swipe::retired(candidate).is_some() => false,
         Some(AttrTarget::Styles(_) | AttrTarget::Flex | AttrTarget::Shorthand) => true,
         Some(_) => !style_only,
         None => false,

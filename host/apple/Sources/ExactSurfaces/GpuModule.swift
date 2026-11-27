@@ -128,6 +128,9 @@ final class GpuModule {
     typealias TextureMetalFn = @convention(c) (UInt32, UInt32, UInt32, UnsafeMutableRawPointer?) -> UInt32
     typealias SyncFn = @convention(c) () -> UInt32
     typealias WantsFn = @convention(c) (UInt32) -> UInt32
+    typealias SampleFrameFn = @convention(c) (UInt32, UnsafeMutablePointer<UInt32>) -> Int
+    var sampleFrame: SampleFrameFn?
+    var renderOffscreen: RenderFn?
     typealias ReadbackFn = @convention(c) (UInt32, Float, Float, Float, Double, UnsafeMutablePointer<UInt8>?, Int) -> UInt32
     typealias ChildFn = @convention(c) (UInt32, UInt32, UnsafePointer<UInt8>?, Int, Float, Float, Float, Float, UInt32, UInt32, UnsafePointer<UInt8>?, Int) -> UInt32
     typealias CountFn = @convention(c) (UInt32, UInt32) -> UInt32
@@ -298,6 +301,9 @@ final class GpuModule {
     /// The children as a Metal texture the presenter rendered, imported as it
     /// is (LLP 1008 §9) — when the module exports it (Apple targets).
     let textureMetal: TextureMetalFn?
+    /// Snapshot a canvas's Metal children texture into `previous` and wait for
+    /// GPU reads to complete before overwriting it in place (LLP 1008 §9).
+    var prepareTextureMetal: WantsFn?
     /// The module's GPU work complete — before a texture it read is drawn
     /// into again.
     let sync: SyncFn?
@@ -348,6 +354,7 @@ final class GpuModule {
         }
         let module = GpuModule(create: create, bind: bind, render: render, dirty: dirty, destroy: destroy, texture: texture, textureMetal: sym("gpu_texture_metal", TextureMetalFn.self), sync: sym("gpu_sync", SyncFn.self), childrenMode: childrenMode, readback: readback, child: child, childrenCount: childrenCount, placement: placement, shader: sym("gpu_shader", ShaderFn.self), validateShader: sym("gpu_shader_validate", ShaderFn.self), clearShaders: sym("gpu_shaders_clear", ClearShadersFn.self), errorLen: errorLen, errorPtr: errorPtr, wantsInput: sym("gpu_wants_input", WantsFn.self), input: sym("gpu_input", BindFn.self), messages: sym("gpu_messages", WantsFn.self), published: sym("gpu_published", WantsFn.self), agent: sym("gpu_agent", BindFn.self), outPtr: sym("gpu_out_ptr", ErrorPtrFn.self))
         module.performanceReporting = sym("gpu_performance_reporting", PerformanceReportingFn.self)
+        module.prepareTextureMetal = sym("gpu_prepare_texture_metal", WantsFn.self)
         module.storage = storage
         module.performance = sym("gpu_performance", PerformanceFn.self)
         module.flushFn = flush
@@ -390,6 +397,9 @@ final class GpuModule {
         module.due = sym("gpu_due", DueFn.self)
         module.maxFps = sym("gpu_max_fps", WantsFn.self)
         module.presentationFlags = sym("gpu_presentation_flags", WantsFn.self)
+        if ExactEnv.agentMode { sym("gpu_enable_frame_samples", RetierFn.self)?() }
+        module.sampleFrame = sym("gpu_sample_frame", SampleFrameFn.self)
+        module.renderOffscreen = sym("gpu_render_offscreen", RenderFn.self)
         module.bindAt = sym("gpu_bind_at", BindAtFn.self)
         module.canvasSize = sym("gpu_size", SizeFn.self)
         module.wantsPads = sym("gpu_wants_pads", WantsFn.self)
@@ -404,6 +414,7 @@ final class GpuModule {
         if module.starved != nil { sym("gpu_on_acquire", OnAcquireFn.self)?(gpuAcquired) }
         module.seen = sym("gpu_seen", WantsFn.self)
         if module.seen != nil { sym("gpu_on_presented", OnAcquireFn.self)?(gpuPresented) }
+        sym("gpu_on_wake", OnAcquireFn.self)?(gpuWoken)
         return .success(module)
     }
 
@@ -432,6 +443,13 @@ final class GpuModule {
     static func acquired() {
         for case .success(let module) in shared.values {
             for owner in module.canvases.allObjects { owner.renderStarved() }
+        }
+    }
+
+    /// A resting surface called `SurfaceWaker::wake` (LLP 1009 D12).
+    static func woken() {
+        for case .success(let module) in shared.values {
+            for owner in module.canvases.allObjects { owner.surfaceWoken() }
         }
     }
 
@@ -551,6 +569,30 @@ private enum AcquiredPass {
     nonisolated(unsafe) static var queued = false
     static let lock = NSLock()
     /// True when this call queued the pass.
+    static func schedule() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if queued { return false }
+        queued = true
+        return true
+    }
+    static func begin() {
+        lock.lock(); queued = false; lock.unlock()
+    }
+}
+
+/// The module's callback on any thread when a resting surface calls
+/// `SurfaceWaker::wake` (LLP 1009 D12): coalesces onto one main-thread pass.
+private let gpuWoken: GpuModule.AcquiredFn = {
+    guard WakePass.schedule() else { return }
+    DispatchQueue.main.async {
+        WakePass.begin()
+        GpuModule.woken()
+    }
+}
+
+private enum WakePass {
+    nonisolated(unsafe) static var queued = false
+    static let lock = NSLock()
     static func schedule() -> Bool {
         lock.lock(); defer { lock.unlock() }
         if queued { return false }

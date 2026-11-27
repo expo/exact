@@ -42,6 +42,7 @@ final class DragHandleSet: DragHandles {
     }
 
     func geometryChanged() { geometry.changed() }
+    func handles(_ id: UInt32) -> Bool { transform[id]?.target != nil || height[id]?.target != nil }
 
     #if EXACT_AGENT
     func transformClip(_ id: UInt32) -> UInt32? { transform[id]?.clip }

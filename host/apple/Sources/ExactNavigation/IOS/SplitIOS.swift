@@ -183,13 +183,17 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// went through, including a stack already in place.
     @discardableResult
     func show(_ stack: [RouteController], animated: Bool, relocated: Bool = false) -> Bool {
-        guard let root = stack.first else { return false }
         self.stack = stack
         // UIKit is moving N1 between the columns: the stack shows once it has
         // expanded or collapsed (`settle`). Written now, the columns would be
         // set from the split's state before the move, and UIKit, finding
         // them changed, pushed the detail twice and asserted.
         if moving { return false }
+        guard let root = stack.first else {
+            keepTransition([])
+            if !list.viewControllers.isEmpty, !write([], list, false) { return false }
+            return Self.same(detail.viewControllers, [empty]) || write([empty], detail, false)
+        }
         let rest = Array(stack.dropFirst())
         let current = detailRoutes
         // Compare with the installed columns so a request kept during a move still reveals its detail

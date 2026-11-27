@@ -116,6 +116,11 @@
     ],
     "description": "Inline option match expression"
   },
+  "Rotate Simulator": {
+    "prefix": "rotate",
+    "body": ["rotate ${1|portrait,portraitUpsideDown,landscapeLeft,landscapeRight|}"],
+    "description": "Wait for the iOS simulator scene to turn"
+  },
   "Test": {
     "prefix": "test",
     "body": [

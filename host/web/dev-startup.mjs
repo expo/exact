@@ -111,7 +111,7 @@ export function claimDevLoop(dir, target) {
   const state = resolve(dir, '.exact'); mkdirSync(state, {recursive:true});
   const record = resolve(state, `web-${target}-loop.json`), lock = record + '.lock';
   let release;
-  try { release = takeLock(lock, {waitMs:0}); }
+  try { release = takeLock(lock, {waitMs:50}); }
   catch (error) {
     if (error.code !== 'ELOCKED') throw error;
     let owner = {}, pid = ''; try { owner = JSON.parse(readFileSync(record, 'utf8')); } catch {}

@@ -27,6 +27,7 @@ beforeAll(async () => {
   const app = resolve(dir, 'source.js');
   writeFileSync(app, `import { fetch as streamFetch } from './ts-fetch.js';
 export const appId = 'test.answer.json', grants = '';
+export const tools = { ping: () => 'pong', get 'script.message'() { throw new Error('read the host event receiver'); } };
 export function answer(name) {
   if (name === 'rows-stream') return streamFetch('https://example.test/', {
     exactStream(event) {
@@ -59,6 +60,11 @@ export function answer(name) {
   ts.install(data);
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+test('web tool dispatch never looks up the script.message receiver', async () => {
+  expect(data.tool('script.message', {}, new Map(), 'tool')).toBeNull();
+  expect(await data.tool('ping', {}, new Map(), 'tool')).toBe('pong');
+});
 
 // What `source` answering `value` converts to, or the refusal's message; each target is its own, so no answer is
 // converted against another's.

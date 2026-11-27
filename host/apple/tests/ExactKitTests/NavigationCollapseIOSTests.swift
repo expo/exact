@@ -918,10 +918,16 @@ final class NavigationCollapseIOSTests: XCTestCase {
     func testUnderACoverRootTheBarsScrollerHasNoSidewaysRange() throws {
         let session = try booted("EXACT_COVER_SCROLL_PLAN", label: "cover-scroll")
         let sv = try XCTUnwrap(try node(session, "home-scroll").scroll)
-        let host = try XCTUnwrap(window?.rootViewController), before = sv.safeAreaInsets.right
+        let host = try XCTUnwrap(window?.rootViewController), navigation = session.presenter.navigationHost
+        let route = try XCTUnwrap(navigation.activeRoute)
         host.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 84)
         host.view.layoutIfNeeded()
-        until("the scroller lies under the side inset") { sv.safeAreaInsets.right >= before + 83.5 }
+        // The route clears an app's own side inset; its scroller reaches across only the window's band until the
+        // kernel's reach does (LLP 1188 D2; LLP 1123 D13 at activation)
+        until("the route clears the side inset") {
+            guard case .edges(let edges)? = navigation.covers[route.node.id] else { return false }
+            return edges.right >= 83.5
+        }
         XCTAssertEqual(sv.adjustedContentInset.left, 0, accuracy: 0.5)
         XCTAssertEqual(sv.adjustedContentInset.right, 0, accuracy: 0.5, "UIKit adds no side inset")
         XCTAssertLessThanOrEqual(sv.contentSize.width + sv.adjustedContentInset.left + sv.adjustedContentInset.right, sv.bounds.width + 0.5, "no sideways range")

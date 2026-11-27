@@ -45,26 +45,27 @@ extension RouteController: BarItemStore {}
 import UIKit
 import ExactKit
 
-/// A dialog's sheet bar: the controller whose navigation item it fills,
-/// the header it stands for, and its items.
-final class DialogBar: BarItemStore {
+/// The items projected for one toolbar or dialog header and the targets they retain.
+class ProjectedBarItems: BarItemStore {
     weak var controller: UIViewController?
-    /// The header the bar stands for, hidden in the page while it does.
-    weak var lifted: NodeView?
     var barPresses: [BarPress] = []
     var barItemsMade: [UInt32: (item: HeaderShape.Item, bar: UIBarButtonItem, press: BarPress, menuFrom: UInt64?)] = [:]
     var barSpaces: [UInt32: UIBarButtonItem] = [:]
     #if EXACT_INSPECT
     var itemNodes: [ObjectIdentifier: UInt32] = [:]
     #endif
+    var navigationController: UINavigationController? { controller?.navigationController }
+    init(_ controller: UIViewController) { self.controller = controller }
+}
+
+final class DialogBar: ProjectedBarItems {
+    weak var lifted: NodeView?
     /// What was last projected, and that with each item's enabling left out.
     var source: BarSource?, faces: BarSource?
     var subtitle: String?
     /// The tint last given the bar: the dialog's own accent.
     var tint: UIColor?
     let titleInk = NavigationTitleInk()
-    var navigationController: UINavigationController? { controller?.navigationController }
-    init(_ controller: UIViewController) { self.controller = controller }
 }
 
 extension HeaderShape {
@@ -122,7 +123,7 @@ extension NavigationHost {
         if kept == nil { titleInk(nav) }
         dialogBars[dialog.id] = bar
         func barSource(_ key: (HeaderShape.Item) -> String) -> BarSource {
-            BarSource(bar: .header, authored: [], placed: shape.placed.map(\.id), header: shape.header.id, title: shape.title, level: shape.level,
+            BarSource(bar: .header, authored: [], placed: shape.placed.map(\.id), header: shape.header.id, heading: shape.heading?.id, title: shape.title, level: shape.level,
                       leading: shape.leading.map(key), trailing: shape.trailing.map(key), group: shape.group?.source ?? "", canGoBack: false)
         }
         let item = controller.navigationItem

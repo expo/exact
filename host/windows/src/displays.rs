@@ -30,7 +30,22 @@ use exact_painted::desktop::{Pointer, Screen, Screens};
 #[cfg(windows)]
 mod os;
 #[cfg(windows)]
-pub(crate) use os::{capture_snapshot, install};
+pub(crate) use os::{capture_snapshot, install, orientation};
+
+#[cfg(any(windows, test))]
+pub(super) fn screen_orientation(
+    width: u32,
+    height: u32,
+    turns: u32,
+) -> exact_runner::ScreenOrientation {
+    let natural_portrait = if turns % 2 == 0 {
+        height >= width
+    } else {
+        width >= height
+    };
+    // DMDO measures the panel counterclockwise. The content turns the other way.
+    exact_runner::ScreenOrientation::rotated(natural_portrait, ((4 - turns) % 4) as u8)
+}
 
 /// One monitor as Windows reports it to a per-monitor-aware process.
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -55,26 +55,34 @@ impl Lowerer<'_> {
                     _ => None,
                 })
         };
+        let is_route = place.is_route(attrs);
+        let presentation = literal("navigationPresentation");
+        let has_source = literal("navigationSource").is_some_and(|s| !s.is_empty());
         for a in attrs
             .iter()
             .filter(|a| a.name == VIEW_TRANSITION_NEW || a.name == VIEW_TRANSITION_OLD)
         {
             let part = part_of(&a.name).expect("one of the two");
-            if !place.is_route(attrs) {
+            if !is_route {
                 return err(
                     "lower-route-part",
                     format!("`{part}` is a route's entrance or exit, and this `{tag}` is no route (an element with a `navigationKey`, a child of the navigation root or of a linked `role=\"tabpanel\"` in it); an element that moves between states takes `sharedElement` (LLP 1013.000)"),
                     a.span,
                 );
             }
-            if literal("navigationPresentation") == Some("modal") {
+            if matches!(presentation, Some("modal" | "popover")) {
+                let kind = if presentation == Some("popover") {
+                    "popover"
+                } else {
+                    "sheet"
+                };
                 return err(
                     "lower-route-part",
-                    format!("`{part}` is on a route presented as a sheet (`navigationPresentation=\"modal\"`), whose motion is the platform's: its detents, its drag and its dismissal, which keyframes cannot follow. A route that is pushed, or presented `fullscreen`, takes the parts (LLP 1013.001 D4)"),
+                    format!("`{part}` is on a route presented as a {kind} (`navigationPresentation=\"{}\"`), whose motion is the platform's. A route that is pushed, or presented `fullscreen`, takes the parts (LLP 1013.001 D4)", presentation.unwrap()),
                     a.span,
                 );
             }
-            if literal("navigationSource").is_some_and(|s| !s.is_empty()) {
+            if has_source {
                 return err(
                     "lower-route-part",
                     format!("`{part}` is on a route with `navigationSource`, which zooms from its source as the platform does; a route asks for the zoom or for its own transition, not both (LLP 1013.001 D4)"),
@@ -82,6 +90,33 @@ impl Lowerer<'_> {
                 );
             }
             self.check_part_value(part, &a.value)?;
+        }
+        // @ref LLP 1013.001 D4 (amended 2026-11-27, expo/exact#2005) —
+        // `-exact-exit-animation` animates elements removed from layout, not
+        // routes: a covered route stays mounted and never exits, while a popped
+        // route leaves through `::view-transition-old` or its platform motion.
+        if is_route {
+            if let Some(a) = attrs
+                .iter()
+                .rev()
+                .find(|a| a.name == "-exact-exit-animation")
+            {
+                let alternative = if matches!(presentation, Some("modal" | "popover")) {
+                    format!(
+                        "a route with `navigationPresentation=\"{}\"` keeps the platform's own motion (LLP 1013.001 D4)",
+                        presentation.unwrap()
+                    )
+                } else if has_source {
+                    "a route with `navigationSource` keeps its platform zoom transition (LLP 1013.001 D4)".to_string()
+                } else {
+                    "for a pushed or `fullscreen` route being popped, write `::view-transition-old { animation=\"...\" }` (LLP 1013.001 D1; sheets, popovers, and `navigationSource` routes keep platform motion), or call `startViewTransition()` in an action for a whole-window cross-fade (LLP 1013.003)".to_string()
+                };
+                return err(
+                    "lower-route-part",
+                    format!("`-exact-exit-animation` animates elements removed from layout (`if`, `for`, `dialog`), not routes (`navigationKey`): a covered route stays mounted and plays no exit; {alternative}"),
+                    a.span,
+                );
+            }
         }
         Ok(())
     }

@@ -1,6 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, posix, relative, resolve, win32 } from 'node:path';
@@ -268,7 +269,9 @@ test('external Rust modules have identical bytes in relocated cold source captur
       for (const [path, text] of sources) write(resolve(sdk, path), text);
       for (const path of ['rust-toolchain.toml', 'scripts/rustc/exact-rustc', 'logic/abi/src/lib.rs']) write(resolve(sdk, path), readFileSync(resolve(root, path)));
       chmodSync(resolve(sdk, 'scripts/rustc/exact-rustc'), 0o755);
-      const capturedHelper = resolve(sdk, 'target/exact-filesystem-tool', basename(helper));
+      const suffix = process.platform === 'win32' ? '.exe' : '';
+      const helperDigest = createHash('sha256').update(readFileSync(helper)).digest('hex');
+      const capturedHelper = resolve(sdk, 'target/exact-filesystem-tool', `exact-filesystem-${helperDigest}${suffix}`);
       mkdirSync(dirname(capturedHelper), { recursive: true }); copyFileSync(helper, capturedHelper);
       process.env.EXACT_FILESYSTEM_HELPER = capturedHelper;
       write(resolve(sdk, 'Cargo.toml'), '[workspace]\nmembers=["dep"]\n');

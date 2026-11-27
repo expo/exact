@@ -216,6 +216,11 @@ impl<G: Game> Sim<G> {
                 });
             }
         }
+        if matches!(event, InputEvent::Sensor { .. }) {
+            if let Some(count) = &mut self.consumed_sensor_samples {
+                *count = count.saturating_add(1);
+            }
+        }
         // Every event applies over the world's sensor state, which the last
         // tick may have changed (`World::set_tilt_neutral`).
         self.load_sensors();

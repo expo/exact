@@ -62,7 +62,11 @@ class InAppBrowserModule(context: ExtensionContext) : ExactExtension(context) {
         // Not `uri.authority`, which carries the user name and password the URL may have.
         val origin = "${uri.scheme}://${uri.host}${if (uri.port != -1) ":${uri.port}" else ""}"
         if (context.agent) {
-            val action = tap ?: "opened"
+            val action = when (tap) {
+                null -> "opened"
+                "cancel" -> "dismissed"
+                else -> tap
+            }
             say("$action $origin")
             return reply(JSONObject().put("action", action))
         }

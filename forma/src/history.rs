@@ -238,7 +238,7 @@ pub struct Revert {
 /// the file as it is. Each edit is put back where `now` still has the
 /// commit's `after`; one `now` has as `before` already is left; anything
 /// else conflicts, as does an edit no operation can invert (a dial added or
-/// removed, an axis added, a kind, metadata, param spelling or component
+/// removed, a kind, metadata, param spelling or component
 /// declaration changed).
 pub fn revert(old: &Design, new: &Design, now: &Design) -> Revert {
     let mut out = Revert::default();
@@ -300,6 +300,8 @@ pub fn revert(old: &Design, new: &Design, now: &Design) -> Revert {
         .map(|(i, t)| (t.name.value.as_str(), i))
         .collect();
     let old_next = next_present(&old.tokens, &now_tokens);
+    let old_positions = axis_positions(&old.axes, &now.axes);
+    let new_positions = axis_positions(&new.axes, &now.axes);
     for edit in all {
         let conflict = |out: &mut Revert, now: Option<String>, why: &str| {
             out.conflicts.push(Conflict {
@@ -346,7 +348,18 @@ pub fn revert(old: &Design, new: &Design, now: &Design) -> Revert {
             What::Axis => {
                 let current = now_axes.get(&edit.name);
                 let (x, y) = (old_axes.get(&edit.name), new_axes.get(&edit.name));
-                if current.map(axis_text) == edit.before {
+                let position = match (x, y, current) {
+                    (Some(_), None, _) => old_positions.get(edit.name.as_str()),
+                    (None, Some(_), Some(_)) => new_positions.get(edit.name.as_str()),
+                    _ => None,
+                };
+                if position.is_some_and(|p| !p.fits) {
+                    conflict(&mut out, current.map(axis_text), "its position among the axes has changed since");
+                    continue;
+                }
+                let same_comment = current.and_then(|a| a.comment.as_ref())
+                    == x.and_then(|a| a.comment.as_ref());
+                if current.map(axis_text) == edit.before && (y.is_some() || same_comment) {
                     out.already.push(edit.clone());
                     continue;
                 }
@@ -355,12 +368,14 @@ pub fn revert(old: &Design, new: &Design, now: &Design) -> Revert {
                         name: edit.name.clone(),
                         values: x.values.clone(),
                         under_dark: x.under_dark,
+                        comment: x.comment.clone(),
+                        before: position.and_then(|p| p.before).map(str::to_owned),
                     }),
-                    (None, Some(_), _) => conflict(
-                        &mut out,
-                        current.map(axis_text),
-                        "no operation removes an axis",
-                    ),
+                    (None, Some(y), Some(c))
+                        if c.values == y.values && c.under_dark == y.under_dark && c.comment == y.comment =>
+                    {
+                        last.push(Op::RemoveAxis { name: edit.name.clone() });
+                    }
                     (Some(x), Some(y), Some(c)) if !same_order(&x.values, &y.values) => conflict(
                         &mut out,
                         Some(axis_text(c)),
@@ -429,6 +444,11 @@ pub fn revert(old: &Design, new: &Design, now: &Design) -> Revert {
                         current.map(axis_text),
                         "no operation changes an axis's `under`",
                     ),
+                    (None, Some(y), Some(c)) | (Some(y), None, Some(c))
+                        if c.values == y.values && c.under_dark == y.under_dark && c.comment != y.comment =>
+                    {
+                        conflict(&mut out, c.comment.clone(), "its declaration comment has changed since");
+                    }
                     _ => conflict(&mut out, current.map(axis_text), "changed since"),
                 }
             }
@@ -643,6 +663,47 @@ fn next_present<'a>(old: &'a [Token], now: &ByName<'_, Token>) -> Vec<Option<&'a
         }
     }
     out
+}
+
+struct AxisPosition<'a> {
+    before: Option<&'a str>,
+    fits: bool,
+}
+
+/// An axis belongs after all its surviving predecessors and before all its
+/// surviving successors. A later reorder may leave no such position.
+fn axis_positions<'a>(then: &'a [Axis], now: &'a [Axis]) -> HashMap<&'a str, AxisPosition<'a>> {
+    let indices: HashMap<_, _> = now
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.name.value.as_str(), i))
+        .collect();
+    let mut right = now.len();
+    let mut successors = Vec::with_capacity(then.len());
+    for a in then.iter().rev() {
+        successors.push(right);
+        if let Some(&i) = indices.get(a.name.value.as_str()) {
+            right = right.min(i);
+        }
+    }
+    let mut left = 0;
+    let mut positions = HashMap::new();
+    for (a, right) in then.iter().zip(successors.into_iter().rev()) {
+        let name = a.name.value.as_str();
+        let position = indices.get(name).copied();
+        let fits = position.map_or(left <= right, |i| left <= i && i < right);
+        positions.insert(
+            name,
+            AxisPosition {
+                fits,
+                before: now.get(right).map(|n| n.name.value.as_str()),
+            },
+        );
+        if let Some(i) = position {
+            left = left.max(i + 1);
+        }
+    }
+    positions
 }
 
 fn axis_text(a: &Axis) -> String {
@@ -959,6 +1020,56 @@ mod tests {
         assert!(revert(&d(V1), &d(&twice), &d(&twice)).conflicts[0]
             .why
             .contains("twice"));
+    }
+
+    #[test]
+    fn reverting_axis_commits_restores_their_position_and_declaration() {
+        let full = "forma t\naxes\n  day = today | tomorrow\n  tone = pale | deep  under scheme=dark  // artwork\n  size = small | big\ntheme\n  ink = #112233\n    when tone=deep: #445566\n";
+        let bare = full
+            .lines()
+            .filter(|l| !l.contains("tone"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        for (old, new) in [(full, bare.as_str()), (bare.as_str(), full)] {
+            let r = revert(&d(old), &d(new), &d(new));
+            assert!(r.conflicts.is_empty(), "{r:?}");
+            let back = apply_all(new, &r.ops, &Vocab::default()).unwrap().text;
+            assert_eq!(back, old);
+        }
+        let kept = "forma t\naxes\n  keep = one\n";
+        let multiple = kept.replace("  keep =", "  zeta = first\n  alpha = next\n  keep =");
+        let r = revert(&d(&multiple), &d(kept), &d(kept));
+        assert!(r.conflicts.is_empty(), "{r:?}");
+        assert_eq!(
+            apply_all(kept, &r.ops, &Vocab::default()).unwrap().text,
+            multiple
+        );
+        let misplaced = bare.replace(
+            "  size = small | big",
+            "  size = small | big\n  tone = pale | deep  under scheme=dark  // artwork",
+        );
+        let r = revert(&d(full), &d(&bare), &d(&misplaced));
+        assert!(r
+            .conflicts
+            .iter()
+            .any(|c| c.edit.name == "tone" && c.why.contains("position")));
+        for (from, to, why) in [
+            ("deep  under", "deep | dark  under", "changed since"),
+            ("under scheme=dark", "", "changed since"),
+            (
+                "artwork",
+                "photos",
+                "its declaration comment has changed since",
+            ),
+        ] {
+            let later = d(&full.replace(from, to));
+            let r = revert(&d(&bare), &d(full), &later);
+            assert!(r
+                .conflicts
+                .iter()
+                .any(|c| c.edit.name == "tone" && c.why == why));
+        }
     }
 
     #[test]

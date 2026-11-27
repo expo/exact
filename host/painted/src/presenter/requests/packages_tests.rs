@@ -131,6 +131,7 @@ impl Package for Probe {
         let origin = self.context.origin();
         HEARD.with(|h| h.borrow_mut().push(format!("later {name} {args} {origin}")));
         match name {
+            "development" => reply.send(json!(self.context.development())),
             "status" => reply.send(json!({ "state": STATE.with(|s| *s.borrow()) })),
             _ => reply.send(json!({ "name": name })),
         }
@@ -176,9 +177,18 @@ fn boot() -> Presenter<Nothing> {
 /// Hand `body` to the native slot as the runner does, run a turn, and
 /// return what its reply carried.
 fn call(p: &mut Presenter<Nothing>, body: Json) -> std::sync::mpsc::Receiver<Json> {
+    call_status(p, body, 200)
+}
+
+fn call_status(
+    p: &mut Presenter<Nothing>,
+    body: Json,
+    status: u16,
+) -> std::sync::mpsc::Receiver<Json> {
     let (tx, rx) = std::sync::mpsc::channel();
     let reply = exact_runner::Reply::new(move |outcome| {
         if let exact_runner::Outcome::Response(r) = outcome {
+            assert_eq!(r.status, status);
             let _ = tx.send(serde_json::from_slice(&r.body).unwrap_or_default());
         }
     });
@@ -191,6 +201,20 @@ fn call(p: &mut Presenter<Nothing>, body: Json) -> std::sync::mpsc::Receiver<Jso
     handler(body.to_string().into_bytes(), reply);
     p.run_commands(Nothing::default);
     rx
+}
+
+#[test]
+fn package_reads_the_binarys_trust() {
+    for trust in ["production", "development"] {
+        let mut p = boot();
+        p.set_delivery_from_compat(&json!({"embedded": {"trust": trust}}).to_string());
+        p.serve_packages(vec![Entry::of::<Probe>("probe")]);
+        let answer = call(
+            &mut p,
+            json!({"extension": "probe", "source": "development"}),
+        );
+        assert_eq!(answer.recv().unwrap(), json!(trust == "development"));
+    }
 }
 
 #[test]
@@ -227,6 +251,10 @@ fn bodies_reach_the_package_the_shell_or_a_refusal() {
     // A shell beside the packages: its extension's body is queued for it,
     // and the package's still reaches the package.
     p.serve_requests();
+    assert!(
+        !p.host().runner().native_slot().hosted(),
+        "the shell carries package calls without an app module"
+    );
     let shells = call(
         &mut p,
         json!({"extension": "other", "send": "go", "args": {}}),
@@ -236,6 +264,19 @@ fn bodies_reach_the_package_the_shell_or_a_refusal() {
     let id = queued[1] as u32;
     assert!(p.answer_request(id, Some("{\"went\":true}")));
     assert_eq!(shells.recv().unwrap(), json!({ "went": true }));
+    let rejected = call_status(&mut p, json!({"op": "ping"}), 500);
+    p.set_agent_turn(Some(Box::new(|_, words| {
+        let id = words.expect("the shell has a request")[1];
+        serde_json::from_value(json!([{ "id": id, "error": "NotSupportedError" }])).unwrap()
+    })));
+    p.agent_reader_turn();
+    assert_eq!(
+        rejected
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap(),
+        json!({"error":"NotSupportedError"})
+    );
+    p.set_agent_turn(None);
     let still = call(
         &mut p,
         json!({"extension": "probe", "send": "ping", "args": {}}),
@@ -272,6 +313,243 @@ fn an_admitted_call_reads_the_status_first() {
     p.run_commands(Nothing::default);
     assert_eq!(made.recv().unwrap(), json!({ "name": "ask" }));
     assert_eq!(heard(), ["later status {} tool", "later ask {} tool"]);
+}
+
+enum StatusReply {
+    Send(Json),
+    Error(&'static str),
+    Drop,
+    Hold,
+}
+
+thread_local! {
+    static ADMIT_REPLY: RefCell<StatusReply> = const { RefCell::new(StatusReply::Send(Json::Null)) };
+    static ADMIT_HEARD: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static ADMIT_HELD: RefCell<Option<Reply>> = const { RefCell::new(None) };
+}
+
+struct AdmitProbe {
+    context: Context,
+}
+
+impl Package for AdmitProbe {
+    fn new(context: Context) -> Self {
+        Self { context }
+    }
+
+    fn later(&mut self, name: &str, _: &Json, _: Option<&Json>, reply: Reply) {
+        let req = self.context.request();
+        ADMIT_HEARD.with(|h| h.borrow_mut().push(format!("later {name} req={req:?}")));
+        if name == "status" {
+            let mode = ADMIT_REPLY
+                .with(|r| std::mem::replace(&mut *r.borrow_mut(), StatusReply::Send(Json::Null)));
+            match mode {
+                StatusReply::Send(v) => reply.send(v),
+                StatusReply::Error(code) => reply.error(code, None),
+                StatusReply::Drop => drop(reply),
+                StatusReply::Hold => ADMIT_HELD.with(|h| *h.borrow_mut() = Some(reply)),
+            }
+            return;
+        }
+        reply.send(json!({ "name": name, "request": req }));
+    }
+
+    fn cancel(&mut self, request: u64) {
+        ADMIT_HEARD.with(|h| h.borrow_mut().push(format!("cancel {request}")));
+    }
+}
+
+fn admit_heard() -> Vec<String> {
+    ADMIT_HEARD.with(|h| std::mem::take(&mut *h.borrow_mut()))
+}
+
+fn enqueue(p: &mut Presenter<Nothing>, body: Json) -> std::sync::mpsc::Receiver<Json> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reply = exact_runner::Reply::new(move |outcome| {
+        if let exact_runner::Outcome::Response(r) = outcome {
+            let _ = tx.send(serde_json::from_slice(&r.body).unwrap_or_default());
+        }
+    });
+    let handler = p
+        .host()
+        .runner()
+        .native_slot()
+        .handler()
+        .expect("a handler");
+    handler(body.to_string().into_bytes(), reply);
+    rx
+}
+
+#[test]
+fn admit_fails_closed_on_status_error_drop_missing_field_and_unknown() {
+    let mut p = boot();
+    p.serve_packages(vec![Entry::of::<AdmitProbe>("admit-probe")]);
+    let admit = json!({"status": "status", "field": "state", "denied": "NotAllowedError"});
+
+    let refused_cases = [
+        StatusReply::Error("NotSupportedError"),
+        StatusReply::Drop,
+        StatusReply::Send(json!({})),
+        StatusReply::Send(json!({ "state": 42 })),
+        StatusReply::Send(json!({ "state": "unknown" })),
+        StatusReply::Send(json!({ "state": "prompt" })),
+        StatusReply::Send(json!({ "state": "granted", "error": "NotSupportedError" })),
+    ];
+    for (idx, mode) in refused_cases.into_iter().enumerate() {
+        ADMIT_REPLY.with(|r| *r.borrow_mut() = mode);
+        let rx = call(
+            &mut p,
+            json!({
+                "extension": "admit-probe",
+                "send": "ask",
+                "request": idx as u64 + 1,
+                "args": {},
+                "origin": "tool",
+                "admit": admit,
+            }),
+        );
+        p.run_commands(Nothing::default);
+        let answer = rx.recv().unwrap();
+        assert_eq!(
+            (answer["error"].as_str(), answer["message"].as_str()),
+            (Some("NotAllowedError"), Some("person-required")),
+            "case {idx}: {answer}"
+        );
+        assert_eq!(admit_heard(), ["later status req=None"], "case {idx}");
+    }
+
+    for (idx, allowed) in ["granted", "limited", "denied"].into_iter().enumerate() {
+        let req = 100 + idx as u64;
+        ADMIT_REPLY.with(|r| *r.borrow_mut() = StatusReply::Send(json!({ "state": allowed })));
+        let rx = call(
+            &mut p,
+            json!({
+                "extension": "admit-probe",
+                "send": "ask",
+                "request": req,
+                "args": {},
+                "origin": "tool",
+                "admit": admit,
+            }),
+        );
+        p.run_commands(Nothing::default);
+        assert_eq!(
+            rx.recv().unwrap(),
+            json!({ "name": "ask", "request": req }),
+            "state={allowed}"
+        );
+        assert_eq!(
+            admit_heard(),
+            [
+                "later status req=None",
+                &format!("later ask req=Some({req})")
+            ],
+            "state={allowed}"
+        );
+    }
+}
+
+#[test]
+fn cancel_during_admit_probe_or_queued_retry_never_starts_the_send() {
+    let mut p = boot();
+    p.serve_packages(vec![Entry::of::<AdmitProbe>("admit-probe")]);
+    let admit = json!({"status": "status", "field": "state", "denied": "NotAllowedError"});
+
+    // Cancel while an async status probe is in flight, then status answers granted.
+    ADMIT_REPLY.with(|r| *r.borrow_mut() = StatusReply::Hold);
+    let send_rx = call(
+        &mut p,
+        json!({
+            "extension": "admit-probe",
+            "send": "ask",
+            "request": 7,
+            "args": {},
+            "origin": "tool",
+            "admit": admit,
+        }),
+    );
+    assert_eq!(admit_heard(), ["later status req=None"]);
+    let cancel_rx = call(&mut p, json!({"extension": "admit-probe", "cancel": 7}));
+    assert_eq!(cancel_rx.recv().unwrap(), json!({}));
+    assert_eq!(send_rx.recv().unwrap(), json!({ "error": "AbortError" }));
+    assert!(
+        admit_heard().is_empty(),
+        "never-started send is not cancelled on package"
+    );
+    ADMIT_HELD
+        .with(|h| h.borrow_mut().take())
+        .unwrap()
+        .send(json!({ "state": "granted" }));
+    p.run_commands(Nothing::default);
+    assert!(
+        admit_heard().is_empty(),
+        "cancelled send must never invoke later"
+    );
+
+    // Cancel while an async status probe is in flight, then status drops its reply.
+    ADMIT_REPLY.with(|r| *r.borrow_mut() = StatusReply::Hold);
+    let send_rx = call(
+        &mut p,
+        json!({
+            "extension": "admit-probe",
+            "send": "ask",
+            "request": 8,
+            "args": {},
+            "origin": "tool",
+            "admit": admit,
+        }),
+    );
+    admit_heard();
+    let _ = call(&mut p, json!({"extension": "admit-probe", "cancel": 8}));
+    assert_eq!(send_rx.recv().unwrap(), json!({ "error": "AbortError" }));
+    drop(ADMIT_HELD.with(|h| h.borrow_mut().take()));
+    p.run_commands(Nothing::default);
+    assert!(admit_heard().is_empty());
+
+    // Cancel while the admitted send is already queued awaiting the next turn.
+    ADMIT_REPLY.with(|r| *r.borrow_mut() = StatusReply::Send(json!({ "state": "granted" })));
+    let send_rx = call(
+        &mut p,
+        json!({
+            "extension": "admit-probe",
+            "send": "ask",
+            "request": 9,
+            "args": {},
+            "origin": "tool",
+            "admit": admit,
+        }),
+    );
+    assert_eq!(admit_heard(), ["later status req=None"]);
+    let cancel_rx = enqueue(&mut p, json!({"extension": "admit-probe", "cancel": 9}));
+    p.run_commands(Nothing::default);
+    assert_eq!(cancel_rx.recv().unwrap(), json!({}));
+    assert_eq!(send_rx.recv().unwrap(), json!({ "error": "AbortError" }));
+    assert!(
+        admit_heard().is_empty(),
+        "queued admitted send must not run after cancel"
+    );
+
+    // Once the admitted send actually starts, a later cancel still reaches the package.
+    ADMIT_REPLY.with(|r| *r.borrow_mut() = StatusReply::Send(json!({ "state": "granted" })));
+    let send_rx = call(
+        &mut p,
+        json!({
+            "extension": "admit-probe",
+            "send": "ask",
+            "request": 10,
+            "args": {},
+            "origin": "tool",
+            "admit": admit,
+        }),
+    );
+    p.run_commands(Nothing::default);
+    assert_eq!(
+        send_rx.recv().unwrap(),
+        json!({ "name": "ask", "request": 10 })
+    );
+    admit_heard();
+    let _ = call(&mut p, json!({"extension": "admit-probe", "cancel": 10}));
+    assert_eq!(admit_heard(), ["cancel 10"]);
 }
 
 /// A plan that reads a module the composed package answers.
@@ -445,5 +723,28 @@ fn a_replaced_runner_reaches_the_packages_as_the_last_did() {
             p.host().has_announced(),
             "{name}: announced into the new runner"
         );
+    }
+}
+
+#[test]
+fn android_identity_admission_can_read_a_bound_package_with_or_without_an_app_module() {
+    for app in [false, true] {
+        let slot = exact_runner::Native::default();
+        let handler: exact_runner::NativeHandler = std::sync::Arc::new(|_, _| unreachable!());
+        let caps = json!({"providers":{"google":{"active":true}}});
+        let read = json!({"extension":"sign-in","sync":"getIdentityCapabilitiesSync","args":{}});
+        let call: exact_runner::NativeCall = std::sync::Arc::new({
+            let read = read.clone();
+            let caps = caps.clone();
+            move |body| {
+                assert_eq!(serde_json::from_slice::<Json>(body).unwrap(), read);
+                Ok(caps.to_string().into_bytes())
+            }
+        });
+        super::install_android_handlers(&slot, &handler, app, Some(call));
+        slot.sync([("sign-in.getIdentityCapabilitiesSync".into(), None)].into());
+        assert_eq!(slot.hosted(), app);
+        let answer = slot.hosted_call().unwrap()(read.to_string().as_bytes()).unwrap();
+        assert_eq!(serde_json::from_slice::<Json>(&answer).unwrap(), caps);
     }
 }

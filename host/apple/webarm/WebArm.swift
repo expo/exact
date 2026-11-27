@@ -76,17 +76,12 @@ final class ExactWebView: WKWebView {
         super.layout()
         pinInsets()
     }
-    func pinInsets() {
-        func walk(_ v: NSView) {
-            if let s = v as? NSScrollView {
-                if s.automaticallyAdjustsContentInsets { s.automaticallyAdjustsContentInsets = false }
-                if s.contentInsets.top != 0 || s.contentInsets.left != 0 || s.contentInsets.bottom != 0 || s.contentInsets.right != 0 {
-                    s.contentInsets = NSEdgeInsetsZero
-                }
-            }
-            v.subviews.forEach(walk)
-        }
-        walk(self)
+    var magnificationWord: String?
+    var authoredMagnification: CGFloat?
+    override func setFrameSize(_ newSize: NSSize) {
+        let previous = frame.size
+        super.setFrameSize(newSize)
+        if frame.size != previous { restoreMagnification() }
     }
 }
 #else
@@ -340,6 +335,8 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var suppressLoad = false
     var recovering = false
     var invalidated = false
+    /// Whether the current web view draws a transparent background (`buildFrame`, not partitioned).
+    var transparent = false
     /// The guest is the web view's own document, not a frame in a wrapper
     /// (see `serve`).
     var direct = false
@@ -416,7 +413,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         applied = []
         applyOptions(to: web)
         // Preload scripts are a partitioned frame's: an unpartitioned one may be a wrapper's child.
-        if partition != nil { automation?.attached(controller) }
+        if partition != nil { automation?.attached(web) }
         ownScripts = controller.userScripts.count
         return web
     }
@@ -486,6 +483,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         webView.scrollView.backgroundColor = .clear
         if #available(iOS 15.0, *) { webView.underPageBackgroundColor = .clear }
         #endif
+        transparent = true
         return webView
     }
 
@@ -510,15 +508,20 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             guard let self, let web = self.built else { return }
             self.ui?.confirmExternal(url, from: web, byApp: true)
         }
+        let driver = automation ?? FrameAutomation(arm: self)
+        automation = driver
         browser.install(on: controller)
         self.browser = browser
         configuring(configuration)
+        driver.installPageSeed(configuration.userContentController)
         #if os(macOS)
         let webView: WKWebView = ExactWebView(frame: .zero, configuration: configuration)
         #else
         let webView = WKWebView(frame: .zero, configuration: configuration)
         #endif
+        driver.seedInitialDocument(webView)
         browser.attach(webView)
+        transparent = false
         return webView
     }
 
@@ -540,7 +543,9 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         // displayed frame after a zoom unobservable (LLP 1020.002 D6).
         if said("zoom") { web.pageZoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1) }
         if said("allowsBackForwardNavigationGestures") { web.allowsBackForwardNavigationGestures = options["allowsBackForwardNavigationGestures"] as? Bool ?? false }
+        applyInsets(to: web, said: said)
         #if os(macOS)
+        (web as? ExactWebView)?.configureMagnification(options["magnification"] as? String, id: id)
         if said("allowsMagnification") { web.allowsMagnification = options["allowsMagnification"] as? Bool ?? false }
         #endif
         // Never on the template's shared preferences: a policy said after the
@@ -595,18 +600,20 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         session = values["session"] as? String ?? ""
         handlesNewWindow = values["newwindow"] as? Bool ?? false
         hatched = values["hatched"] as? Bool ?? false
-        element = values["element"] as? String ?? ""
+        let newElement = values["element"] as? String ?? ""
         owner = values["owner"] as? String ?? ""
         Automations.arms.add(self)
         let name = values["partition"] as? String
         options = values
         pdf?.view.zoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1)
         guard name != partition || (built == nil && pdf == nil) else {
+            element = newElement
             if let built { applyOptions(to: built) }
             return
         }
         let replacing = built != nil || pdf != nil
         if replacing { teardown() }
+        element = newElement
         partition = name
         if replacing {
             // A local PDF's frame losing its partition shows the PDF's view, and makes no web view for `serve` to drop.
@@ -1191,8 +1198,9 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         ui?.committed(webView)
-        guard !invalidated, !isBlank(navigation) else { return }
+        guard !invalidated, webView === built else { return }
         automation?.committed()
+        guard !isBlank(navigation) else { return }
         browser?.committed(navigation)
     }
 
@@ -1226,6 +1234,9 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         serving = false
         recovering = false
+        #if os(macOS)
+        (webView as? ExactWebView)?.restoreMagnification()
+        #endif
         guard direct, !invalidated else { return }
         if isBlank(navigation) { blank = nil; return }
         // A direct guest's document loaded: the iframe's `load`.
@@ -1258,13 +1269,10 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             sendReply(token: token, kind: 2, text: "iframe has no snapshot box")
             return
         }
-        let configuration = WKSnapshotConfiguration()
-        configuration.rect = webView.bounds
-        configuration.afterScreenUpdates = true
-        webView.takeSnapshot(with: configuration) { [weak self] image, error in
+        snapshotForHost(webView) { [weak self] image, error in
             guard let self else { return }
-            guard let image, let data = self.png(image) else {
-                self.sendReply(token: token, kind: 2, text: error?.localizedDescription ?? "WebKit returned no snapshot")
+            guard let image, let data = FrameCaptures.png(image) else {
+                self.sendReply(token: token, kind: 2, text: error ?? "WebKit returned no snapshot")
                 return
             }
             self.sendReply(token: token, kind: 0, data: data)
@@ -1280,15 +1288,6 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case .failure(let error):
             sendReply(token: token, kind: 2, text: error.localizedDescription)
         }
-    }
-
-    func png(_ image: PlatformImage) -> Data? {
-        #if os(macOS)
-        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        return NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])
-        #else
-        return image.pngData()
-        #endif
     }
 
     func emit(kind: UInt32, text: String = "") {
@@ -1401,7 +1400,7 @@ private func json(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32) -> [String: 
 }
 
 /// `{partition, agent, zoom, allowsBackForwardNavigationGestures,
-/// allowsMagnification, inactiveSchedulingPolicy}`: before the first
+/// allowsMagnification, magnification, inactiveSchedulingPolicy}`: before the first
 /// `exact_web_platform_view`, and again when any changes (a new partition
 /// makes a new web view, which that call then returns).
 @_cdecl("exact_web_configure")
@@ -1443,24 +1442,26 @@ public func exactWebAnswer(_ handle: UnsafeMutableRawPointer?, _ bytes: UnsafePo
 
 public typealias ClearFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32) -> Void
 
+public typealias AutomationMessage = @convention(block) (NSDictionary) -> Void
+
 /// A call of `@exact/browser-automation` (@ref LLP 1020.002 D9), its options
 /// with `op`, `id` and `owner` (the session's module folder): `done` receives
 /// the answer's JSON, `{error, message}` when it failed.
 @_cdecl("exact_web_automation")
 public func exactWebAutomation(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32, _ context: UnsafeMutableRawPointer?, _ done: ClearFn?) {
-    let request = json(bytes, length)
+    // Byte 2 selects the message-capable ABI. Its context retains [completion, message block].
+    // A plain JSON request keeps its opaque context, even when its JSON is malformed.
+    let extended = length > 0 && bytes?.pointee == 2
+    let request = extended ? json(bytes?.advanced(by: 1), length - 1) : json(bytes, length)
+    let message: AutomationMessage? = extended ? context.map {
+        let callbacks = Unmanaged<NSArray>.fromOpaque($0).takeUnretainedValue()
+        return unsafeBitCast(callbacks.object(at: 1) as AnyObject, to: AutomationMessage.self)
+    } : nil
     let finish: ([String: Any]) -> Void = { answer in
         let data = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data("{}".utf8)
         data.withUnsafeBytes { done?(context, $0.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count)) }
     }
-    let run = {
-        let id = request["id"] as? String ?? ""
-        let found = Automations.find(owner: request["owner"] as? String ?? "", id: id)
-        guard found.count == 1, let arm = found.first else { return finish(["error": "NotFoundError", "message": "no unique live iframe with id \(id)"]) }
-        let automation = arm.automation ?? FrameAutomation(arm: arm)
-        arm.automation = automation
-        automation.run(request, reply: finish)
-    }
+    let run = { Automations.run(request, message: message, finish: finish) }
     if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
 }
 

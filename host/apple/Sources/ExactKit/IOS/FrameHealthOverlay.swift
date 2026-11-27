@@ -40,6 +40,7 @@ final class FrameHealthOverlay: UIView {
     /// Paused, the card shows what it read at the pause, and its readers take no samples while the collectors go on
     /// measuring, so the first read after it covers the paused span
     private var paused = false
+    private var sharing = false
     /// While paused, the request, display and source the readers were read under
     private var frozen: (rates: FrameHealthCardText.Rates, display: FrameHealthCardText.Display, source: FrameHealthCardText.Source)?
     /// A change waits for the app's next frame, to go out with it
@@ -369,6 +370,16 @@ final class FrameHealthOverlay: UIView {
             if !observing { card.chart.follow(!paused && !card.minimized) }
             UIAccessibility.post(notification: .announcement, argument: paused ? "Paused" : "Resumed")
             if paused { render() } else { refresh() }
+        case .clear:
+            health?.clear()
+            screen?.clear()
+            reader.reset()
+            screenReader.reset()
+            card.chart.reset()
+            needsShow = false
+            sample(now: CACurrentMediaTime(), force: true)
+            alone { render() }
+            UIAccessibility.post(notification: .announcement, argument: "Frame health cleared")
         case .close: hideReadout()
         case .minimize:
             guard !card.minimized || fullCardFits else {
@@ -389,60 +400,43 @@ final class FrameHealthOverlay: UIView {
         case .details:
             card.showDetails(!card.state.showsDetails)
             render()
-        case .share: chooseShare()
+        case .share: share()
         case .charts, .table:
             card.state.table = control == .table
             render()
         }
     }
 
-    /// What to share, as an action sheet from the Share button, which UIKit shows as a popover from it
-    /// where there is room.
-    private func chooseShare() {
-        guard let presenter = ViewPresentation.presenter(for: card) else { return }
-        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        for kind in FrameHealthShare.choices(screen: observing) {
-            sheet.addAction(UIAlertAction(title: kind.title(screen: observing), style: .default) { [weak self] _ in self?.share(kind) })
-        }
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = card
-        sheet.popoverPresentationController?.sourceRect = card.shareFrame
-        presenter.present(sheet, animated: !ExactEnv.agentFreezes)
-    }
-
-    /// The system's share sheet with one item: the report an agent reads, the summary, or the image.
-    /// It leaves out Assign to Contact, which an image would offer.
-    func share(_ kind: FrameHealthShare) {
-        guard let health else { return }
-        let present = { [weak self] (item: Any) in
-            guard let self, let presenter = ViewPresentation.presenter(for: card) else { return }
-            let sheet = UIActivityViewController(activityItems: [item], applicationActivities: nil)
-            sheet.excludedActivityTypes = [.assignToContact]
+    /// The system's share sheet with `shareText`. A tap while the text is being made opens no second sheet.
+    private func share() {
+        guard !sharing, health != nil else { return }
+        sharing = true
+        shareText { [weak self] text in
+            guard let self else { return }
+            sharing = false
+            guard let presenter = ViewPresentation.presenter(for: card) else { return }
+            let sheet = UIActivityViewController(activityItems: [text], applicationActivities: nil)
             sheet.popoverPresentationController?.sourceView = card
             sheet.popoverPresentationController?.sourceRect = card.shareFrame
             presenter.present(sheet, animated: !ExactEnv.agentFreezes)
         }
-        switch kind {
-        case .report, .clockReport: report(kind) { present(String(decoding: $0, as: UTF8.self)) }
-        case .summary:
-            present(FrameHealthCardText.summary(reader: shown.face, clock: shown.clock, rates: rates, display: display, source: source,
-                paused: paused, health: health).text)
-        case .image:
-            let picture = FrameHealthCardText.picture(reader: shown.face, clock: shown.clock, chart: card.chart, rates: rates,
-                display: display, source: source, paused: paused, health: health, palette: card.palette)
-            if let image = picture.flatMap(UIImage.init(data:)) { present(image) }
-        }
     }
 
-    /// The agent report of what the face shows, or of Exact's frames: measuring the screen, the card gives each as a report
-    /// of its own, which names the other. Exact's frames are its frame clock's, never the native scroll's, which a face
-    /// showing Exact's frames gives instead where its late frame is the newest (`reportSource`).
-    func report(_ kind: FrameHealthShare, completion: @escaping (Data) -> Void) {
+    /// The text Share gives: the summary of what the card shows, held while it is paused, then the current reports.
+    /// Measuring the screen, these are the screen's and Exact's frames', each naming the other. Exact's frames are its
+    /// frame clock's, never the native scroll's, which a face showing Exact's frames reports instead where its late frame
+    /// is the newest (`reportSource`).
+    func shareText(completion: @escaping (String) -> Void) {
         guard let health else { return }
-        let screenHealth = observing ? screen?.health : nil
-        let shown = kind == .clockReport ? health : screenHealth ?? health.reportSource
-        FrameHealthReport.prepare(health: shown, session: session, beside: screenHealth.map { shown === $0 ? health : $0 },
-            completion: completion)
+        let shown = shown
+        let summary = FrameHealthCardText.summary(reader: shown.face, clock: shown.clock, rates: rates, display: display, source: source,
+            health: health)
+        let status = card.state.status
+        let sources: [(health: FrameHealth, beside: FrameHealth?)] = (observing ? screen?.health : nil).map { [($0, health), (health, $0)] }
+            ?? [(health.reportSource, nil)]
+        FrameHealthReport.prepare(sources, session: session) {
+            completion(FrameHealthCardText.shared(summary: summary, status: status, reports: $0))
+        }
     }
 
     override func layoutSubviews() {
@@ -960,7 +954,7 @@ final class FrameHealthCardView: UIView {
     // MARK: Accessibility: an element for each region the card draws.
 
     fileprivate final class Element: UIAccessibilityElement {
-        enum Role { case close, title, status, details, share, minimize, context, figures, pacing, charts, table, rateChart, timeChart, tableView, detailsView }
+        enum Role { case close, title, status, clear, details, share, minimize, context, figures, pacing, charts, table, rateChart, timeChart, tableView, detailsView }
         let role: Role
         weak var card: FrameHealthCardView?
         init(_ role: Role, card: FrameHealthCardView) {
@@ -969,7 +963,7 @@ final class FrameHealthCardView: UIView {
             super.init(accessibilityContainer: card)
         }
         static func all(_ card: FrameHealthCardView) -> [Element] {
-            [.close, .title, .status, .details, .share, .minimize, .context, .figures, .pacing, .charts, .table, .rateChart, .timeChart, .tableView,
+            [.close, .title, .status, .clear, .details, .share, .minimize, .context, .figures, .pacing, .charts, .table, .rateChart, .timeChart, .tableView,
              .detailsView].map { Element($0, card: card) }
         }
         override func accessibilityActivate() -> Bool {
@@ -978,6 +972,7 @@ final class FrameHealthCardView: UIView {
             case .close: card.activate?(.close)
             case .title: card.activate?(.title)
             case .status: card.activate?(.status)
+            case .clear: card.activate?(.clear)
             case .details: card.activate?(.details)
             case .share: card.activate?(.share)
             case .minimize: card.activate?(.minimize)
@@ -1006,6 +1001,7 @@ final class FrameHealthCardView: UIView {
                 frame = l.status; traits = .button
                 label = state.status == .paused ? "Resume frame health" : "Pause frame health"
                 element.accessibilityValue = state.status == .paused ? "Paused" : state.status == .live ? "Live" : "Idle"
+            case .clear: frame = l.clear; label = "Clear frame health"; traits = .button
             case .details: frame = l.details; label = state.showsDetails ? "Done" : "Frame health details"; traits = .button
             case .share: frame = l.share; label = "Share frame health"; traits = .button
             case .minimize:
@@ -1015,7 +1011,7 @@ final class FrameHealthCardView: UIView {
                 element.accessibilityValue = minimized ? state.minimizedText : nil
                 element.accessibilityHint = "Actions move the card to an edge."
             case .context:
-                frame = CGRect(x: 0, y: l.context.minY, width: l.details.minX, height: l.context.height)
+                frame = CGRect(x: 0, y: l.context.minY, width: l.clear.minX, height: l.context.height)
                 label = [state.request.0, state.request.1, state.display].filter { !$0.isEmpty }.joined(separator: ", ")
             case .figures:
                 frame = CGRect(x: 0, y: 80, width: l.width, height: 45)
@@ -1047,7 +1043,7 @@ final class FrameHealthCardView: UIView {
                 label = p.details.map { "\($0.name): \($0.value)" + ($0.reason.map { ", " + $0 } ?? "") }.joined(separator: ". ") + ". " + p.detailsCaption
             }
             // Details replaces the figures and charts
-            if state.showsDetails, ![.close, .title, .status, .details, .share, .minimize, .context, .detailsView].contains(element.role) { hidden = true }
+            if state.showsDetails, ![.close, .title, .status, .clear, .details, .share, .minimize, .context, .detailsView].contains(element.role) { hidden = true }
             if element.role == .detailsView, !state.showsDetails { hidden = true }
             if minimized { hidden = element.role != .minimize }
             if element.role == .title || element.role == .minimize {

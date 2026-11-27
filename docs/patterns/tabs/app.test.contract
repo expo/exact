@@ -38,3 +38,14 @@ test "each tab's search filters its own list as you type"
   clock settle
   expect tree has "places-1"
   expect tree missing "places-2"
+
+test "beside the list, the next place opened takes the shown one's place" on web
+  size 1100x800
+  tap "places-1"
+  clock settle
+  tap "places-2"
+  clock settle
+  expect text "about-places" == "Cliffside trails above the Golden Gate."
+  back
+  clock settle
+  expect tree missing "about-places"

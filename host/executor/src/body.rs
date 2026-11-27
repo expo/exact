@@ -315,41 +315,65 @@ impl Drop for Pumped {
     }
 }
 
+struct ReadersState {
+    running: usize,
+    /// Executors with an upload waiting for a place, started when one is
+    /// given back.
+    waiting: Vec<Weak<super::Shared>>,
+}
+
 /// The process's reader places in use: by a file body from its open until
 /// its last reader thread ends (whether or not its request is still
 /// waiting), by a root's first opening, and by the asynchronous executor's
 /// reads (LLP 1120 D4). Past [`MAX_READERS`] (a stalled disk, or file
 /// bodies going out) a new file body is refused, or an upload waits.
 pub(super) struct Readers {
-    running: std::sync::atomic::AtomicUsize,
-    /// Executors with an upload waiting for a place, started when one is
-    /// given back.
-    waiting: Mutex<Vec<Weak<super::Shared>>>,
+    state: Mutex<ReadersState>,
     #[cfg(test)]
     pub(super) replied: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 impl Readers {
     pub(super) const fn new() -> Readers {
         Readers {
-            running: std::sync::atomic::AtomicUsize::new(0),
-            waiting: Mutex::new(Vec::new()),
+            state: Mutex::new(ReadersState {
+                running: 0,
+                waiting: Vec::new(),
+            }),
             #[cfg(test)]
             replied: std::sync::Mutex::new(None),
         }
     }
     #[cfg(test)]
     pub(super) fn running(&self) -> usize {
-        self.running.load(std::sync::atomic::Ordering::Acquire)
+        self.state.lock().unwrap().running
     }
     /// A place, if one is free.
     fn take(&'static self) -> Option<Place> {
-        use std::sync::atomic::Ordering;
-        self.running
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_READERS).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| Place(Arc::new(Reader(self))))
+        let mut state = self.state.lock().unwrap();
+        if state.running >= MAX_READERS {
+            return None;
+        }
+        state.running += 1;
+        Some(Place(Arc::new(Reader(self))))
+    }
+    /// A place if one is free, or record `shared` to start when one is given
+    /// back. Both check and registration share `self.state`, preventing a
+    /// lost wakeup against [`Reader::drop`].
+    fn take_or_wait(&'static self, shared: &Arc<super::Shared>) -> Option<Place> {
+        let mut state = self.state.lock().unwrap();
+        if state.running < MAX_READERS {
+            state.running += 1;
+            return Some(Place(Arc::new(Reader(self))));
+        }
+        state.waiting.retain(|w| w.strong_count() > 0);
+        if !state
+            .waiting
+            .iter()
+            .any(|w| w.as_ptr() == Arc::as_ptr(shared))
+        {
+            state.waiting.push(Arc::downgrade(shared));
+        }
+        None
     }
 }
 pub(super) static READERS: Readers = Readers::new();
@@ -374,15 +398,7 @@ pub(super) struct Place(Arc<Reader>);
 /// A free place for an upload `shared` is about to start, or `None`, in
 /// which case `shared` is started again when a place is given back.
 pub(super) fn take_place(shared: &Arc<super::Shared>) -> Option<Place> {
-    let place = READERS.take();
-    if place.is_none() {
-        let mut waiting = READERS.waiting.lock().unwrap();
-        waiting.retain(|w| w.strong_count() > 0);
-        if !waiting.iter().any(|w| w.as_ptr() == Arc::as_ptr(shared)) {
-            waiting.push(Arc::downgrade(shared));
-        }
-    }
-    place
+    READERS.take_or_wait(shared)
 }
 
 /// Releases a place when its last holder ends, and gives the executors
@@ -390,10 +406,11 @@ pub(super) fn take_place(shared: &Arc<super::Shared>) -> Option<Place> {
 struct Reader(&'static Readers);
 impl Drop for Reader {
     fn drop(&mut self) {
-        self.0
-            .running
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-        let waiting = std::mem::take(&mut *self.0.waiting.lock().unwrap());
+        let waiting = {
+            let mut state = self.0.state.lock().unwrap();
+            state.running -= 1;
+            std::mem::take(&mut state.waiting)
+        };
         for shared in waiting.iter().filter_map(Weak::upgrade) {
             super::stream::upload::start(&shared);
         }
@@ -625,19 +642,11 @@ pub(super) fn read_at_most(
 pub(super) fn reader(
     job: impl FnOnce() + Send + 'static,
 ) -> Result<std::thread::JoinHandle<()>, Outcome> {
-    use std::sync::atomic::Ordering;
-    if READERS
-        .running
-        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-            (n < MAX_READERS).then_some(n + 1)
-        })
-        .is_err()
-    {
+    let Some(place) = READERS.take() else {
         return Err(refused(format!(
             "exactBodyFrom: {MAX_READERS} file reads are still running (a stalled disk?); nothing was sent"
         )));
-    }
-    let place = Place(Arc::new(Reader(&READERS)));
+    };
     std::thread::Builder::new()
         .name("exact-body-from".into())
         .spawn(move || {

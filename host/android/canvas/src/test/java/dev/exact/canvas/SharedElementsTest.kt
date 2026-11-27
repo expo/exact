@@ -66,6 +66,16 @@ class SharedElementsTest {
         assertEquals(expected.right, actual.right, 0.01f); assertEquals(expected.bottom, actual.bottom, 0.01f)
     }
 
+    @Test fun definingSharedContentKeepsOtherRowsHostedPlacements() {
+        val t = Fixture()
+        val graph = PaintedOrigins().apply { tracksFrames = true }
+        val frame = RenderNode("iframe")
+        graph.record(null, listOf(PaintedOrigins.Placement(frame, 12f, 24f)))
+        t.player.origins = graph
+        t.define(definition(3, RectF(20f, 30f, 100f, 60f)))
+        assertTrue(graph.transform(frame, android.graphics.Matrix()))
+    }
+
     @Test fun capturesNativeScrollAndLayerBeforeTheyAreResetAndReversesFromShown() {
         val t = Fixture()
         val thumb = RectF(20f, 200f, 120f, 250f)

@@ -836,7 +836,7 @@ fn contextmenu_and_double_click_keep_their_authored_arguments_and_do_not_take_a_
     magnify = value == "context"
   view
     column
-      button contextmenu=choose("context") dblclick=choose("double") swiperight=choose("right") testId="bubble"
+      button contextmenu=choose("context") dblclick=choose("double") swipe=choose("right") swipe-follow="right" testId="bubble"
         text "A message"
       column contextTarget="bubble" contextMagnify=magnify testId="preview"
         text "A message"
@@ -1263,7 +1263,9 @@ fn the_motion_fixtures_after_task_fires_once_and_its_timer_is_then_spent() {
     assert_eq!(r.timer_due_ms(), Some(1_000.0));
     assert_eq!(r.advance(120.0).unwrap().len(), 0);
     assert_eq!(r.advance(180.0).unwrap().len(), 0);
-    assert_eq!(r.advance(2_500.0).unwrap().len(), 2);
+    // The ticker fires at 1,000 and 2,000; its second `auto = true` changes nothing.
+    assert_eq!(r.advance(2_500.0).unwrap().len(), 1);
+    assert_eq!(r.timer_due_ms(), Some(3_000.0));
 }
 
 // @ref LLP 1073 D1, D4 — `every(frame, a)` lowers to a frame timer: the

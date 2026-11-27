@@ -581,3 +581,34 @@ fn a_retained_animation_is_presentable_while_its_replacement_is_not_ready() {
     draw(&gpu, surface.as_mut(), &frame(3000.));
     assert!(surface.frame_presentable());
 }
+
+#[test]
+fn device_lost_re_requests_pending_shader_asset_through_module() {
+    static REGISTRY: exact_gpu::Registry = exact_gpu::Registry {
+        surfaces: &[("shader", 4, exact_shader::surface)],
+        shaders: &[],
+    };
+    let mut module = exact_gpu::Module::new(&REGISTRY);
+    let id = module.create_headless("shader").unwrap();
+    assert!(module.bind(id, &inputs(None, &[]), None));
+    assert_eq!(module.take_assets(id).requests, ["test.wgsl"]);
+    // Losing the device before delivery clears outstanding requests in Module;
+    // Shader must re-emit the pending asset so recovery can deliver it.
+    module.lose_device();
+    assert_eq!(module.take_assets(id).requests, ["test.wgsl"]);
+    let solid =
+        "@fragment fn solid() -> @location(0) vec4f { return vec4f(0.25, 0.5, 0.75, 1.0); }";
+    assert!(module.asset(id, "test.wgsl", Ok(solid.as_bytes())));
+    assert!(module.take_assets(id).requests.is_empty());
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = exact_shader::surface();
+    surface.bind(&inputs(None, &[]), None).unwrap();
+    assert_eq!(surface.assets().requests, ["test.wgsl"]);
+    surface.device_lost();
+    assert_eq!(surface.assets().requests, ["test.wgsl"]);
+    surface.asset("test.wgsl", Ok(solid.as_bytes()));
+    draw(&gpu, surface.as_mut(), &frame(0.));
+    assert!(surface.frame_ready());
+}

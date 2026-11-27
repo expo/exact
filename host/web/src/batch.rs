@@ -10,6 +10,7 @@ use exact_num::{push_text, text, Piece, Shortest};
 #[derive(Debug, Default)]
 pub struct Batch {
     ops: Vec<String>,
+    package_view_owners: Option<String>,
     collection_accepted: bool,
     seq: Option<(u64, u64)>,
     alerts: Vec<String>,
@@ -238,6 +239,26 @@ impl Batch {
             quote(url, &mut s);
             s.push(']');
         }
+        s.push_str("],\"roots\":[");
+        for (i, id) in change.roots.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            id.push_to(&mut s);
+        }
+        s.push_str("],\"tab\":");
+        quote(&change.tab, &mut s);
+        s.push_str(",\"chain\":[");
+        for (i, exact_route::Destination { url, tab, .. }) in change.chain.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push('[');
+            quote(url, &mut s);
+            s.push(',');
+            quote(tab, &mut s);
+            s.push(']');
+        }
         s.push_str("]}");
         self.ops.push(s);
     }
@@ -272,6 +293,18 @@ impl Batch {
     /// Whether nothing was recorded.
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
+    }
+
+    /// Replace the previous plan’s package view owners before creating elements (LLP 1133.008 D8).
+    pub(crate) fn package_views(&mut self, plan: &exact_plan::Plan) {
+        let owners = plan
+            .views
+            .iter()
+            .map(|view| (plan.str(view.tag), plan.str(view.package).to_owned()))
+            .collect::<Vec<_>>();
+        let mut json = String::new();
+        string_map(&owners, &mut json);
+        self.package_view_owners = Some(json);
     }
 
     /// `{"op":"create","id":…,"tag":…,"props":{…},"css":…,"handlers":[…]}`,
@@ -1128,6 +1161,10 @@ impl Batch {
             s.push_str(op);
         }
         s.push(']');
+        if let Some(owners) = self.package_view_owners {
+            s.push_str(r#","packageViewOwners":"#);
+            s.push_str(&owners);
+        }
         let timers = timer_due_ms.is_some();
         if !self.alerts.is_empty() {
             s.push_str(",\"alerts\":[");

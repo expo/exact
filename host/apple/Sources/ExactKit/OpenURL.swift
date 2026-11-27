@@ -12,6 +12,16 @@ extension ExactEnv {
     /// refuses them again, whatever a bundle carries.
     public static let openURLSchemes = Set((appMetadata["ExactOpenURLSchemes"] as? [String] ?? []).map { $0.lowercased() })
         .subtracting(["javascript", "vbscript", "data", "file", "filesystem", "blob", "about", "view-source", "jar", "intent", "content"])
+
+    /// What a refused `openURL` names: its scheme, lowercased (`unknown:`), or
+    /// that it has none. A path or query can carry a token, so the rest of the
+    /// URL stays out, as in the painted and web hosts' refusals.
+    public static func refusedOpenName(_ target: String) -> String {
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        // RFC 3986's `scheme`: a letter, then letters, digits, `+`, `-` or `.`.
+        guard let scheme = trimmed.range(of: "^[A-Za-z][A-Za-z0-9+.-]*:", options: .regularExpression) else { return "a URL with no scheme" }
+        return trimmed[scheme].lowercased()
+    }
 }
 
 extension ExactSession {

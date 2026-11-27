@@ -126,6 +126,9 @@ import ExactSharing
 #if EXACT_LINK_DRAG_OUT
 import ExactDragOut
 #endif
+#if EXACT_LINK_DRAG_IN && os(iOS)
+import ExactDragIn
+#endif
 public enum ExactComposition {
     public static let app: ExactApp = {
         AgentLink.install()
@@ -261,6 +264,10 @@ public enum ExactComposition {
         #endif
         #if EXACT_LINK_DRAG_OUT
         ExactDragOut.install()
+        #endif
+        // The Mac takes drops in its core (FileDragMac.swift), and tvOS has no drag
+        #if EXACT_LINK_DRAG_IN && os(iOS)
+        ExactDragIn.install()
         #endif
     }
 }

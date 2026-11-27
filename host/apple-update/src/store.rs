@@ -102,14 +102,18 @@ fn descriptor(pinned: Option<&Pinned>) -> Vec<u8> {
                 .join(",")
         )
         .into_bytes(),
-        None => format!(
-            "{{\"token\":0,\"entry\":null,\"seq\":{},\"assets\":[]}}",
-            lock(&SNAPSHOT)
-                .status
-                .as_ref()
-                .map_or(0, |s| s.embedded_seq)
-        )
-        .into_bytes(),
+        None => {
+            let snap = lock(&SNAPSHOT);
+            let seq = snap.status.as_ref().map_or(0, |s| s.embedded_seq);
+            match &snap.note {
+                Some(note) => format!(
+                    "{{\"token\":0,\"entry\":null,\"seq\":{seq},\"assets\":[],\"note\":{}}}",
+                    quote(note)
+                ),
+                None => format!("{{\"token\":0,\"entry\":null,\"seq\":{seq},\"assets\":[]}}"),
+            }
+            .into_bytes()
+        }
     }
 }
 
@@ -121,7 +125,11 @@ fn initial_selection() -> Option<Pinned> {
         if let Some(client) = client.as_mut() {
             match client.prepare_selected() {
                 Ok(Some(selection)) => generations.live = Some(pin(&mut generations, selection)),
-                Ok(None) => {}
+                Ok(None) => {
+                    if let Some(note) = client.launch_note() {
+                        lock(&SNAPSHOT).note = Some(format!("exact update: {note}"));
+                    }
+                }
                 Err(refusal) => {
                     let mut snapshot = lock(&SNAPSHOT);
                     snapshot.note = Some(format!("exact update: {refusal}; booted entry zero"));
@@ -218,6 +226,7 @@ pub fn open(len: usize, compat: &str, plan: &[u8]) -> u32 {
     match Client::open(Some(Path::new(&base)), Path::new(&assets), compat, plan) {
         Ok(client) => {
             ibex2::process::wait_at_exit(exact_update::client::remove_agent_store);
+            lock(&SNAPSHOT).note = None;
             refresh(&client);
             *lock(&CLIENT) = Some(client);
             let mut generations = lock(&GENERATIONS);
@@ -420,7 +429,6 @@ pub fn check(done: Option<DoneFn>, ctx: *mut c_void) -> u32 {
         .name("exact-update".into())
         .spawn(move || {
             let (line, download) = run_check();
-            lock(&SNAPSHOT).checking = false;
             let mut json = format!("{{\"line\":{}", quote(&line));
             if let Some(d) = download {
                 json.push_str(&format!(
@@ -435,6 +443,7 @@ pub fn check(done: Option<DoneFn>, ctx: *mut c_void) -> u32 {
             if let Some(f) = done {
                 f(ctx as *mut c_void, json.as_ptr(), json.len());
             }
+            lock(&SNAPSHOT).checking = false;
         });
     if spawned.is_err() {
         lock(&SNAPSHOT).checking = false;
@@ -1046,6 +1055,9 @@ mod tests {
             g.candidate = None;
         }
         assert!(initial_selection().is_none());
+        let len = select() as usize;
+        let desc = String::from_utf8(lock(&OUTPUT)[..len].to_vec()).unwrap();
+        assert!(desc.contains("\"note\":\"exact update: entry "), "{desc}");
         assert_eq!(lock(&CLIENT).as_ref().unwrap().status().entry, None);
         *lock(&CLIENT) = None;
         std::fs::remove_dir_all(base).unwrap();

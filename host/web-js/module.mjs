@@ -14,19 +14,163 @@ import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 // Also for its PATH: the pinned binaryen (and Cargo) as every web build has
 // them, so a prebuild optimizes and keeps what an app's build would.
-import { awaitBuildOutput, cargoCheckout, refuseStdLockfile, WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, injectedProfiles, resolveApp, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
+import { awaitBuildOutput, cargoCheckout, refuseStdLockfile, WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, shaderRoots, shaderPreludeFiles, injectedProfiles, resolveApp, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
 import { rustDataOf, undeclaredDataCrate } from '../../scripts/app-shells.mjs';
 import { appCrates, linkedCrate } from '../../scripts/cargo-check.mjs';
-import { SETUP_FETCHES, withHostDeployment } from '../../scripts/filesystem.mjs';
-import { replaceBuild } from '../web/serve.mjs';
+import { SETUP_FETCHES, filesystemRead, withHostDeployment } from '../../scripts/filesystem.mjs';
+import { withoutBase } from './route-pattern.js';
+import { buildTreeFile, planRows, replaceBuild, webContentType } from '../web/serve.mjs';
+import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
+import { webPackageBindingChanged } from '../../js/bake/src/package-config.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
 import { RustMissing, compilerFrom, fromSet, fromSets, fetchedTool, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
 import { EXE, slashRelative, within } from '../../scripts/paths.mjs';
+// Most tables use only ECMAScript at import time. Detect a host read even under
+// `typeof` or a caught exception, so an answer for the build VM never qualifies a browser-only branch.
+async function scriptModuleTags(dist, base, factoryTags) {
+  const vm = await import('node:vm');
+  const options = { strings: false, wasm: false };
+  const properties = vm.runInNewContext('Object.getOwnPropertyDescriptors(globalThis)', {}, { contextCodeGeneration: options });
+  delete properties.globalThis;
+  let hostRead = false;
+  const context = vm.createContext(new Proxy(Object.defineProperties(Object.create(null), properties), {
+    get(target, key) {
+      if (typeof key === 'string' && !Object.hasOwn(target, key)) {
+        hostRead = true;
+        throw new ReferenceError(key);
+      }
+      return Reflect.get(target, key);
+    },
+  }), { codeGeneration: options });
+  const origin = 'https://exact.invalid', modules = new Map();
+  function load(url) {
+    if (modules.has(url.href)) return modules.get(url.href);
+    const path = url.origin === origin && withoutBase(url.pathname, base);
+    const file = path && buildTreeFile(dist, path);
+    if (!file) throw new Error(url.href);
+    const module = new vm.SourceTextModule(readFileSync(file.path, 'utf8'), {
+      context, identifier: url.href, initializeImportMeta(meta) { meta.url = url.href; },
+    });
+    modules.set(url.href, module);
+    return module;
+  }
+  let timer;
+  try {
+    const module = load(new URL(base + 'modules/index.js', origin));
+    await module.link((specifier, parent) => {
+      if (!/^(?:\.{1,2}\/|\/)/.test(specifier)) throw new Error(specifier);
+      return load(new URL(specifier, parent.identifier));
+    });
+    await Promise.race([module.evaluate({ timeout: 2000 }), new Promise((_, reject) => { timer = setTimeout(reject, 2000); })]);
+    const tags = factoryTags(module.namespace);
+    return hostRead ? null : tags;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+/** The `Bun.WebView` backend used to read a DOM-dependent module roster.
+ * Off macOS, pass `--no-sandbox` (and `--disable-dev-shm-usage` on Linux) so
+ * Chromium starts on CI runners, containers and root build environments. */
+export function webModuleBackend(chrome, platform = process.platform) {
+  if (platform === 'darwin') return 'webkit';
+  if (chrome.unavailable) throw new Error(chrome.unavailable);
+  return {
+    type: 'chrome',
+    path: chrome.executable,
+    argv: ['--no-sandbox', ...(platform === 'linux' ? ['--disable-dev-shm-usage'] : [])],
+  };
+}
+
+/** Read the table in the staged page when its initialization needs a browser. */
+export async function webModuleTags(dist, base, required, release, { platform = process.platform } = {}) {
+  const entry = resolve(dist, 'modules/index.js');
+  if (!existsSync(entry)) return [];
+  let view, server, timer;
+  try {
+    const { factoryTags } = await import('../../scripts/launch-modules.mjs');
+    const tags = await scriptModuleTags(dist, base, factoryTags);
+    if (tags) return tags;
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const url = new URL(request.url);
+      const path = url.origin === server.url.origin && withoutBase(url.pathname, base);
+      const file = path && buildTreeFile(dist, path, request.headers.get('Accept') ?? '');
+      if (!file) return new Response(null, { status: 404 });
+      return new Response(Bun.file(file.path), { headers: {
+        'Content-Type': webContentType(file.route),
+        'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'",
+      } });
+    } });
+    let chrome = null;
+    if (platform !== 'darwin') {
+      const { chromium } = await import('../../scripts/agent-launch.mjs');
+      chrome = chromium();
+    }
+    const backend = webModuleBackend(chrome, platform);
+    view = new Bun.WebView({ backend });
+    const read = async () => {
+      await view.navigate(new URL(base, server.url).href);
+      return view.evaluate(`(async () => (${factoryTags})(await import(new URL('./modules/index.js', document.baseURI))))()`);
+    };
+    return await Promise.race([read(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('module initialization timed out')), 15000);
+    })]);
+  } catch (cause) {
+    const message = `web: cannot read the factory roster for ${required.join(', ')}: ${cause.message}`;
+    if (release) throw new Error(message, { cause });
+    console.warn(`warning: ${message}`);
+    return null;
+  } finally { clearTimeout(timer); view?.close(); server?.stop(true); }
+}
+
 /** The development URL for frames/<name>.contract. */
 export const frameURL = name => '/__dev/frames/' + encodeURIComponent(name).replaceAll("'", '%27');
 
 export const frameFixturePath = frame => frame.slice(0, -'.contract'.length) + '.fixture.mts';
+
+/** Files whose bytes enter a frame's output, and public URLs the browser reads itself. */
+export async function recordFrameAssets(gen, appDir, manifest, rustModule, gpuCrates) {
+  const graph = resolve(gen, 'dev-sources.json'), inputs = JSON.parse(readFileSync(graph));
+  const plan = readFileSync(resolve(gen, 'app.plan'));
+  const baked = [
+    ...planRows(plan, 'sounds', ['src']).map(row => row.src),
+    ...planRows(plan, 'faces', ['source']).map(row => row.source),
+    ...planRows(plan, 'profiles', ['src']).map(row => row.src),
+  ];
+  for (const icons of [manifest, ...(manifest.alternate_icons ?? [])]) {
+    for (const entry of [...(icons.icons ?? []), ...(icons.color_scheme_dark?.icons ?? [])]) baked.push(entry.src);
+  }
+  inputs.baked = baked.filter(Boolean).map(name => resolve(appDir, name));
+  const depFiles = rustModule ? [moduleDepInfo.get(rustModule).depInfo] : [];
+  if (gpuCrates.length) {
+    const app = resolveApp(appDir);
+    for (const crate of gpuCrates) depFiles.push(resolve(app.target, 'wasm32-unknown-unknown/web', crate.replaceAll('-', '_') + '.d'));
+    for (const dir of shaderRoots(app)) if (existsSync(dir)) inputs.baked.push(...readdirSync(dir).map(name => resolve(dir, name)));
+    inputs.baked.push(...shaderPreludeFiles(app));
+  }
+  for (const dep of depFiles) inputs.baked.push(...compilerPaths(readFileSync(dep, 'utf8'), appDir).filter(path => within(appDir, path) && !within(gen, path)));
+  const output = dirname(gen), publicName = path => slashRelative(appDir, path);
+  const settings = builtSettings(output).sourceInputs?.reads ?? [];
+  // Keep the URL and the plan from one publication when the compiler also consumed the public file.
+  const names = [...new Set([...inputs.sources, ...inputs.baked, ...settings.filter(r => r.kind === 'file').map(r => r.path)].map(publicName))];
+  inputs.captured = [];
+  for (const path of names.filter(name => /^(assets|deck)\//.test(name))) {
+    if (!statSync(resolve(appDir, path), { throwIfNoEntry: false })?.isFile()) continue;
+    const bytes = await filesystemRead({ op: 'get', root: appDir, path });
+    if (bytes === null) throw new Error(path + ' disappeared while building the frame');
+    mkdirSync(dirname(resolve(output, path)), { recursive: true });
+    writeFileSync(resolve(output, path), Buffer.from(bytes, 'base64'));
+    inputs.captured.push(path);
+  }
+  inputs.publicAssets = [];
+  for (const value of planRows(plan)) {
+    if (!/^(?:\.\/|\/)?(?:assets|deck)\//.test(value)) continue;
+    try {
+      const path = decodeURIComponent(new URL(value, 'http://localhost/').pathname).slice(1);
+      if (/^(assets|deck)\//.test(path)) inputs.publicAssets.push(path);
+    } catch { /* the browser cannot request this path */ }
+  }
+  writeFileSync(graph, JSON.stringify(inputs));
+}
 
 /** Only the selected frame's fixture enters its TypeScript capture. */
 export function frameFixture(app, frame) {
@@ -58,7 +202,7 @@ export const answer: TypeScriptAnswer = (source, args, store, storage, native) =
 }
 
 export { EXE };
-import { buildScriptDir, crateDir, depInfoOf, fresh as cargoFresh, refreshCargoRustBindings } from '../../scripts/cargo-dep-info.mjs';
+import { buildScriptDir, compilerPaths, crateDir, depInfoOf, fresh as cargoFresh, refreshCargoRustBindings } from '../../scripts/cargo-dep-info.mjs';
 export { buildScriptDir, crateDir, depInfoOf, freshCompiler };
 export const fresh = (product, dep, also = []) => cargoFresh(product, dep, also);
 import { BINARYEN_DOWNLOAD } from '../web/stages.mjs';
@@ -157,7 +301,7 @@ const held = new Map();
 // fails, `input` copied there unoptimized and said so, as host/web/build.mjs
 // does: a missing tool is named, never left for a later ENOENT to report.
 const unoptimized = new Set();
-const OPT = ['-Oz', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals'];
+const OPT = ['-Oz', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-simd'];
 function optimized(opt, input, output, label) {
   if (opt.status === 0) return output;
   // Not optimized: a leaf is not kept for other checkouts (`buildLeaf`).
@@ -822,6 +966,10 @@ export function takeWarmGame(app, dist, env = process.env) {
     stage = mkdtempSync(resolve(app.target, 'proof-web-copy-'));
     cpSync(resolve(receipt.directory, 'dist'), stage, {recursive:true});
     if (JSON.stringify(warmFiles(stage)) !== JSON.stringify(receipt.files)) return false;
+    // The game proof's source inventory excludes installed packages. Verify what the bundler read and what it bound.
+    const markerPath = resolve(stage, '.exact-build.json');
+    const marker = existsSync(markerPath) ? JSON.parse(readFileSync(markerPath, 'utf8')) : {};
+    if (webPackageBindingChanged(app.dir, marker.packageViews)) return false;
     // Driver staleness paths are local to the captured source tree. Relocate only
     // after the complete portable input identity and copied products agree.
     // The caller refreshes the driver's path-based marker after this copy.

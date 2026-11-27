@@ -64,7 +64,7 @@ pub(crate) fn admit_one_shot(
     _shared: &Shared,
     _ticket: u64,
     _ceiling: usize,
-) -> Result<(), &'static str> {
+) -> Result<(), String> {
     Ok(())
 }
 

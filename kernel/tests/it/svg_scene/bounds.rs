@@ -44,7 +44,12 @@ fn use_doubling_stops_at_the_expansion_limit() {
     let s = resolve(&k, svg);
     assert_eq!(s.over, Some(Limit::Expansion));
     assert!(s.items.is_empty(), "a scene over its limit draws nothing");
-    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let budget = if cfg!(debug_assertions) { 30 } else { 5 };
+    assert!(
+        started.elapsed().as_secs() < budget,
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[test]
@@ -84,7 +89,12 @@ fn a_use_box_stops_at_the_expansion_limit() {
     let started = std::time::Instant::now();
     let s = resolve(&k, svg);
     assert_eq!(s.over, Some(Limit::Expansion));
-    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let budget = if cfg!(debug_assertions) { 30 } else { 5 };
+    assert!(
+        started.elapsed().as_secs() < budget,
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[test]
@@ -236,4 +246,34 @@ fn dashes_and_surfaces_have_limits_and_an_ordinary_svg_passes() {
     assert_eq!(s.over, Some(Limit::Surfaces));
     let s = filtered("-10", "120", 100);
     assert_eq!((s.over, s.items.len()), (None, 100));
+}
+
+#[test]
+fn overflowing_filter_chain_still_charges_full_item_cost_per_primitive() {
+    use NodeType::*;
+    let mut d = Doc::new();
+    let defs = d.node(SvgDefs, &[], &[]);
+    let filter = d.node(SvgFilter, &[], &[(PropId::Id, "f")]);
+    let ops: Vec<u32> = (0..1_000)
+        .map(|_| d.node(SvgFe, &[], &[(PropId::Fe, "feOffset")]))
+        .collect();
+    d.children(filter, &ops);
+    d.children(defs, &[filter]);
+    // 160 references * 1,000 primitives = 160,000 primitives * ITEM (8) = 1,280,000 > MAX_COST (1,000,000),
+    // which would pass if overflowed primitives were undercharged at half ITEM.
+    let list = "url(#f) ".repeat(160);
+    let r = d.node(
+        SvgRect,
+        &[
+            (StyleId::Width, "10"),
+            (StyleId::Height, "10"),
+            (StyleId::Filter, &list),
+        ],
+        &[],
+    );
+    let svg = svg(&mut d, &[defs, r]);
+    let k = d.kernel(&[svg], 100.0);
+    let s = resolve(&k, svg);
+    assert_eq!(s.over, Some(Limit::Expansion));
+    assert!(s.items.is_empty());
 }

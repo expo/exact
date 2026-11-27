@@ -292,6 +292,7 @@ fn a_tap_that_drifts_inside_the_systems_slop_still_presses() {
     let phone = Device {
         night: false,
         font_scale: 1.0,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,
@@ -633,7 +634,7 @@ fn drag_bindings_prevent_focus_but_their_inner_buttons_and_a_swipe_do_not() {
           box transformDragFor="photo" transformgeometry=geometry transformrelease=transform press=press testId="transform" width=300 height=50
           box transformDragFor="photo" transformgeometry=geometry transformrelease=transform width=300 height=50
             button "Inner transform" press=press testId="transform-button" width=300 height=50
-      box swiperight=press touch-action="pan-y" press=press testId="swipe" width=300 height=50
+      box swipe=press swipe-follow="right" touch-action="pan-y" press=press testId="swipe" width=300 height=50
       text `${count}` testId="log" height=20
 "#,
     );

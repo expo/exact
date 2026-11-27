@@ -47,12 +47,14 @@ function placeOf(line) {
   return at < 0 ? body : body.slice(0, at);
 }
 
-/** `lines` (each indented two) by rule, the commonest first: a rule's one finding as it is; several as the rule and
- *  their count, the first in full, then where the next PLACES are and how many more. */
+/** `lines` (each indented two) by rule and the page their remedy names (`contract vocab <page>`), the commonest first: a
+ *  group's one finding as it is; several as the rule and their count, the first in full, then where the next PLACES are
+ *  and how many more. */
 export function byRule(lines) {
-  const rules = new Map();
-  for (const l of lines) rules.set(ruleOf(l), [...(rules.get(ruleOf(l)) ?? []), l]);
-  return [...rules].sort((a, b) => b[1].length - a[1].length).flatMap(([rule, all]) => {
+  const rules = new Map(), key = (l) => `${ruleOf(l)} ${/\(contract vocab ([\w-]+)\)$/.exec(l.trimEnd())?.[1] ?? ''}`;
+  for (const l of lines) rules.set(key(l), [...(rules.get(key(l)) ?? []), l]);
+  return [...rules].sort((a, b) => b[1].length - a[1].length).flatMap(([group, all]) => {
+    const rule = group.split(' ')[0];
     if (all.length === 1) return all;
     const rest = all.slice(1), more = rest.length - PLACES;
     return [`  ${rule} ×${all.length}`, `    ${all[0].trim()}`, `    also ${rest.slice(0, PLACES).map(placeOf).join('; ')}${more > 0 ? ` and ${more} more` : ''}`];

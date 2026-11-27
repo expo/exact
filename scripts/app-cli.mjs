@@ -3,10 +3,11 @@
 // a builder reading it learns where the verbs are (`bun exact.mjs --help`), not this code. An
 // exact.mjs written before this file held all of it, and still runs; `bun exact.mjs update` thins it.
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { noteBunLoaded } from '../js/bake/src/__exact_env.mjs';
+import './paths.mjs';
 
 /** The hosts a `test`, `agent` or `verify` may name first. */
 const APP_HOSTS = ['web', 'ios', 'macos', 'mac', 'linux', 'windows', 'android'];
@@ -241,6 +242,7 @@ export const windowsWindow = (manifest) => [manifest?.host?.windows?.window?.wid
  * first arguments. `host` is a drive's (`test ios`); a game has its own and no `verify` or `pattern`. */
 export function appVerbs(name, dir, { host = 'web', game = false, os = process.platform } = {}) {
   return {
+    dev: ['host/web/dev.mjs', '--app', name],
     web: ['host/web/dev.mjs', '--app', name],
     'web-build': ['host/web/build.mjs', name],
     serve: ['host/web/serve.mjs'],
@@ -286,7 +288,7 @@ export function appVerbs(name, dir, { host = 'web', game = false, os = process.p
  * app, and so read what it makes (a fetched asset, a generated source). A verb whose arguments decide is a test of
  * them; `test` and `agent` prepare in `run`, where they build first. */
 export const beforeBuild = {
-  status: false, web: true, 'web-build': true, serve: true, test: false, agent: false, verify: true, ios: true, mac: true, share: true,
+  status: false, dev: true, web: true, 'web-build': true, serve: true, test: false, agent: false, verify: true, ios: true, mac: true, share: true,
   linux: true, windows: true, android: true, update: false, lock: false, hatch: false, snapback: true, backend: false, docs: false,
   feedback: false, add: false, deploy: true, push: true,
   contract: ([command, ...rest]) => ['build', 'types', 'rust', 'verify', 'test', 'lean', 'symbols', 'gallery'].includes(command)
@@ -384,11 +386,11 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     if (asked === '' && code === 0) console.log(`\n${checkoutLine(exact2)}`);
     return code;
   }
-  if (verb === 'web' && rest.includes('--ready') && !game) {
-    console.error('web --ready waits for a game\'s dev loop, which serves while it builds; an app\'s web prints its URL once it serves');
+  if ((verb === 'web' || verb === 'dev') && rest.includes('--ready') && !game) {
+    console.error(`${verb} --ready waits for a game's dev loop, which serves while it builds; an app's ${verb} prints its URL once it serves`);
     return 2;
   }
-  if (verb === 'status' && game || verb === 'web' && rest.includes('--ready')) {
+  if (verb === 'status' && game || (verb === 'web' || verb === 'dev') && rest.includes('--ready')) {
     const {readStatus, formatStatus, waitReady} = await import(resolve(exact2, 'game/status.mjs'));
     if (verb === 'status') { console.log(formatStatus(readStatus(dir))); return 0; }
     try { const row = await waitReady(dir, {timeout:Number(rest.includes('--timeout') ? rest[rest.indexOf('--timeout') + 1] : 600)}); console.log(`READY ${row.url}`); return 0; }
@@ -414,9 +416,13 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     for (const line of feedback.nudge(dir, { verb, host, exit, ms: Date.now() - started, args: rest, interrupted })) console.error(line);
   } catch {}
   return exit; };
+  // EXACT2 as well, for an app's scripts that read that name (LLP 1036.001 D3).
+  const childEnv = (env = {}) => ({ ...process.env, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_APP_DIR: dir, EXACT: exact2, EXACT2: exact2, EXACT_LAUNCHER_PID: String(process.pid), ...env });
   // `agent --attach` reads an app already running (LLP 1012.000 D1): the driver takes it as given, before anything here
   // builds, prepares or adds a launch default.
-  if (verb === 'agent' && rest.includes('--attach')) return log(spawnSync(process.execPath, [resolve(exact2, verbs.agent[0]), ...verbs.agent.slice(1), ...rest], { stdio: 'inherit' }).status ?? 1);
+  if (verb === 'agent' && rest.includes('--attach')) return log(spawnSync(process.execPath, [resolve(exact2, verbs.agent[0]), ...verbs.agent.slice(1), ...rest], {
+    stdio: 'inherit', env: childEnv(),
+  }).status ?? 1);
   // A verb that builds the app bundles app.ts with rolldown from this checkout's node_modules (the web's build and
   // every native bake); without it Bun's auto-install spins silently instead of failing. A web drive of a site
   // already built (`--web-dist`, or a `--url` that is not a path: a path is the app's own, built first, as
@@ -425,7 +431,7 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   const backend = rest.indexOf('--backend'), driven = backend < 0 ? rest : rest.filter((_, i) => i !== backend && i !== backend + 1);
   const builtSite = (verb === 'test' || verb === 'agent') && host === 'web'
     && driven.some((a, i) => (a === '--url' && !driven[i + 1]?.startsWith('/')) || a === '--web-dist');
-  const builds = ['web', 'web-build', 'test', 'agent', 'verify', 'ios', 'mac', 'linux', 'windows', 'android'].includes(verb) && !builtSite;
+  const builds = ['dev', 'web', 'web-build', 'test', 'agent', 'verify', 'ios', 'mac', 'linux', 'windows', 'android'].includes(verb) && !builtSite;
   if (builds && !['rolldown', 'rolldown.exe'].some((bin) => existsSync(resolve(exact2, 'node_modules/.bin', bin)))) {
     const error = `exact's node_modules is missing: run \`bun install --frozen-lockfile\` in ${exact2} (every build's type check imports rolldown from it)`;
     console.error(`${verb}: ${error}`);
@@ -480,7 +486,13 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   if (verb === 'ios' && process.platform === 'linux' && rest.includes('--run') && !rest.includes('--help')) {
     console.error('ios --run needs an iOS simulator or connected iPhone; bun exact.mjs ios builds the bundle on Linux/WSL'); return log(2);
   }
-  if (platform) {
+  // Experimental: a share on a machine with no iOS build of its own, or with EXACT_BUILD=1, builds on Exact Build
+  // (scripts/exact-build.mjs), which needs none of this machine's tools. A machine set up to build keeps building here.
+  const exactBuild = verb === 'share' && !helpFlag ? (await import(resolve(exact2, 'scripts/exact-build.mjs')).catch(() => null))?.exactBuildReason() : null;
+  if (exactBuild) {
+    console.error(`share: ${exactBuild}, so the iPhone build runs on Exact Build.`);
+    process.env.EXACT_BUILD = '1';
+  } else if (platform) {
     const shells = await import(resolve(exact2, 'scripts/app-shells.mjs'));
     const named = shells.namesPlatform(existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')) : {}, platform);
     const device = rest.includes('--device') || verb === 'share';
@@ -498,8 +510,7 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     const child = spawn(command, args, {
       stdio,
       cwd,
-      // EXACT2 as well, for an app's scripts that read that name (LLP 1036.001 D3)
-      env: { ...process.env, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_APP_DIR: dir, EXACT: exact2, EXACT2: exact2, EXACT_LAUNCHER_PID: String(process.pid), ...env },
+      env: childEnv(env),
     });
     piped(child);
     const pass = (signal) => { interrupted = true; stopped ??= signal; child.kill(signal); }, signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
@@ -512,7 +523,7 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
       done(code ?? 128 + (constants.signals[signal] ?? 0));
     });
   });
-  const script = ([file, ...args], more = [], stdio = 'inherit') => spawned(process.execPath, [resolve(exact2, file), ...args, ...more], stdio);
+  const script = ([file, ...args], more = [], stdio = 'inherit', { piped, env } = {}) => spawned(process.execPath, [resolve(exact2, file), ...args, ...more], stdio, undefined, piped, env);
   const bun = (command) => command === 'bun' ? process.execPath : command;
   // A flag the command's script refuses (scripts/help.mjs), refused here first so that the refusal comes before any work
   const refusedFlag = async () => (await import(resolve(exact2, 'scripts/help.mjs')).catch(() => null))?.guardFlags(verb, rest, { exit: (code) => ({ code }) })?.code;
@@ -656,7 +667,7 @@ if (verb === 'contract') {
   const prepares = beforeBuild[verb];
   if (declared.before_build !== undefined && !own[verb] && (typeof prepares === 'function' ? prepares(rest) : prepares)) {
     // The verbs whose scripts refuse a flag they do not take (`guardFlags`)
-    if (['web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share', 'deploy', 'push'].includes(verb)) {
+    if (['dev', 'web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share', 'deploy', 'push'].includes(verb)) {
       const refused = await refusedFlag();
       if (refused != null) return log(refused);
     }
@@ -687,9 +698,16 @@ if (verb === 'contract') {
   // Each file's agent owns its server, so it can restart between that file's tests.
   let failed = 0;
   const files = tests.length ? tests : (await import(resolve(exact2, 'scripts/app.mjs'))).authoredTests(dir);
+  // Each file has its own agent. It tells the parent which simulator it checked before the next file starts.
+  const checked = host === 'ios' && drivesNative && files.length > 1 ? new Map() : null;
   for (const file of files.length ? files : [resolve(dir, 'app.test.contract')]) {
     if (files.length > 1) console.log(`# ${relative(process.cwd(), file)}`);
-    const code = await script(verbs.test, ['--test', file, ...rest]);
+    const code = await script(verbs.test, ['--test', file, ...rest], checked ? [0, 1, 2, 'ipc'] : 'inherit', checked ? {
+      env: { EXACT_IOS_TEST_CHECKED: [...checked].map(entry => entry.join(':')).join(',') },
+      piped: child => child.on('message', message => {
+        if (typeof message?.checkedSimulatorAccessibility === 'string') checked.set(message.checkedSimulatorAccessibility, message.status);
+      }),
+    } : undefined);
     if (stopped) return log(code || 128 + (constants.signals[stopped] ?? 0));
     failed = code || failed;
   }
@@ -782,7 +800,48 @@ export async function lockApp(dir) {
   const { readManifest } = await import('./app.mjs');
   const { lockSwiftPackages } = await import('../host/apple/compose.mjs');
   const swift = lockSwiftPackages({ dir, manifest: readManifest(dir, basename(dir)) });
-  return [await lockRustApp(dir), swift].filter(Boolean).join('\n');
+  return [await lockRustApp(dir), swift, await reportAndroidLock(dir)].filter(Boolean).join('\n');
+}
+/** Resolve the Android classpaths from the current Contract and package declarations without building an APK. */
+export async function reportAndroidLock(dir) {
+  const lock = resolve(dir, 'gradle.lockfile');
+  if (!existsSync(lock)) return null;
+  const { androidJavaEnv, androidJavaFix, androidSdk, androidSdkPackages, androidSdkFix, androidLockCommand,
+    mavenCoordinates, mavenGraph, runGradle } = await import('./agent-android.mjs');
+  const { androidPackageId, resolveApp } = await import('./app.mjs');
+  const { androidImplementations } = await import('../js/bake/src/typescript.mjs');
+  const { androidLibraryArgs } = await import('./android-manifest.mjs');
+  const { contractTool, ROOT } = await import('./tools.mjs');
+  const app = resolveApp(dir, { useOutput: false }), command = androidLockCommand(app);
+  const compiler = contractTool();
+  if (!compiler) return `${lock}: checking the app's Maven dependencies needs the Contract compiler`;
+  const plan = spawnSync(compiler.cmd, [...compiler.pre, 'sources', resolve(dir, 'app.contract'), '--android'], {
+    cwd: ROOT, encoding: 'utf8', env: compiler.env,
+  });
+  compiler.done();
+  if (plan.status !== 0) throw new Error(`${lock}: could not read Android dependencies: ${plan.stderr || plan.error?.message}`);
+  const { uses, extensions } = JSON.parse(plan.stdout);
+  const bound = androidImplementations(dir, extensions), maven = mavenCoordinates(app, bound);
+  if (!maven.length) return `${lock}: the app and its bound packages declare no Maven libraries`;
+  if (!existsSync(resolve(dir, 'gradle-verification.xml'))) return `${lock}: gradle-verification.xml is missing. Run ${command}`;
+  const env = androidJavaEnv(process.env);
+  if (!env) return `${lock}: unchecked. ${androidJavaFix(process.env)}`;
+  const sdk = androidSdk(env), missing = androidSdkPackages().filter(p => !existsSync(resolve(sdk, p.path)));
+  if (missing.length) return `${lock}: unchecked. Install ${missing.map(p => p.id).join(', ')} with ${androidSdkFix(env, missing)}`;
+  const out = mkdtempSync(resolve(tmpdir(), 'exact-android-lock-report-'));
+  try {
+    const manifest = resolve(out, 'app.json');
+    writeFileSync(manifest, JSON.stringify(app.manifest));
+    const graph = mavenGraph(app, false, maven, env);
+    try {
+      const checked = runGradle(['--quiet', '--no-watch-fs', ':app:checkMavenLock', ...graph.args,
+        `-Papp=${app.name}`, `-PappDir=${dir}`, `-PappManifest=${manifest}`, `-PapplicationId=${androidPackageId(app.manifest)}`, `-PappName=${app.displayName}`,
+        `-PappBuildDir=${out}/app`, `-PcanvasBuildDir=${out}/canvas`, `-PvideoBuildDir=${out}/video`, `-PwidgetsBuildDir=${out}/widgets`,
+        '--project-cache-dir', resolve(out, 'cache'), ...androidLibraryArgs(app, bound, uses, env),
+      ], { env: { ...env, ANDROID_HOME: sdk } }, process.platform, { lockAdvice: `For an intended dependency change, run ${command}` });
+      return checked ? `${lock}: current` : `${lock}: Gradle could not confirm the lock. See its diagnostic above.`;
+    } finally { graph.done(); }
+  } finally { rmSync(out, { recursive: true, force: true }); }
 }
 async function lockRustApp(dir) {
   const { cargoEnvironment } = await import('./app.mjs');

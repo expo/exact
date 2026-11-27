@@ -3,7 +3,7 @@
 // UIKit's bars and real touches (`--chrome platform`, `--touch platform`; the web
 // leg has the agent's), on the Duo simulator fully open, partially folded and
 // closed (the hinge at 180°, 130° and 0°), the hinge set from inside the simulator
-// by `scripts/duo/hinge_helper.c` (compiled per run with the selected Xcode's
+// by `scripts/duo/hinge_helper.m` (compiled per run with the selected Xcode's
 // simulator SDK). At every pose:
 // the cover-root and inset invariants `smoke ios` checks; the Fold screen's
 // two panes exactly on the division's segments (one pane flat or closed);
@@ -25,8 +25,10 @@
 // §9): the suite starts it upright, and the rotate, resize and web legs turn it.
 // `--only insets,keyboard-bar,lab,arrangement,reading,navigation,navigation-gestures,host-navigation,host,rotate,resize,web` runs the named legs; the keyboard checks
 // run only when a probe shows a software keyboard on this simulator.
+import { runTests } from './agent-test.mjs';
+import { hasSimulatorHinge, hingeHelper, simulatorTurns } from './duo/hinge.mjs';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { appleArtifacts } from '../host/apple/build.mjs';
@@ -73,7 +75,7 @@ const STACKED = [[0, 0, 669, 455.5], [0, 495.5, 669, 455.5]];
 // and what UIKit reports at each on either panel (the scene's interface orientation, its screen and
 // safe area, top right bottom left; measured against a plain UIKit app, 2026-10-15, and in duo-lab,
 // 2026-10-16). An iPhone app does not turn upside down: on the cover panel that turn keeps the last.
-const TURNS = [['landscape-right', 'landscapeRight'], ['pud', 'portraitUpsideDown'], ['landscape-left', 'landscapeLeft'], ['portrait', 'portrait']];
+const TURNS = simulatorTurns.map(({ helper, device }) => [helper, device]);
 const TURNED = {
   inner: {
     'landscape-right': ['portraitUpsideDown', 669, 951, [82, 0, 34, 0]], pud: ['landscapeRight', 951, 669, [0, 84, 34, 0]],
@@ -119,7 +121,7 @@ async function suite({ open: openSession, check: record }, reset) {
   const pick = process.env.EXACT_SIM;
   const version = (d) => Number(/iOS-(\d+)-(\d+)/.exec(d.runtime)?.slice(1).join('.') ?? 0);
   const dev = pick ? simulators().find((d) => d.udid === pick || d.name === pick) : null;
-  if (!dev || dev.type !== 'iPhone-Duo' || version(dev) < 27.1) {
+  if (!dev || !hasSimulatorHinge(dev) || version(dev) < 27.1) {
     console.log('duo: unsupported — needs an iPhone Duo simulator on iOS ≥ 27.1 under Xcode 27.1 (EXACT_SIM, DEVELOPER_DIR)');
     return 'unsupported';
   }
@@ -129,23 +131,16 @@ async function suite({ open: openSession, check: record }, reset) {
   let recorded = null; // whether the open pose reports the recorded inner panel
   const panels = {}; // what each panel reported first, when the record does not apply
 
-  // The hinge helper, compiled for this run with the selected Xcode's simulator SDK and ad-hoc signed.
-  const helper = resolve(out, 'hinge_helper');
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
-  const cc = spawnSync('xcrun', ['-sdk', 'iphonesimulator', 'clang', '-arch', arch, '-mios-simulator-version-min=17.0', '-O2', '-framework', 'IOKit', '-framework', 'CoreFoundation', '-o', helper, resolve(ROOT, 'scripts/duo/hinge_helper.c')], { encoding: 'utf8' });
-  if (!check(cc.status === 0, `the hinge helper did not compile: ${cc.stderr || cc.stdout}`)) return;
-  const sign = spawnSync('codesign', ['-f', '-s', '-', helper], { encoding: 'utf8' });
-  if (!check(sign.status === 0, `the hinge helper was not signed: ${sign.stderr}`)) return;
-  /** Set the hinge. Xcode 27.1's devicectl reads no hinge back (it has no `device motion`), so a pose is judged by what the session reports. */
-  const hinge = (deg) => {
-    const r = spawnSync('xcrun', ['simctl', 'spawn', udid, helper, 'set', String(deg)], { encoding: 'utf8' });
-    check(r.status === 0, `hinge ${deg}: ${r.stderr || r.stdout}`);
+  let helper;
+  try { helper = hingeHelper(udid, out); } catch (e) { check(false, e.message); return; }
+  const move = (command, value) => {
+    try { helper(command, value); return true; } catch (e) { return check(false, e.message); }
   };
+  const hinge = deg => move('set', deg);
   /** Turn the device (`TURNS`' helper name) and wait, over 50 reads, for CoreDevice to report it turned. A failure in session `s` before the turn is photographed first. */
   const orient = async (turn, s) => {
     if (s) await shot(s);
-    const r = spawnSync('xcrun', ['simctl', 'spawn', udid, helper, 'orient', turn], { encoding: 'utf8' });
-    if (!check(r.status === 0, `orient ${turn}: ${r.stderr || r.stdout}`)) return;
+    if (!move('orient', turn)) return;
     const want = TURNS.find(([name]) => name === turn)[1];
     let now;
     for (let i = 0; i < 50 && now !== want; i++) {
@@ -207,13 +202,13 @@ async function suite({ open: openSession, check: record }, reset) {
   /** Set the hinge and wait for the session to report the pose. A failure before the fold is photographed first. */
   const pose = async (s, deg) => {
     await shot(s);
-    hinge(deg);
-    await reached(s, deg);
+    // The driver's `fold` lands at the pose; a host fixture's session has none, and is watched for it
+    if (s.carrier?.fold) { check((await s.fold(deg)).reason !== 'hinge', `the app takes the fold to ${deg}°`); await reached(s, deg, 1); } else { hinge(deg); await reached(s, deg); }
   };
-  /** Wait, over 50 reads, for the session to report the pose `deg`, then settle it: the cover panel at 0° and only then, the posture and the segments (the division regions can trail the posture). A pose the session never reports fails here. */
-  const reached = async (s, deg) => {
+  /** Wait, over `reads` reads, for the session to report the pose `deg`, then settle it: the cover panel at 0° and only then, the posture and the segments (the division regions can trail the posture). A pose the session never reports fails here. */
+  const reached = async (s, deg, reads = 50) => {
     let panel = false, postured = false, split = false;
-    for (let i = 0; i < 50 && !(panel && postured && split); i++) {
+    for (let i = 0; i < reads && !(panel && postured && split); i++) {
       if (i > 0) await sleep(100);
       const l = await s.layout();
       panel = onCover(l) === (deg === 0);
@@ -333,7 +328,7 @@ async function suite({ open: openSession, check: record }, reset) {
    * its route starts at the viewport's top and ends at the keyboard's top while one shows, else at the viewport's bottom;
    * under the agent's chrome it ends at the viewport's bottom. iOS's layout lists only views in the window, so its sheet
    * is listed only while it shows. Under UIKit's bars the authored
-   * tablist has no box. Beside UIKit's tab bar along the bottom a tab's route ends below the bar's top by the home
+   * tablist's box is UIKit's tab bar's. Beside UIKit's tab bar along the bottom a tab's route ends below the bar's top by the home
    * indicator's inset (34 points on the whole panel), which the panes' padding takes; beside its rail, at the viewport's
    * bottom. Under the agent's own chrome (the web leg) the tablist is laid out below the routes, as the web does,
    * ending at the viewport's bottom, and they end at its top. */
@@ -349,9 +344,9 @@ async function suite({ open: openSession, check: record }, reset) {
       return end;
     }
     if (uikit) {
-      check(!laid, `${tag}: under UIKit's bars the authored tablist has no box: ${JSON.stringify(bar)}`);
       const f = await tabBarFrame(s);
       if (!check(f, `${tag}: UIKit's tab bar is visible`)) return l.viewport.h;
+      check(['x', 'y', 'w', 'h'].every((k) => near(bar?.[k], f[k])), `${tag}: the authored tablist's box is UIKit's tab bar's ${JSON.stringify(f)}: ${JSON.stringify(bar)}`);
       if (f.h > f.w) return l.viewport.h; // a rail at the side
       check(near(f.x, 0) && near(f.w, l.viewport.w) && near(f.y + f.h, l.viewport.h), `${tag}: UIKit's tab bar runs along the viewport's bottom: ${JSON.stringify(f)} in ${JSON.stringify(l.viewport)}`);
       return f.y + l.env['safe-area-inset-bottom'];
@@ -415,9 +410,10 @@ async function suite({ open: openSession, check: record }, reset) {
   /** At a fold, layout `l` has two segments, and no control of the screen shown lies on the band between them, the
    * hinge: a button, a field, a sheet's drag handle (`heightDragFor`). Scrolling content may cross it (Apple's
    * adaptive-layout talk, developer.apple.com/videos/play/tech-talks/111463), so a control inside a scroller is exempt.
-   * The authored tablist's tabs count: under UIKit's bars they have no box (UIKit's tab bar is a rail at the inner
-   * panel's right edge upright, a bar at its bottom turned), and under the agent's own chrome they keep to the trailing
-   * segment on a book fold. */
+   * Under UIKit's bars the authored tablist's tabs count, their boxes its items' (UIKit's tab bar is a rail at the inner
+   * panel's right edge upright, a bar at its bottom turned). Under the agent's own chrome, on a book fold, the tabs of a
+   * tablist a `UITabBar` stands for do not: that bar centres its own items across the tablist's box, which spans the band,
+   * and the web's own tabs, which keep off it, are the web test's (`host/web-js/duo-panes.test.mjs`). */
   const offBand = async (s, l, tag) => {
     const segs = l.env['viewport-segments'];
     if (!check(segs?.length === 2, `${tag}: two segments to check the band against, not ${JSON.stringify(segs)}`)) return;
@@ -429,9 +425,11 @@ async function suite({ open: openSession, check: record }, reset) {
       return false;
     };
     const control = (n) => ['Pressable', 'Control', 'TextInput'].includes(n.type) || n.props.heightDragFor != null || (n.handlers ?? []).some((h) => ['press', 'input', 'change'].includes(h));
+    const drawn = s.chrome === 'agent' && near(a[1], b[1]) && await tabBarFrame(s) !== undefined;
+    const standIn = (n) => drawn && n.props.accessibilityRole === 'tab' && nodes.get(n.parent)?.props.testId === 'tab-bar';
     const on = l.nodes.filter((m) => {
       const n = nodes.get(m.id);
-      return n && !n.inactive && control(n) && !exempt(n) && m.w > 0 && m.h > 0 && m.x < band[0] + band[2] && m.x + m.w > band[0] && m.y < band[1] + band[3] && m.y + m.h > band[1];
+      return n && !n.inactive && control(n) && !exempt(n) && !standIn(n) && m.w > 0 && m.h > 0 && m.x < band[0] + band[2] && m.x + m.w > band[0] && m.y < band[1] + band[3] && m.y + m.h > band[1];
     });
     check(on.length === 0, `${tag}: no control on the band ${JSON.stringify(band)}: ${JSON.stringify(on.map((m) => ({ id: m.testId ?? m.id, x: m.x, y: m.y, w: m.w, h: m.h })))}`);
   };
@@ -476,11 +474,13 @@ async function suite({ open: openSession, check: record }, reset) {
   // The insets fixture serves its leg and the keyboard probe, which the legs that type need
   const probe = leg('insets') || leg('keyboard-bar') || leg('lab') || leg('rotate') || leg('web') || leg('navigation') || leg('navigation-gestures') || leg('secondary-navigation') || leg('host-navigation');
   const plans = {};
-  const compile = (name, source) => {
+  /** Compile `source` to `<name>.plan`, or, given `text`, that text as though it were `source`. */
+  const compile = (name, source, text) => {
     const plan = resolve(out, `${name}.plan`);
-    const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, '-o', plan], { cwd: ROOT, encoding: 'utf8' });
+    const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, ...(text == null ? [] : ['--stdin']), '-o', plan], { cwd: ROOT, encoding: 'utf8', input: text });
     if (check(c.status === 0, `the ${name} fixture did not compile: ${c.stderr}`)) plans[name] = plan;
   };
+  if (leg('rotate')) compile('closed-duo', resolve(ROOT, 'scripts/fixtures/closed-duo.contract'));
   for (const name of [probe ? 'insets' : null, leg('keyboard-bar') ? 'keyboard-bar' : null].filter(Boolean)) compile(name, resolve(ROOT, `contract/corpus/${name}.contract`));
   if (leg('navigation') || leg('navigation-gestures') || leg('host-navigation') || leg('secondary-navigation')) {
     compile('pushed-title', resolve(ROOT, 'scripts/fixtures/pushed-title.contract'));
@@ -492,11 +492,9 @@ async function suite({ open: openSession, check: record }, reset) {
   if (leg('rotate') || leg('web')) {
     const source = readFileSync(resolve(lab.dir, 'app.contract'), 'utf8'), tall = source.replace('state sheetPx = 400', 'state sheetPx = 600');
     if (check(tall !== source, 'duo-lab no longer declares `state sheetPx = 400`, which the rotate and web legs raise to 600')) {
-      // The copy compiles beside duo-lab's `app.json`, which declares the `data` names and hatches it uses
-      const fixture = mkdtempSync(resolve(out, 'duo-lab-tall-'));
-      copyFileSync(resolve(lab.dir, 'app.json'), resolve(fixture, 'app.json'));
-      writeFileSync(resolve(fixture, 'app.contract'), tall);
-      compile('duo-lab-tall', resolve(fixture, 'app.contract'));
+      // The variant compiles as duo-lab's own `app.contract`, so its `use` lines, symbols, colours and `app.json`
+      // resolve as the app's do
+      compile('duo-lab-tall', resolve(lab.dir, 'app.contract'), tall);
     }
   }
   const labBundle = appleArtifacts(lab, { destination: 'ios-simulator' }).bundle;
@@ -505,7 +503,7 @@ async function suite({ open: openSession, check: record }, reset) {
   const sdk = JSON.parse(readFileSync(resolve(labBundle, 'receipt.json'), 'utf8')).sdk ?? '';
   const sdkVersion = Number(/iPhoneSimulator(\d+\.\d+)\.sdk/.exec(sdk)?.[1] ?? 0);
   if (!check(sdkVersion >= 27.1, `duo: the duo-lab bundle was built with ${sdk || 'an unknown SDK'}; the fold needs the iOS 27.1 SDK — DEVELOPER_DIR=<Xcode 27.1> bun host/apple/build.mjs --ios duo-lab`)) return;
-  reset.hinge = () => { spawnSync('xcrun', ['simctl', 'spawn', udid, helper, 'orient', 'portrait']); hinge(180); }; // leave the simulator upright and open, whatever happens
+  reset.hinge = () => { move('orient', 'portrait'); hinge(180); }; // leave the simulator upright and open, whatever happens
   await orient('portrait'); // the record is the device upright
   // Whether this simulator shows a software keyboard at all. The simulator's state
   // is what counts, and it moves under a run: a Device Hub window sets the device's
@@ -693,6 +691,13 @@ async function suite({ open: openSession, check: record }, reset) {
           await retained(tag);
           const a = box(l, 'panes-workspace-pane'), b = box(l, 'panes-activity-pane');
           check(a?.w > 0 && a?.h > 0, `${tag}: the primary pane has space`);
+          // UIKit's panes lie under the side bar, their scroll indicators at the display's edge, and their content ends at the bar
+          if (mode !== 'css') {
+            const edge = Math.max(...[a, b].filter(pane => pane?.w > 0).map(pane => pane.x + pane.w));
+            check(Math.abs(edge - l.viewport.w) <= 1, `${tag}: the panes end at the display's edge: ${edge} of ${l.viewport.w}`);
+            const row = box(l, b?.w > 0 && b.x + b.w > l.viewport.w - 1 ? 'panes-activity-row-1' : 'panes-workspace-row-1');
+            check(row?.x + row?.w <= l.viewport.w - l.env['safe-area-inset-right'] + 1, `${tag}: the content at that edge ends at the bar: ${JSON.stringify(row)}`);
+          }
           // Detect scroll resets while allowing native bar insets to change with the pose
           for (const [i, pane] of [a, b].entries()) {
             if (pane?.w > 0 && pane?.h > 0) { check(pane.sy > 0, `${tag}: pane ${i + 1} stays scrolled`); }
@@ -1294,6 +1299,8 @@ async function suite({ open: openSession, check: record }, reset) {
     await s.tap('tab-fold'); await settle(s);
   };
   if (leg('rotate')) {
+    const drive = await runTests({ host: 'ios', app: 'duo-lab', plan: plans['closed-duo'], file: resolve(ROOT, 'scripts/fixtures/closed-duo.test.contract') });
+    check(drive.passed === 1, `closed Duo authored rotation: ${drive.results.flatMap(t => t.failures).join(', ')}`);
     // SpringBoard's lines about its orientation deferrals and the device's pose, which a turn after closing waits on
     const sb = [];
     const stream = logStream(udid, 'process == "SpringBoard" AND (category == "DeviceOrientationUpdateDeferral" OR category == "DevicePose")', (line) => {
@@ -1438,10 +1445,10 @@ async function suite({ open: openSession, check: record }, reset) {
   // 7. The web's layout: duo-lab under the agent's own chrome, which lays the authored tablist out below the routes as
   // the web does, so the routes end above the panel's bottom. Flat, and partially folded side by side and, the device
   // turned, one above the other, the Fold screen's panes sit on the segments where the routes end, and on a book fold
-  // the tabs keep to the trailing segment; folded like a laptop, the note screen, which hides the tablist, keeps its
-  // sheet to the lower segment, and the sheet rides on the keyboard once it is up with its textarea above it, as the
-  // rotate leg checks under UIKit's bars. Its taps are the agent's: the agent refuses a real touch on the tablist this
-  // chrome shows in place of UIKit's tab bar (LLP 1080.000 D7, stage 3).
+  // no other control lies on the band; folded like a laptop, the note screen, which hides the tablist, keeps its sheet
+  // to the lower segment, and the sheet rides on the keyboard once it is up with its textarea above it, as the rotate
+  // leg checks under UIKit's bars. Its taps are the agent's: the agent refuses a real touch on the tablist this chrome
+  // shows in place of UIKit's tab bar (LLP 1080.000 D7, stage 3).
   if (leg('web')) {
     const s = await open({ host: 'ios', app: 'duo-lab', plan: plans['duo-lab-tall'], chrome: 'agent', touch: 'agent' });
     try {
@@ -1455,8 +1462,6 @@ async function suite({ open: openSession, check: record }, reset) {
       let l = await s.layout();
       await foldScreen(s, l, where, 130, chosen);
       await offBand(s, l, where);
-      const drawn = await tabBarFrame(s), trailing = l.env['viewport-segments'][1];
-      check(within(drawn, trailing), `${where}: the tab bar keeps to the trailing segment ${JSON.stringify(trailing)}: ${JSON.stringify(drawn)}`);
       where = 'web-130-landscape-right';
       await orient('landscape-right', s);
       for (let i = 0; i < 50 && l.env['vertical-viewport-segments'] !== 2; i++) { await sleep(100); l = await s.layout(); }

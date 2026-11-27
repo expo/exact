@@ -7,7 +7,7 @@ mod sizing;
 
 use exact_kernel::{Env, HostCover, Kernel, NodeType, Offer, Op, StyleId, StyleProps, StyleValue};
 
-fn style(rows: &[(StyleId, StyleValue)]) -> StyleProps {
+pub(crate) fn style(rows: &[(StyleId, StyleValue)]) -> StyleProps {
     let mut s = StyleProps::default();
     for (id, value) in rows {
         s.set_dynamic(*id, value).unwrap();
@@ -17,7 +17,7 @@ fn style(rows: &[(StyleId, StyleValue)]) -> StyleProps {
 
 /// A root, one route filling it (a flex column padded by the top inset as
 /// an app under `viewport-fit=cover` pads it), a 52-point header and a list.
-fn route() -> Kernel {
+pub(crate) fn route() -> Kernel {
     let mut kernel = Kernel::with_monospace();
     let column = |extra: &[(StyleId, StyleValue)]| {
         let mut rows = vec![
@@ -87,7 +87,7 @@ fn route() -> Kernel {
     kernel
 }
 
-fn frame(kernel: &mut Kernel, id: u32) -> (f32, f32, f32, f32) {
+pub(crate) fn frame(kernel: &mut Kernel, id: u32) -> (f32, f32, f32, f32) {
     kernel
         .compute_layout(1, Offer::definite(390.0, 844.0))
         .unwrap();

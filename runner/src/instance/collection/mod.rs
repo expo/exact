@@ -12,6 +12,7 @@ mod replacement;
 pub(super) use replacement::ListReading;
 mod rekey;
 mod reorder;
+pub(crate) use reorder::Offsets;
 mod reorder_group;
 #[cfg(test)]
 mod reorder_tests;

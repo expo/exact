@@ -215,6 +215,7 @@ pub fn plan(
     let mut moved = Vec::new();
     let mut values = Vec::new();
     let mut structure = false;
+    let mut refusals = Vec::new();
     let mut diff = String::new();
     for (path, text) in files {
         let mine: Vec<Op> = ops
@@ -232,12 +233,14 @@ pub fn plan(
                 edit::apply_all_with(text, &mine, vocab, synthetic.params)
             }
             false => edit::apply_all(text, &mine, vocab),
-        }
-        .map_err(|all| {
-            all.into_iter()
-                .map(|d| (path.clone(), d))
-                .collect::<Refused>()
-        })?;
+        };
+        let edited = match edited {
+            Ok(edited) => edited,
+            Err(all) => {
+                refusals.extend(all.into_iter().map(|d| (path.clone(), d)));
+                continue;
+            }
+        };
         if edited.text == *text {
             continue;
         }
@@ -324,6 +327,9 @@ pub fn plan(
         };
         diff.push_str(&file_diff(path, text, &edited.text));
         out.push((path.clone(), edited.text, edited.inverse));
+    }
+    if !refusals.is_empty() {
+        return Err(refusals);
     }
     for path in ops.iter().map(|(p, _)| p) {
         if !files.iter().any(|(f, _)| f == path) {

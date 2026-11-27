@@ -351,14 +351,14 @@ impl Collection {
 }
 
 // Resolve keyed boundaries/prefixes once, then emit O(W) arithmetic targets.
-pub(super) struct Offsets {
-    pub(super) source: usize,
-    pub(super) before: usize,
-    pub(super) height: f64,
-    pub(super) source_offset: f64,
+pub(crate) struct Offsets {
+    pub(crate) source: usize,
+    pub(crate) before: usize,
+    pub(crate) height: f64,
+    pub(crate) source_offset: f64,
 }
 impl Offsets {
-    pub(super) fn at(&self, row: usize) -> f64 {
+    pub(crate) fn at(&self, row: usize) -> f64 {
         if row == self.source {
             self.source_offset
         } else if self.before <= row && row < self.source {

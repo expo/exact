@@ -181,6 +181,11 @@ final class ProgressBarIOS: UIProgressView {
         get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
         set { super.accessibilityDragSourceDescriptors = newValue }
     }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { super.accessibilityDropPointDescriptors = newValue }
+    }
     #endif
 }
 
@@ -191,6 +196,11 @@ final class SpinnerIOS: UIActivityIndicatorView {
     override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
         get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
         set { super.accessibilityDragSourceDescriptors = newValue }
+    }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { super.accessibilityDropPointDescriptors = newValue }
     }
     #endif
 }

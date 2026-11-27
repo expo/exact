@@ -164,7 +164,10 @@ impl Tree for serde_json::Value {
         self.as_object().map_or(0, serde_json::Map::len)
     }
     fn first_key(&self, keep: &dyn Fn(&str) -> bool) -> Option<String> {
-        self.as_object()?.keys().find(|k| !keep(k)).cloned()
+        // The least, not the first met: with serde_json's `preserve_order`
+        // feature (unified from any crate in the build) a map iterates in
+        // insertion order, and the field named must not follow it.
+        self.as_object()?.keys().filter(|k| !keep(k)).min().cloned()
     }
 }
 

@@ -52,8 +52,8 @@ fn pro(ops: Vec<Op>) -> Kernel {
     let reported = crate::kernel::OwnerMargins {
         root: [62.0, 16.0, 34.0, 16.0],
         plain: [8.0; 4],
-        minimum: [0.0, 16.0, 0.0, 16.0],
-        readable_width: 672.0,
+        minimum: Some([0.0, 16.0, 0.0, 16.0]),
+        readable_width: Some(672.0),
     };
     k.set_owner_margins(2, Some(reported)).unwrap();
     lay_out(&mut k);
@@ -274,8 +274,8 @@ fn the_duo_gives_a_plain_view_no_margins_of_its_own() {
     let duo = crate::kernel::OwnerMargins {
         root: [0.0, 84.0, 34.0, 20.0],
         plain: [0.0; 4],
-        minimum: [0.0, 0.0, 0.0, 20.0],
-        readable_width: 1000.0,
+        minimum: Some([0.0, 0.0, 0.0, 20.0]),
+        readable_width: Some(1000.0),
     };
     k.set_owner_margins(2, Some(duo)).unwrap();
     lay_out(&mut k);
@@ -308,8 +308,8 @@ fn a_report_or_a_restyle_measures_the_readers_again() {
     let none = crate::kernel::OwnerMargins {
         root: [62.0, 16.0, 34.0, 16.0],
         plain: [0.0; 4],
-        minimum: [0.0, 16.0, 0.0, 16.0],
-        readable_width: 672.0,
+        minimum: Some([0.0, 16.0, 0.0, 16.0]),
+        readable_width: Some(672.0),
     };
     assert!(k.set_owner_margins(2, Some(none)).unwrap());
     lay_out(&mut k);
@@ -322,6 +322,66 @@ fn a_report_or_a_restyle_measures_the_readers_again() {
     .unwrap();
     lay_out(&mut k);
     assert_eq!(read(&k, 3)[0], 82.0);
+}
+
+#[test]
+fn an_appkit_owners_readable_content_is_its_margins_and_it_has_no_minimum() {
+    // A 600 by 400 window with full-size content under a 32-point title bar, as AppKit gives
+    // it on macOS 27: each view's margins are 20 from its safe area, there is no readable width
+    // and no system minimum. 3 fills it; 4 and 5 lie below the bar with their own directional
+    // margins, 4 reading readable content, which stays its margins, and 5 the readable guide;
+    // 6 reads the system minimum's left with a fallback
+    let mut ops = create(3..=6);
+    ops.push(style(
+        2,
+        vec![],
+        &[
+            (StyleId::SafeAreaIgnore, "container"),
+            (StyleId::PositionType, "relative"),
+            (StyleId::Height, "100%"),
+        ],
+    ));
+    ops.push(probed(3, ("0", "0", "600", "400"), "layout-margins", &[]));
+    let directional = [
+        (StyleId::LayoutMarginTop, "4"),
+        (StyleId::LayoutMarginLeading, "30"),
+        (StyleId::LayoutMarginBottom, "6"),
+        (StyleId::LayoutMarginTrailing, "5"),
+    ];
+    ops.push(probed(
+        4,
+        ("40", "140", "322", "50"),
+        "readable-content",
+        &directional,
+    ));
+    ops.push(probed(
+        5,
+        ("40", "200", "322", "50"),
+        "readable-content-guide",
+        &[],
+    ));
+    let minimum = "var(--exact-system-minimum-layout-margins-inset-left, 7px)";
+    ops.push(style(6, vec![], &[(StyleId::PaddingLeft, minimum)]));
+    ops.extend([children(1, &[2]), children(2, &[3, 4, 5, 6])]);
+    let mut k = owner(600.0, 400.0, ops);
+    k.set_owner_band(2, Some([32.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
+    let appkit = crate::kernel::OwnerMargins {
+        root: [52.0, 20.0, 20.0, 20.0],
+        plain: [20.0; 4],
+        minimum: None,
+        readable_width: None,
+    };
+    k.set_owner_margins(2, Some(appkit)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(read(&k, 3), [52.0, 20.0, 20.0, 20.0]);
+    assert_eq!(
+        read(&k, 4),
+        [4.0, 5.0, 6.0, 30.0],
+        "not UIKit's 17.5 on the right"
+    );
+    assert_eq!(read(&k, 5), [20.0; 4]);
+    assert_eq!(read(&k, 6)[3], 7.0, "the minimum is unavailable");
 }
 
 #[test]
@@ -340,8 +400,8 @@ fn the_readable_guide_centres_the_readable_width_in_the_margins() {
     let narrow = crate::kernel::OwnerMargins {
         root: [62.0, 16.0, 34.0, 16.0],
         plain: [8.0; 4],
-        minimum: [0.0, 16.0, 0.0, 16.0],
-        readable_width: 300.0,
+        minimum: Some([0.0, 16.0, 0.0, 16.0]),
+        readable_width: Some(300.0),
     };
     k.set_owner_margins(2, Some(narrow)).unwrap();
     lay_out(&mut k);

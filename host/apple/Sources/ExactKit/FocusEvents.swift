@@ -71,6 +71,7 @@ final class FocusEvents {
     func reset() { current = nil; pending = nil }
     /// The node that has the focus, as the page was told.
     var focused: UInt32? { current?.node }
+    var blurring: UInt32? { pending?.node }
 
     private func snapshot(_ id: UInt32) -> FocusSnapshot? {
         guard let presenter, let view = presenter.textHost(id) else { return nil }
@@ -157,6 +158,15 @@ final class FocusEvents {
         // or flush, even if its handler removes the old views in the meantime.
         if pending?.path.contains(id) == true { return }
         guard presenter?.resetting != true, let old = current, old.path.contains(id) else { return }
+        current = nil
+        pending = nil
+        emit(named(old), entering: false, related: nil)
+    }
+
+    func removed(all ids: Set<UInt32>) {
+        guard presenter?.resetting != true, let old = current else { return }
+        if let pending, pending.path.contains(where: ids.contains) { return }
+        guard old.path.contains(where: ids.contains) else { return }
         current = nil
         pending = nil
         emit(named(old), entering: false, related: nil)

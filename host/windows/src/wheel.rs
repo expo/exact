@@ -192,6 +192,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fine_ticks_on_snap_scrollers_scroll_freely_and_settle_once() {
+        use exact_painted::{presenter::PainterChoice, Presenter};
+
+        let source = r#"component App
+  view
+    column width=400 height=900
+      scroll testId="near" width=400 height=400 scroll-snap-type="y"
+        column
+          for i in [0, 1, 2, 3, 4] key=i
+            view width=400 height=400 flex-shrink=0 scroll-snap-align="start"
+      scroll testId="pager" width=400 height=400 scroll-snap-type="y mandatory"
+        column
+          for i in [0, 1, 2, 3, 4] key=i
+            view width=400 height=400 flex-shrink=0 scroll-snap-align="start"
+"#;
+        let plan = contract::compile(source).unwrap().encode();
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            (),
+            (400., 900.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let near = {
+            let k = p.host().kernel();
+            k.node_by_key(k.find_by_test_id("near")[0]).unwrap().id
+        };
+        let pager = {
+            let k = p.host().kernel();
+            k.node_by_key(k.find_by_test_id("pager")[0]).unwrap().id
+        };
+        let mut t = p.host().now();
+        let mut run = |id, y: f32, lines: f32, counts: [u32; 2], ticks: usize| -> (Vec<f32>, f32) {
+            p.scroll_to(id, (0., 0.));
+            p.frame();
+            let mut seen = Vec::with_capacity(ticks);
+            for _ in 0..ticks {
+                t += 8.;
+                p.advance(t);
+                let chain = p.scrollers_at(200., y).chain;
+                let delta = notches((0., lines), counts, &chain, p.viewport());
+                p.wheel_at(200., y, delta.0, delta.1);
+                p.frame();
+                seen.push(p.scroll_of(id).1);
+            }
+            t += 100.;
+            p.advance(t);
+            p.frame();
+            (seen, p.scroll_of(id).1)
+        };
+        // Proximity: 60 touchpad ticks (4 pt each) reach 240 and stay there.
+        let (seen, rested) = run(near, 200., 1. / 12., [3, 3], 60);
+        assert_eq!(seen.first().copied(), Some(4.));
+        assert_eq!(seen.last().copied(), Some(240.));
+        assert_eq!(rested, 240.);
+        // Proximity: 6 notches at 1 line (16 pt each) reach 96 and stay there.
+        let (seen, rested) = run(near, 200., 1., [1, 1], 6);
+        assert_eq!(seen, [16., 32., 48., 64., 80., 96.]);
+        assert_eq!(rested, 96.);
+        // Proximity: 3 notches at 3 lines (48 pt each) move immediately.
+        let (seen, rested) = run(near, 200., 1., [3, 3], 3);
+        assert_eq!(seen, [48., 96., 144.]);
+        assert_eq!(rested, 144.);
+        // Mandatory: 60 touchpad ticks scroll freely to 240, then settle once to 400.
+        let (seen, rested) = run(pager, 600., 1. / 12., [3, 3], 60);
+        assert_eq!(seen.first().copied(), Some(4.));
+        assert_eq!(seen.last().copied(), Some(240.));
+        assert_eq!(rested, 400.);
+        // Mandatory: 6 notches at 1 line scroll freely to 96, then settle once to 400.
+        let (seen, rested) = run(pager, 600., 1., [1, 1], 6);
+        assert_eq!(seen, [16., 32., 48., 64., 80., 96.]);
+        assert_eq!(rested, 400.);
+        // Mandatory: 3 notches at 3 lines advance one page per notch immediately.
+        let (seen, rested) = run(pager, 600., 1., [3, 3], 3);
+        assert_eq!(seen, [400., 800., 1200.]);
+        assert_eq!(rested, 1200.);
+    }
+
     #[cfg(windows)]
     #[test]
     fn precision_wheels_preserve_distance_at_each_display_scale() {

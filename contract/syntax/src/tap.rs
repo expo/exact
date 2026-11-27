@@ -9,6 +9,8 @@ pub enum TapForm {
     Hover,
     /// `dblclick`: two presses, the second a double click (feed F10).
     Dblclick,
+    /// `dblclick touch`: two finger taps.
+    DoubleTap,
     /// `contextmenu`: a secondary press.
     Contextmenu,
     /// `into "key"`: a virtualized list's row brought into view by its key
@@ -23,6 +25,16 @@ pub enum TapForm {
         /// How far the fingers spread, greater than 0. `1` is no change.
         scale: f64,
         /// Where the pinch is centred, in the node's box; its middle when `None`.
+        at: Option<(f64, f64)>,
+    },
+    /// `swipe <left|right|up|down> [at x y]`: the platform's discrete swipe,
+    /// a real flick of 120 points that way from the node's middle, or from
+    /// `at` in its box, which the platform's recognizer reads (LLP 1057.001
+    /// §8.3).
+    Swipe {
+        /// `left`, `right`, `up` or `down`.
+        direction: String,
+        /// Where the swipe starts, in the node's box; its middle when `None`.
         at: Option<(f64, f64)>,
     },
     /// `wheel <dx> <dy>`: the agent's wheel at the node's middle, in points,

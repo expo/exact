@@ -1,17 +1,19 @@
-//! `dataTransfer=DataTransfer(text=, url=, files=[…])` (LLP 1094.000 D1, D2):
-//! what a drag carries, by `DataTransfer`'s names, a named-argument construct
-//! like `share(…)` and no value of its own. Each argument is optional and one
-//! is required; `text` and `url` are strings and `files` a list of strings.
-//! A literal `url` is absolute `http:` or `https:`, and a literal file is a
-//! file the app ships (`assets/…`) or an `app:/` path. Whether a shipped file
-//! exists is lowering's to find; the grants and the host's reach are the
-//! runner's.
+//! `dataTransfer=DataTransfer(text=, url=, files=[…], names=[…])` (LLP
+//! 1094.000 D1, D2, D14): what a drag carries, by `DataTransfer`'s names, a
+//! named-argument construct like `share(…)` and no value of its own. Each
+//! argument is optional and one of `text`, `url` and `files` is required;
+//! `text` and `url` are strings, and `files` and `names` lists of strings,
+//! `names` only beside `files`. A literal `url` is absolute `http:` or
+//! `https:`, a literal file is a file the app ships (`assets/…`) or an `app:/`
+//! path, and a literal name keeps D14's rule as written. Whether a shipped
+//! file exists is lowering's to find; the grants, the host's reach and the
+//! name as offered are the runner's.
 
 use super::{err, infer, Scope, Shapes, Ty, TypeError};
 use contract_syntax::{Expr, Span};
 use std::collections::BTreeSet;
 
-const USAGE: &str = "`dataTransfer=DataTransfer(files=[\"assets/photo.jpg\"])`, with `text=`, `url=` or `files=` by name";
+const USAGE: &str = "`dataTransfer=DataTransfer(files=[\"assets/photo.jpg\"])`, with `text=`, `url=`, `files=` or `names=` by name";
 
 /// The attribute's value: a literal `DataTransfer(…)` and its arguments.
 pub(super) fn check(value: &Expr, scope: &Scope, shapes: &Shapes) -> Result<(), TypeError> {
@@ -33,8 +35,9 @@ pub(super) fn check(value: &Expr, scope: &Scope, shapes: &Shapes) -> Result<(), 
 }
 
 fn arguments(args: &[Expr], scope: &Scope, shapes: &Shapes, span: Span) -> Result<(), TypeError> {
-    const NAMES: [&str; 3] = ["text", "url", "files"];
+    const NAMES: [&str; 4] = ["text", "url", "files", "names"];
     let mut seen = BTreeSet::new();
+    let (mut files_given, mut names_given) = (None, None);
     for arg in args {
         let Expr::NamedArg(name, value, at) = arg else {
             return err(
@@ -46,7 +49,7 @@ fn arguments(args: &[Expr], scope: &Scope, shapes: &Shapes, span: Span) -> Resul
         if !NAMES.contains(&name.as_str()) {
             return err(
                 "type-data-transfer",
-                format!("`DataTransfer` has no argument `{name}`; it takes `text=`, `url=` and `files=`. A dragged file keeps its own name"),
+                format!("`DataTransfer` has no argument `{name}`; it takes `text=`, `url=`, `files=` and `names=`"),
                 *at,
             );
         }
@@ -59,7 +62,14 @@ fn arguments(args: &[Expr], scope: &Scope, shapes: &Shapes, span: Span) -> Resul
         }
         let t = infer(value, scope, shapes)?;
         match name.as_str() {
-            "files" => files(value, &t)?,
+            "files" => {
+                files(value, &t)?;
+                files_given = Some(value);
+            }
+            "names" => {
+                names(value, &t)?;
+                names_given = Some((value, *at));
+            }
             _ if Ty::String.unify(&t).is_none() => {
                 return err(
                     "type-data-transfer",
@@ -71,6 +81,29 @@ fn arguments(args: &[Expr], scope: &Scope, shapes: &Shapes, span: Span) -> Resul
             _ => {}
         }
     }
+    if let Some((names, at)) = names_given {
+        let Some(files) = files_given else {
+            return err(
+                "type-data-transfer",
+                "`names=` names the files of `files=`, and this `DataTransfer` has no `files=`: add the files, or remove `names=`",
+                at,
+            );
+        };
+        if let (Expr::List(files, _), Expr::List(names, list)) = (&**files, &**names) {
+            if names.len() > files.len() {
+                return err(
+                    "type-data-transfer",
+                    format!(
+                        "`names=` has {} names for {} {}: each name goes with the file at its place in `files=`, so remove the names past the last file",
+                        names.len(),
+                        files.len(),
+                        if files.len() == 1 { "file" } else { "files" }
+                    ),
+                    *list,
+                );
+            }
+        }
+    }
     if seen.is_empty() {
         return err(
             "type-data-transfer",
@@ -79,6 +112,39 @@ fn arguments(args: &[Expr], scope: &Scope, shapes: &Shapes, span: Span) -> Resul
         );
     }
     Ok(())
+}
+
+/// `names=`: a list of strings, each literal name one every host can write
+/// as written, or empty for the file's own (LLP 1094.000 D14).
+fn names(value: &Expr, t: &Ty) -> Result<(), TypeError> {
+    if Ty::List(Box::new(Ty::String)).unify(t).is_none() {
+        return err(
+            "type-data-transfer",
+            format!("`names=` is a list of strings, a name for each file of `files=`, not `{t}`"),
+            value.span(),
+        );
+    }
+    let Expr::List(items, _) = value else {
+        return Ok(());
+    };
+    items.iter().try_for_each(name)
+}
+
+/// A literal name, or each arm of a choice between names.
+fn name(e: &Expr) -> Result<(), TypeError> {
+    match e {
+        Expr::Str(s, _) if s.is_empty() => Ok(()),
+        Expr::Str(s, at) => match exact_plan::drag_name_refusal(s) {
+            Some(why) => err(
+                "type-data-transfer",
+                format!("`names=` takes file names, not {s:?}: {why}"),
+                *at,
+            ),
+            None => Ok(()),
+        },
+        Expr::Ternary(_, yes, no, _) => name(yes).and_then(|()| name(no)),
+        _ => Ok(()),
+    }
 }
 
 /// A literal `url=`: absolute `http:` or `https:`, with a host, by the

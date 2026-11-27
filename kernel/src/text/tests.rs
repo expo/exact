@@ -9,7 +9,7 @@ fn style(font_size: f32) -> TextStyle {
         font_variations: Default::default(),
         font_optical_sizing: Default::default(),
         font_family: 0,
-        line_height: None,
+        line_height: crate::LineHeight::Normal,
         letter_spacing: 0.0,
         font_variant_numeric: 0,
         font_variant_ligatures: 0,
@@ -113,7 +113,7 @@ fn text_box_trim_cuts_to_the_cap_height_and_baseline() {
 #[test]
 fn a_trimmed_paragraphs_last_line_ends_at_its_height() {
     let mut short = style(10.0);
-    short.line_height = Some(4.0);
+    short.line_height = crate::LineHeight::Length(4.0);
     let runs = [TextRun {
         text: "Ab\nAb".into(),
         style: short,

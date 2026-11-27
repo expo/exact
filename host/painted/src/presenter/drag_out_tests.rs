@@ -27,7 +27,7 @@ const APP: &str = r##"component App
         text "Send"
       button press=picture testId="picture"
         text "Picture"
-      button id="card" testId="card" draggable=true dataTransfer=DataTransfer(text="Mount Fuji", url="https://example.com/1016", files=files) width=200 height=80
+      button id="card" testId="card" draggable=true dataTransfer=DataTransfer(text="Mount Fuji", url="https://example.com/1016", files=files, names=["", "Fuji at dawn"]) width=200 height=80
         text "Card"
       box testId="both" draggable=true dataTransfer=DataTransfer(text="b") contextmenu=opened width=200 height=80
         text "Both"
@@ -76,7 +76,7 @@ impl DataSource for Granted {
 }
 
 /// A shell that makes windows and keeps nothing they draw.
-struct Blank;
+pub(super) struct Blank;
 impl SurfacePainter for Blank {
     fn record(&mut self, _: (f32, f32), _: f32, _: &mut dyn FnMut(&mut dyn Backend)) -> Vec<u32> {
         Vec::new()
@@ -171,11 +171,23 @@ fn a_long_press_on_a_draggable_node_asks_the_reader_for_its_drag() {
     );
     assert_eq!(words[next], 2, "two files");
     let (shipped, next) = string(words, next + 1);
-    let app = string(words, next).0;
+    let (shipped_name, next) = string(words, next);
+    let (app, next) = string(words, next);
+    let app_name = string(words, next).0;
     assert_eq!(
-        [shipped.as_str(), app.as_str()],
-        ["assets/a.png", "app:/data/shared/fuji.png"],
-        "as the node names them"
+        [
+            shipped.as_str(),
+            shipped_name.as_str(),
+            app.as_str(),
+            app_name.as_str()
+        ],
+        [
+            "assets/a.png",
+            "a.png",
+            "app:/data/shared/fuji.png",
+            "Fuji at dawn.png"
+        ],
+        "as the node names them, each with the name it is offered under (LLP 1094.000 D14)"
     );
 }
 
@@ -461,7 +473,16 @@ fn the_request_writes_the_words_the_reader_reads() {
         service: true,
         text: "Fuji".into(),
         url: "https://example.com/1".into(),
-        files: vec!["assets/a.png".into(), "app:/data/b.pdf".into()],
+        files: vec![
+            super::drag_out::DragFile {
+                entry: "assets/a.png".into(),
+                name: "a.png".into(),
+            },
+            super::drag_out::DragFile {
+                entry: "app:/data/b.pdf".into(),
+                name: "Notes.pdf".into(),
+            },
+        ],
     };
     let mut words = Vec::new();
     drag.encode(&mut words);
@@ -469,8 +490,8 @@ fn the_request_writes_the_words_the_reader_reads() {
         words,
         [
             7, 10, 20, 30, 40, 15, 25, 1, 4, 1768584518, 21, 1886680168, 791624307, 1835104357,
-            778398832, 795701091, 49, 2, 12, 1702064993, 1630499700, 1735290926, 15, 980447329,
-            1952539695, 778186593, 6710384
+            778398832, 795701091, 49, 2, 12, 1702064993, 1630499700, 1735290926, 5, 1852845665,
+            103, 15, 980447329, 1952539695, 778186593, 6710384, 9, 1702129486, 1685073523, 102
         ]
     );
 }

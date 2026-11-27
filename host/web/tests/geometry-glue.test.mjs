@@ -11,16 +11,20 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../glue.js', import.meta.url), 'utf8');
 const declarations = glueDeclarations(source, ['toldScreenReader', 'pageChanged', 'resizeRunner', 'mediaChanged']);
-// The glue's own registrations of the two `resize` listeners, as written.
+const environment = readFileSync(new URL('../navigation/environment.js', import.meta.url), 'utf8');
+const orientation = glueDeclarations(environment, ['screenOrientation', 'orientationCode', 'onPreferences']);
+// Register the window, visual viewport and preference listeners as the page does.
 const registrations = parseSync('glue.js', source).program.body
   .filter(s => s.type === 'ExpressionStatement')
   .map(s => source.slice(s.start, s.end))
-  .filter(text => /addEventListener\("resize"/.test(text));
+  .filter(text => /addEventListener\("resize"|^onPreferences\(/.test(text));
 
 function page() {
   const calls = [], window = new EventTarget(), visualViewport = new EventTarget();
   const state = {
-    innerWidth: 402, innerHeight: 874, JSON, document: { body: {} }, visualViewport,
+    innerWidth: 402, innerHeight: 874, JSON,
+    screen: { orientation: Object.assign(new EventTarget(), {type: "portrait-primary", angle: 0}) },
+    queries: () => [], updates: () => [], document: { body: {} }, visualViewport,
     addEventListener: window.addEventListener.bind(window),
     readOut: value => value, applyBatch: () => {}, presence: { resize: x => x },
     now: () => 0, preferences: () => 0, foldBits: () => 0, requestAnimationFrame: () => {}, positionContexts: () => {},
@@ -34,16 +38,25 @@ function page() {
       exact_resize: (w, h, _now, _prefs, len) => { calls.push(['resize', w, h, len]); return state.refuse ? '{"ops":[],"error":"viewport: InvalidViewport"}' : '{}'; },
       exact_set_viewport_geometry: len => { calls.push(['geometry', state.innerWidth, state.innerHeight, len]); return '{}'; },
       exact_set_page: () => '{}',
+      exact_set_orientation: code => { state.orientationCodeRead = code; },
       exact_set_screen_reader: code => { state.readerCode = code; },
     },
   };
   state.host = state;
   vm.createContext(state);
-  vm.runInContext(`${declarations}\n${registrations.join('\n')}`, state);
+  vm.runInContext(`${orientation}\n${declarations}\n${registrations.join('\n')}`, state);
   const rotate = () => { [state.innerWidth, state.innerHeight] = [state.innerHeight, state.innerWidth]; };
   return { calls, window, visualViewport, rotate, state,
     reader: value => { state.reader = value; vm.runInContext('pageChanged()', state); } };
 }
+
+test('a screen half-turn reaches wasm at the same window size', () => {
+  const p = page();
+  Object.assign(p.state.screen.orientation, {type: 'portrait-secondary', angle: 180});
+  p.state.screen.orientation.dispatchEvent(new Event('change'));
+  expect(p.state.orientationCodeRead).toBe(26);
+  expect(p.calls.filter(([op]) => op === 'resize').map(row => row.slice(1, 3))).toEqual([[402, 874]]);
+});
 
 test('a screen-reader substitute reaches the viewport at the current size', () => {
   const p = page();

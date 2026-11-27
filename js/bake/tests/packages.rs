@@ -470,10 +470,14 @@ fn eval_is_no_constructor_on_hermes() {
     );
 }
 
-/// What no executor has is refused by every producer, naming the package,
-/// its version and the file: a Node built-in, a native addon, a dependency
-/// not installed, the DOM, Node's globals, and a computed `require`. Nothing
-/// of a package runs in the build's process, refused or not.
+/// What no executor can bundle or run is refused by every producer, naming the
+/// package, its version and the file: a surviving Node built-in, a native addon,
+/// a dependency not installed, a computed `require` or `import()`, and
+/// `import.meta.env` in package code (LLP 1195.000 D1). Surviving unguarded
+/// DOM/Node globals in packages warn (`[portable-global]`) instead of refusing;
+/// `try/catch`-guarded probes, dead branches, and the minimal `process` shim
+/// build without warnings. The app's own JS still refuses Node/DOM globals.
+/// Nothing of a package runs in the build's process, refused or not.
 #[test]
 fn package_code_no_executor_runs_is_refused_by_package_and_file() {
     let app = App::new("refused");
@@ -481,7 +485,7 @@ fn package_code_no_executor_runs_is_refused_by_package_and_file() {
     // Each after the sentinel line, so a position is on line 2.
     let cases = [
         (
-            "const fs = require('fs');\nmodule.exports = 'x';\n",
+            "const fs = require('fs');\nmodule.exports = () => fs;\n",
             "bad@3.1.0 (index.js) imports Node's built-in 'fs'",
         ),
         (
@@ -493,62 +497,8 @@ fn package_code_no_executor_runs_is_refused_by_package_and_file() {
             "bad@3.1.0 (index.js) imports 'missing', which is not installed",
         ),
         (
-            "module.exports = document.title;\n",
-            "bad@3.1.0 (index.js:2:18) uses the DOM's 'document'",
-        ),
-        (
-            "module.exports = Buffer.from('x').toString();\n",
-            "bad@3.1.0 (index.js:2:18) uses Node's 'Buffer'",
-        ),
-        (
             "const name = 'x';\nmodule.exports = require('./' + name);\n",
             "bad@3.1.0 (index.js:3:18) loads a module by a computed name",
-        ),
-        // An unrelated test of the name, or a parameter of that name in another function, guards nothing.
-        (
-            "typeof document;\nmodule.exports = document.title;\n",
-            "bad@3.1.0 (index.js:3:18) uses the DOM's 'document'",
-        ),
-        (
-            "function f(document) { return document; }\nmodule.exports = () => document.title;\n",
-            "bad@3.1.0 (index.js:3:24) uses the DOM's 'document'",
-        ),
-        // Nor does a `try`, or reaching it through the global object.
-        (
-            "try { module.exports = document.cookie; } catch (e) {}\n",
-            "bad@3.1.0 (index.js:2:24) uses the DOM's 'document'",
-        ),
-        (
-            "module.exports = () => globalThis.localStorage.getItem('k');\n",
-            "bad@3.1.0 (index.js:2:24) uses the DOM's 'localStorage'",
-        ),
-        // A local named `Function` is the alias check's: here it holds `process`.
-        (
-            "const Function = globalThis.process;\nmodule.exports = () => Function.cwd();\n",
-            "bad@3.1.0 (index.js:3:24) uses Node's 'process'",
-        ),
-        // The page's other names for itself.
-        (
-            "module.exports = () => globalThis.top.document.cookie;\n",
-            "bad@3.1.0 (index.js:2:24) uses the DOM's 'top'",
-        ),
-        // Node's `process` read where its absence throws: bare (`?.` does not
-        // catch a name that is not there), or a member of an absent value.
-        (
-            "module.exports = () => process.env.API;\n",
-            "bad@3.1.0 (index.js:2:24) uses Node's 'process'",
-        ),
-        (
-            "module.exports = () => process?.env;\n",
-            "bad@3.1.0 (index.js:2:24) uses Node's 'process'",
-        ),
-        (
-            "module.exports = () => globalThis.process.env.API;\n",
-            "bad@3.1.0 (index.js:2:24) uses Node's 'process'",
-        ),
-        (
-            "const node = globalThis.process;\nmodule.exports = () => node.env.API;\n",
-            "bad@3.1.0 (index.js:3:24) uses Node's 'process'",
         ),
         (
             "module.exports = (name) => import(name);\n",
@@ -576,58 +526,42 @@ fn package_code_no_executor_runs_is_refused_by_package_and_file() {
     );
     let ran = app.0.join("ran");
     app.answer("import bad from 'bad';", "bad + count");
-    // A global the check cannot follow, one per line (the first two, `Function.prototype` held or destructured, are
-    // warned as every use of `Function` is, not refused): a `const` holding `globalThis.process` (a `for` head's, one whose `globalThis` a later
-    // scope shadows, one holding an optional chain from it or from another such `const`) used unguarded; that chain
-    // as a parameter's default;
-    // a test the check cannot read as `process` being there (a property beside one, `||`, `!`); `Function`
-    // beside `export * as Function`, which binds no name in its own module; and a global held through `??`.
-    let unfollowed = [
-        "const proto = Function.prototype; proto.constructor('return 1');",
-        "const { constructor: make } = Function.prototype; make('return 1');",
-        "for (const process = globalThis.process; ; ) { process.env.HOME; break; }",
-        "const node = globalThis.process; function hide(globalThis) { return node.env.HOME; }",
-        "const env = globalThis.process?.env; env.API;",
-        "const host = globalThis.process; const vars = host?.env; export const home = () => vars.HOME;",
-        "function read(env = globalThis.process?.env) { return env.API; }",
-        "const features = { node: typeof process !== 'undefined', enabled: true }; features.enabled ? process.cwd() : '/';",
-        "const ok = typeof Object !== 'undefined' || typeof process !== 'undefined'; if (ok) process.env.HOME;",
-        "function absent() { const no = typeof process === 'undefined'; if (!no) return; return process.env.HOME; }",
-        "export * as Function from './fn.js';",
-        "export const made = Function('return 1');",
-        "const Kind = globalThis.document?.defaultView?.Element ?? globalThis.Element; Kind.prototype;",
-        "export default [make, hide, read, absent];",
+    // Surviving unguarded DOM/Node globals in packages emit [portable-global] warnings
+    // (not hard build refusals); try/catch-guarded probes and minimal `process` emit none (LLP 1195.000 D1).
+    let warn_only = [
+        "const okTry = (() => { try { return document.cookie; } catch { return 'ok'; } })();",
+        "const env = process.env.NODE_ENV;",
+        "export const deadBuiltin = () => require('fs');",
+        "export default [okTry, env, () => document.title, () => Buffer.from('x'), () => globalThis.localStorage.getItem('k'), () => globalThis.top.document.cookie];",
     ];
     app.put(
         "node_modules/bad/index.js",
-        &format!("{}{}\n", sentinel(&ran), unfollowed.join("\n")),
+        &format!("{}{}\n", sentinel(&ran), warn_only.join("\n")),
     );
-    let refusals = [
-        "4:48) uses Node's 'process'",
-        "5:69) uses Node's 'process'",
-        "6:38) uses Node's 'process'",
-        "7:84) uses Node's 'process'",
-        "8:21) uses Node's 'process'",
-        "9:94) uses Node's 'process'",
-        "10:85) uses Node's 'process'",
-        "11:88) uses Node's 'process'",
-        "14:59) uses the DOM's 'Element'",
-    ];
     for result in every(&app) {
-        let error = result.expect_err("unfollowed");
-        for why in refusals {
+        result.expect("surviving package DOM/Node globals warn rather than refuse");
+    }
+    if exact_js::ENGINE_LINKED {
+        let warnings = bake(&app.0, &Tools::default()).unwrap().warnings;
+        for name in ["'document'", "'Buffer'", "'localStorage'", "'top'"] {
             assert!(
-                error.contains(&format!("bad@3.1.0 (index.js:{why}")),
-                "{why}: {error}"
+                warnings
+                    .iter()
+                    .any(|w| w.contains("[portable-global]") && w.contains(name)),
+                "expected [portable-global] warning for {name}: {warnings:?}"
             );
         }
-        assert_eq!(
-            error.matches("bad@3.1.0 (index.js:").count(),
-            refusals.len(),
-            "{error}"
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("index.js:2:") && w.contains("[portable-global]")),
+            "try/catch probe should not warn: {warnings:?}"
         );
     }
-    assert!(!ran.exists(), "a refused package's code never runs");
+    assert!(
+        !ran.exists(),
+        "a package's code never runs in the build process"
+    );
     for (code, why) in cases {
         app.put(
             "node_modules/bad/index.js",
@@ -803,9 +737,10 @@ fn feature_tests_and_names_that_build_no_code_are_not_refused() {
         result.unwrap();
     }
     if exact_js::ENGINE_LINKED {
+        // `Object.keys({ ...globalThis.process?.env }).length` is 1 (`NODE_ENV` from the minimal frozen `process` shim, LLP 1195.000 D1.3).
         assert_eq!(
             message(&app),
-            Value::str("0 undefined undefined none / false 0 true function function undefined 2")
+            Value::str("1 undefined undefined none / false 0 true function function undefined 2")
         );
     }
     // The library stays unloaded for the app's own code.

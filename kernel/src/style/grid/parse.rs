@@ -1,7 +1,7 @@
 //! Extend Taffy's track grammar with the kernel's length calculations.
 
 use super::*;
-use cssparser::Token;
+use cssparser::{ParseError, Token};
 use taffy::{CssParseResult, FromCss};
 
 // Carry the wire's calculation limits through Taffy's generic parser.
@@ -30,7 +30,7 @@ fn template<const CANONICAL: bool>(text: &str) -> Option<TaffyTracks<String, Gri
 }
 
 impl<const CANONICAL: bool> FromCss for Parsed<GridTrackComponent, CANONICAL> {
-    fn from_css<'i>(parser: &mut Parser<'i, '_>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
         if parser
             .try_parse(|p| p.expect_function_matching("repeat"))
             .is_ok()
@@ -56,7 +56,7 @@ impl<const CANONICAL: bool> FromCss for Parsed<GridTrackComponent, CANONICAL> {
 }
 
 impl<const CANONICAL: bool> FromCss for Parsed<GridTrack, CANONICAL> {
-    fn from_css<'i>(parser: &mut Parser<'i, '_>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
         if parser
             .try_parse(|p| p.expect_function_matching("minmax"))
             .is_ok()
@@ -66,7 +66,7 @@ impl<const CANONICAL: bool> FromCss for Parsed<GridTrack, CANONICAL> {
                     GridTrackMin::Calc(c)
                 } else {
                     min_from_taffy(taffy::MinTrackSizingFunction::from_css(p)?.expand())
-                        .ok_or_else(|| p.new_custom_error("unsupported minimum"))?
+                        .ok_or_else(|| ParseError::custom("unsupported minimum"))?
                 };
                 p.expect_comma()?;
                 let max = if let Ok(c) = p.try_parse(calculation::<CANONICAL>) {
@@ -74,7 +74,7 @@ impl<const CANONICAL: bool> FromCss for Parsed<GridTrack, CANONICAL> {
                 } else {
                     match max_from_taffy(taffy::MaxTrackSizingFunction::from_css(p)?.expand()) {
                         Some(GridTrackMaxExpanded::Track(max)) => max,
-                        _ => return Err(p.new_custom_error("unsupported maximum")),
+                        _ => return Err(ParseError::custom("unsupported maximum")),
                     }
                 };
                 Ok(Self(GridTrack::MinMax(min, max)))
@@ -85,15 +85,13 @@ impl<const CANONICAL: bool> FromCss for Parsed<GridTrack, CANONICAL> {
         }
         track_from_taffy(TrackSizingFunction::from_css(parser)?)
             .map(Self)
-            .ok_or_else(|| parser.new_custom_error("unsupported track"))
+            .ok_or_else(|| ParseError::custom("unsupported track"))
     }
 }
 
 const MATH: [&str; 4] = ["calc", "min", "max", "clamp"];
 
-fn calculation<'i, const CANONICAL: bool>(
-    p: &mut Parser<'i, '_>,
-) -> CssParseResult<'i, Comparison> {
+fn calculation<'i, const CANONICAL: bool>(p: &mut Parser<'i>) -> CssParseResult<'i, Comparison> {
     let start = p.position();
     let text = match p.next()?.clone() {
         // A `rem` length resolves with the root font size, as a calculation does
@@ -107,8 +105,8 @@ fn calculation<'i, const CANONICAL: bool>(
             })?;
             p.slice_from(start).to_string()
         }
-        _ => return Err(p.new_custom_error("expected a length calculation")),
+        _ => return Err(ParseError::custom("expected a length calculation")),
     };
     super::super::calc::grid(&text, CANONICAL)
-        .ok_or_else(|| p.new_custom_error("expected a px, rem or % calculation"))
+        .ok_or_else(|| ParseError::custom("expected a px, rem or % calculation"))
 }

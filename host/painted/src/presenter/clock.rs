@@ -24,7 +24,7 @@ impl<D: DataSource> Presenter<D> {
         frame_ms: f64,
     ) -> (bool, Option<String>) {
         let motion = self.host.motion_due_ms().is_some_and(|due| due <= now);
-        if vsync && self.host.wants_frames() {
+        if vsync && self.wants_frames() {
             *last_tick = now;
             (false, self.animation_frame(now))
         } else if self.wake_due_ms().is_some_and(|due| due <= now)
@@ -76,6 +76,7 @@ impl<D: DataSource> Presenter<D> {
         self.host
             .timer_due_ms()
             .into_iter()
+            .chain(self.module_due())
             .chain(self.host.runner().waits().next_check())
             .chain(self.idle_timer_retry.then_some(self.host.now()))
             .reduce(f64::min)
@@ -89,6 +90,7 @@ impl<D: DataSource> Presenter<D> {
         let after = self.finish_commit();
         self.hatch_timers(now_ms);
         let held = self.release_held_tap(false);
+        self.settle_wheel_snaps();
         let ends = self.deliver_scroll_ends();
         e.or(after)
             .or(held)
@@ -117,6 +119,7 @@ impl<D: DataSource> Presenter<D> {
         self.dirty |= paint;
         let after = self.finish_commit();
         self.hatch_presented(now_ms);
+        self.settle_wheel_snaps();
         let ends = self.deliver_scroll_ends();
         admission.or(e).or(after).or(ends)
     }
@@ -182,6 +185,11 @@ impl<D: DataSource> Presenter<D> {
             .host
             .runner_mut()
             .fire_native_timer(timer.index, timer.generation, now_ms);
+        // An idle firing, or a callback the runner no longer owes: nothing
+        // committed, so there is nothing to lay out, service or paint.
+        if a.receipts.is_empty() && a.error.is_none() {
+            return None;
+        }
         let (e, paint) = self.host.advanced(a);
         self.dirty |= paint;
         let after = self.finish_commit();
@@ -335,6 +343,7 @@ impl<D: DataSource> Presenter<D> {
         self.dirty = true;
         let after = self.after_commit();
         let held = self.release_held_tap(false);
+        self.settle_wheel_snaps();
         let ends = self.deliver_scroll_ends();
         (landed, e.or(after).or(held).or(ends))
     }

@@ -21,6 +21,12 @@ final class ArrangementPaneController: UIViewController {
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // Tell the pane's inset and block in this layout, as a route's block is, so that its content moves in the animation
+        // UIKit lays it out in
+        Presenter.inPaneLayout { [presenter = node.presenter] in
+            if #available(iOS 27.1, *) { presenter?.arrangements.reportInsets() }
+            presenter?.owners.publish()
+        }
         changed()
     }
     override func viewSafeAreaInsetsDidChange() {
@@ -176,7 +182,12 @@ struct BottomReach {
 @available(iOS 27.1, *)
 package final class ArrangementHost {
     private unowned let presenter: Presenter
+    /// The boxes a hatch arranges, each with the controller it gave.
     private var requests: [UInt32: UIArrangementViewController] = [:]
+    /// The other boxes whose author says `arrangement` (LLP 1188 D3): the controller Exact made for each, and the word it has.
+    private var authored: [UInt32: (controller: UIArrangementViewController, word: String)] = [:]
+    /// The boxes whose author's arrangement cannot stand, and why, as the journal was last told.
+    private var refusals: [UInt32: String] = [:]
     private var insetScrollers: [UInt32: UIScrollView] = [:]
     private var syncingInsets = false
     /// A sync asked for while one runs, by a UIKit callback inside its writes: the running one queues a pass as it ends.
@@ -185,6 +196,10 @@ package final class ArrangementHost {
     /// The panes UIKit hid at the last pass, after its layout, which the covers read: a report can find UIKit's views
     /// partway through a change
     package private(set) var hidden: Set<UInt32> = []
+    /// Each pane's own safe area, which its content reads (LLP 1123 D9), as UIKit gives its controller's view
+    private(set) var insets = LocalInsetsReport()
+    /// Those the kernel is told are covered whole
+    package var covered: Set<UInt32> { hidden.filter { presenter.views[$0] != nil && !presenter.menus.ownsCover($0) } }
     private var reaches: [UInt32: BottomReach] = [:]
     private var children: [UInt32: [UInt32]] = [:]
     private(set) var entries: [UInt32: Entry] = [:]
@@ -235,8 +250,69 @@ package final class ArrangementHost {
         return true
     }
 
+    /// The arrangement an author's word names, for `give` to set on a controller; `nil` for a word that names none.
+    private static func named(_ word: String) -> ((UIArrangementViewController, Bool) -> Void)? {
+        switch word {
+        case "split": return { $0.updateArrangement(.split, animated: $1) }
+        case "split horizontal": return { $0.updateArrangement(.split.axes(.horizontal), animated: $1) }
+        case "split vertical": return { $0.updateArrangement(.split.axes(.vertical), animated: $1) }
+        case "overlay": return { $0.updateArrangement(.overlay, animated: $1) }
+        case "overlay horizontal": return { $0.updateArrangement(.overlay.axes(.horizontal), animated: $1) }
+        case "overlay vertical": return { $0.updateArrangement(.overlay.axes(.vertical), animated: $1) }
+        default: return nil
+        }
+    }
+
+    /// Take up what the authors say now, an outer box before one inside it. A box a hatch arranges is the hatch's.
+    private func readAuthored() {
+        let carriers = presenter.carrying("arrangement").filter { $0.props["arrangement"] != "none" && requests[$0.id] == nil }
+        guard !authored.isEmpty || !refusals.isEmpty || !carriers.isEmpty else { return }
+        var said: [UInt32: String] = [:], refused: [UInt32: String] = [:], boxes: [UInt32: UInt32] = [:]
+        for entry in entries.values { for holder in entry.holders where holder.node.superview === holder.view { boxes[holder.node.id] = entry.node.id } }
+        // Up to a dialog or a popover. UIKit takes the view of a pane it hides out, and a stack's containers hold its routes'.
+        let parent = { [presenter, boxes] (id: UInt32) -> UInt32? in presenter.menus.ownsCover(id) ? nil : boxes[id] ?? presenter.logicalParent(of: id) }
+        let around = Set(presenter.navigation.routeSurfaces.values.flatMap { sequence(first: $0.node.id, next: parent).dropFirst() })
+        let placed = carriers.map { ($0, Array(sequence(first: $0.id, next: parent).dropFirst())) }
+        for (node, above) in placed.sorted(by: { $0.1.count < $1.1.count }) {
+            let word = node.props["arrangement"] ?? ""
+            let why: String? = if Self.named(word) == nil { "\"\(word)\" is no arrangement" } else if around.contains(node.id) { "it holds a stack's routes" } else { misplaced(node, above, inside: said) }
+            if let why { refused[node.id] = why } else { said[node.id] = word }
+        }
+        for (id, why) in refused where refusals[id] != why {
+            presenter.session?.log("`arrangement` on \(presenter.views[id]?.props["testId"] ?? "#\(id)") is laid out in CSS: \(why)")
+        }
+        refusals = refused
+        authored = authored.filter { said[$0.key] != nil }
+        for (id, word) in said {
+            guard let held = authored[id] else { authored[id] = (UIArrangementViewController(), word); continue }
+            authored[id]?.word = word
+            // Outside the batch, as a hatch's `changed` runs: UIKit lays the panes out in the animation
+            if held.word != word { presenter.session?.afterApplying { [weak self] in self?.give(id, to: held.controller, animated: true) } }
+        }
+    }
+
+    /// Why UIKit's arrangement cannot stand at `node`, for an author who asks for one (LLP 1188 D3), with the arrangements
+    /// already admitted: Apple advises against one in a scroll view, a split view or another container that could put part
+    /// of it out of reach, and for navigation around one.
+    private func misplaced(_ node: NodeView, _ above: [UInt32], inside admitted: [UInt32: String]) -> String? {
+        let ids = childIDs(of: node)
+        if ids.count != 2 { return "it has not two children" }
+        if ids.contains(where: presenter.menus.ownsCover) { return "a child is a dialog or a popover" }
+        if ([node.id] + above).contains(where: { presenter.views[$0].map { $0.scrollView != nil || $0.scrollDormant } ?? false }) { return "it is in a scroll view" }
+        if above.contains(where: { admitted[$0] != nil || requests[$0] != nil }) { return "it is in another arrangement" }
+        return ViewPresentation.controller(for: node, layout: true)?.splitViewController == nil ? nil : "it is in a split view's column"
+    }
+
+    /// Give box `id`'s controller the word its author says now, while it is the author's.
+    private func give(_ id: UInt32, to controller: UIArrangementViewController, animated: Bool) {
+        guard let held = authored[id], held.controller === controller else { return }
+        // Off screen there is nothing to animate
+        Self.named(held.word)?(controller, animated && controller.viewIfLoaded?.window != nil)
+    }
+
     func record(_ node: NodeView, children ids: [UInt32]) {
-        if node.props["hatch"] != nil || requests[node.id] != nil || entries[node.id] != nil { children[node.id] = ids }
+        let arranged = node.props["hatch"] != nil || node.props["arrangement"] != nil || requests[node.id] != nil || entries[node.id] != nil
+        children[node.id] = arranged ? ids : nil
     }
 
     package func owns(_ node: NodeView, under parent: NodeView) -> Bool {
@@ -244,19 +320,22 @@ package final class ArrangementHost {
     }
 
     func sync() {
-        guard !requests.isEmpty || !entries.isEmpty || !insetScrollers.isEmpty else { return }
-        for (id, entry) in entries where requests[id] !== entry.controller || presenter.views[id] !== entry.node || entry.panes.contains(where: { presenter.views[$0.id] !== $0 }) || (children[id] != nil && children[id] != entry.panes.map(\.id)) {
+        readAuthored()
+        let wanted = authored.mapValues(\.controller).merging(requests) { _, given in given }
+        guard !wanted.isEmpty || !entries.isEmpty || !insetScrollers.isEmpty else { return }
+        for (id, entry) in entries where wanted[id] !== entry.controller || presenter.views[id] !== entry.node || entry.panes.contains(where: { presenter.views[$0.id] !== $0 }) || (children[id] != nil && children[id] != entry.panes.map(\.id)) {
             retire(entry); entries[id] = nil
             if presenter.views[id] === entry.node { presenter.placeChildren(entry.node, children[id] ?? entry.panes.map(\.id)) }
             // Its panes are no longer hidden by UIKit: their covers go with the next layout pass.
             layoutChanged()
         }
-        for (id, controller) in requests where entries[id] == nil {
+        for (id, controller) in wanted where entries[id] == nil {
             guard let node = presenter.views[id], let owner = ViewPresentation.controllers(for: node, layout: true).first,
                   let ids = paneIDs(of: node) else { continue }
             let panes = ids.compactMap { presenter.views[$0] }
             let entry = Entry(node: node, controller: controller, panes: panes) { [weak self] in self?.layoutChanged() }
             entries[id] = entry
+            give(id, to: controller, animated: false)
             owner.addChild(controller)
             controller.view.frame = node.container.bounds
             controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -273,13 +352,21 @@ package final class ArrangementHost {
 
     private func refreshContentSizes() {
         for entry in entries.values {
-            for holder in entry.holders { holder.contentChanged() }
+            for holder in entry.holders {
+                holder.followMinimumMargins(of: holder.node)
+                holder.contentChanged()
+            }
         }
+    }
+
+    /// The box's authored children, which an arrangement's panes are while UIKit holds them.
+    private func childIDs(of node: NodeView) -> [UInt32] {
+        children[node.id] ?? entries[node.id]?.panes.map(\.id) ?? presenter.flats.children(of: node.id) ?? node.structuralChildren.map(\.id)
     }
 
     /// Promote flat leaves so both authored children can enter UIKit containment
     private func paneIDs(of node: NodeView) -> [UInt32]? {
-        let ids = children[node.id] ?? node.container.subviews.compactMap { ($0 as? NodeView)?.id }
+        let ids = childIDs(of: node)
         guard ids.count == 2 else { return nil }
         for id in ids where presenter.views[id] == nil { presenter.flats.promote(id) }
         return ids.allSatisfy { presenter.views[$0] != nil } ? ids : nil
@@ -292,6 +379,10 @@ package final class ArrangementHost {
     private func retire(_ entry: Entry) {
         // Before the panes move, whose callbacks a pass may be running under
         for pane in entry.panes { reaches[pane.id] = nil }
+        // Exact's part on each pane goes with it, what an app set there staying (LLP 1123 D11)
+        for holder in entry.holders {
+            ContributionsIOS.existing(on: holder)?.write(ContributionsIOS.Identity(node: holder.node.id, operation: .containerClearance), .zero)
+        }
         let ids = children[entry.node.id] ?? entry.panes.map(\.id)
         let held = entry.holders.filter { $0.node.superview === $0.view }.map(\.node)
         for pane in held where presenter.views[pane.id] !== pane || !ids.contains(pane.id) { pane.removeFromSuperview() }
@@ -323,15 +414,28 @@ package final class ArrangementHost {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             layoutPending = false
-            // With nothing arranged too: the panes of a retired arrangement give their covers up
+            // With nothing arranged too: the panes of a retired arrangement give their covers and their own insets up
             hidden = Set(hiddenPanes)
-            if !entries.isEmpty || !insetScrollers.isEmpty {
+            let arranging = !entries.isEmpty || !insetScrollers.isEmpty
+            if arranging {
                 syncInsets()
                 refreshContentSizes()
-                presenter.owners.publish()
             }
+            reportInsets()
+            if arranging { presenter.owners.publish() }
             presenter.navigation.coversChanged()
         }
+    }
+
+    /// Tell each pane's own safe area where it changed. One out of a window keeps its last.
+    func reportInsets() {
+        var wanted: [UInt32?: [CGFloat]] = [:]
+        for holder in entries.values.flatMap(\.holders) {
+            let id = holder.node.id, safe = holder.view.safeAreaInsets
+            wanted[id] = holder.view.window == nil ? insets.wanted[id] : [safe.top, safe.right, safe.bottom, safe.left].map { max(0, $0) }
+        }
+        insets.wanted = wanted
+        presenter.session?.localInsets(insets.take { presenter.draws($0) })
     }
 
     /// Panes touching a route edge own its inset; interior panes must already clear that edge.
@@ -423,7 +527,7 @@ package final class ArrangementHost {
             }
             if let node, presenter.navigation.routeSurfaces.values.contains(where: { $0.collapseScroll === node || $0.edgeScroll === node }) { continue }
             if let node {
-                node.keepingScrollTop(of: scroll) { scroll.contentInsetAdjustmentBehavior = .never; node.scrollOrigin = 0; node.scrollCollapsed = 0 }
+                node.keepingScrollTop(of: scroll) { scroll.contentInsetAdjustmentBehavior = .never; node.scrollOrigin = 0 }
             } else {
                 let top = scroll.contentOffset.y + scroll.adjustedContentInset.top
                 scroll.contentInsetAdjustmentBehavior = .never
@@ -467,8 +571,10 @@ package final class ArrangementHost {
     private func syncSafeAreas() {
         for entry in entries.values {
             guard let route = route(of: entry.node), let window = route.surface.window else { continue }
+            // Exact's part, on each pane's ledger, what an app set there staying (LLP 1123 D11)
+            let id = { (holder: ArrangementPaneController) in ContributionsIOS.Identity(node: holder.node.id, operation: .containerClearance) }
             if entry.controller.parent === route {
-                for holder in entry.holders where holder.additionalSafeAreaInsets != .zero { holder.additionalSafeAreaInsets = .zero }
+                for holder in entry.holders { ContributionsIOS.existing(on: holder)?.write(id(holder), .zero) }
                 continue
             }
             for holder in entry.holders where holder.view.window === window {
@@ -476,10 +582,11 @@ package final class ArrangementHost {
                 let room = route.surface.bounds.inset(by: route.surface.safeAreaInsets)
                 let expected = UIEdgeInsets(top: max(0, min(frame.height, room.minY - frame.minY)), left: 0,
                                            bottom: max(0, min(frame.height, frame.maxY - room.maxY)), right: 0)
-                let actual = holder.view.safeAreaInsets, extra = holder.additionalSafeAreaInsets
+                // What Exact's part did to the pane's safe area, as measured, which UIKit's floor can hold
+                let actual = holder.view.safeAreaInsets, extra = ContributionsIOS.existing(on: holder)?.effect(of: id(holder)) ?? .zero
                 let needed = UIEdgeInsets(top: max(0, expected.top - max(0, actual.top - extra.top)), left: 0,
                                          bottom: max(0, expected.bottom - max(0, actual.bottom - extra.bottom)), right: 0)
-                if needed != extra { holder.additionalSafeAreaInsets = needed }
+                ContributionsIOS.of(holder).write(id(holder), needed)
             }
         }
     }
@@ -489,6 +596,16 @@ package final class ArrangementHost {
         entries.values.flatMap { entry in
             entry.holders.filter { entry.isHidden($0) }.map { $0.node.id }
         }
+    }
+
+    /// Each shown pane's controller, by its node: an owner whose update is sampled with its block
+    /// (LLP 1123 D2, `OwnerBlocks.samplesOwners`).
+    package var shownPanes: [UInt32: UIViewController] {
+        var out: [UInt32: UIViewController] = [:]
+        for entry in entries.values {
+            for holder in entry.holders where !entry.isHidden(holder) && holder.view.window != nil { out[holder.node.id] = holder }
+        }
+        return out
     }
 
     package var blocks: [UInt32: (block: HostBlock, placement: BlockPlacement?)] {
@@ -505,6 +622,7 @@ package final class ArrangementHost {
 
     func remove(_ id: UInt32) {
         let request = requests.removeValue(forKey: id)
+        authored[id] = nil; refusals[id] = nil
         let entry = entries.removeValue(forKey: id)
         if let entry { retire(entry) }
         children[id] = nil
@@ -514,7 +632,7 @@ package final class ArrangementHost {
 
     func reset() {
         for entry in entries.values { retire(entry) }
-        entries = [:]; requests = [:]; children = [:]; hidden = []
+        entries = [:]; requests = [:]; authored = [:]; refusals = [:]; children = [:]; hidden = []; insets = LocalInsetsReport()
         syncInsets()
     }
 }

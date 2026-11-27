@@ -137,6 +137,9 @@ impl Saved {
     }
     fn decode(&mut self) -> Result<(), DataError> {
         if self.bytes.is_empty() {
+            if !self.entries.is_empty() {
+                return Err(DataError::new("physics: saved entries without a snapshot"));
+            }
             return Ok(());
         }
         let payload = self.bytes.strip_prefix(SNAPSHOT).ok_or_else(|| {
@@ -145,12 +148,31 @@ impl Saved {
                 &self.bytes[..self.bytes.len().min(8)]
             ))
         })?;
-        let entries: BTreeMap<_, _> = self.entries.iter().map(|e| (e.entity, e)).collect();
-        let owners: BTreeMap<_, _> = self
-            .entries
-            .iter()
-            .filter_map(|e| Some((e.collider_handle?, e)))
-            .collect();
+        let mut entries = BTreeMap::new();
+        let mut body_handles = BTreeSet::new();
+        let mut collider_handles = BTreeSet::new();
+        let mut owners = BTreeMap::new();
+        for entry in &self.entries {
+            if entries.insert(entry.entity, entry).is_some() {
+                return Err(DataError::new("physics: duplicate saved entry"));
+            }
+            if let Some(h) = entry.body_handle {
+                if !body_handles.insert(h) {
+                    return Err(DataError::new("physics: duplicate saved body handle"));
+                }
+            }
+            if let Some(h) = entry.collider_handle {
+                if !collider_handles.insert(h) {
+                    return Err(DataError::new("physics: duplicate saved collider handle"));
+                }
+                owners.insert(h, entry);
+            }
+            for &h in &entry.extra_handles {
+                if !collider_handles.insert(h) {
+                    return Err(DataError::new("physics: duplicate saved collider handle"));
+                }
+            }
+        }
         // A hole over a missing or invalid entry fails the read by name; nothing
         // here may panic, since release builds abort.
         let mut refused = None;
@@ -172,6 +194,44 @@ impl Saved {
                 Some(why) => DataError::new(format!("physics: invalid snapshot: {why}")),
                 None => DataError::new(format!("physics: invalid snapshot: {e}")),
             })?;
+        for entry in &self.entries {
+            if entry.body_handle.is_some() != entry.body.is_some() {
+                return Err(DataError::new(
+                    "physics: mismatched body handle and component",
+                ));
+            }
+            if entry.collider_handle.is_some() != entry.collider.is_some() {
+                return Err(DataError::new(
+                    "physics: mismatched collider handle and component",
+                ));
+            }
+            let expected_extras = match (&entry.body, &entry.collider) {
+                (Some(_), Some(c)) => c.extra.len(),
+                (None, Some(c)) if !c.extra.is_empty() => {
+                    return Err(DataError::new("physics: extra shapes need a Body"));
+                }
+                _ => 0,
+            };
+            if entry.extra_handles.len() != expected_extras {
+                return Err(DataError::new("physics: mismatched extra collider handles"));
+            }
+        }
+        for &h in &body_handles {
+            if !rapier
+                .bodies
+                .contains(RigidBodyHandle::from_raw_parts(h[0], h[1]))
+            {
+                return Err(DataError::new("physics: dangling saved body handle"));
+            }
+        }
+        for &h in &collider_handles {
+            if !rapier
+                .colliders
+                .contains(ColliderHandle::from_raw_parts(h[0], h[1]))
+            {
+                return Err(DataError::new("physics: dangling saved collider handle"));
+            }
+        }
         let entries = entries.into_iter().map(|(k, e)| (k, e.clone())).collect();
         let mut live = Live::new(rapier, entries);
         live.elidable = filled;
@@ -888,6 +948,150 @@ mod tests {
             let result = bin::from_slice::<Executor>(&bin::to_vec(&saved));
             assert!(result.is_err(), "stale physics accepted by Data::read");
             assert!(result.unwrap_err().to_string().contains("physics"));
+        }
+    }
+
+    #[test]
+    fn unvalidated_handles_entries_and_solver_settings_refuse_on_load() {
+        use crate::{ExtraShape, Physics};
+        use exact_game::{Vec3, World};
+
+        let mut empty_world = World::new(60, 0);
+        crate::register(&mut empty_world);
+        crate::step(&mut empty_world);
+        let empty_bytes = {
+            let p = empty_world.resource::<Physics>();
+            let mut s = p.executor.0.borrow_mut();
+            s.refresh();
+            s.bytes.clone()
+        };
+
+        let mut one_world = World::new(60, 0);
+        crate::register(&mut one_world);
+        let e1 = one_world.spawn((Transform::default(), Body::default(), Collider::default()));
+        let e2 = one_world.spawn(Transform::default());
+        crate::step(&mut one_world);
+        let (one_bytes, valid_entry) = {
+            let p = one_world.resource::<Physics>();
+            let mut s = p.executor.0.borrow_mut();
+            s.refresh();
+            s.entries();
+            (s.bytes.clone(), s.entries[0].clone())
+        };
+
+        let load_saved = |bytes: Vec<u8>, entries: Vec<Entry>| {
+            let mut w = World::new(60, 0);
+            crate::register(&mut w);
+            {
+                let p = w.resource::<Physics>();
+                let mut s = p.executor.0.borrow_mut();
+                s.bytes = bytes;
+                s.entries = entries;
+                s.live = None;
+                s.dirty = false;
+                s.entries_stale = false;
+            }
+            let save = w.save();
+            let mut restored = World::new(60, 0);
+            crate::register(&mut restored);
+            restored.load(&save)
+        };
+
+        // Non-empty entries with empty snapshot bytes.
+        assert!(load_saved(Vec::new(), vec![valid_entry.clone()]).is_err());
+        // Dangling body handle.
+        assert!(load_saved(
+            empty_bytes.clone(),
+            vec![Entry {
+                entity: e1,
+                body_handle: Some([999, 0]),
+                body: Some(Body::default()),
+                ..Entry::default()
+            }]
+        )
+        .is_err());
+        // Dangling collider handle.
+        assert!(load_saved(
+            empty_bytes.clone(),
+            vec![Entry {
+                entity: e1,
+                collider_handle: Some([999, 0]),
+                collider: Some(Collider::default()),
+                ..Entry::default()
+            }]
+        )
+        .is_err());
+        // Dangling extra collider handle.
+        assert!(load_saved(
+            one_bytes.clone(),
+            vec![Entry {
+                collider: Some(Collider {
+                    extra: vec![ExtraShape::default()],
+                    ..Collider::default()
+                }),
+                extra_handles: vec![[999, 0]],
+                ..valid_entry.clone()
+            }]
+        )
+        .is_err());
+        // body_handle present with body: None.
+        assert!(load_saved(
+            one_bytes.clone(),
+            vec![Entry {
+                body: None,
+                ..valid_entry.clone()
+            }]
+        )
+        .is_err());
+        // collider_handle present with collider: None.
+        assert!(load_saved(
+            one_bytes.clone(),
+            vec![Entry {
+                collider: None,
+                ..valid_entry.clone()
+            }]
+        )
+        .is_err());
+        // Duplicate entity entry.
+        assert!(load_saved(
+            one_bytes.clone(),
+            vec![valid_entry.clone(), valid_entry.clone()]
+        )
+        .is_err());
+        // Duplicate body/collider handle across distinct entities.
+        assert!(load_saved(
+            one_bytes,
+            vec![
+                valid_entry.clone(),
+                Entry {
+                    entity: e2,
+                    ..valid_entry
+                }
+            ]
+        )
+        .is_err());
+
+        // Invalid Physics solver settings and gravity.
+        let invalid_settings: Vec<Box<dyn Fn(&mut Physics)>> = vec![
+            Box::new(|p| p.solver_iterations = 0),
+            Box::new(|p| p.gravity = Vec3::NAN),
+            Box::new(|p| p.contact_frequency = 0.0),
+            Box::new(|p| p.static_contact_frequency = -1.0),
+            Box::new(|p| p.contact_damping_ratio = 0.0),
+            Box::new(|p| {
+                p.coulomb_friction = false;
+                p.friction_gravity = 1.0;
+            }),
+            Box::new(|p| p.friction_slip_speed = -0.5),
+        ];
+        for mutate in invalid_settings {
+            let mut w = World::new(60, 0);
+            crate::register(&mut w);
+            mutate(&mut w.resource_mut::<Physics>());
+            let save = w.save();
+            let mut restored = World::new(60, 0);
+            crate::register(&mut restored);
+            assert!(restored.load(&save).is_err());
         }
     }
 }

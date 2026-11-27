@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // LLP 1115.000 D4 part A in a real browser: a route is a page, so the focus
 // follows it. The shell's stylesheet, the navigation glue's projection
 // (navigation.js) and the input piece (input-glue.js), which both web targets
@@ -22,17 +22,17 @@ const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
-// A root with two tabs. The first tab's root route is a list in a scroller:
-// rows that push a detail (a button, a link, each drawing the disclosure, so
-// a wide window splits), a button that opens a sheet, and one that pushes a
-// route with no header. `window.then` is what the pressed control's action
-// does besides navigating, before the commit ends (a `focus()` command, an
-// `autofocus` field).
+// A root with two tabs. The first tab's root route asks for the split (so a
+// wide window splits) and is a list in a scroller: rows that push a detail (a
+// button, a link, each drawing the disclosure), a button that opens a sheet,
+// and one that pushes a route with no header. `window.then` is what the
+// pressed control's action does besides navigating, before the commit ends (a
+// `focus()` command, an `autofocus` field).
 const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<style>[\s\S]*?<\/style>/)[0] + `
 <div id="exact-root" style="height:100%">
   <main id="nav" navigationKey="list" navigationBack="back" style="display:flex;flex-direction:column;height:100%">
     <div role="tabpanel" id="p1" style="flex:1;position:relative">
-      <div navigationKey="list" id="list" style="position:absolute;inset:0;display:flex;flex-direction:column">
+      <div navigationKey="list" id="list" navigationSplit="split" style="position:absolute;inset:0;display:flex;flex-direction:column">
         <header><h1 id="list-title">Books</h1><button id="add">Add</button><input id="search" data-native></header>
         <div id="scroller" data-exact-list style="flex:1;min-height:0;overflow-y:auto">
           <button id="row-1" data-exact-router-press="true" style="height:60px"><img data-symbol-source="symbol:forward-chevron" alt="">One</button>
@@ -102,9 +102,9 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 async function serve() {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    const file = ['navigation.js', 'input-glue.js', 'menu-rows.js', 'agent-input.js', 'prompt-glue.js', 'alert-message.js'].find(name => req.url === '/' + name);
-    if (!file) { res.writeHead(404); res.end(); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, file)));
+    const module = hostFixtureModule(req.url.slice(1));
+    if (module === null) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(module);
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   return server;

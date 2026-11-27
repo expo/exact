@@ -334,6 +334,105 @@ for (const runtime of ['JS', 'wasm']) {
       button "Comment" press=comment testId="comment"
       button "Percent" press=percent testId="percent"
 `));
+  check(`${runtime}: bound calc/clamp/min/max length math sets line-height and refuses invalid math`, () => fixture(runtime, async evaluate => {
+    const leading = () => evaluate(`getComputedStyle(document.querySelector('[data-testid="child"]')).lineHeight`);
+    expect(await leading()).toBe('24px');
+    for (const [id, expected] of [
+      ['setClamp', '32px'],
+      ['setCalc', '20px'],
+      ['setMin', '24px'],
+      ['setLh', '20px'],
+      ['setCh', '12px'],
+      ['setComment', '2px'],
+      ['setEscape', '2px'],
+      ['setClampNone', '24px'],
+      ['setEofCalc', '20px'],
+      ['setEofMin', '20px'],
+    ]) {
+      await evaluate(`document.querySelector('[data-testid="${id}"]').click()`);
+      expect(await leading(), id).toBe(expected);
+    }
+    for (const id of ['badNum', 'badPct', 'badEm', 'badPiEm', 'badClampNoneEm', 'badSyntax', 'badEnv', 'badVar', 'badTooMany', 'badTooDeep', 'badNbsp']) {
+      await evaluate(`document.querySelector('[data-testid="${id}"]').click()`);
+      expect(await leading(), id).toBe('36px');
+    }
+    const lines = runtime === 'JS' ? await evaluate(`import('/rt.js').then(m => m.journal)`)
+      : (await evaluate(`exact.agent({op:'logs',since:0})`)).lines;
+    for (const value of [
+      'calc(1 + 0.5)', 'calc(150%)', 'calc(1.5em + 4px)', 'calc(pi * 1em)',
+      'clamp(none, 1em, none)', 'calc(10px +)', 'calc(10px + env(safe-area-inset-top))',
+      'calc(10px + var(--x))',
+    ])
+      expect(lines.filter(l => l.endsWith(`invalid line-height value "${value}"; unset`)), value).toHaveLength(1);
+  }, `component App
+  state leading = "24px"
+  action setClamp
+    leading = "clamp(20px, 4vw, 32px)"
+  action setCalc
+    leading = "calc(1rem + 4px)"
+  action setMin
+    leading = "min(24px, 30px)"
+  action setLh
+    leading = "calc(1lh + 4px)"
+  action setCh
+    leading = "calc(1ch + 4px)"
+  action setComment
+    leading = "calc(1px/**/ + 1px)"
+  action setEscape
+    leading = "calc(1\\\\70 x + 1px)"
+  action setClampNone
+    leading = "clamp(none, 24px, 32px)"
+  action setEofCalc
+    leading = "calc((20px"
+  action setEofMin
+    leading = "min(20px, 30px"
+  action badNum
+    leading = "calc(1 + 0.5)"
+  action badPct
+    leading = "calc(150%)"
+  action badEm
+    leading = "calc(1.5em + 4px)"
+  action badPiEm
+    leading = "calc(pi * 1em)"
+  action badClampNoneEm
+    leading = "clamp(none, 1em, none)"
+  action badSyntax
+    leading = "calc(10px +)"
+  action badEnv
+    leading = "calc(10px + env(safe-area-inset-top))"
+  action badVar
+    leading = "calc(10px + var(--x))"
+  action badTooMany
+    leading = "calc(${Array(33).fill('1px').join(' + ')})"
+  action badTooDeep
+    leading = "calc(${'('.repeat(32)}1px${')'.repeat(32)})"
+  action badNbsp
+    leading = "\\u{00a0}calc(20px)"
+  view
+    column line-height="36px"
+      text "Child" testId="child" font-size=16 line-height=leading
+      button "Clamp" press=setClamp testId="setClamp"
+      button "Calc" press=setCalc testId="setCalc"
+      button "Min" press=setMin testId="setMin"
+      button "Lh" press=setLh testId="setLh"
+      button "Ch" press=setCh testId="setCh"
+      button "Comment" press=setComment testId="setComment"
+      button "Escape" press=setEscape testId="setEscape"
+      button "ClampNone" press=setClampNone testId="setClampNone"
+      button "EofCalc" press=setEofCalc testId="setEofCalc"
+      button "EofMin" press=setEofMin testId="setEofMin"
+      button "BadNum" press=badNum testId="badNum"
+      button "BadPct" press=badPct testId="badPct"
+      button "BadEm" press=badEm testId="badEm"
+      button "BadPiEm" press=badPiEm testId="badPiEm"
+      button "BadClampNoneEm" press=badClampNoneEm testId="badClampNoneEm"
+      button "BadSyntax" press=badSyntax testId="badSyntax"
+      button "BadEnv" press=badEnv testId="badEnv"
+      button "BadVar" press=badVar testId="badVar"
+      button "BadTooMany" press=badTooMany testId="badTooMany"
+      button "BadTooDeep" press=badTooDeep testId="badTooDeep"
+      button "BadNbsp" press=badNbsp testId="badNbsp"
+`));
   check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
       for (const id of ['pushed', 'literal', 'unsaid']) document.querySelector('[data-testid="' + id + '"]').setAttribute('data-exact-in-sheet', '');
@@ -693,6 +792,12 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
     ? evaluate(`(async () => { const { pieces } = await import('/rt.js'); await pieces(); })()`)
     : page.waitForFunction(() => typeof exact.hold === 'function');
   const settle = evaluate => evaluate('Promise.all(document.getAnimations().map(a => (a.finish(), a.finished)))');
+  const release = async (evaluate, page) => {
+    await page.mouse.up();
+    // A quick tap displays its pressed frame before starting the release animation.
+    await page.locator('[data-testid="slab"]:not([data-pressed])').waitFor({ state: 'attached' });
+    await settle(evaluate);
+  };
   check(`${runtime} ${engine}: active translate composes and a stationary real pointer activates`, async () => {
     await fixture(runtime, async (evaluate, page) => {
       await feedback(evaluate, page);
@@ -705,7 +810,7 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
       expect(held.width).toBeCloseTo(base.width, 2);
       // The original left edge is now outside: the browser hit-tests the paint.
       expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x + 1, y + 40)?.closest('[data-testid="slab"]') != null, base)).toBe(false);
-      await page.mouse.up(); await settle(evaluate);
+      await release(evaluate, page);
       expect(await page.locator('[data-testid="count"]').textContent()).toBe('1');
       expect(await slab.boundingBox()).toEqual(base);
     }, `component App
@@ -731,7 +836,7 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
       await page.waitForFunction(() => document.querySelector('[data-testid="size"]').textContent === '200');
       const resized = await slab.boundingBox();
       expect(resized.x - base.x).toBeCloseTo((resized.width - base.width) * .1 + resized.width * .1, 2);
-      await page.mouse.up(); await settle(evaluate);
+      await release(evaluate, page);
       expect((await slab.boundingBox()).x - base.x).toBeCloseTo((resized.width - base.width) * .1, 2);
     }, `component App
   state size = 100
@@ -800,7 +905,7 @@ component App
         await page.mouse.down(); await settle(evaluate);
         expect(await child.evaluate(el => el.offsetTop)).toBe(0);
         expect((await child.boundingBox()).y - (await slab.boundingBox()).y).toBeCloseTo(0, 2);
-        await page.mouse.up(); await settle(evaluate);
+        await release(evaluate, page);
         expect((await child.boundingBox()).y).toBe(40);
       }
     }, `component App

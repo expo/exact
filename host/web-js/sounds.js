@@ -11,10 +11,13 @@
 import { journal, clock, Sounds } from './rt.js';
 import { plain } from './format.js';
 import { watchOutput } from './output.js';
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 
 const LIVE = 32, WAITING = 256, RECORD = 1024, HAPTICS = 1024, SHOWN = 64, RAMP = 20, OWN = new Set(['playSound', 'playSounds', 'stopSounds', 'setSounds']);
 const say = line => journal.push(`t=${clock.now} ${line}`);
-let Table = [], Voices = [], Next = 0, Evicted = 0, EvictedThrough = 0, Ops = [], Glue = null, Output = null, Haptics = [], NextHaptic = 0;
+let Table = [], Voices = [], Next = 0, Evicted = 0, EvictedThrough = 0, Ops = [], Output = null, Haptics = [], NextHaptic = 0;
 let RestoreAt = null, Recount = false, BatchFirst = 1, Sets = [];
 const sounds = by => by !== 'cut' && by !== 'cancelled' && by !== 'edit' && by !== 'clock';
 const live = (v, t) => sounds(v.by) && v.ends > t;
@@ -237,10 +240,9 @@ const Seq = {
 };
 // The output: none under the agent; else the web host's glue, fetched after the first frame.
 function load() {
-  if (Glue || clock.agent || typeof requestAnimationFrame !== 'function') return;
-  Glue = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import('./sound-glue.js'))
-    .then(() => { Output = globalThis.exact.installSound({ files: Table.map(r => r[0]), log: say, origin: () => clock.start }); flush(); })
-    .catch(err => say(`sound: unavailable: ${err.message}`));
+  if (loads.Glue || clock.agent || typeof requestAnimationFrame !== 'function') return;
+  loadOnce(loads, "Glue", () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import('./sound-glue.js'))
+    .then(() => { Output = globalThis.exact.installSound({ files: Table.map(r => r[0]), log: say, origin: () => clock.start }); flush(); }), err => say(`sound: unavailable: ${err.message}`));
 }
 function flush() {
   if (Sounds.settling) Ops = Ops.filter(op => op.op !== 'play' && op.op !== 'haptic');

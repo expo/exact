@@ -32,17 +32,17 @@ public final class LocalNetworkModule: ExactPackage {
     public static var browser: ((NWBrowser) -> Void)?
 
     let context: ExactPackageContext
+    private var destroyed = false
     public init(context: ExactPackageContext) { self.context = context }
 
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
-        DispatchQueue.main.async { [self] in
-            guard !context.agent else { return reply(["error": "NotSupportedError"]) }
-            switch name {
-            case "localNetworkStatus": reply(LocalNetworkFact.status())
-            case "browseServices": LocalNetworkBrowse.read(self, args, reply)
-            case "resolveService": LocalNetworkResolve.read(self, args, reply)
-            default: reply(["error": "NotSupportedError"])
-            }
+        guard !destroyed else { return reply(Self.error("AbortError")) }
+        guard !context.agent else { return reply(["error": "NotSupportedError"]) }
+        switch name {
+        case "localNetworkStatus": reply(LocalNetworkFact.status())
+        case "browseServices": LocalNetworkBrowse.read(self, args, reply)
+        case "resolveService": LocalNetworkResolve.read(self, args, reply)
+        default: reply(["error": "NotSupportedError"])
         }
     }
 
@@ -63,6 +63,8 @@ public final class LocalNetworkModule: ExactPackage {
     }
 
     public func destroy(_ done: @escaping () -> Void) {
+        destroyed = true
+        LocalNetworkFact.watchers[ObjectIdentifier(self)] = nil
         Self.leave(self) { _ in true }
         done()
     }
@@ -70,7 +72,7 @@ public final class LocalNetworkModule: ExactPackage {
     private static func leave(_ module: LocalNetworkModule, where wanted: (String) -> Bool) {
         let id = ObjectIdentifier(module)
         for (key, b) in LocalNetworkBrowse.all where wanted(key) { b.readers[id] = nil; if b.readers.isEmpty { b.stop(); LocalNetworkBrowse.all[key] = nil } }
-        for (key, r) in LocalNetworkResolve.all where wanted(key) { r.readers[id] = nil; if r.readers.isEmpty { r.stop(); LocalNetworkResolve.all[key] = nil } }
+        for (key, r) in LocalNetworkResolve.all where wanted(key) { r.readers[id] = nil; if r.readers.isEmpty { r.dispose(); LocalNetworkResolve.all[key] = nil } }
     }
 
     static func error(_ name: String, _ message: String? = nil) -> [String: Any] {
@@ -158,8 +160,14 @@ final class LocalNetworkBrowse: LocalNetworkReaders {
         LocalNetworkModule.parameters?(parameters)
         parameters.includePeerToPeer = peerToPeer
         let b = NWBrowser(for: .bonjour(type: type, domain: "local."), using: parameters)
-        b.browseResultsChangedHandler = { [weak self] results, _ in self?.found(results) }
-        b.stateUpdateHandler = { [weak self] state in self?.moved(state) }
+        b.browseResultsChangedHandler = { [weak self, weak b] results, _ in
+            guard let self, let b, self.browser === b else { return }
+            self.found(results)
+        }
+        b.stateUpdateHandler = { [weak self, weak b] state in
+            guard let self, let b, self.browser === b else { return }
+            self.moved(state)
+        }
         LocalNetworkModule.browser?(b)
         browser = b
         b.start(queue: .main)
@@ -211,26 +219,35 @@ final class LocalNetworkBrowse: LocalNetworkReaders {
     func pause(_ hidden: Bool) {
         guard hidden != paused else { return }
         paused = hidden
-        if hidden { stop() } else { settled = false; failure = nil; changed() }
+        if hidden { stop() } else { settled = false; failure = nil; names = []; changed() }
     }
 
     func stop() {
+        browser?.browseResultsChangedHandler = nil
+        browser?.stateUpdateHandler = nil
         browser?.cancel()
         browser = nil
     }
 }
 
 final class LocalNetworkResolve: LocalNetworkReaders {
+    private final class Waiter {
+        let reply: ([String: Any]) -> Void
+        var timer: DispatchWorkItem?
+        init(_ reply: @escaping ([String: Any]) -> Void) { self.reply = reply }
+    }
+
     static var all: [String: LocalNetworkResolve] = [:]
     let name: String, type: String, peerToPeer: Bool
     private var service: DNSServiceRef?
     private var lookup: DNSServiceRef?
     private var record: (hostName: String, port: Int, txt: [[String: Any]])?
     private var addresses: [String] = []
-    private var waiting: [([String: Any]) -> Void] = []
+    private var waiting: [Waiter] = []
     private var paused = false
 
     init(name: String, type: String, peerToPeer: Bool) { self.name = name; self.type = type; self.peerToPeer = peerToPeer }
+    deinit { dispose() }
 
     static func key(_ args: [String: Any]) -> String {
         "resolveService \(args["type"] as? String ?? "") \(args["includePeerToPeer"] as? Bool ?? false) \(args["name"] as? String ?? "")"
@@ -243,13 +260,26 @@ final class LocalNetworkResolve: LocalNetworkReaders {
         all[key] = r
         r.join(module, "local-network.resolveService")
         if let info = r.info() { return reply(info) }
-        r.waiting.append(reply)
-        r.start()
-        let timeout = (args["timeout"] as? Double ?? 5000) / 1000
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak r] in
-            guard let r, r.info() == nil else { return }
-            r.finish(LocalNetworkModule.error("NotFoundError"))
+        let waiter = Waiter(reply)
+        let timeout = max(0, (args["timeout"] as? Double ?? 5000) / 1000)
+        let work = DispatchWorkItem { [weak r, weak waiter] in
+            guard let r, let waiter else { return }
+            r.timedOut(waiter)
         }
+        waiter.timer = work
+        r.waiting.append(waiter)
+        r.start()
+        if r.waiting.contains(where: { $0 === waiter }) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
+        }
+    }
+
+    private func timedOut(_ waiter: Waiter) {
+        guard let index = waiting.firstIndex(where: { $0 === waiter }) else { return }
+        waiting.remove(at: index)
+        waiter.timer = nil
+        waiter.reply(LocalNetworkModule.error("NotFoundError"))
+        if waiting.isEmpty, readers.isEmpty { stop() }
     }
 
     /// The answer once the platform has the SRV and TXT records and an address (D2).
@@ -271,7 +301,20 @@ final class LocalNetworkResolve: LocalNetworkReaders {
         service = ref
     }
 
-    fileprivate func took(_ hostName: String, _ port: Int, _ txt: [[String: Any]]) {
+    fileprivate func resolved(_ ref: DNSServiceRef?, _ code: DNSServiceErrorType, _ hostName: String?, _ port: Int, _ txt: [[String: Any]]) {
+        guard ref == service else { return }
+        guard code == LocalNetworkFact.noError, let hostName else { return failed(code) }
+        took(hostName, port, txt)
+    }
+
+    fileprivate func addressed(_ ref: DNSServiceRef?, _ code: DNSServiceErrorType, _ address: String?, _ added: Bool) {
+        guard ref == lookup else { return }
+        guard code == LocalNetworkFact.noError else { return failed(code) }
+        guard let address else { return }
+        took(address: address, added: added)
+    }
+
+    func took(_ hostName: String, _ port: Int, _ txt: [[String: Any]]) {
         let moved = record?.hostName != hostName
         record = (hostName, port, txt)
         LocalNetworkFact.report("granted")
@@ -288,7 +331,7 @@ final class LocalNetworkResolve: LocalNetworkReaders {
         lookup = ref
     }
 
-    fileprivate func took(address: String, added: Bool) {
+    func took(address: String, added: Bool) {
         if added, !addresses.contains(address) { addresses.append(address) }
         if !added { addresses.removeAll { $0 == address } }
         answered()
@@ -309,16 +352,33 @@ final class LocalNetworkResolve: LocalNetworkReaders {
     }
 
     private func finish(_ answer: [String: Any]) {
-        let replies = waiting
+        let waiters = waiting
         waiting = []
-        replies.forEach { $0(answer) }
+        for waiter in waiters {
+            waiter.timer?.cancel()
+            waiter.timer = nil
+            waiter.reply(answer)
+        }
         if answer["error"] != nil { stop(); record = nil; addresses = [] }
     }
 
     func pause(_ hidden: Bool) {
         guard hidden != paused else { return }
         paused = hidden
-        if hidden { stop() } else { record = nil; addresses = []; changed() }
+        if hidden { stop() } else {
+            record = nil; addresses = []
+            if !waiting.isEmpty { start() }
+            changed()
+        }
+    }
+
+    func dispose() {
+        for waiter in waiting {
+            waiter.timer?.cancel()
+            waiter.timer = nil
+        }
+        waiting = []
+        stop()
     }
 
     func stop() {
@@ -347,22 +407,22 @@ final class LocalNetworkResolve: LocalNetworkReaders {
     }
 }
 
-private let localNetworkResolved: DNSServiceResolveReply = { _, _, _, code, _, host, port, length, txt, context in
+private let localNetworkResolved: DNSServiceResolveReply = { sdRef, _, _, code, _, host, port, length, txt, context in
     guard let context else { return }
     let r = Unmanaged<LocalNetworkResolve>.fromOpaque(context).takeUnretainedValue()
-    guard code == LocalNetworkFact.noError, let host else { return r.failed(code) }
     let entries = txt.map { LocalNetworkResolve.entries(UnsafeBufferPointer(start: $0, count: Int(length))) } ?? []
-    r.took(String(cString: host), Int(UInt16(bigEndian: port)), entries)
+    r.resolved(sdRef, code, host.map { String(cString: $0) }, Int(UInt16(bigEndian: port)), entries)
 }
 
-private let localNetworkAddressed: DNSServiceGetAddrInfoReply = { _, flags, _, code, _, address, _, context in
+private let localNetworkAddressed: DNSServiceGetAddrInfoReply = { sdRef, flags, _, code, _, address, _, context in
     guard let context else { return }
     let r = Unmanaged<LocalNetworkResolve>.fromOpaque(context).takeUnretainedValue()
-    guard code == LocalNetworkFact.noError, let address else { return code == LocalNetworkFact.noError ? () : r.failed(code) }
+    guard code == LocalNetworkFact.noError else { return r.addressed(sdRef, code, nil, false) }
+    guard let address else { return }
     var text = [CChar](repeating: 0, count: Int(NI_MAXHOST))
     guard getnameinfo(address, socklen_t(address.pointee.sa_len), &text, socklen_t(text.count), nil, 0, NI_NUMERICHOST) == 0 else { return }
     let written = String(cString: text)
     // An IPv6 link-local address carries a zone no URL can (D2).
     guard !written.lowercased().hasPrefix("fe80:") else { return }
-    r.took(address: written, added: flags & DNSServiceFlags(kDNSServiceFlagsAdd) != 0)
+    r.addressed(sdRef, code, written, flags & DNSServiceFlags(kDNSServiceFlagsAdd) != 0)
 }

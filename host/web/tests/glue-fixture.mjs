@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { bundleHostModule } from '../../web-js/glue.mjs';
+import { HOST_WEB_GLUE, bundleHostModule } from '../../web-js/glue.mjs';
 
 const root = resolve(import.meta.dir, '../../..');
 // As a page with popovers has it (glue.js, or a JS target page with a dialog, a menu or a popover: navigation.js
@@ -18,6 +18,12 @@ export function hostFixtureFile(path, encoding) {
     : file === resolve(root, 'host/web/grant-admission.js') ? admissionSource : null;
   return source === null ? readFileSync(path, encoding)
     : encoding ? source : Buffer.from(source);
+}
+
+/** A browser fixture uses the web host's published module names. */
+export function hostFixtureModule(name) {
+  return name === 'navigation.js' || HOST_WEB_GLUE.includes(name)
+    ? hostFixtureFile(resolve(root, 'host/web', name)) : null;
 }
 
 import { parseSync } from 'rolldown/utils';
@@ -110,16 +116,30 @@ export function glueCase(source, name) {
 
 export function symbolSheet(source) {
   const parsed = parseSync('symbols.js', source);
-  let sheet;
-  function visit(node) {
-    if (!node || typeof node !== 'object') return;
-    if (node.type === 'Literal' && typeof node.value === 'string' && node.value.startsWith('@property --exact-tint')) sheet = node.value;
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) value.forEach(visit);
-      else if (value && typeof value === 'object') visit(value);
+  function literal(node) {
+    if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+    if (node.type === 'BinaryExpression' && node.operator === '+') {
+      const left = literal(node.left), right = literal(node.right);
+      if (left !== undefined && right !== undefined) return left + right;
     }
   }
-  visit(parsed.program);
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return;
+    }
+    const sheet = literal(node);
+    if (sheet?.startsWith('@property --exact-tint')) return sheet;
+    for (const value of Object.values(node)) {
+      const found = visit(value);
+      if (found) return found;
+    }
+  }
+  const sheet = visit(parsed.program);
   if (!sheet) throw new Error('symbol fixture: missing stylesheet');
   return sheet;
 }

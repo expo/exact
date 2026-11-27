@@ -5,6 +5,7 @@
   "description": "The Async Clipboard API's write: a ClipboardItem of a PNG image and its text, sanitized as Chrome does (LLP 1133.006).",
   "exports": {
     ".": "./exact.json",
+    "./android": "./android/exact.json",
     "./apple": "./apple/exact.json",
     "./web": "./web/exact.json",
     "./windows": "./windows/exact.json"

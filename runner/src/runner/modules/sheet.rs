@@ -200,7 +200,7 @@ impl<D: DataSource> Runner<D> {
             }
             Ok(())
         };
-        let grants = self.data.grants();
+        let grants = self.module_grants();
         for m in &data {
             let method = m["supportedMethods"].as_str().unwrap_or_default();
             let Some(declared) = methods.get(method) else {
@@ -440,7 +440,14 @@ impl<D: DataSource> Runner<D> {
             token,
             attempt: call,
         };
-        self.run_handler(at, &handler, &arg, cause, to, None);
+        self.run_handler(
+            at,
+            format!("tool:{handler}"),
+            arg.to_string(),
+            cause,
+            to,
+            None,
+        );
         true
     }
 

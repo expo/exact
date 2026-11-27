@@ -46,8 +46,9 @@ mod record;
 
 use crate::envelope::{safe_name, Card, Envelope, FileCard};
 use disk::{
-    hold_entry, read_bounded, read_card, regular_file, remove_entry, sweep, sync_dir,
-    temporary_name, write_atomic, write_file, Blobs,
+    hold_entry, lock_entry, read_bounded, read_card, regular_file, remove_entry,
+    replace_entry_in_place, swap_entry, sweep, sync_dir, temporary_name, write_atomic, write_file,
+    Blobs,
 };
 use record::{read_record, Record, RecordFile};
 use std::collections::BTreeMap;
@@ -346,6 +347,11 @@ pub struct Store {
     /// A selected entry rejected while opening, retained until the host asks
     /// for the launch candidate so it can publish the fallback note/status.
     launch_refusal: Option<(String, String)>,
+    /// Non-fatal reason this launch opened at entry zero (foreign codec,
+    /// demoted entry, or reader-mode entry drop; LLP 1156.008.000 D2).
+    launch_note: Option<String>,
+    /// The selection this process refused at boot ([`Store::entry_refused`]).
+    refused: Option<String>,
 }
 
 /// The selected entry, validated: it exists, it parses, and it is this app's
@@ -364,6 +370,15 @@ const BAD_REMEMBERED: usize = 8;
 
 /// Two failed boots in a row demote a bundle (LLP 1026 D11).
 const FAILURES_ALLOWED: u64 = 2;
+
+/// Result of [`Store::download`]: the authenticated head and whether the
+/// download verified or wrote the entry on disk (false when the snapshot
+/// already admitted the head as current).
+#[derive(Debug)]
+pub(crate) struct Downloaded {
+    pub(crate) envelope: Envelope,
+    pub(crate) wrote: bool,
+}
 
 impl Store {
     /// Open the store at `dir`, creating it, and settle what this launch boots.
@@ -413,11 +428,15 @@ impl Store {
             view: None,
             sunset: None,
             launch_refusal: None,
+            launch_note: None,
+            refused: None,
         };
         let mut rewrite = false;
         match read_record(&store.record_path()) {
             RecordFile::Foreign => {
                 store.frozen = true;
+                store.launch_note =
+                    Some("store record uses a newer codec; booted entry zero".into());
                 store.record = Record::fresh(&store.embedded);
                 return Ok(store);
             }
@@ -477,7 +496,7 @@ impl Store {
         if store.record.failures >= FAILURES_ALLOWED {
             if let Some(bad) = store.record.selected.take() {
                 store.record.bad.retain(|s| *s != bad);
-                store.record.bad.push(bad);
+                store.record.bad.push(bad.clone());
                 let extra = store.record.bad.len().saturating_sub(BAD_REMEMBERED);
                 store.record.bad.drain(..extra);
                 store.record.failures = 0;
@@ -491,6 +510,10 @@ impl Store {
                 store.view = store.validate(store.record.selected.clone());
                 if store.view.is_none() {
                     store.record.selected = None;
+                    store.launch_note = Some(format!(
+                        "demoted entry {} after {FAILURES_ALLOWED} failed boots; booted entry zero",
+                        &bad[..bad.len().min(12)]
+                    ));
                 }
             }
         }
@@ -525,7 +548,11 @@ impl Store {
                         store._running_lock = Some(Arc::new(lock));
                         store.view = Some(view);
                     }
-                    Err(_) => {
+                    Err(reason) => {
+                        store.launch_note = Some(format!(
+                            "reader mode dropped entry {}: {reason}",
+                            &entry[..entry.len().min(12)]
+                        ));
                         store.record.selected = None;
                         store.view = None;
                     }
@@ -657,9 +684,12 @@ impl Store {
 
     /// First pixel: the bundle that booted is good (LLP 1026 D11). Clears the
     /// counter and makes what is **running** — not what a check has since
-    /// staged — the fallback for the next bad update.
+    /// staged — the fallback for the next bad update. A no-op when this
+    /// process refused its selected entry and booted entry zero instead, so
+    /// crash recovery keeps the failure count and previous fallback.
     pub fn boot_succeeded(&mut self, generation: &Generation) -> Result<(), String> {
-        if self.read_only().is_some() || *generation != self.generation() {
+        if self.read_only().is_some() || self.refused.is_some() || *generation != self.generation()
+        {
             return Ok(());
         }
         let mut record = self.record.clone();
@@ -673,9 +703,12 @@ impl Store {
     /// The selected entry was refused before it could run and this process
     /// booted entry zero instead. The durable failure count and selection stay
     /// intact for crash recovery; only this process's running identity moves
-    /// to the embedded generation.
+    /// to the embedded generation. The entry is not staged: the next launch
+    /// retries it, and activating it here would clear its failure count.
     pub fn entry_refused(&mut self) {
-        self.running = None;
+        if let Some(running) = self.running.take() {
+            self.refused = Some(running);
+        }
         self.running_seq = self.embedded.seq;
     }
 
@@ -712,8 +745,8 @@ impl Store {
         fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
     ) -> Result<Check, String> {
-        let envelope = self.download(head_url, fetch, embedded_asset)?;
-        self.finish_check(envelope, head_url, embedded_asset, true)
+        let downloaded = self.download(head_url, fetch, embedded_asset)?;
+        self.finish_check(downloaded, head_url, embedded_asset, true)
     }
 
     /// The immutable facts a download uses while its host releases the lock.
@@ -733,7 +766,14 @@ impl Store {
             view: self.view.clone(),
             sunset: self.sunset.clone(),
             launch_refusal: self.launch_refusal.clone(),
+            launch_note: self.launch_note.clone(),
+            refused: self.refused.clone(),
         }
+    }
+
+    /// Non-fatal reason this launch fell back to entry zero, if any.
+    pub fn launch_note(&self) -> Option<&str> {
+        self.launch_note.as_deref()
     }
 
     pub(crate) fn download(
@@ -741,7 +781,7 @@ impl Store {
         head_url: &str,
         fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
-    ) -> Result<Envelope, String> {
+    ) -> Result<Downloaded, String> {
         if let Some(why) = self.read_only() {
             return Err(why.into());
         }
@@ -757,10 +797,11 @@ impl Store {
         if let Some(receipt) = &envelope.cohort_receipt {
             self.blobs().obtain_cohort(receipt, head_url, fetch)?;
         }
-        if !current {
+        let wrote = !current;
+        if wrote {
             self.write_entry(&envelope, head_url, fetch, embedded_asset)?;
         }
-        Ok(envelope)
+        Ok(Downloaded { envelope, wrote })
     }
 
     /// Recheck against the live record after downloading: activation, boot
@@ -769,11 +810,12 @@ impl Store {
     /// another download of this store is outstanding.
     pub(crate) fn finish_check(
         &mut self,
-        envelope: Envelope,
+        downloaded: Downloaded,
         head_url: &str,
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
         collect: bool,
     ) -> Result<Check, String> {
+        let Downloaded { envelope, wrote } = downloaded;
         if self.admit_check(&envelope, head_url, embedded_asset)? {
             let witness = self.entry_dir(&envelope.digest);
             std::fs::create_dir_all(&witness)
@@ -797,6 +839,12 @@ impl Store {
             return Ok(Check::Current {
                 sunset: envelope.sunset,
             });
+        }
+        if !wrote {
+            return Err(format!(
+                "entry {} changed during check and was not downloaded",
+                envelope.digest
+            ));
         }
         let view = self
             .validate(Some(envelope.digest.clone()))
@@ -898,18 +946,26 @@ impl Store {
         });
         if envelope.stream.seq == floor && accepted.is_some_and(|digest| *digest != envelope.digest)
         {
-            return Err(format!("the head is seq {floor} but names another bundle; a used sequence cannot equivocate"));
+            return Err(format!(
+                "the head is seq {floor} but names another bundle; a used sequence cannot equivocate"
+            ));
         }
         let roster = envelope.assets()?;
         let current = match &self.view {
-            // A held entry's plan is first read by `prepare_activation`, so a
-            // plan damaged since staging is written again, not reported current.
+            // A staged or held entry's plan is read on activation or next
+            // launch, so a plan damaged since staging is written again, not
+            // reported current.
             _ if self.record.pending.as_deref() == Some(envelope.digest.as_str()) => self
                 .validate(Some(envelope.digest.clone()))
                 .is_some_and(|view| {
                     read_card(&self.entry_dir(&view.sha).join("app.plan"), &view.plan).is_ok()
                 }),
-            Some(view) => view.sha == envelope.digest,
+            Some(view) if view.sha == envelope.digest => {
+                self.read_view(&view.sha).is_ok_and(|disk| {
+                    read_card(&self.entry_dir(&disk.sha).join("app.plan"), &disk.plan).is_ok()
+                })
+            }
+            Some(_) => false,
             // Entry zero is current when the head names the plan the binary
             // embeds and exactly the same complete asset roster — removal
             // and an unknown roster are both updates.
@@ -961,13 +1017,15 @@ impl Store {
     }
 
     /// The bundle waiting for this process: held pending, or selected for
-    /// the next launch and not the one this process booted (LLP 1030 D5/D7).
+    /// the next launch and neither the one this process booted nor the one it
+    /// refused at boot (LLP 1030 D5/D7).
     pub fn staged(&self) -> Option<Staged> {
         let view = match self.validate(self.record.pending.clone()) {
             Some(pending) => pending,
             None => {
                 let view = self.view.as_ref()?;
-                if self.running.as_deref() == Some(view.sha.as_str()) {
+                let sha = Some(view.sha.as_str());
+                if self.running.as_deref() == sha || self.refused.as_deref() == sha {
                     return None;
                 }
                 view.clone()
@@ -1034,6 +1092,9 @@ impl Store {
         self.view = Some(view);
         self.running = Some(staged.entry);
         self.running_seq = staged.seq;
+        // The boot refusal was this process's earlier generation; the one it
+        // runs now is blessed by its own first pixel.
+        self.refused = None;
         Ok(())
     }
 
@@ -1266,9 +1327,10 @@ impl Store {
         write_atomic(&self.record_path(), record.to_json().as_bytes(), false)
     }
 
-    /// Build one entry under a temporary name and rename it into place. Whole
-    /// or absent: any failure removes the temporary directory and leaves the
-    /// store exactly as it was.
+    /// Build one entry under a temporary name and install it only after every
+    /// file is downloaded, verified and synced: any failure removes the
+    /// temporary directory and leaves an existing entry and its signed floor
+    /// witness intact, and replacement refuses an entry held by a reader.
     fn write_entry(
         &self,
         envelope: &Envelope,
@@ -1282,44 +1344,28 @@ impl Store {
                 return Ok(()); // already here, whole: the record just selects it
             }
         }
-        let witness_only =
-            !regular_file(&target.join("app.plan")) && self.read_envelope(&envelope.digest).is_ok();
-        if target.exists() && !witness_only {
-            std::fs::remove_dir_all(&target)
-                .map_err(|e| format!("cannot clear {}: {e}", target.display()))?;
-        }
         let tmp = self.entries_dir().join(temporary_name());
         let filled = self.fill(&tmp, envelope, head_url, fetch, embedded_asset);
         if filled.is_err() {
             let _ = std::fs::remove_dir_all(&tmp);
         }
         filled?;
-        if witness_only {
-            // Publish the plan last: the signed floor survives while a witness
-            // becomes a selectable entry for a binary with different embedded bytes.
-            let assets = target.join("assets");
-            if assets.exists() {
-                std::fs::remove_dir_all(&assets).map_err(|e| e.to_string())?;
+        let installed = if let Ok(meta) = std::fs::symlink_metadata(&target) {
+            let _entry_lock = lock_entry(&target).inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(&tmp);
+            })?;
+            if meta.file_type().is_dir() && self.read_envelope(&envelope.digest).is_ok() {
+                replace_entry_in_place(&tmp, &target)
+            } else {
+                swap_entry(&tmp, &target)
             }
-            if tmp.join("assets").exists() {
-                std::fs::rename(tmp.join("assets"), &assets).map_err(|e| e.to_string())?;
-            }
-            if tmp.join("assets.json").exists() {
-                std::fs::rename(tmp.join("assets.json"), target.join("assets.json"))
-                    .map_err(|e| e.to_string())?;
-            }
-            sync_dir(&target)?;
-            std::fs::rename(tmp.join("app.plan"), target.join("app.plan"))
-                .map_err(|e| e.to_string())?;
-            sync_dir(&target)?;
-            let _ = std::fs::remove_dir_all(&tmp);
-            return Ok(());
-        }
-        std::fs::rename(&tmp, &target).map_err(|e| {
-            let _ = std::fs::remove_dir_all(&tmp);
-            format!("cannot put {} in place: {e}", target.display())
-        })?;
-        sync_dir(&self.entries_dir())
+        } else {
+            std::fs::rename(&tmp, &target)
+                .map_err(|e| format!("cannot put {} in place: {e}", target.display()))
+                .and_then(|()| sync_dir(&self.entries_dir()))
+        };
+        let _ = std::fs::remove_dir_all(&tmp);
+        installed
     }
 
     fn validate_contents(&self, view: &EntryView) -> Result<(), String> {

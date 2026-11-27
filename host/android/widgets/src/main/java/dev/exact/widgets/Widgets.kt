@@ -226,7 +226,9 @@ internal class Store(private val context: Context, private val kind: String) {
             return "${info.longVersionCode}-${info.lastUpdateTime}"
         }
 
-        private fun configurationFile(context: Context, id: Int) = File(root(context), "configuration-$id.json")
+        private fun configurationFile(dir: File, id: Int) = File(dir, "configuration-$id.json")
+
+        private fun configurationFile(context: Context, id: Int) = configurationFile(root(context), id)
 
         fun configuration(context: Context, id: Int): String? = runCatching { configurationFile(context, id).readText() }.getOrNull()
 
@@ -234,6 +236,40 @@ internal class Store(private val context: Context, private val kind: String) {
 
         fun forget(context: Context, id: Int) { configurationFile(context, id).delete() }
 
-        fun move(context: Context, from: Int, to: Int) { configurationFile(context, from).renameTo(configurationFile(context, to)) }
+        /** Remap restored configurations in parallel through temporary files so overlapping shifts and cycles never
+         * clobber a source waiting to move. */
+        fun move(context: Context, old: IntArray, new: IntArray) {
+            val pairs = old.zip(new)
+            if (pairs.isEmpty()) return
+            val dir = root(context)
+            val token = java.util.UUID.randomUUID().toString()
+            val staged = ArrayList<Pair<File, Int>>()
+            val clear = ArrayList<Int>()
+            val keep = HashSet<Int>()
+            for ((index, pair) in pairs.withIndex()) {
+                val (from, to) = pair
+                if (from == to) {
+                    keep += to
+                    continue
+                }
+                val temp = File(dir, ".configuration-restore-$token-$index.tmp")
+                if (configurationFile(dir, from).renameTo(temp)) {
+                    staged += temp to to
+                } else {
+                    clear += to
+                }
+            }
+            val targets = staged.map { it.second }.toSet()
+            for (to in clear) {
+                if (to !in targets && to !in keep) configurationFile(dir, to).delete()
+            }
+            for ((temp, to) in staged) {
+                val target = configurationFile(dir, to)
+                if (!temp.renameTo(target)) {
+                    target.delete()
+                    if (!temp.renameTo(target)) temp.delete()
+                }
+            }
+        }
     }
 }

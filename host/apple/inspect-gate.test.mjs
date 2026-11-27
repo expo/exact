@@ -22,6 +22,11 @@ function swiftFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? swiftFiles(join(dir, e.name)) : e.name.endsWith('.swift') ? [join(dir, e.name)] : []);
 }
 
+function appleSourceFiles(dir, exts) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? appleSourceFiles(join(dir, e.name), exts) : exts.some((ext) => e.name.endsWith(ext)) ? [join(dir, e.name)] : []);
+}
+
 test('Package.swift defines EXACT_INSPECT for development and not for production', () => {
   const defines = (trust) => {
     const out = appleSpawnSync('swift', ['package', 'dump-package'], { cwd: resolve(root, 'host/apple'), env: { ...process.env, EXACT_UPDATE_TRUST: trust }, encoding: 'utf8' });
@@ -146,6 +151,29 @@ test('shipped code names no private class', () => {
   const lines = shippedLines();
   expect(lines.some(({ at }) => at.startsWith('host/apple/videoarm/'))).toBe(true);
   expect(lines.filter(({ code }) => namesAClass(code)).map(({ at, code }) => `${at}: ${code.trim()}`)).toEqual([]);
+});
+
+// Shipped Objective-C and C headers under host/apple/ and packages/*/apple/ (LLP 1156.008.001 A3)
+// must likewise use only Apple public APIs and name no private classes or undocumented keys.
+test('shipped Objective-C sources under host/apple and packages/*/apple name no private class or undocumented key', () => {
+  const pkgAppleDirs = readdirSync(resolve(root, 'packages'), { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => resolve(root, 'packages', e.name, 'apple'))
+    .filter(existsSync);
+  const files = [
+    ...appleSourceFiles(resolve(root, 'host/apple'), ['.m', '.h'])
+      .map((f) => f.slice(root.length + 1))
+      .filter((p) => !notShipped.test(p) && !p.startsWith('host/apple/include/')),
+    ...pkgAppleDirs.flatMap((d) => appleSourceFiles(d, ['.m', '.h']).map((f) => f.slice(root.length + 1))),
+  ];
+  expect(files).toContain('packages/media-capture/apple/MediaCaptureBridge.m');
+  expect(files).toContain('packages/media-capture/apple/MediaCaptureBridge.h');
+  const violations = files.flatMap((path) =>
+    linesOutside(readFileSync(resolve(root, path), 'utf8'), development)
+      .filter(({ code }) => namesAClass(code) || undocumented.test(code))
+      .map(({ line, code }) => `${path}:${line}: ${code.trim()}`),
+  );
+  expect(violations).toEqual([]);
 });
 
 test('the shipped-code check sees what it refuses', () => {

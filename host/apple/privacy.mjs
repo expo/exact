@@ -163,3 +163,17 @@ export function writePrivacyManifest(resources, binaries, { manifests = [], apiM
   writeFileSync(output, plistFile(manifest));
   return output;
 }
+
+/** App-bundle required-reason manifest for `--embed` (LLP 1031.000 D1.5): declares ExactKit and
+ * the Rust runtime's catalog reasons plus any static app/package manifests, without invoking
+ * `nm`/`otool` over unlinked static archives or re-merging wrapped framework manifests. */
+export function writeEmbedPrivacyManifest(directory, { manifests = [] } = {}) {
+  const exact = {
+    [TYPES]: Object.entries(EXACT_REASONS).map(([category, reasons]) => ({ [TYPE]: PREFIX + category, [REASONS]: reasons })),
+  };
+  const merged = mergePrivacyManifests(exact, ...manifests.map(capturedPrivacyManifest));
+  const output = resolve(directory, 'PrivacyInfo.xcprivacy');
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(output, plistFile(merged));
+  return output;
+}

@@ -13,6 +13,17 @@ import ExactKit
 import Foundation
 
 enum DragFiles {
+    /// Each of `node`'s admitted files with the name a destination is offered
+    /// for it: the one `dataTransferNames` holds at its place, else the
+    /// file's own (LLP 1094.000 D14).
+    static func files(of node: NodeView) -> [(entry: String, name: String)] {
+        let names = (node.props["dataTransferNames"] ?? "").split(separator: "\n", omittingEmptySubsequences: false)
+        return (node.props["dataTransferFiles"] ?? "").split(separator: "\n").enumerated().map { at, entry in
+            let name = at < names.count && !names[at].isEmpty ? String(names[at]) : (String(entry) as NSString).lastPathComponent
+            return (String(entry), name)
+        }
+    }
+
     /// A shipped file's URL in `resolver`'s generation, or nil when the app
     /// does not ship it: an admitted entry is not read until the drop.
     static func shipped(_ entry: String, in resolver: AssetResolver?) -> URL? {

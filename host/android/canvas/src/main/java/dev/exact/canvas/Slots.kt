@@ -62,7 +62,7 @@ internal class Slots(private val again: Player, private val alive: (Int) -> Bool
     fun set(id: Int, b: IntBuffer, from: Int, to: Int, player: Player) {
         nodes[id]?.let { node ->
             val c = node.beginRecording()
-            player.replay(c, b, from, to)
+            player.replay(c, b, from, to, into = node)
             node.endRecording()
         }
         drawings.remove(id)?.let { old -> pictures(IntBuffer.wrap(old), 0, old.size) { unlist(it, id) } }
@@ -101,7 +101,7 @@ internal class Slots(private val again: Player, private val alive: (Int) -> Bool
         val node = nodes[id] ?: return
         val drawing = drawings[id] ?: return
         val c = node.beginRecording()
-        again.replay(c, IntBuffer.wrap(drawing), 0, drawing.size)
+        again.replay(c, IntBuffer.wrap(drawing), 0, drawing.size, into = node)
         node.endRecording()
     }
 

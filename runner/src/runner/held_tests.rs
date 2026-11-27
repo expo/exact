@@ -244,3 +244,84 @@ fn a_delayed_http_fixture_honours_an_earlier_timeout_and_drops_a_superseded_repl
     r.advance(130.).unwrap();
     assert_eq!(r.resource("changes"), Some(&Value::Number(-1.)));
 }
+
+#[test]
+fn a_held_continuation_is_pending_without_blocking_clocks_and_supersedes_cleanly() {
+    struct HeldContinuation;
+    impl DataSource for HeldContinuation {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!()
+        }
+        fn answer(
+            &mut self,
+            _: &mut Store,
+            source: &str,
+            args: &[Value],
+        ) -> Result<Answer, DataError> {
+            Ok(match (source, args.first()) {
+                ("busy", Some(v)) => Answer::Now(v.clone()),
+                (_, Some(Value::Number(n))) if *n == 1. || *n == 3. => {
+                    Answer::Later(Request::continuation::<crate::host_work::TestWork>(77).held())
+                }
+                (_, Some(Value::Number(n))) if *n == 2. => {
+                    Answer::Later(Request::continuation::<crate::host_work::TestWork>(78))
+                }
+                _ => Answer::Now(Value::Number(-1.)),
+            })
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            match outcome {
+                Outcome::Response(r) if r.body == b"more" => {
+                    Ok(Answer::Later(Request::get("https://example.test/follow")))
+                }
+                Outcome::Response(r) => Ok(Answer::Now(Value::Number(r.body.len() as f64))),
+                _ => Ok(Answer::Now(Value::Number(-2.))),
+            }
+        }
+    }
+
+    let mut r = Runner::boot(
+        plan(),
+        HeldContinuation,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let req = r.take_requests().remove(0);
+    assert!(req.request.continuation == Some(77) && req.request.is_held());
+    assert_eq!(r.resource("busy"), Some(&Value::Bool(true)));
+    assert!(
+        !r.has_pending(),
+        "a held continuation does not block clocks"
+    );
+    assert!(r.in_flight().is_empty());
+    assert_eq!(r.held_requests(), vec![("changes".to_string(), req.ticket)]);
+    assert!(crate::agent::state(&r).contains("\"held\":true"));
+
+    // Replying increments held_replies and follow-up unheld work blocks clocks again.
+    r.fulfill(req.ticket, reply("more")).unwrap();
+    assert_eq!(r.held_replies(), [("changes".to_string(), 1)]);
+    let follow = r.take_requests().remove(0);
+    assert!(r.has_pending());
+    r.fulfill(follow.ticket, reply("ok")).unwrap();
+    assert!(!r.has_pending());
+    assert_eq!(r.resource("changes"), Some(&Value::Number(2.)));
+
+    // Unmarked continuation still blocks clocks, and re-asking supersedes a held continuation.
+    r.act("wave", vec![Value::Number(3.)]).unwrap();
+    let parked = r.take_requests().remove(0);
+    assert!(!r.has_pending());
+    r.act("wave", vec![Value::Number(2.)]).unwrap();
+    let unheld = r.take_requests().remove(0);
+    assert!(!unheld.request.is_held());
+    assert!(r.has_pending());
+    assert!(!r.holds(parked.ticket));
+    assert_eq!(r.fulfill(parked.ticket, reply("late")).unwrap(), None);
+}

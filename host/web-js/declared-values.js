@@ -1,6 +1,8 @@
 // JSON values against the types an interface declares: an error answer's code, a value checked or completed
 // against its type, the agent's preferred value laid over an answer, and the handles a value holds.
 
+import { Failed } from "./shape.js";
+
 /** The code of an error answer, `{"error": "POSITION_UNAVAILABLE"}`, which may say more in a `message`, and each
  * platform's own code beside it (`apple`, `android`; LLP 1133.011 D1), as the runner's `error_code`. */
 export function errorCode(json) {

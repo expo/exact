@@ -11,6 +11,11 @@ fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=DEP_EXACT_WGPU_HAL_PATCHES");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    println!("cargo::rustc-check-cfg=cfg(exact_android_draw_trace)");
+    println!("cargo::rerun-if-env-changed=EXACT_UPDATE_TRUST");
+    if os == "android" && std::env::var("EXACT_UPDATE_TRUST").as_deref() != Ok("production") {
+        println!("cargo::rustc-cfg=exact_android_draw_trace");
+    }
     if !matches!(os.as_str(), "macos" | "ios" | "tvos" | "android") {
         return;
     }

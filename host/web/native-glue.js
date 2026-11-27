@@ -1,3 +1,5 @@
+import { loadOnce } from './load-once.js';
+
 // Native modules on the web (@ref LLP 1024 D2–D5, D7; LLP 1067 D5): the host
 // half of the app's module table. Loaded after first paint for an app with a
 // module artifact (`./modules/index.js`, the app's `modules/web/`), whose
@@ -19,6 +21,7 @@
 // once (a reload reuses the definitions), and the module renders into the
 // element it is given. Events are copied, checked against the instance's
 // nonce, and dispatched after the batch that caused them, never inside it.
+const PACKAGE_LIFETIME = true;
 const ABI = 1;
 // The runner's dispatch codes for EventKind ordinals 0–8 (hover: over 2, off 3).
 const DISPATCH = [0, 1, 2, 4, 5, 6, 7, 8, 9];
@@ -27,7 +30,7 @@ const NAMES = ['press', 'change', 'hover', 'focus', 'blur', 'key', 'submit', 'lo
 // The app's module artifact, loaded once for the page: its views' table
 // here, and its `later(request)` for `native.later` (pageNative, below).
 const artifactUrl = () => new URL('./modules/index.js', document.baseURI).href;
-const artifact = () => globalThis.exact.nativeArtifact ??= new Promise((resolve, reject) => {
+const artifact = () => loadOnce(globalThis.exact, 'nativeArtifact', () => new Promise((resolve, reject) => {
   const attempt = globalThis.exact.nativeAttempt ?? 0;
   globalThis.exact.nativeAttempt = attempt + 1;
   const url = new URL(artifactUrl());
@@ -40,7 +43,7 @@ const artifact = () => globalThis.exact.nativeArtifact ??= new Promise((resolve,
   import(url.href).then(
     table => { clearTimeout(timer); resolve(table); },
     error => { clearTimeout(timer); reject(new Error(`the module artifact ${url} did not load: ${error?.message ?? error}`)); });
-}).catch(error => { globalThis.exact.nativeArtifact = null; throw error; });
+}));
 
 // The artifact itself, for the page module's hatches (LLP 1075.003.000).
 globalThis.exact.nativeModule = artifact;
@@ -50,12 +53,13 @@ globalThis.exact.nativeModule = artifact;
 // by the app's artifact, which such a tag does not load.
 globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
   let table = null, failure = null, nonce = 0, loaded = null;
+  const loads = {};
   const waiting = new Set();
   const defines = (globalThis.exact.nativeDefines ??= { count: 0 });
   const say = (line) => { log(`native ${line}`); };
   const url = artifactUrl();
   const define = (tag) => { if (!customElements.get(tag)) { customElements.define(tag, class extends HTMLElement {}); defines.count += 1; } };
-  const load = () => artifact().then((m) => {
+  const load = () => loadOnce(loads, 'table', () => artifact().then((m) => {
     if (m.abi !== ABI) throw Object.assign(new Error(`module ABI ${m.abi}, host ABI ${ABI}`), { state: 'unavailable' });
     if (!m.roster || typeof m.create !== 'function' || typeof m.setProps !== 'function' || typeof m.destroy !== 'function') {
       throw Object.assign(new Error(`${url} is not a module table (abi, roster, create, setProps, destroy)`), { state: 'unavailable' });
@@ -63,7 +67,7 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
     for (const tag of Object.keys(m.roster)) define(tag);
     table = m;
     say(`loaded ${url}: ${Object.keys(m.roster).join(', ')} (abi ${m.abi})`);
-  }).catch((error) => {
+  }), (error) => {
     failure = error;
     say(`unavailable: ${error.message}`);
   }).finally(() => { for (const el of waiting) attachNow(el); waiting.clear(); });
@@ -89,21 +93,23 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
   }
   // Props replace the whole aggregate; a refusal keeps the last accepted.
   function observe(el, st, live, set) {
-    st.observer = new MutationObserver(() => {
+    const update = () => {
       const next = el.getAttribute('data-nativeviewprops') ?? '{}';
       if (next === st.props || !live()) return;
       try { set(next); st.props = next; if (st.state === 'error') { st.state = 'ready'; delete st.error; } }
       catch (error) { fail(st, 'error', `props refused: ${error?.message ?? error}`); }
-    });
+    };
+    st.observer = new MutationObserver(update);
     st.observer.observe(el, { attributes: true, attributeFilter: ['data-nativeviewprops'] });
+    if (PACKAGE_LIFETIME && st.package) update(); // Props may have changed while the factory loaded.
   }
   function attachNow(el) {
     const st = el.exactNative;
     if (!st || st.destroyed) return;
-    if (failure) return fail(st, failure.state ?? 'unavailable', failure.message);
+    if (failure) return st.missingFactory ? fail(st, 'error', st.missingFactory) : fail(st, failure.state ?? 'unavailable', failure.message);
     // The name is a table key, checked again on plan bytes (D2, D5).
     if (!/^[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$/.test(st.name)) return fail(st, 'error', `refused module name ${JSON.stringify(st.name)}`);
-    if (!Object.hasOwn(table.roster, st.name)) return fail(st, 'error', `the module artifact has no factory for ${st.name}`);
+    if (!Object.hasOwn(table.roster, st.name)) return fail(st, 'error', st.missingFactory ?? `the module artifact has no factory for ${st.name}`);
     const mine = ++nonce;
     st.nonce = mine;
     const { live, event } = events(el, st, mine);
@@ -124,6 +130,7 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
     const mine = ++nonce;
     st.nonce = mine;
     const { live, event } = events(el, st, mine);
+    if (PACKAGE_LIFETIME) st.package = true;
     const handlers = Object.fromEntries(NAMES.map((name, kind) => [name, (payload) => event(kind, payload)]));
     // An event the package declares beyond the nine (LLP 1133.021 §9 item 2)
     // rides the message kind; the plan's handler decodes its arguments.
@@ -134,10 +141,11 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
       st.handle = handle; st.package = true; st.props = props; st.state = 'ready'; delete st.error;
       say(`${st.name} #${st.id}: ready (a package's view)`);
       observe(el, st, live, (next) => handle.setProps?.(JSON.parse(next)));
-    }, (error) => { st.nonce = 0; fail(st, 'error', `create refused: ${error?.message ?? error}`); });
+    }, (error) => { if (PACKAGE_LIFETIME && !live()) return; st.nonce = 0; fail(st, 'error', `create refused: ${error?.message ?? error}`); });
   }
   return {
     attach(el) {
+      if (PACKAGE_LIFETIME && el.exactNative.destroyed) return;
       say(`${el.exactNative.name} #${el.exactNative.id}: loading`);
       if (packages?.serves(el.exactNative.name)) return attachPackage(el);
       if (!loaded || failure) { failure = null; loaded = load(); }

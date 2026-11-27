@@ -55,6 +55,15 @@ pub enum LayoutOperand {
     },
 }
 
+/// The answer in an authored held-ticket step (`tap "@target" choice` or `type "@target" "text"`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TicketAnswer {
+    /// A discrete choice (`tap "@browser" dismissed`, `tap "@share" cancel`).
+    Choice(String),
+    /// Typed text (`type "@date" "2026-10-10"`).
+    Text(String),
+}
+
 /// `test "name"` with steps: the agent API's own operations (LLP 1012) and
 /// `expect` lines that read their replies — compiled to a script the agent
 /// driver runs against the real hosts; never a second evaluator (LLP 1017 P7).
@@ -199,6 +208,15 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// A package substitute, keyed as in a drive. An absent value clears it.
+    PreferExtension {
+        /// The qualified source or agent word.
+        key: String,
+        /// The JSON the package receives.
+        value: Option<String>,
+        /// Where.
+        span: Span,
+    },
     /// `before data` skips the initial `clock data` wait. A native app runs
     /// on real time before the driver connects; the web uses the agent's.
     BeforeData {
@@ -291,6 +309,15 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// A plain `secret.keep` value seeded in the test's initial scratch store (LLP 1018.000 D1).
+    Secret {
+        /// The granted plain `secret.keep` name.
+        name: String,
+        /// The seeded secret value text.
+        value: String,
+        /// Where.
+        span: Span,
+    },
     /// A persisted state in the test's initial store (LLP 1116 D5).
     Stored {
         /// The state name, including names used by earlier builds.
@@ -362,6 +389,16 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// `tap "@target" <choice>` or `type "@target" "<text>"`: answer a held device
+    /// or package ticket by its capability or target name.
+    Ticket {
+        /// The ticket's name without its leading `@` (for example `browser`, `share`, `date`).
+        target: String,
+        /// The choice or typed text answering the hold.
+        answer: TicketAnswer,
+        /// Where.
+        span: Span,
+    },
     /// `type "testId" copy`, `… cut`, `… paste "text"`: the clipboard's
     /// event at the node, a paste carrying `text` as the clipboard's.
     Clipboard {
@@ -386,6 +423,20 @@ pub enum Step {
     Background {
         /// Elapsed wall time with the app away.
         ms: u32,
+        /// Where.
+        span: Span,
+    },
+    /// Turn an iOS simulator and wait for the scene.
+    Rotate {
+        /// The requested interface orientation, as reported by `layout`.
+        orientation: String,
+        /// Where.
+        span: Span,
+    },
+    /// Move the iOS simulator's hinge and wait for its angle.
+    Fold {
+        /// Hinge angle from closed (0) to fully open (180).
+        degrees: f64,
         /// Where.
         span: Span,
     },

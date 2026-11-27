@@ -1,12 +1,13 @@
 // An app's `file:` dependencies, as its builds read them (#115). Bun installs a `file:` package inside the app's
-// directory as a copy of the package's directory, and one outside it as a directory of links to each of its files.
-// Either is the package as it was at the last `bun install`: an edit to a copy, a file added to either and a file
-// removed from either are not what `node_modules` holds until the next one. Every reader of a package (the bake's
-// resolver, Rolldown, the Swift, Kotlin and Rust builds) reads `node_modules`, so before a build reads it, this makes
-// it what the declared directories hold now, by Bun's own install: the one that decides what an install is.
+// directory as a copy of the package's directory (on Linux, a hard link to each file), and one outside it as a directory
+// of links to each of its files. Any of these is the package as it was at the last `bun install`: an edit to a copy, a
+// hard-linked file replaced by a new one, a file added and a file removed are not what `node_modules` holds until the
+// next one. Every reader of a package (the bake's resolver, Rolldown, the Swift, Kotlin and Rust builds) reads
+// `node_modules`, so before a build reads it, this makes it what the declared directories hold now, by Bun's own
+// install: the one that decides what an install is.
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { installLock, withInstallLock } from './filesystem.mjs';
 
 // Not a package's sources: its own installs, and its repository. Bun copies both; no build reads either from it.
@@ -63,13 +64,14 @@ export function declaredSources(appDir) {
 
 const isDirectory = (path) => { try { return statSync(path).isDirectory(); } catch { return false; } };
 
-/** Every file under `dir` but the package's own installs and repository, as paths relative to it. A link is followed;
+/** Every file under `dir` but the package's own installs and repository, as paths relative to it, in name order in
+ * each directory. A link is followed;
  * one that leads nowhere is not a file of a source, and is one of an install (`dangling`), where it is the link to a
  * file removed since. */
 function files(dir, dangling = false, at = '') {
   const out = [];
   let entries;
-  try { entries = readdirSync(join(dir, at)); } catch { return out; }
+  try { entries = readdirSync(join(dir, at)).sort(); } catch { return out; }
   for (const name of entries) {
     if (!at && NOT_SOURCE.has(name)) continue;
     const path = at ? join(at, name) : name;
@@ -112,12 +114,34 @@ export const installDifference = (dependency) => installDifferences(dependency).
  * judge a file by its time would keep that build's output. A package that still differs after the install is what
  * Bun installs, which no install by hand would change, so it is said and the build goes on. One process installs at
  * a time (`withInstallLock`); `install` is the install a test stands in for. */
+/** Warns when any `@exact/*` `file:` dependency points into a different Exact checkout than the active one (LLP 1156.008.000 D10.10). */
+export function mixedCheckoutWarnings(dependencies, activeRoot = resolve(import.meta.dir, '..')) {
+  let active;
+  try { active = realpathSync(activeRoot); } catch { active = resolve(activeRoot); }
+  const out = [];
+  for (const { name, source } of dependencies) {
+    if (!name.startsWith('@exact/')) continue;
+    let real;
+    try { real = realpathSync(source); } catch { continue; }
+    for (let dir = dirname(real); ; dir = dirname(dir)) {
+      if (basename(dir) === 'packages' && existsSync(join(dirname(dir), 'scripts', 'exact.mjs'))) {
+        const checkout = dirname(dir);
+        if (checkout !== active) out.push(`warning: ${name} points to a different Exact checkout (${checkout}) than the active one (${active}); run \`bun exact.mjs update\` or repoint package.json to match`);
+        break;
+      }
+      if (dirname(dir) === dir) break;
+    }
+  }
+  return out;
+}
+
 export function installedFileDependencies(appDir, { install = (root) => spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: root, stdio: ['ignore', 2, 2] }).status === 0 } = {}) {
   const dependencies = fileDependencies(appDir);
   // A declared directory that is gone (removed, renamed) leaves its last install in node_modules, which every reader
   // would go on reading: no install mends that, so the build stops.
   const gone = dependencies.filter(({ source }) => !isDirectory(source));
   if (gone.length) throw new Error(gone.map(({ name, spec, source, installed, root }) => `${name} is ${spec} in ${join(root, 'package.json')}, and ${source} is not a directory, so the build would read the copy at ${installed} as of its last install: restore the directory, or point ${name} at its new place (or remove it) and run bun install`).join('\n'));
+  for (const warning of mixedCheckoutWarnings(dependencies)) console.error(warning);
   const said = (list) => list.map(({ dependency, found: [[path, what], ...more] }) => `${dependency.name} (${dependency.spec}): ${path} ${what}${more.length ? ` and ${more.length} more` : ''}`).join('; ');
   // Installed again where the install is, when a package.json there declares it (an ancestor's install, or the app's
   // own; Bun finds a workspace from a member), else where the app's package.json is.

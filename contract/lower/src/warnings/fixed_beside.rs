@@ -172,6 +172,7 @@ fn facts(route: Visit<'_>) -> BTreeMap<Site, Facts> {
                 _ => false,
             };
             let fixed = !out_of_flow
+                && !crate::routes::bottom_toolbar::bottom(attrs)
                 && !has(attrs, "navigationSplit")
                 && tag != "header"
                 && !computed(attrs, "position")

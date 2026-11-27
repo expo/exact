@@ -67,10 +67,11 @@ extension UIView {
     /// The elements UIKit exposes for this view, found as VoiceOver finds
     /// them: what it declares (`declared`, UIKit's own answer before any
     /// stand-in's), else its subviews, down to each element.
-    package func nativeAccessibilityElements(declared: [NSObject]) -> [NSObject] {
+    package func nativeAccessibilityElements(declared: [NSObject], visibleOnly: Bool = false) -> [NSObject] {
         var found: [NSObject] = [], seen = Set<ObjectIdentifier>()
         func visit(_ object: NSObject) {
             guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            if visibleOnly && (object.accessibilityElementsHidden || (object as? UIView)?.isHidden == true) { return }
             if object.isAccessibilityElement { found.append(object); return }
             if let elements = object.accessibilityElements, !elements.isEmpty {
                 for case let element as NSObject in elements { visit(element) }

@@ -165,7 +165,7 @@ impl<D: DataSource> Runner<D> {
         // Only the application data source can opt in, and an unasked
         // tail must belong to the same foreground cause. A queue with
         // `then` owes one action per reply (LLP 1092 D4).
-        let replacement = if cause == Cause::person()
+        let replacement = if cause.ordinary_app()
             && self.mutation_row(m).then.is_none()
             && self.source_ready(source)
             && self.seams.source_answer.is_none()
@@ -567,7 +567,7 @@ impl<D: DataSource> Runner<D> {
         let name = |_: &Plan| name.clone();
         self.check_send_arguments(m, args)?;
         self.snapshot_sockets();
-        self.store.set_clock_ms(self.now_ms);
+        self.sync_store_clock();
         self.mutation_requests += 1;
         let answer = self.route_send(target, source, args);
         // What its source staged on sockets goes out only with an answer

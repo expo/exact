@@ -106,6 +106,8 @@ std::thread_local! {
 /// set them after.
 #[derive(Debug, Clone, Default)]
 pub struct Launch {
+    /// A web client's keyboard notation. Server renders leave it unknown.
+    pub keyboard: crate::page::Keyboard,
     /// The host's viewport preferences, read before the first settlement (LLP 1039 D10).
     pub preferences: Option<crate::Preferences>,
     /// The date (`set_time`'s fact).
@@ -174,6 +176,7 @@ impl std::fmt::Debug for PageFacts {
 impl Launch {
     /// Nothing known: the boot reads the defaults.
     pub const NONE: Launch = Launch {
+        keyboard: crate::page::Keyboard::Unknown,
         preferences: None,
         time: None,
         place: None,
@@ -216,6 +219,7 @@ pub fn launching_with<T>(launch: Launch, boot: impl FnOnce() -> T) -> T {
         }
     }
     let launch = Launch {
+        keyboard: launch.keyboard,
         preferences: launch.preferences,
         time: launch.time.filter(|t| t.validate().is_ok()),
         place: launch.place.filter(|p| p.validate().is_ok()),
@@ -305,6 +309,10 @@ pub(crate) fn launch_direction() -> Option<exact_kernel::Direction> {
 /// Whether a boot under [`launching_with`] was told its unsaid text is natural.
 pub(crate) fn launch_natural_text() -> bool {
     LAUNCH.with(|l| l.borrow().natural_text)
+}
+
+pub(crate) fn launch_keyboard() -> crate::page::Keyboard {
+    LAUNCH.with(|l| l.borrow().keyboard)
 }
 
 /// Where the viewer is, when a boot under [`launching_with`] was told.

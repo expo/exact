@@ -82,8 +82,7 @@ impl NodeArena {
     /// Whether a slot is a `<button>` element on the web: a Pressable,
     /// whatever its ARIA role, unless an `href` makes it an `<a>`.
     pub(crate) fn is_button(&self, slot: u32) -> bool {
-        self.node_type(slot) == NodeType::Pressable
-            && self.props(slot).str(crate::PropId::Href).is_none()
+        self.node_type(slot) == NodeType::Pressable && !self.props(slot).has_link_destination()
     }
 
     pub(crate) fn is_native_button(&self, slot: u32) -> bool {
@@ -200,7 +199,11 @@ impl NodeArena {
         {
             return false;
         }
-        let modal = |s| self.props(s).str(PropId::NavigationPresentation) == Some("modal");
+        let modal = |s| {
+            self.props(s)
+                .presentation()
+                .is_some_and(crate::props::Presentation::sheet_like)
+        };
         let mut parent = self.parent(slot);
         while let Some(header) = parent {
             parent = self.parent(header);

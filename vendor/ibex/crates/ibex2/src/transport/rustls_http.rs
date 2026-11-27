@@ -277,7 +277,7 @@ impl ureq::unversioned::resolver::Resolver for Resolver {
         #[cfg(test)]
         RESOLVER_CALLS.fetch_add(1, Ordering::SeqCst);
         let signal = self.0.lock().unwrap().signal.clone().expect("active lease");
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         let deadline = timeout
             .not_zero()
             .map(|duration| Instant::now() + *duration);
@@ -292,7 +292,7 @@ impl ureq::unversioned::resolver::Resolver for Resolver {
         match found {
             Ok(result) => result,
             Err(super::lookup::Unanswered::Aborted) => {
-                Err(interrupted(signal.check().err().unwrap_or_else(|| {
+                Err(cancelled(signal.check().err().unwrap_or_else(|| {
                     HostError::Failed("AbortError: The operation was aborted".into())
                 })))
             }
@@ -311,8 +311,14 @@ impl std::fmt::Debug for CancellableConnector {
         f.write_str("CancellableConnector")
     }
 }
-fn interrupted(error: HostError) -> ureq::Error {
-    std::io::Error::new(std::io::ErrorKind::Interrupted, error.to_string()).into()
+pub(super) fn cancelled_io(error: HostError) -> std::io::Error {
+    // Interrupted means retry the same I/O. The abort signal is permanent
+    // for this request, including inside rustls complete_io and write_all.
+    std::io::Error::new(std::io::ErrorKind::ConnectionAborted, error.to_string())
+}
+
+fn cancelled(error: HostError) -> ureq::Error {
+    cancelled_io(error).into()
 }
 impl<In: WireTransport> Connector<In> for CancellableConnector {
     type Out = Either<In, CancellableSocket>;
@@ -331,7 +337,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
             current.resendable = false;
             current.signal.clone().expect("active lease")
         };
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         let budget = details
             .timeout
             .not_zero()
@@ -341,7 +347,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
         let mut last = std::io::Error::new(std::io::ErrorKind::NotConnected, "no resolved address");
         let count = details.addrs.len();
         for (index, address) in details.addrs.iter().enumerate() {
-            signal.check().map_err(interrupted)?;
+            signal.check().map_err(cancelled)?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -351,7 +357,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
             let attempt = remaining / (count - index) as u32;
             match connect_socket(*address, attempt, &signal) {
                 Ok(stream) => {
-                    signal.check().map_err(interrupted)?;
+                    signal.check().map_err(cancelled)?;
                     stream.set_nodelay(details.config.no_delay())?;
                     let socket = stream.try_clone()?;
                     let buffers = LazyBuffers::new(
@@ -374,7 +380,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
                 }
             }
         }
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         Err(last.into())
     }
 }
@@ -509,9 +515,7 @@ pub(crate) fn connect_socket(
         }
         let deadline = Instant::now() + timeout;
         loop {
-            signal
-                .check()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Interrupted, e.to_string()))?;
+            signal.check().map_err(cancelled_io)?;
             if let Some(error) = socket.take_error()? {
                 return Err(error);
             }
@@ -578,7 +582,7 @@ impl CancellableSocket {
         let Some(signal) = signal else {
             return Ok(());
         };
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         if self.generation != Some(generation) {
             let socket = self.socket.try_clone()?;
             let context = Arc::downgrade(&self.context);
@@ -608,7 +612,18 @@ impl WireTransport for CancellableSocket {
             .map_err(ureq::Error::from)
     }
     fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
-        self.prepare()?;
+        #[cfg(test)]
+        let gated = abort_tests::before_socket_read();
+        let ready = self.prepare();
+        #[cfg(test)]
+        if gated {
+            // Report a retryable cancellation before returning it to rustls.
+            assert!(
+                matches!(&ready, Err(ureq::Error::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionAborted),
+                "{ready:?}"
+            );
+        }
+        ready?;
         self.stream
             .set_read_timeout(timeout.not_zero().map(|d| *d))?;
         let n = self.stream.read(self.buffers.input_append_buf())?;
@@ -686,14 +701,14 @@ fn run<S: ureq::AsSendBody>(
 fn send(
     lease: &Lease,
     req: ureq::http::Request<()>,
-    body: &[u8],
+    body: Option<&[u8]>,
     reader: &mut Option<Counted<'_>>,
     timeout: Option<Duration>,
     left: Option<Duration>,
 ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
     let (parts, ()) = req.into_parts();
-    match reader.as_mut() {
-        Some(reader) => {
+    match (reader.as_mut(), body) {
+        (Some(reader), _) => {
             let counted = ureq::SendBody::from_reader(reader);
             run(
                 lease,
@@ -702,9 +717,40 @@ fn send(
                 left,
             )
         }
-        None => run(
+        // RFC 9110 §8.6 / Fetch §4.6: omit Content-Length when no body is
+        // present and the method does not anticipate one, or on GET/HEAD with
+        // an empty byte slice; an explicitly empty body on methods such as
+        // DELETE or OPTIONS still sends `Content-Length: 0`.
+        (None, None)
+            if !matches!(
+                parts.method,
+                ureq::http::Method::POST | ureq::http::Method::PUT | ureq::http::Method::PATCH
+            ) =>
+        {
+            run(
+                lease,
+                ureq::http::Request::from_parts(parts, ()),
+                timeout,
+                left,
+            )
+        }
+        (None, Some(b))
+            if b.is_empty()
+                && matches!(
+                    parts.method,
+                    ureq::http::Method::GET | ureq::http::Method::HEAD
+                ) =>
+        {
+            run(
+                lease,
+                ureq::http::Request::from_parts(parts, ()),
+                timeout,
+                left,
+            )
+        }
+        (None, body) => run(
             lease,
-            ureq::http::Request::from_parts(parts, body),
+            ureq::http::Request::from_parts(parts, body.unwrap_or_default()),
             timeout,
             left,
         ),
@@ -878,7 +924,14 @@ impl Transport for RustlsHttpTransport {
                 read: read.clone(),
             }),
         };
-        let mut result = send(&lease, req, body, &mut reader, request.timeout, limit);
+        let mut result = send(
+            &lease,
+            req,
+            request.body.as_deref(),
+            &mut reader,
+            request.timeout,
+            limit,
+        );
         signal.check()?;
         // A request whose pooled connection closed before any of its response
         // arrived may never have reached the server, which can close an idle
@@ -898,7 +951,14 @@ impl Transport for RustlsHttpTransport {
                     reader.rewind().map_err(failed)?;
                 }
                 watch(&lease);
-                result = send(&lease, build()?, body, &mut reader, request.timeout, left);
+                result = send(
+                    &lease,
+                    build()?,
+                    request.body.as_deref(),
+                    &mut reader,
+                    request.timeout,
+                    left,
+                );
             }
         }
         signal.check()?;
@@ -969,7 +1029,7 @@ mod tests {
     use std::process::Command;
     use std::sync::{mpsc, MutexGuard};
 
-    fn tls_test_lock() -> MutexGuard<'static, ()> {
+    pub(super) fn tls_test_lock() -> MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
         LOCK.lock().unwrap()
     }
@@ -1002,12 +1062,15 @@ mod tests {
         let result = opened
             .recv_timeout(Duration::from_secs(5))
             .expect("returned at the abort");
-        let error = result.unwrap_err().to_string();
+        let error = result.unwrap_err();
         assert!(
             aborted.elapsed() < Duration::from_millis(500),
             "returned at the abort"
         );
-        assert!(error.contains("abort"), "{error}");
+        assert_eq!(
+            error,
+            HostError::Failed("AbortError: The operation was aborted".into())
+        );
         assert_eq!(gate.0.waiting(), 1, "the lookup itself still runs");
         drop(gate);
     }
@@ -1037,7 +1100,7 @@ mod tests {
         }
     }
 
-    fn request_head(socket: &mut TcpStream) -> String {
+    pub(super) fn request_head(socket: &mut TcpStream) -> String {
         next_head(socket).expect("a request's head")
     }
 
@@ -1088,7 +1151,7 @@ mod tests {
     }
 
     /// The listener's next connection, or none within `limit`.
-    fn accept_within(listener: &TcpListener, limit: Duration) -> Option<TcpStream> {
+    pub(super) fn accept_within(listener: &TcpListener, limit: Duration) -> Option<TcpStream> {
         let end = Instant::now() + limit;
         loop {
             match listener.accept() {
@@ -1734,8 +1797,118 @@ mod tests {
         assert_eq!(transport.send(&Request::get(&a)).unwrap().body, b"ok");
         assert_eq!(at_a.load(Ordering::SeqCst), 1);
     }
+
+    /// RFC 9110 §8.6: bodiless methods omit `Content-Length`, while methods
+    /// that anticipate a body (`POST`, `PUT`, `PATCH`) or carry bytes send it.
+    #[test]
+    fn bodiless_methods_omit_content_length_while_body_methods_send_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let cases: &[(&str, Option<&[u8]>, Option<&str>)] = &[
+            ("GET", None, None),
+            ("GET", Some(b""), None),
+            ("HEAD", None, None),
+            ("HEAD", Some(b""), None),
+            ("DELETE", None, None),
+            ("DELETE", Some(b""), Some("content-length: 0")),
+            ("OPTIONS", None, None),
+            ("OPTIONS", Some(b""), Some("content-length: 0")),
+            ("DELETE", Some(b"ok"), Some("content-length: 2")),
+            ("POST", None, Some("content-length: 0")),
+            ("POST", Some(b""), Some("content-length: 0")),
+            ("PUT", None, Some("content-length: 0")),
+            ("PATCH", None, Some("content-length: 0")),
+            ("POST", Some(b"hello"), Some("content-length: 5")),
+        ];
+        let expected = cases.len() + 2; // plus 303 POST -> GET (2 hops)
+        let peer = std::thread::spawn(move || {
+            let mut heads = Vec::with_capacity(expected);
+            for i in 0..expected {
+                let (mut socket, _) = listener.accept().unwrap();
+                let head = request_head(&mut socket);
+                let length: usize = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; length];
+                socket.read_exact(&mut body).unwrap();
+                if head.starts_with("POST /redirect ") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 303 See Other\r\nLocation: /after\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                } else {
+                    let reply = if head.starts_with("HEAD ") { "" } else { "ok" };
+                    write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .unwrap();
+                }
+                heads.push((i, head, body));
+            }
+            heads
+        });
+        let transport = RustlsHttpTransport::new();
+        for (index, &(method, body, _)) in cases.iter().enumerate() {
+            let mut req = Request::get(&format!("{url}/case-{index}"));
+            req.method = method.into();
+            req.body = body.map(|b| b.to_vec());
+            let reply = transport.send(&req).unwrap();
+            assert_eq!(reply.status, 200, "{method} case {index}");
+        }
+        let grants = crate::grant::GrantSet::parse(&format!("net.fetch {url}")).unwrap();
+        let mut redirect = post(&format!("{url}/redirect"));
+        redirect.body = Some(b"go".to_vec());
+        let reply = crate::stdlib::fetch::fetch(&transport, &grants, redirect).unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.body, b"ok");
+
+        let heads = peer.join().unwrap();
+        for ((_, head, seen_body), &(method, body, want_cl)) in heads.iter().zip(cases.iter()) {
+            let lower = head.to_ascii_lowercase();
+            match want_cl {
+                None => {
+                    assert!(
+                        !lower.contains("content-length:"),
+                        "{method} unexpectedly sent Content-Length:\n{head}"
+                    );
+                    assert!(
+                        !lower.contains("transfer-encoding:"),
+                        "{method} unexpectedly sent Transfer-Encoding:\n{head}"
+                    );
+                }
+                Some(header) => {
+                    assert!(
+                        lower.contains(&format!("{header}\r\n")),
+                        "{method} missing `{header}`:\n{head}"
+                    );
+                }
+            }
+            assert_eq!(seen_body.as_slice(), body.unwrap_or_default(), "{method}");
+        }
+        let redirect_post = heads[cases.len()].1.to_ascii_lowercase();
+        let redirect_get = heads[cases.len() + 1].1.to_ascii_lowercase();
+        assert!(
+            redirect_post.contains("content-length: 2\r\n"),
+            "{redirect_post}"
+        );
+        assert!(
+            !redirect_get.contains("content-length:"),
+            "303 GET unexpectedly sent Content-Length:\n{redirect_get}"
+        );
+    }
 }
 
+#[cfg(test)]
+#[path = "rustls_abort_tests.rs"]
+mod abort_tests;
 #[cfg(test)]
 #[path = "rustls_timeout_tests.rs"]
 mod timeout_tests;

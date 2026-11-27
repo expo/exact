@@ -74,6 +74,8 @@ const here = process.platform === 'linux' ? 'linux' : `linux host on ${process.p
   check('agent', 'unbound, the declaration answers', texts(tree).battery === '1 true' && texts(tree).network === 'unknown false' && texts(tree).power === 'false none', JSON.stringify(texts(tree)));
   check('agent', 'a preferred value reaches the reader', texts(pref).power === 'true none', texts(pref).power);
 }
+run('bun', ['exact.mjs', 'agent', 'linux', '--test', resolve(pkg, 'test/fixture/power.test.contract')], app);
+
 if (cross) {
   // A crate per OS beside the fixture's own, which composes the package as the host's build does but runs no data
   // module: Hermes has no Windows build, and its Linux bundle is not one this Mac needs. The bake still runs (its

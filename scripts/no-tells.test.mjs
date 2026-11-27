@@ -126,3 +126,15 @@ test('a symbol sized in points beside text that scales is named; alone, in rem, 
   ].join('\n');
   assert.deepEqual(fixedSymbolsIn(source).map((f) => [f.line, f.property, f.size, f.testId]), [[5, 'width', 28, 'trash'], [5, 'height', 28, 'trash']]);
 });
+
+test('declared theme or forma type tokens on font properties are not flagged as tells (LLP 1156.008.000 D11.7)', () => {
+  const source = [
+    'component A',
+    '  view',
+    '    column',
+    '      text "Title" font="type.headline"',
+    '      text "Raw" font-size="18px"',
+  ].join('\n');
+  const found = tellsIn(source, new Set(['type.headline']));
+  assert.deepEqual(found.map((t) => [t.line, t.property, t.kind]), [[5, 'font-size', 'type']]);
+});

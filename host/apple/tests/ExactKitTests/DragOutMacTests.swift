@@ -52,6 +52,105 @@ final class DragOutMacTests: XCTestCase {
         XCTAssertTrue(MouseDragOut.source(from: try XCTUnwrap(link.views[12]), in: link) === link.views[10], "its own press is the node's: a drag cancels it (D8)")
     }
 
+    /// A first click in a window that is not key reaches a card only for its
+    /// drag (D5, "From an inactive window"): the card, and a box inside it,
+    /// take the first mouse and delay the window's ordering; the down arms the
+    /// drag alone, and neither it nor its up reaches a `pointerdown` or a
+    /// `press`. A child that hears `press`, a Control-click and a card that
+    /// does not drag take no first mouse.
+    func testAFirstClickInABackgroundWindowIsTheDragsAlone() throws {
+        let counted = NodeView.everyClickCounts
+        NodeView.everyClickCounts = false
+        defer { NodeView.everyClickCounts = counted }
+        let p = presenter(["draggable": "true", "dataTransferText": "Mount Fuji"], handlers: ["press", "pointerdown", "pointerup"])
+        XCTAssertFalse(window.isKeyWindow, "a window that is not key")
+        let card = try XCTUnwrap(p.views[10]), inner = try XCTUnwrap(p.views[12]), pin = try XCTUnwrap(p.views[14])
+        let event = { (type: NSEvent.EventType, at: NSPoint, flags: NSEvent.ModifierFlags) in
+            NSEvent.mouseEvent(with: type, location: at, modifierFlags: flags, timestamp: 0, windowNumber: self.window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)!
+        }
+        let onCard = card.convert(NSPoint(x: 150, y: 20), to: nil)
+        let down = event(.leftMouseDown, onCard, [])
+        XCTAssertTrue(card.acceptsFirstMouse(for: down) && card.shouldDelayWindowOrdering(for: down), "the card")
+        XCTAssertTrue(inner.acceptsFirstMouse(for: down) && inner.shouldDelayWindowOrdering(for: down), "a box inside it")
+        XCTAssertFalse(pin.acceptsFirstMouse(for: down) || pin.shouldDelayWindowOrdering(for: down), "a child that hears press keeps its contact")
+        XCTAssertFalse(card.acceptsFirstMouse(for: event(.leftMouseDown, onCard, [.control])), "a Control-click is a contextual click")
+        var pointers: [PointerKind] = [], presses: [UInt32] = []
+        p.onPointer = { _, kind, _ in pointers.append(kind) }
+        p.onPress = { presses.append($0) }
+        XCTAssertTrue(card.acceptsFirstMouse(for: down), "AppKit asks, then gives the card the down")
+        card.mouseDown(with: down)
+        XCTAssertTrue(p.mouseDragOut?.armed === card, "the drag arms")
+        XCTAssertEqual(p.mouseChain.order.count, 1, "and nothing else")
+        card.mouseUp(with: event(.leftMouseUp, onCard, []))
+        XCTAssertEqual(pointers, [], "no pointer event")
+        XCTAssertEqual(presses, [], "no press")
+        XCTAssertNil(p.mouseDragOut?.armed, "the up ends the contact")
+        // A drag-only contact whose up never comes ends at the next down, which goes its way
+        XCTAssertTrue(card.acceptsFirstMouse(for: down))
+        card.mouseDown(with: down)
+        XCTAssertTrue(p.mouseDragOut?.armed === card)
+        NodeView.everyClickCounts = true
+        let next = event(.leftMouseDown, onCard, [])
+        card.mouseDown(with: next)
+        card.mouseUp(with: event(.leftMouseUp, onCard, []))
+        XCTAssertEqual(pointers, [.down, .up], "the next click's pointerdown and pointerup")
+        XCTAssertEqual(presses, [10], "and its press, once")
+        XCTAssertNil(p.pointerHeld, "and no pointer held after it")
+        pointers = []; presses = []
+        NodeView.everyClickCounts = false
+        // Whether the drag keeps the window where it was follows the recorded first click, not the key state AppKit has changed by the down
+        let drag = try XCTUnwrap(p.mouseDragOut as? MouseDragOut)
+        drag.arm(card, event: down)
+        XCTAssertFalse(drag.fromBackground, "an ordinary down's drag orders the window as AppKit does")
+        drag.cancel()
+        var begun = 0
+        drag.begin = { _, _, _, _ in begun += 1 }
+        XCTAssertTrue(card.acceptsFirstMouse(for: down))
+        card.mouseDown(with: down)
+        card.mouseDragged(with: event(.leftMouseDragged, NSPoint(x: onCard.x + 40, y: onCard.y), []))
+        XCTAssertEqual(begun, 1, "past the slop the session begins")
+        XCTAssertTrue(drag.fromBackground, "as a first click's, which keeps the window where it was")
+        drag.cancel()
+        card.mouseUp(with: event(.leftMouseUp, onCard, []))
+        XCTAssertEqual(pointers, [], "the drag's contact reaches no pointer event")
+        // A recorded first click that no longer may drag arms nothing, and its contact reaches nothing
+        XCTAssertTrue(card.acceptsFirstMouse(for: down))
+        p.apply(wireBatch([["op": "props", "id": 10, "set": ["draggable": "false"]]]))
+        card.mouseDown(with: down)
+        card.mouseUp(with: event(.leftMouseUp, onCard, []))
+        XCTAssertNil(p.mouseDragOut?.armed)
+        XCTAssertEqual(pointers, [], "no pointer event")
+        XCTAssertEqual(presses, [], "no press")
+        XCTAssertFalse(card.acceptsFirstMouse(for: down), "a card that does not drag")
+        // A renewed row ends the drag but not the contact: its up, a second click, reaches no `dblclick` of the row's next item
+        let row = presenter(["draggable": "true", "dataTransferText": "Mount Fuji"], handlers: ["dblclick"])
+        var doubled: [UInt32] = []
+        row.onDblclick = { doubled.append($0) }
+        let rowCard = try XCTUnwrap(row.views[10])
+        let rowDown = event(.leftMouseDown, rowCard.convert(NSPoint(x: 150, y: 20), to: nil), [])
+        XCTAssertTrue(rowCard.acceptsFirstMouse(for: rowDown))
+        rowCard.mouseDown(with: rowDown)
+        row.renew(10)
+        XCTAssertNil(row.mouseDragOut?.armed, "the drag ends with the row's item")
+        rowCard.mouseUp(with: NSEvent.mouseEvent(with: .leftMouseUp, location: rowDown.locationInWindow, modifierFlags: [], timestamp: 0,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2, pressure: 0)!)
+        XCTAssertEqual(doubled, [], "no dblclick")
+        XCTAssertNil(row.mouseChain.dragOnly, "and the up ends the contact")
+        // A swipe on the card arms too, which rule 4 ranks first: the click only activates the window
+        let swiped = presenter(["draggable": "true", "dataTransferText": "Mount Fuji"], handlers: ["swipeleft", "pointerdown"])
+        var swipedPointers: [PointerKind] = []
+        swiped.onPointer = { _, kind, _ in swipedPointers.append(kind) }
+        let swipeCard = try XCTUnwrap(swiped.views[10])
+        swipeCard.style["touch_action"] = .string("pan-y")
+        let at = swipeCard.convert(NSPoint(x: 150, y: 20), to: nil)
+        let swipeDown = event(.leftMouseDown, at, [])
+        XCTAssertFalse(swipeCard.acceptsFirstMouse(for: swipeDown) || swipeCard.shouldDelayWindowOrdering(for: swipeDown),
+                       "no first mouse beside a candidate that may outrank the drag: the click only activates the window")
+        XCTAssertNil(swiped.mouseDragOut?.armed, "and asking arms nothing")
+        XCTAssertEqual(swipedPointers, [])
+    }
+
     func testTheDragIsTheChainsLastCandidate() throws {
         let p = presenter(["draggable": "true", "dataTransferText": "a"])
         XCTAssertTrue(p.mouseChain.ranked.last === p.mouseDragOut, "after reorder, transform, height, pan and swipe (D8)")
@@ -214,6 +313,17 @@ final class DragOutMacTests: XCTestCase {
         p.apply(wireBatch([["op": "destroy", "id": 12], ["op": "destroy", "id": 14], ["op": "destroy", "id": 10]]))
         drag.ended(at: window.convertPoint(toScreen: at))
         XCTAssertNotNil(NSApp.nextEvent(matching: .leftMouseUp, until: Date().addingTimeInterval(2), inMode: .default, dequeue: true), "to the session's window")
+    }
+
+    /// Each promise is written under the name `dataTransferNames` holds at its
+    /// place, else the file's own, its type still its own extension's (LLP
+    /// 1094.000 D14).
+    func testANamedFileIsPromisedUnderItsNameAndTypedByItsOwn() throws {
+        let p = presenter(["draggable": "true", "dataTransferFiles": "assets/apple/1016.jpg\napp:/data/notes.pdf",
+                           "dataTransferNames": "Mount Fuji.jpg\n"])
+        let promises = try DragItemsMac.items(of: try XCTUnwrap(p.views[10]), in: nil).map { try XCTUnwrap($0.item as? NSFilePromiseProvider) }
+        XCTAssertEqual(promises.map { $0.fileType }, [UTType.jpeg.identifier, UTType.pdf.identifier])
+        XCTAssertEqual(promises.map { $0.delegate?.filePromiseProvider($0, fileNameForType: $0.fileType) }, ["Mount Fuji.jpg", "notes.pdf"])
     }
 
     /// With files, the URL and the text are pasteboard items of their own (LLP 1094.000 D5).

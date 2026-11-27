@@ -2,6 +2,31 @@
 use super::*;
 
 impl<D: DataSource + Default + 'static> App<D> {
+    /// The loop's turn before it waits. An app that has started to end, by
+    /// a close or the status menu's Exit earlier in the turn, is served no
+    /// more: its timers and commands would run against ended packages.
+    pub(super) fn serve(&mut self, events: &ActiveEventLoop) {
+        if self.ended {
+            return;
+        }
+        if let Some(p) = &mut self.presenter {
+            let now = p.host().now();
+            self.touches.drain_cancels(p, now);
+        }
+        self.file_dialog_answers();
+        self.handed_launches();
+        self.tray_input(events);
+        if self.ended {
+            return;
+        }
+        self.unshown_first_pixel();
+        self.wait(events, |p| {
+            (p.painter_retry_deadline(), p.painter_present_deadline())
+        });
+        self.queue_file_dialogs();
+        self.tray_sync();
+    }
+
     pub(super) fn wait(
         &mut self,
         events: &ActiveEventLoop,

@@ -24,6 +24,11 @@ impl Watch {
         }
     }
 
+    /// Whether an interrupt is currently pending.
+    pub(crate) fn is_interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::Acquire)
+    }
+
     /// Whether an interrupt ended the call that just failed. Taking it lets
     /// the next call run.
     pub(crate) fn take(&self) -> bool {

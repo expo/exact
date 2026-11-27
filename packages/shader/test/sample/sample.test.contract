@@ -1,0 +1,10 @@
+test "sample sees the surface and the views around it"
+  clock settle
+  expect sample "gpu" at 20 20 == "#ff0000" within 4
+  expect sample "gpu" at 5 5 == "#ffffff" within 4
+  expect sample "gpu" at 14 14 == "#00ff00" within 4
+  expect sample "gpu" at 25 14 == "#7f0000" within 4
+  expect sample "scaled" at 40 40 == "#ff0000" within 4
+  expect sample "scaled" at 90 40 == "#000080" within 4
+  expect sample "scaled" at 110 40 == "#80007f" within 4
+  expect sample "scaled" at 2 2 == "#0000ff" within 4

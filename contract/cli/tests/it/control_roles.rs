@@ -106,6 +106,28 @@ fn best_effort_is_silent_and_an_unset_parameter_is_not_judged() {
         said.iter().any(|s| s.contains("disabled checkbox")),
         "{said:?}"
     );
+    // The Mac's range is exact (`trackFillColor`); its disabled range is none (AppKit draws it grey).
+    let range = "component App\n  state level = 50\n  action slide(value: number)\n    level = value\n  view\n    input type=\"range\" min=0 max=100 value=level change=slide aria-label=\"Level\" accent-color=\"accent.brand\"\n";
+    assert_eq!(
+        unreachable(&app(
+            "range",
+            "\"macos\": {}",
+            "  accent.brand = #e0218a\n",
+            range
+        )),
+        Vec::<String>::new()
+    );
+    let range_disabled = range.replace("change=slide", "change=slide disabled=true");
+    let said = unreachable(&app(
+        "range-disabled",
+        "\"macos\": {}",
+        "  accent.brand = #e0218a\n",
+        &range_disabled,
+    ));
+    assert!(
+        said.iter().any(|s| s.contains("disabled ranges")),
+        "{said:?}"
+    );
     // A switch with no accent anywhere: nothing set, nothing unreachable.
     let plain = SWITCHES.replace(" accent-color=\"accent.brand\"", "");
     let path = app(

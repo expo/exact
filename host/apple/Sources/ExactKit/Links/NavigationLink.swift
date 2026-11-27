@@ -83,6 +83,14 @@ package enum RouteGeometry {
     /// clearance `route` turns off (`-exact-safe-area`).
     package static func clearanceOff(_ route: NodeView) -> Int { Int(route.style["safe_area"]?.number ?? 0) & 0xf }
 
+    /// The clearance layout adds after crediting authored padding that reads this edge's inset.
+    package static func clearancePadding(_ route: NodeView, edge: Int, inset: CGFloat) -> CGFloat {
+        let bit = 1 << edge
+        if clearanceOff(route) & bit != 0 { return 0 }
+        if Int(route.style["inset_credit"]?.number ?? 0) & bit == 0 { return inset }
+        return max(0, inset - ((route.kernelPadding?[edge] ?? nil) ?? 0))
+    }
+
     /// Whether a route asks `navigationBar="transparent"`: its bar shows
     /// with a clear scroll-edge appearance and insets no content.
     package static func transparentBar(_ route: NodeView) -> Bool { route.props["navigationBar"] == "transparent" }
@@ -139,10 +147,11 @@ package enum RouteGeometry {
         // A native backend owns layout/footer insets, composed with the
         // refresh control and keyboard; zero is only the plain-scroll baseline.
         if s === node.scroll {
+            let expected = node.bandInset.adding(node.sideInset).adding(node.presenter?.navigation.clearanceInset(of: s) ?? .zero)
             #if os(tvOS)
-            if s.contentInset != node.bandInset { out.append("contentInset") }
+            if s.contentInset != expected { out.append("contentInset") }
             #else
-            if s.contentInset != node.bandInset, s.refreshControl?.isRefreshing != true { out.append("contentInset") } // a band's is the host's
+            if s.contentInset != expected, s.refreshControl?.isRefreshing != true { out.append("contentInset") }
             #endif
         }
         if s.contentInsetAdjustmentBehavior != (insetByUIKit ? .automatic : .never) { out.append("contentInsetAdjustmentBehavior") }
@@ -161,6 +170,7 @@ extension UITabBarController {
         return tabs.compactMap(\.viewController)
     }
 
+    #if EXACT_INSPECT
     /// The bar the controller projects, including iPadOS's floating list of tab items.
     package var projectedTabBar: UIView? {
         if #available(iOS 18.0, tvOS 18.0, *), isTabBarHidden { return nil }
@@ -173,49 +183,159 @@ extension UITabBarController {
 
     /// The projected bar, when it is visibly on screen.
     package var shownTabBar: UIView? { RouteGeometry.shownBar(projectedTabBar) }
+    #endif
 }
 
 #if os(iOS)
 extension UITabBarController {
-    /// iPadOS 18's floating tab bar, in a regular width: no `UITabBar` in the
-    /// window (`tabBar` is out of it), but a list of the tabs' items at the
-    /// top, a collection view whose first section has a cell per tab, in
-    /// their order, and whose others are empty (iPadOS 27 keeps a second,
-    /// for tabs a person adds), beside the selected tab's view. Its cells
-    /// carry their items' accessibility identifiers (the tabs' test ids,
-    /// `syncItems`), or their titles as labels, as the agent's aim reads
-    /// them: a list of the same shape whose cells name other things (a
-    /// hatch's) is not it. A sidebar's list of tabs (`mode = .tabSidebar`,
-    /// TabsIOS.swift) has the same shape, and while it shows the floating
-    /// bar does not. Nil where the bar is UIKit's classic one, where no such
-    /// list shows, or where two would.
-    package var floatingTabList: UICollectionView? {
-        guard tabBar.window == nil, let controllers = tabControllers, case let items = controllers.compactMap(\.tabBarItem), !items.isEmpty, items.count == controllers.count,
-              let selected = selectedViewController?.viewIfLoaded else { return nil }
-        func names(_ cell: UIView, _ item: UITabBarItem) -> Bool {
-            let id = item.accessibilityIdentifier ?? ""
-            if id.isEmpty, (item.title ?? "").isEmpty { return false }
-            var pending = [cell]
-            while !pending.isEmpty {
-                let v = pending.removeFirst()
-                if id.isEmpty ? v.accessibilityLabel == item.title : v.accessibilityIdentifier == id { return true }
-                pending += v.subviews
+    /// The navigation beside this route or pane, on the edge it adjoins (LLP 1123 D9).
+    package func barInsets(beside route: UIView) -> UIEdgeInsets {
+        guard #available(iOS 18.0, *), let root = viewIfLoaded, let window = root.window,
+              route.window === window, let selected = selectedViewController?.viewIfLoaded,
+              route === selected || route.isDescendant(of: selected) else { return .zero }
+        func visibleBounds(_ view: UIView) -> CGRect {
+            var rect = root.bounds.intersection(view.convert(view.bounds, to: root))
+            for parent in sequence(first: view, next: \.superview).dropFirst() {
+                if parent.clipsToBounds || parent === window { rect = rect.intersection(parent.convert(parent.bounds, to: root)) }
+                if parent === window { break }
             }
-            return false
+            return rect
         }
-        var found: [UICollectionView] = [], pending: [UIView] = view.subviews
-        while !pending.isEmpty {
-            let v = pending.removeFirst()
-            guard v !== selected, !v.isHidden, !(v is NodeView) else { continue }
-            if let list = v as? UICollectionView, list.numberOfSections >= 1, list.numberOfItems(inSection: 0) == items.count,
-               (1..<list.numberOfSections).allSatisfy({ list.numberOfItems(inSection: $0) == 0 }) {
-                let shown = list.indexPathsForVisibleItems.filter { $0.section == 0 }
-                if !shown.isEmpty, shown.allSatisfy({ path in list.cellForItem(at: path).map { names($0, items[path.item]) } ?? false }) { found.append(list) }
+
+        let page = visibleBounds(route)
+        guard !page.isEmpty else { return .zero }
+        let content: CGRect, onLeft: Bool, width: CGFloat
+        if traitCollection.userInterfaceIdiom == .pad, !sidebar.isHidden, mode != .tabBar {
+            onLeft = root.effectiveUserInterfaceLayoutDirection == .leftToRight
+            // UIKit can move the selected view or reserve the sidebar inside its safe area.
+            // The tab controller’s safe area and the selected controller’s own inset also reach that view.
+            let frame = selected.convert(selected.bounds, to: root)
+            let offset = onLeft ? frame.minX - root.bounds.minX : root.bounds.maxX - frame.maxX
+            let inherited = onLeft ? root.safeAreaInsets.left : root.safeAreaInsets.right
+            let extra = selectedViewController?.additionalSafeAreaInsets ?? .zero
+            let safe = onLeft ? selected.safeAreaInsets.left - extra.left : selected.safeAreaInsets.right - extra.right
+            width = max(0, offset) + max(0, safe - max(0, inherited - offset))
+            content = root.bounds.inset(by: UIEdgeInsets(top: 0, left: onLeft ? width : 0, bottom: 0, right: onLeft ? 0 : width))
+        } else if #available(iOS 27.1, *), traitCollection.userInterfaceIdiom == .phone, !isTabBarHidden,
+                  let rail = RouteGeometry.shownBar(tabBar), rail.traitCollection.placesVerticalBar {
+            let frame = rail.convert(rail.bounds, to: root)
+            guard frame.height > frame.width else { return .zero }
+            content = contentLayoutGuide.layoutFrame
+            onLeft = frame.midX < content.midX
+            guard onLeft ? frame.minX < content.minX : frame.maxX > content.maxX else { return .zero }
+            let visible = visibleBounds(rail), adjoining = page.intersection(content)
+            guard !visible.isEmpty, min(visible.maxY, adjoining.maxY) > max(visible.minY, adjoining.minY) else { return .zero }
+            width = visible.width
+        } else { return .zero }
+        guard width > 0, !content.isEmpty, page.intersects(content) else { return .zero }
+        let pixel = 1 / root.traitCollection.displayScale
+        if onLeft, page.minX <= content.minX + pixel { return UIEdgeInsets(top: 0, left: width, bottom: 0, right: 0) }
+        if !onLeft, page.maxX >= content.maxX - pixel { return UIEdgeInsets(top: 0, left: 0, bottom: 0, right: width) }
+        return .zero
+    }
+
+    #if EXACT_INSPECT
+    /// The one section containing every item of a bar built from viewControllers. UIKit fixes
+    /// these tabs in bar-item order. Customizable UITabs can move between sections.
+    private func itemSection(in list: UICollectionView, count: Int) -> Int? {
+        let sections = (0..<list.numberOfSections).filter { list.numberOfItems(inSection: $0) > 0 }
+        guard sections.count == 1, let section = sections.first, list.numberOfItems(inSection: section) == count else { return nil }
+        return section
+    }
+
+    private func matchesTabSource(_ frame: CGRect, of view: UIView, in space: UIView) -> Bool {
+        guard !frame.isEmpty else { return false }
+        let bounds = view.convert(view.bounds, to: space), pixel = 1 / space.traitCollection.displayScale
+        return abs(frame.minX - bounds.minX) <= pixel && abs(frame.maxX - bounds.maxX) <= pixel
+            && abs(frame.minY - bounds.minY) <= pixel && abs(frame.maxY - bounds.maxY) <= pixel
+    }
+
+    private func draws(_ cell: UICollectionViewCell, _ item: UITabBarItem) -> Bool {
+        var pending: [UIView] = [cell]
+        while let view = pending.popLast() {
+            guard !view.isHidden, view.alpha > 0.01, !(view is NodeView) else { continue }
+            if let title = item.title, !title.isEmpty {
+                if (view as? UILabel)?.text == title { return true }
+            } else if let image = (view as? UIImageView)?.image, image == item.image || image == item.selectedImage { return true }
+            pending += view.subviews
+        }
+        return false
+    }
+
+    /// UIKit gives a UITab its popover source rect in the top bar or the sidebar, even before
+    /// accessibility loads. Without that rect the visible cells can still identify the bar by
+    /// their drawn titles or images. The selected page's own collections belong to its content.
+    package var floatingTabList: UICollectionView? {
+        guard #available(iOS 18.0, *), !isTabBarHidden, tabBar.window == nil,
+              let root = viewIfLoaded, root.window != nil, let selected = selectedViewController?.viewIfLoaded else { return nil }
+        let models = tabs.isEmpty ? [selectedTab].compactMap { $0 } : tabs
+        let frames = models.compactMap { $0.frame(in: root) }.filter { !$0.isEmpty }
+        let items = tabBar.items ?? []
+        var found: UICollectionView?, best = (-1, 0), pending = root.subviews
+        while let view = pending.popLast() {
+            guard view !== selected, !view.isHidden, view.alpha > 0.01, !(view is NodeView) else { continue }
+            if let list = view as? UICollectionView {
+                let cells = list.visibleCells
+                guard !cells.isEmpty else { continue }
+                let matches = cells.filter { cell in frames.contains { matchesTabSource($0, of: cell, in: root) } }.count
+                if tabs.isEmpty {
+                    // A legacy controller exposes only its selected UITab. When its cell is
+                    // scrolled away, the other items still identify the fixed section.
+                    guard let section = itemSection(in: list, count: items.count) else { continue }
+                    if matches == 0, !cells.allSatisfy({ cell in
+                        guard let path = list.indexPath(for: cell), path.section == section, items.indices.contains(path.item) else { return false }
+                        return draws(cell, items[path.item])
+                    }) { continue }
+                } else if matches == 0, !cells.allSatisfy({ cell in items.contains { draws(cell, $0) } }) { continue }
+                let score = (matches, matches == 0 ? cells.count : 0)
+                if score > best { best = score; found = list }
+                else if score == best { found = nil }
                 continue
             }
-            pending += v.subviews
+            pending += view.subviews
         }
-        return found.count == 1 ? found[0] : nil
+        return found
+    }
+
+    func floatingTabView(for item: UITabBarItem, in list: UICollectionView) -> UIView? {
+        guard #available(iOS 18.0, *) else { return nil }
+        if !tabs.isEmpty {
+            guard let tab = tabs.first(where: { $0.viewController?.tabBarItem === item }) else { return nil }
+            if let frame = tab.frame(in: list), !frame.isEmpty {
+                if let cell = list.visibleCells.first(where: { matchesTabSource(frame, of: $0, in: list) }) { return cell }
+                // UIKit pins the search tab beside the collection. Its popover source also
+                // identifies the view beneath a sheet covering the controller.
+                if let root = viewIfLoaded, let selected = selectedViewController?.viewIfLoaded {
+                    let point = list.convert(CGPoint(x: frame.midX, y: frame.midY), to: root)
+                    if let hit = root.hitTest(point, with: nil), !hit.isDescendant(of: selected),
+                       let view = sequence(first: hit, next: \.superview).prefix(while: { $0 !== root }).first(where: { matchesTabSource(frame, of: $0, in: list) }) {
+                        return view
+                    }
+                }
+            }
+            // An item with no source rect can still have a drawn cell. Only a face that
+            // identifies one model and one visible cell can stand in for the missing rect.
+            let cells = list.visibleCells.filter { draws($0, item) }
+            guard cells.count == 1, let cell = cells.first,
+                  tabBar.items?.contains(where: { $0 !== item && draws(cell, $0) }) == false else { return nil }
+            return cell
+        }
+        guard let items = tabBar.items, let index = items.firstIndex(of: item),
+              let section = itemSection(in: list, count: items.count) else { return nil }
+        let path = IndexPath(item: index, section: section)
+        return list.indexPathsForVisibleItems.contains(path) ? list.cellForItem(at: path) : nil
+    }
+    #endif
+}
+#endif
+
+#if EXACT_AGENT
+package struct BarLayoutBox {
+    package let view: UIView, region: CGRect, name: String
+    package init(_ view: UIView, _ region: CGRect? = nil, _ name: String) {
+        self.view = view
+        self.region = region ?? view.bounds
+        self.name = name
     }
 }
 #endif
@@ -240,6 +360,7 @@ package protocol NavigationHosting: AnyObject {
     func mounted()
     func unmounted()
     func replayHatches()
+    func presentationCleared()
 
     // Routes and containment.
     var container: NodeView? { get }
@@ -310,6 +431,7 @@ package protocol NavigationHosting: AnyObject {
     func reportCovers()
     func fitOwner()
     func insetByUIKit(_ node: NodeView) -> Bool
+    func clearanceInset(of scroll: UIScrollView) -> UIEdgeInsets
 
     // Scrolling.
     var scrollsToTopSelection: UIScrollView? { get set }
@@ -328,6 +450,8 @@ package protocol NavigationHosting: AnyObject {
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>?
     func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)?
     #if os(iOS)
+    /// The bar's title that shows `node`, the pressable group the page hides for it, now
+    func titleSurface(for node: NodeView) -> (any UIView & TitleMenuSurface)?
     /// Whether `dialog`'s sheet would show its header as its bar now: its
     /// sheet is then presented in a navigation controller.
     func wantsDialogBar(_ dialog: NodeView) -> Bool
@@ -381,8 +505,14 @@ package protocol NavigationHosting: AnyObject {
     /// A list beside its detail as UIKit's split shows it, for `state window.split` (LLP 1127 D11).
     var splitObservation: [String: Any] { get }
     func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]?
+    /// The boxes of the headers UIKit draws and the parts it places, in each view's coordinates.
+    func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox]
+    func backButtonBar(_ node: NodeView) -> UINavigationBar?
     func drawnSearch(_ node: NodeView) -> UITextField?
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)?
+    #if os(iOS)
+    func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)?
+    #endif
     /// The tabs a route's search scope control shows, by segment; nil when
     /// `segments` is no route's scope control.
     func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]?
@@ -553,6 +683,7 @@ package final class NoNavigation: NavigationHosting {
     package func retheme() {}
     package func appearanceChanged() {}
     package func replayHatches() {}
+    package func presentationCleared() {}
 
     package var container: NodeView? { nil }
     package var routeSurfaces: [UInt32: any RouteSurface] { [:] }
@@ -603,15 +734,16 @@ package final class NoNavigation: NavigationHosting {
     package func reportCovers() {
         #if os(iOS)
         guard #available(iOS 27.1, *) else { return }
-        let views = presenter.views, hidden = presenter.arrangements.hidden.filter { views[$0] != nil }
+        let hidden = presenter.arrangements.covered
         let changes = hidden.subtracting(told).map { ($0, HostCover.whole as HostCover?) }
-            + told.subtracting(hidden).filter(presenter.draws).map { ($0, nil as HostCover?) }
+            + told.subtracting(hidden).filter(presenter.uncovers).map { ($0, nil as HostCover?) }
         told = hidden
         if !changes.isEmpty { presenter.onCovers?(changes) }
         #endif
     }
     /// The document stays in the scrolling viewport: no native container takes the whole view.
     package func fitOwner() { presenter.hostDocument(fixed: false) }
+    package func clearanceInset(of scroll: UIScrollView) -> UIEdgeInsets { .zero }
     /// An arrangement's scroller is inset by UIKit, as with navigation.
     package func insetByUIKit(_ node: NodeView) -> Bool {
         #if os(iOS)
@@ -636,6 +768,7 @@ package final class NoNavigation: NavigationHosting {
     package func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? { nil }
     package func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)? { nil }
     #if os(iOS)
+    package func titleSurface(for node: NodeView) -> (any UIView & TitleMenuSurface)? { nil }
     package func wantsDialogBar(_ dialog: NodeView) -> Bool { false }
     package func projectDialogBar(_ dialog: NodeView, on controller: UIViewController) -> Bool {
         controller.navigationController?.setNavigationBarHidden(true, animated: false)
@@ -675,8 +808,13 @@ package final class NoNavigation: NavigationHosting {
     package func agentBack() -> String? { nil }
     package var splitObservation: [String: Any] { ["installed": false] }
     package func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]? { nil }
+    package func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox] { [:] }
+    package func backButtonBar(_ node: NodeView) -> UINavigationBar? { nil }
     package func drawnSearch(_ node: NodeView) -> UITextField? { nil }
     package func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
+    #if os(iOS)
+    package func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)? { nil }
+    #endif
     package func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]? { nil }
     #endif
 }

@@ -172,26 +172,62 @@ fn viewport_shape(shape: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<Com
         return Err(fail(format!("`{}`: declare shape `{name}` with the viewport's fields it reads (`width: number`, `height: number`)", super::VIEWPORT_SLOT)));
     };
     for field in &declared.fields {
+        if field.name == "segments" {
+            viewport_segments(&field.ty, file, at)?;
+            continue;
+        }
         let expected = match field.name.as_str() {
             "width"
             | "height"
+            | "safeAreaTop"
+            | "safeAreaRight"
+            | "safeAreaBottom"
+            | "safeAreaLeft"
             | "horizontalViewportSegments"
             | "verticalViewportSegments"
+            | "orientationAngle"
             | "keyboardHeight" => "number",
             "prefersReducedMotion" | "prefersReducedTransparency" | "accessibilityTextSize" => {
                 "bool"
             }
+            "devicePixelRatio" => "option<number>",
             other if exact_runner::viewport::FIELDS.contains(&other) => "string",
             _ => {
                 return Err(fail(format!("`{}`: `{name}` has a field `{}` the viewport fact does not supply; its fields are {}", super::VIEWPORT_SLOT, field.name, exact_runner::viewport::FIELDS.join(", "))));
             }
         };
-        let written = match &field.ty {
-            TypeExpr::Named(n, _) => n.as_str(),
-            _ => "",
+        let fits = match &field.ty {
+            TypeExpr::Named(n, _) => n == expected,
+            TypeExpr::Option(inner, _) if expected == "option<number>" => {
+                matches!(inner.as_ref(), TypeExpr::Named(n, _) if n == "number")
+            }
+            _ => false,
         };
-        if written != expected {
+        if !fits {
             return Err(fail(format!("`{}`: `{name}.{}` is `{expected}` in the viewport fact; declare it `{}: {expected}`", super::VIEWPORT_SLOT, field.name, field.name)));
+        }
+    }
+    Ok(())
+}
+
+fn viewport_segments(ty: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<CompileError>> {
+    let fail = |message| vec![refusal("snapshot-viewport", message, at)];
+    let record = match ty {
+        TypeExpr::List(inner, _) => match inner.as_ref() {
+            TypeExpr::Named(name, _) => file.shapes.iter().find(|shape| &shape.name == name),
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(record) = record else {
+        return Err(fail("`snapshot_viewport.segments` needs a list of declared rectangle records; declare `segments: Segment[]` and `shape Segment` with numeric `x`, `y`, `width` and `height` fields".into()));
+    };
+    for field in &record.fields {
+        if !["x", "y", "width", "height"].contains(&field.name.as_str()) {
+            return Err(fail(format!("`snapshot_viewport.segments`: `{}` has a field `{}` the viewport fact does not supply; use only `x`, `y`, `width` and `height`", record.name, field.name)));
+        }
+        if !matches!(&field.ty, TypeExpr::Named(name, _) if name == "number") {
+            return Err(fail(format!("`snapshot_viewport.segments`: `{}.{}` is `number` in the viewport fact; declare it `{}: number`", record.name, field.name, field.name)));
         }
     }
     Ok(())
@@ -788,5 +824,134 @@ fn literal_fonts(e: &Expr, fonts: &mut Vec<(String, Span)>) {
         }
         Expr::Let { body, .. } => literal_fonts(body, fonts),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn viewport(fields: &str, shapes: &str) -> Result<exact_plan::Plan, Vec<crate::CompileError>> {
+        let src = crate::snapshot::tests::source(
+            "    text title",
+            &format!("shape Viewport\n{fields}\n{shapes}"),
+            "  inject\n    snapshot_viewport: Viewport\n",
+        );
+        crate::snapshot::compile(&src, &crate::snapshot::tests::widget())
+    }
+
+    #[test]
+    fn snapshot_pixel_ratio_is_optional_numeric() {
+        let mut failures = Vec::new();
+        for ty in [
+            "option<number>",
+            "number",
+            "string",
+            "option<string>",
+            "number[]",
+        ] {
+            let result = viewport(&format!("  devicePixelRatio: {ty}"), "").map(|_| ());
+            let correct = if ty == "option<number>" {
+                result.is_ok()
+            } else {
+                result.as_ref().is_err_and(|errors| {
+                    errors.iter().any(|e| {
+                        e.id == "snapshot-viewport"
+                            && e.message
+                                .contains("declare it `devicePixelRatio: option<number>`")
+                    })
+                })
+            };
+            if !correct {
+                failures.push(format!("{ty}: {result:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn snapshot_segments_have_numeric_rectangle_fields() {
+        let mut failures = Vec::new();
+        for (ty, fields, repair) in [
+            (
+                "Segment[]",
+                "  x: number\n  y: number\n  width: number\n  height: number",
+                "",
+            ),
+            ("Segment[]", "  height: number\n  x: number", ""),
+            ("string", "  width: number", "segments: Segment[]"),
+            ("Segment", "  width: number", "segments: Segment[]"),
+            ("number[]", "  width: number", "segments: Segment[]"),
+            (
+                "option<Segment[]>",
+                "  width: number",
+                "segments: Segment[]",
+            ),
+            ("Segment[][]", "  width: number", "segments: Segment[]"),
+            ("Missing[]", "  width: number", "segments: Segment[]"),
+            ("Segment[]", "  x: string", "declare it `x: number`"),
+            (
+                "Segment[]",
+                "  width: option<number>",
+                "declare it `width: number`",
+            ),
+            (
+                "Segment[]",
+                "  left: number",
+                "use only `x`, `y`, `width` and `height`",
+            ),
+        ] {
+            let result = viewport(
+                &format!("  segments: {ty}"),
+                &format!("shape Segment\n{fields}"),
+            )
+            .map(|_| ());
+            let correct = if repair.is_empty() {
+                result.is_ok()
+            } else {
+                result.as_ref().is_err_and(|errors| {
+                    errors
+                        .iter()
+                        .any(|e| e.id == "snapshot-viewport" && e.message.contains(repair))
+                })
+            };
+            if !correct {
+                failures.push(format!("{ty} with {fields}: {result:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn snapshot_safe_area_fields_are_numbers() {
+        let mut failures = Vec::new();
+        for field in [
+            "safeAreaTop",
+            "safeAreaRight",
+            "safeAreaBottom",
+            "safeAreaLeft",
+        ] {
+            for ty in ["number", "string"] {
+                let src = crate::snapshot::tests::source(
+                    &format!("    text snapshot_viewport.{field}.toString()"),
+                    &format!("shape Viewport\n  {field}: {ty}"),
+                    "  inject\n    snapshot_viewport: Viewport\n",
+                );
+                let result = crate::snapshot::compile(&src, &crate::snapshot::tests::widget());
+                if ty == "number" {
+                    if let Err(errors) = result {
+                        failures.push(format!("{field}: number was refused: {errors:?}"));
+                    }
+                } else if !result.is_err_and(|errors| {
+                    errors.iter().any(|error| {
+                        error.id == "snapshot-viewport"
+                            && error
+                                .message
+                                .contains(&format!("declare it `{field}: number`"))
+                    })
+                }) {
+                    failures.push(format!("{field}: string needs a numeric repair"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

@@ -301,15 +301,9 @@ impl Composition {
     }
 
     fn wait_for_grants(&mut self, needed: u8, deadline: Instant) -> Result<bool> {
-        while self.held < needed {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let remaining_ms = remaining.as_nanos().div_ceil(1_000_000) as u32;
-            if !latency_ready(unsafe { WaitForSingleObject(self.latency, remaining_ms) })? {
-                return Ok(false);
-            }
-            self.held += 1;
-        }
-        Ok(true)
+        wait_for_grants_with(&mut self.held, needed, deadline, |remaining_ms| {
+            latency_ready(unsafe { WaitForSingleObject(self.latency, remaining_ms) })
+        })
     }
 
     fn acquire(&mut self, timeout_ms: u32) -> Result<bool> {
@@ -631,12 +625,15 @@ impl D3d11 {
                 Some(if opaque { background } else { [0.; 4] }),
                 None,
             )?;
-            let composition = self.composition.as_mut().unwrap();
-            composition.acquired = false;
-            composition.held -= 1;
-            composition.pace.presented(Instant::now());
             let status = swap.Present(1, DXGI_PRESENT(0));
-            did_present = accepted_present(status)?;
+            let composition = self.composition.as_mut().unwrap();
+            did_present = complete_present(
+                &mut composition.acquired,
+                &mut composition.held,
+                &mut composition.pace,
+                status,
+                Instant::now(),
+            )?;
         }
         let s = self.submit()?;
         self.textures.get_mut(&id).unwrap().last = s;
@@ -646,7 +643,15 @@ impl D3d11 {
         if activating && !did_present {
             // A not-yet-attached composition swap chain can return OCCLUDED
             // from the real present too. Retry its populated buffer after Commit.
-            did_present = accepted_present(unsafe { swap.Present(1, DXGI_PRESENT(0)) })?;
+            let status = unsafe { swap.Present(1, DXGI_PRESENT(0)) };
+            let composition = self.composition.as_mut().unwrap();
+            did_present = complete_present(
+                &mut composition.acquired,
+                &mut composition.held,
+                &mut composition.pace,
+                status,
+                Instant::now(),
+            )?;
         }
         if !did_present {
             let c = self.composition.as_mut().unwrap();
@@ -808,6 +813,41 @@ fn accepted_present(status: windows::core::HRESULT) -> Result<bool> {
         crate::counters::submitted();
     }
     Ok(accepted)
+}
+
+/// Only an accepted present enqueues a frame in DXGI and consumes a waitable
+/// latency grant; occluded or failed presents leave `held` and `pace` intact.
+fn complete_present(
+    acquired: &mut bool,
+    held: &mut u8,
+    pace: &mut Pace,
+    status: windows::core::HRESULT,
+    now: Instant,
+) -> Result<bool> {
+    let accepted = accepted_present(status)?;
+    if accepted {
+        *acquired = false;
+        *held -= 1;
+        pace.presented(now);
+    }
+    Ok(accepted)
+}
+
+fn wait_for_grants_with(
+    held: &mut u8,
+    needed: u8,
+    deadline: Instant,
+    mut wait: impl FnMut(u32) -> Result<bool>,
+) -> Result<bool> {
+    while *held < needed {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let remaining_ms = remaining.as_nanos().div_ceil(1_000_000) as u32;
+        if !wait(remaining_ms)? {
+            return Ok(false);
+        }
+        *held += 1;
+    }
+    Ok(true)
 }
 
 fn presented(status: windows::core::HRESULT) -> Result<bool> {
@@ -1281,6 +1321,61 @@ mod tests {
             presented(DXGI_ERROR_DEVICE_REMOVED),
             Err(Error::DeviceLost(_))
         ));
+    }
+
+    #[test]
+    fn occluded_or_failed_present_keeps_latency_grants_and_pace() {
+        use windows::Win32::Foundation::S_OK;
+        let start = Instant::now();
+        let period = Duration::from_micros(16_667);
+        let mut acquired = true;
+        let mut held = 2u8;
+        let mut pace = Pace::default();
+        pace.granted(start, start, period);
+
+        assert!(!complete_present(
+            &mut acquired,
+            &mut held,
+            &mut pace,
+            DXGI_STATUS_OCCLUDED,
+            start + Duration::from_millis(2),
+        )
+        .unwrap());
+        assert!(acquired);
+        assert_eq!(held, 2);
+        assert_eq!(pace.took(), None);
+
+        assert!(matches!(
+            complete_present(
+                &mut acquired,
+                &mut held,
+                &mut pace,
+                DXGI_ERROR_DEVICE_REMOVED,
+                start + Duration::from_millis(3),
+            ),
+            Err(Error::DeviceLost(_))
+        ));
+        assert!(acquired);
+        assert_eq!(held, 2);
+        assert_eq!(pace.took(), None);
+
+        // Both grants remain held, so a follow-up acquire needs no wait on the handle.
+        assert!(wait_for_grants_with(&mut held, 2, Instant::now(), |_| {
+            panic!("waitable handle must not be polled while both grants remain held")
+        })
+        .unwrap());
+
+        assert!(complete_present(
+            &mut acquired,
+            &mut held,
+            &mut pace,
+            S_OK,
+            start + Duration::from_millis(4),
+        )
+        .unwrap());
+        assert!(!acquired);
+        assert_eq!(held, 1);
+        assert_eq!(pace.took(), Some(Duration::from_millis(4)));
     }
 
     #[test]

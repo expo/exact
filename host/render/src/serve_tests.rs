@@ -43,6 +43,25 @@ fn a_scheme_line_is_a_scheme_source() {
 }
 
 #[test]
+fn a_connect_source_is_the_origin_the_grant_admits() {
+    // The grant admits the origin the URL Standard parses; a source spelt
+    // otherwise is one CSP ignores (CSP3 `host-char` is ASCII), or another host.
+    let policy = csp(
+        "net.fetch https://bücher.test\nnet.fetch https://*.Bücher.test\n\
+         net.fetch https://api.test:\nnet.fetch http://0x7f.1:8080\n\
+         net.websocket wss://Feed.test:443/s?q",
+        Path::new("/nonexistent"),
+    );
+    assert!(
+        policy.contains(
+            "connect-src 'self' https://xn--bcher-kva.test https://*.xn--bcher-kva.test \
+             https://api.test http://127.0.0.1:8080 wss://feed.test;"
+        ),
+        "{policy}"
+    );
+}
+
+#[test]
 fn a_local_network_line_admits_local_names_and_no_address_range() {
     // LLP 1133.036 D5: no CSP source names a private range, so a served page
     // reaches `.local` names by the line and an address only by a line naming it.
@@ -56,6 +75,31 @@ fn a_local_network_line_admits_local_names_and_no_address_range() {
         ),
         "{policy}"
     );
+}
+
+#[test]
+fn a_loopback_line_admits_csp3_loopback_hosts_at_any_port() {
+    // LLP 1016 D6: emit the CSP3-valid host-source subset (`127.0.0.1:*`,
+    // `localhost:*`, `localhost.:*`) without CIDR or invalid bracketed IPv6
+    // tokens, and ignore malformed or non-CSP3-host declarations.
+    let policy = csp(
+        "net.fetch loopback\nnet.websocket loopback\nnet.fetch loopback development\n\
+         net.fetch local-network bogus\nnet.fetch https: extra\n\
+         net.fetch http://[::1]:8080\nnet.fetch https://a.test%3Bsample-marker",
+        Path::new("/nonexistent"),
+    );
+    assert!(
+        policy.contains(
+            "connect-src 'self' http://127.0.0.1:* https://127.0.0.1:* http://localhost:* \
+             https://localhost:* http://localhost.:* https://localhost.:* \
+             ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* \
+             ws://localhost.:* wss://localhost.:*;"
+        ),
+        "{policy}"
+    );
+    assert!(!policy.contains("*.local"), "{policy}");
+    assert!(!policy.contains("sample-marker"), "{policy}");
+    assert!(!policy.contains("[::1]"), "{policy}");
 }
 
 #[test]
@@ -251,6 +295,35 @@ fn a_script_src_is_its_origin_and_an_inline_script_is_hashed_as_the_browser_read
     );
     // With no --origin, another origin's script is still that origin's.
     assert!(scripts(None).contains(" https://site.test"));
+}
+
+#[test]
+fn inline_js_entry_is_hashed_from_the_shell_without_duplicating_matching_disk_hash() {
+    let dist = Dist::with(None);
+    let body = "const s=`\\x3c!-- <script>`;";
+    std::fs::write(dist.0.join("app-Ab12Cd34.js"), body).unwrap();
+    let table = r#"{"routes":[],"files":{"app.js":"app-Ab12Cd34.js"}}"#;
+    std::fs::write(dist.0.join("routes.json"), table).unwrap();
+    let shell_same = format!(
+        "<!doctype html>\n<title>T</title>\n<style>.a{{}}</style>\n\
+         <div id=\"exact-root\"></div>\n\
+         <script type=\"module\" data-entry=\"./app-Ab12Cd34.js\">{body}</script>\n"
+    );
+    let headers = csp::headers("", &dist.0, &shell_same, None).unwrap();
+    let scripts = directive(&headers, "Content-Security-Policy", "script-src").unwrap();
+    let hash = sha(body);
+    assert_eq!(scripts.matches(&hash).count(), 1, "{scripts}");
+
+    // When the inlined script differs from disk (or has CRLF), CSP still admits the exact inlined bytes.
+    let shell_other = "<!doctype html>\n<title>T</title>\n<style>.a{}</style>\n\
+        <div id=\"exact-root\"></div>\n\
+        <script type=\"module\" data-entry=\"./app-Ab12Cd34.js\">const a=1;\r\nconst b=2;</script>\n";
+    let headers = csp::headers("", &dist.0, shell_other, None).unwrap();
+    let scripts = directive(&headers, "Content-Security-Policy", "script-src").unwrap();
+    assert!(
+        scripts.contains(&sha("const a=1;\nconst b=2;")),
+        "{scripts}"
+    );
 }
 
 #[test]

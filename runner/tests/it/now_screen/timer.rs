@@ -42,7 +42,9 @@ fn timer_deadline_tracks_ordered_catch_up_and_absence() {
     assert!(r.journal().any(|l| l.contains("advance → 16 timers fired")));
     let target = 1_000_000.0;
     let advanced = r.advance_timed(target);
-    assert_eq!(advanced.receipts.len(), TIMER_FIRE_LIMIT);
+    // The two timers fire together every 2,000 ms, and the second then writes
+    // the time the first wrote: 32 of the firings commit nothing.
+    assert_eq!(advanced.receipts.len(), TIMER_FIRE_LIMIT - 32);
     assert!(matches!(
         advanced.error,
         Some(RunnerError::TimerFireLimit { .. })

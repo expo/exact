@@ -525,16 +525,12 @@ impl At {
             Node::Element { tag, .. } if self == Self::Section && self.row(tag) => {
                 Cow::Owned(grouped(node, &|n, swiped| {
                     crate::grouped::row(n, false, swiped, &|attrs| {
-                        crate::class::rows(
-                            attrs,
-                            &|name| {
-                                styles
-                                    .iter()
-                                    .find(|s| s.name == name)
-                                    .map(|s| s.attrs.as_slice())
-                            },
-                            &[],
-                        )
+                        crate::class::rows(attrs, &|name| {
+                            styles
+                                .iter()
+                                .find(|s| s.name == name)
+                                .map(|s| s.attrs.as_slice())
+                        })
                     })
                 }))
             }
@@ -828,7 +824,10 @@ pub(crate) fn unplaced(
 fn section_list(all: &[Attr], children: &[Node], span: Span, out: &mut Vec<LowerError>) {
     let windowed =
         last(all, "virtualized").is_some_and(|a| !matches!(a.value, Expr::Bool(false, _)));
-    if !windowed && crate::cells::sectioned(children) && crate::cells::rows("list", all, &[], false)
+    if !windowed
+        && crate::grouped::style("list", all).ok().flatten().is_none()
+        && crate::cells::sectioned(children)
+        && crate::cells::rows("list", all, &[], false)
     {
         out.push(LowerError {
             id: "lower-list-section",
@@ -858,7 +857,7 @@ fn drawn(attrs: &[Attr], styles: &[StyleDecl]) -> Vec<Attr> {
             .find(|s| s.name == name)
             .map(|s| s.attrs.as_slice())
     };
-    let class = crate::class::rows(attrs, &style, &[]).ok().flatten();
+    let class = crate::class::rows(attrs, &style).ok().flatten();
     let own = attrs.iter().filter(|a| a.name != "class").cloned();
     sheet
         .into_iter()

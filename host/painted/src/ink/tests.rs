@@ -618,3 +618,63 @@ fn canvas_upload_changes_only_its_rectangle_and_preserves_retained_revisions() {
     images.unpin(texture);
     images.trim(device).unwrap();
 }
+
+/// A backdrop over stripes and blocks that move a pixel a frame, at blurs Ink
+/// reduces further than the CPU painter does. The stripes' periods are near 4.5,
+/// 8.5 and 2.25 pixels, which fold to slow waves on grids of 4, 8 and 2 pixels; a
+/// block's edge shows a blur of another width. Ink stays within three levels of
+/// the CPU painter, and its difference from it changes by no more from one frame
+/// to the next.
+#[test]
+fn a_backdrop_halved_before_its_blur_keeps_to_the_cpu_painter_over_moving_content() {
+    use exact_kernel::style::{BackdropFilter, BackdropOp};
+    let Some(mut ink) = open() else { return };
+    let mut cpu = Raster::new();
+    let id = Transform::identity();
+    let bands: [(u32, &[u32]); 3] = [
+        (9, &[0, 1, 4, 5]),
+        (17, &[0, 1, 2, 3, 8, 9, 10, 11]),
+        (9, &[0, 2, 4, 6]),
+    ];
+    for sigma in [9., 12.5, 16.5, 20., 30., 40., 48., 64., 100.] {
+        let mut previous: Option<Vec<i16>> = None;
+        for step in 0..4 {
+            for backend in [&mut cpu as &mut dyn Backend, &mut ink] {
+                backend.begin(320., 240., 1.);
+                backend.fill(&Shape::rect((0., 0., 320., 240.)), [255; 4], id);
+                for (band, (period, dark)) in bands.iter().enumerate() {
+                    for x in (0..340).filter(|x| dark.contains(&(x % period))) {
+                        let stripe = ((x + step) as f32 - 12., band as f32 * 60., 1., 60.);
+                        backend.fill(&Shape::rect(stripe), [0, 0, 0, 255], id);
+                    }
+                }
+                for n in 0..8 {
+                    let block = ((n * 40 + step) as f32 - 12., 180., 20., 60.);
+                    let color = [n as u8 * 36, 40, 250 - n as u8 * 30, 255];
+                    backend.fill(&Shape::rect(block), color, id);
+                }
+                backend.backdrop_filter(
+                    &Shape::new((20.5, 10.5, 279., 219.), [22.; 4]),
+                    &BackdropFilter(vec![BackdropOp::Blur(sigma)]),
+                    id,
+                );
+            }
+            let (cpu, ink) = (cpu.finish().unwrap(), ink.finish().unwrap());
+            // Inside the glass, clear of its antialiased edge.
+            let inside = (35..205).flat_map(|y| (45..275).map(move |x| (y * 320 + x) * 4));
+            let off: Vec<i16> = inside
+                .flat_map(|at| (at..at + 3).map(|c| ink.data()[c] as i16 - cpu.data()[c] as i16))
+                .collect();
+            let most = off.iter().map(|d| d.abs()).max().unwrap();
+            assert!(
+                most <= 3,
+                "sigma {sigma}, step {step}: {most} from the CPU painter"
+            );
+            if let Some(before) = previous.replace(off.clone()) {
+                let moved = off.iter().zip(before).map(|(a, b)| (a - b).abs());
+                let most = moved.max().unwrap();
+                assert!(most <= 3, "sigma {sigma}, step {step}: flickers by {most}");
+            }
+        }
+    }
+}

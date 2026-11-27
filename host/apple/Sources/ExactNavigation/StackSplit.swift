@@ -9,7 +9,15 @@ import CExact
 /// runner finds it (`exact_stack_split`; `Runner::stack_split`), over the
 /// kernel's own tree.
 struct StackSplit: Equatable {
-    /// The list whose row pushes; nil where only `navigationSplit` asked.
+    /// Whether the root route asks for the split (`navigationSplit` is
+    /// "split" or a width there, or its own child box is the placeholder);
+    /// each host admits a split from it by its own rule (LLP 1127 D1, D22).
+    let asked: Bool
+    /// The root route's own placeholder box, which the split shows while
+    /// nothing is selected: the runner's choice, which asked (LLP 1127 D1).
+    let placeholder: UInt32?
+    /// The list whose row pushes; nil where only the root route's ask (its
+    /// `navigationSplit` or its placeholder box) splits the stack.
     let list: UInt32?
     /// The first visible row the app marks current.
     let current: UInt32?
@@ -20,13 +28,10 @@ struct StackSplit: Equatable {
     let rows: [UInt32: UInt32]
     /// Each route above the root, by its id, with its location.
     let locations: [UInt32: String]
-    /// Whether the press of the view asked about writes the router; nil
-    /// where none was asked about.
-    let pressWrites: Bool?
 
-    init(list: UInt32?, width: Double?, rows: [UInt32: UInt32], locations: [UInt32: String] = [:], current: UInt32? = nil, pressWrites: Bool? = nil) {
-        self.current = current
-        (self.list, self.width, self.rows, self.locations, self.pressWrites) = (list, width, rows, locations, pressWrites)
+    init(asked: Bool = false, placeholder: UInt32? = nil, list: UInt32?, width: Double?, rows: [UInt32: UInt32], locations: [UInt32: String] = [:], current: UInt32? = nil) {
+        (self.asked, self.placeholder, self.current) = (asked, placeholder, current)
+        (self.list, self.width, self.rows, self.locations) = (list, width, rows, locations)
     }
 
     init?(json: Data) {
@@ -36,9 +41,19 @@ struct StackSplit: Equatable {
             guard pair.count == 2, let route = pair[0] as? Int, let url = pair[1] as? String else { return nil }
             return (UInt32(route), url)
         }
-        self.init(list: (o["list"] as? Int).map { UInt32($0) }, width: (o["width"] as? NSNumber)?.doubleValue,
+        self.init(asked: o["asked"] as? Bool ?? false, placeholder: (o["placeholder"] as? Int).map { UInt32($0) }, list: (o["list"] as? Int).map { UInt32($0) }, width: (o["width"] as? NSNumber)?.doubleValue,
                   rows: Dictionary(pairs, uniquingKeysWith: { first, _ in first }),
-                  locations: Dictionary(located, uniquingKeysWith: { first, _ in first }), current: (o["current"] as? Int).map { UInt32($0) }, pressWrites: o["pressWrites"] as? Bool)
+                  locations: Dictionary(located, uniquingKeysWith: { first, _ in first }), current: (o["current"] as? Int).map { UInt32($0) })
+    }
+}
+
+/// A split rule the owner read (`SplitRead`), decoded.
+struct HeardSplit {
+    let read: SplitRead
+    let rule: StackSplit?
+    init(_ read: SplitRead, rule: StackSplit?? = nil) {
+        self.read = read
+        self.rule = rule ?? StackSplit(json: read.json)
     }
 }
 
@@ -46,18 +61,17 @@ extension Runtime {
     /// Whether the stack whose root route is `view` splits, by the runner's
     /// rule; nil for one that pushes, and while the runner is busy.
     /// `retaining` keeps a list that split the stack while it has no row to
-    /// act on (a search that matches nothing). `pressed`: a view being
-    /// pressed, whose press is said to write the router or not.
-    func stackSplit(_ view: UInt32, retaining list: UInt32?, pressed: UInt32? = nil) -> StackSplit? {
-        stackSplitAnswer(view, retaining: list, pressed: pressed) ?? nil
+    /// act on (a search that matches nothing).
+    func stackSplit(_ view: UInt32, retaining list: UInt32?) -> StackSplit? {
+        stackSplitAnswer(view, retaining: list) ?? nil
     }
 
     /// `stackSplit`'s answer, or nil while the runner is busy: from a callback
     /// it waits on, no runtime call runs (`Owner.sync`), and a nil there says
     /// nothing about the stack.
-    func stackSplitAnswer(_ view: UInt32, retaining list: UInt32?, pressed: UInt32? = nil) -> StackSplit?? {
+    func stackSplitAnswer(_ view: UInt32, retaining list: UInt32?) -> StackSplit?? {
         on(busy: nil) {
-            let len = exact_stack_split(rt, view, list ?? 0, pressed ?? 0)
+            let len = exact_stack_split(rt, view, list ?? 0)
             return .some(StackSplit(json: Data(bytes: exact_out(rt), count: Int(len))))
         }
     }

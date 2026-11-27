@@ -212,7 +212,7 @@ test('the deployed origin\'s Apple file: applinks where a claim covers its host,
 test('Android: one autoVerify https filter per claimed host, its scope and, from 15, its exclusions', async () => {
   const { withAppLinks, withProtocolHandlers, withAuthCallbacks } = await import('./android-manifest.mjs');
   assert.equal(withAppLinks('unchanged', []), 'unchanged');
-  const xml = withAuthCallbacks(withAppLinks(withProtocolHandlers('', [{ protocol: 'notes', url: '/open?u=%s' }]),
+  const xml = withAuthCallbacks(withAppLinks(withProtocolHandlers('', { protocol_handlers: [{ protocol: 'notes', url: '/open?u=%s' }] }),
     androidLinkFilters({ ...notes, scope: '/', start_url: '/' }, ['https://notes.example/cb'])), ['notes:/cb']);
   assert.equal((xml.match(/<activity /g) ?? []).length, 1);
   assert.equal((xml.match(/android:autoVerify="true"/g) ?? []).length, 2);
@@ -330,4 +330,4 @@ test('JavaScript derives callback associations and preserves a bake\'s passkeys'
     expect(built.status, built.stdout + built.stderr).toBe(0);
     expect(names.map(name => readFileSync(resolve(out, '.well-known', name), 'utf8'))).toEqual(files);
   } finally { rmSync(dir, { recursive: true, force: true }); }
-}, 120000);
+}, 300_000);

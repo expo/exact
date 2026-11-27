@@ -56,6 +56,54 @@ final class MenuRowPopoverMacTests: XCTestCase {
         return p
     }
 
+    /// A link row of a menu (a button with an `href` and no `press`) is an
+    /// item of the Mac's menu, as it is of UIKit's
+    func testAMenusLinkRowIsAnItem() throws {
+        let p = fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 40, "kind": "button", "props": ["href": "tel:5550100"]], ["op": "create", "id": 41, "kind": "text", "props": ["text": "Call"]],
+            ["op": "children", "id": 40, "ids": [41]], ["op": "children", "id": 3, "ids": [10, 11, 31, 40]],
+            ["op": "frame", "id": 40, "x": 0, "y": 80, "w": 200, "h": 30],
+        ]))
+        let menu = p.menus.menu(of: try XCTUnwrap(p.views[3]))
+        let call = try XCTUnwrap(menu.items.first { $0.title == "Call" }, "the link row is an item: \(menu.items.map(\.title))")
+        XCTAssertTrue(call.isEnabled)
+        XCTAssertNotNil(call.action)
+    }
+
+    /// A link row written as the menu's rows are, closing the menu
+    /// (`popovertargetaction="hide"`), is an item too, and choosing it
+    /// follows the link
+    func testAMenusLinkRowThatHidesTheMenuFollowsItsLink() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "menu-link-hide")
+        defer { session.destroy() }
+        final class Links: ExactSessionDelegate {
+            var urls: [String] = []
+            func exactSession(_ session: ExactSession, command name: String, args: [Any]) {
+                if name == "openURL", let url = args.first as? String { urls.append(url) }
+            }
+        }
+        let links = Links()
+        session.delegate = links
+        let p = session.presenter
+        p.menus.painted = true
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "button", "props": ["popovertarget": "menu"]],
+            ["op": "create", "id": 3, "kind": "view", "props": ["popover": "auto", "id": "menu", "accessibilityRole": "menu"]],
+            ["op": "create", "id": 40, "kind": "button", "props": ["href": "tel:5550100", "popovertarget": "menu", "popovertargetaction": "hide"]],
+            ["op": "create", "id": 41, "kind": "text", "props": ["text": "Call"]],
+            ["op": "children", "id": 40, "ids": [41]], ["op": "children", "id": 3, "ids": [40]], ["op": "children", "id": 1, "ids": [2, 3]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 500, "h": 400], ["op": "frame", "id": 40, "x": 0, "y": 0, "w": 200, "h": 30],
+        ]))
+        let menu = p.menus.menu(of: try XCTUnwrap(p.views[3]))
+        XCTAssertNotNil(menu.items.first { $0.title == "Call" }, "the link row is an item: \(menu.items.map(\.title))")
+        p.press(40, fromNativeMenu: true)
+        XCTAssertEqual(links.urls, ["tel:5550100"])
+    }
+
     func testAMenuRowsPopoverOpensFromTheMenusInvokerAndOnlyAMenuIsASubmenu() throws {
         let p = fixture()
         defer { p.menus.reset() }

@@ -79,7 +79,7 @@ async function bound() {
       const Real = globalThis.Notification;
       if (typeof Real !== 'function') return;
       globalThis.__posted = [];
-      globalThis.Notification = class extends Real { constructor(title, options) { super(title, options); globalThis.__posted.push({ title, options, n: this }); } };
+      globalThis.Notification = class extends Real { constructor(title, options) { super(title, options); globalThis.__posted.push({ title, options, n: this, postedAt: performance.now() }); } };
     });
     const page = await context.newPage();
     await page.goto(origin);
@@ -92,6 +92,12 @@ async function bound() {
     await page.evaluate(() => globalThis.__posted[0].n.dispatchEvent(new Event('click')));
     await page.waitForTimeout(200);
     check('web', 'a script\'s click on it raises nothing', (await text(page, 'opened')) === 'none', await text(page, 'opened'));
+    const later = page.getByTestId('later');
+    await later.evaluate(button => button.addEventListener('pointerdown', () => { globalThis.__pressedAt = performance.now(); }, { once: true }));
+    await later.click();
+    const arrived = await until(page, 'arrived', t => t === 'Reminder', 12_000);
+    const elapsed = await page.evaluate(() => globalThis.__posted.find(p => p.title === 'Reminder')?.postedAt - globalThis.__pressedAt);
+    check('web', 'the browser shows the five-second reminder', arrived === 'Reminder' && elapsed >= 4900, `${arrived}, ${elapsed} ms`);
     await page.getByTestId('post-data').click();
     const data = await until(page, 'data', (t) => t !== 'none');
     check('web', 'data code posts, after reading the status, and the send resolves undefined', data === 'posted', data);
@@ -118,8 +124,12 @@ function substituted(host) {
   check(host, 'tap @ref raises notificationclick with the tag and data', clicked.slots?.opened === 'thread-3 /thread/3', JSON.stringify(clicked.slots));
   const badges = agent('tap count', 'state', 'tap flag', 'state', 'tap clear', 'state');
   check(host, 'the badge is a number, a flag, then none', badges[1].badge === 3 && badges[3].badge === 'flag' && badges[5].badge === null, JSON.stringify([badges[1].badge, badges[3].badge, badges[5].badge]));
-  const later = agent('--permission', 'notifications=granted', 'tap later', 'state', 'clock +61000', 'state');
-  check(host, 'a post for later is delivered once the clock passes it', later[1].notifications?.[0]?.delivered === false && later[3].notifications?.[0]?.delivered === true, JSON.stringify([later[1].notifications, later[3].notifications]));
+  for (const visibility of ['visible', 'hidden']) {
+    const states = agent('--permission', 'notifications=granted', 'tap later', `prefer visibility-state ${visibility}`, 'state', 'clock +5000', 'prefer visibility-state visible', 'state');
+    const before = states[2], after = states.at(-1);
+    check(host, `a reminder due while ${visibility}`, before.notifications?.[0]?.delivered === false && before.slots.arrived === 'Waiting.'
+      && after.notifications?.[0]?.delivered === true && after.slots.arrived === (visibility === 'visible' ? 'Reminder' : 'Waiting.'), JSON.stringify(after.slots));
+  }
   const launched = agent('--permission', 'notifications=granted', '--notification', JSON.stringify(entry ?? {}), 'clock settle', 'state').at(-1);
   check(host, 'a relaunch\'s --notification carries the entry\'s data to the handler', launched.slots?.opened === 'thread-3 /thread/3', JSON.stringify(launched.slots));
 }

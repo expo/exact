@@ -30,14 +30,21 @@ import kotlin.math.sqrt
 internal object DragOut {
     /** A drag exact2 asked for (request kind 23): the node, its box and the finger in the view's pixels, whether an
      * assistive service started it, its text and URL, and its files as the node names them. */
-    data class Ask(val node: Int, val box: Rect, val finger: Point, val service: Boolean, val text: String, val url: String, val files: List<String>)
+    data class Ask(val node: Int, val box: Rect, val finger: Point, val service: Boolean, val text: String, val url: String, val files: List<Dragged>)
+
+    /** A file as the node names it ([src]: a shipped `assets/…` name or an `app:/` path) and the name a destination is
+     * offered for it (LLP 1094.000 D14). */
+    data class Dragged(val src: String, val name: String)
 
     /** The request's words from [at], as `presenter::drag_out::DragOut::encode` writes them. */
     fun read(w: IntArray, at: Int): Ask {
         val box = Rect(w[at + 1], w[at + 2], w[at + 1] + w[at + 3], w[at + 2] + w[at + 4])
         val (text, afterText) = Requests.string(w, at + 8)
         var (url, i) = Requests.string(w, afterText)
-        val files = List(w[i++]) { Requests.string(w, i).also { i = it.second }.first }
+        val files = List(w[i++]) {
+            val src = Requests.string(w, i).also { i = it.second }.first
+            Dragged(src, Requests.string(w, i).also { i = it.second }.first)
+        }
         return Ask(w[at], box, Point(w[at + 5], w[at + 6]), w[at + 7] == 1, text, url, files)
     }
 
@@ -80,7 +87,7 @@ internal object DragOut {
             when {
                 touch == null || down != touch -> Exact.journal("drag: not begun: the finger held for it lifted before its shadow was drawn")
                 busy() -> Exact.journal(UNHEARD)
-                !view.startDragAndDrop(clip, Shadow(picture, shown, finger), null, flags(false, Build.VERSION.SDK_INT)) ->
+                !view.startDragAndDrop(clip, Shadow(picture, shown, finger), OWN, flags(false, Build.VERSION.SDK_INT)) ->
                     Exact.journal("drag: the platform began no drag: another drag is under way, or the view left its window")
             }
         }
@@ -116,24 +123,24 @@ internal object DragOut {
     }
 
     /**
-     * The clip: one item a file, as a content URI the app's [Files] provider serves, then the URL and the text, each
-     * as text. A URL is no item's URI: a receiver opens an item's URI as a file's content, as Chrome's page does for
-     * every item with one. A file is a shipped `assets/…` name or an `app:/` path ([Files.uri]); one the app does not
-     * have is left out and journaled. Null when it carries nothing.
+     * The clip: one item a file, as a content URI the app's [Files] provider serves under the name the file is
+     * offered under, then the URL and the text, each as text. A URL is no item's URI: a receiver opens an item's URI
+     * as a file's content, as Chrome's page does for every item with one. A file is a shipped `assets/…` name or an
+     * `app:/` path ([Files.uri]); one the app does not have is left out and journaled. Null when it carries nothing.
      */
-    fun clip(context: Context, text: String, url: String, files: List<String>): ClipData? {
-        val found = files.mapNotNull { src ->
-            val uri = Files.uri(context, src)
-            if (uri == null) Exact.journal("drag: $src could not be read: the app has no such file, so the drag leaves it out")
-            uri
+    fun clip(context: Context, text: String, url: String, files: List<Dragged>): ClipData? {
+        val found = files.mapNotNull { file ->
+            val uri = Files.uri(context, file.src, file.name)
+            if (uri == null) Exact.journal("drag: ${file.src} could not be read: the app has no such file, so the drag leaves it out")
+            uri?.let { it to file.name }
         }
         val words = listOf(url, text).filter { it.isNotEmpty() }
-        val items = found.map { ClipData.Item(it) } + words.map { ClipData.Item(it) }
+        val items = found.map { ClipData.Item(it.first) } + words.map { ClipData.Item(it) }
         if (items.isEmpty()) return null
-        val types = found.map { Files.type(it.lastPathSegment ?: "") } + words.map { ClipDescription.MIMETYPE_TEXT_PLAIN }
+        val types = found.map { Files.type(it.first.lastPathSegment ?: "") } + words.map { ClipDescription.MIMETYPE_TEXT_PLAIN }
         // Other windows see the label when the drag starts, before any drop: a file's name, else none, as a TextView's
         // drag of text has.
-        val label = found.firstOrNull()?.lastPathSegment
+        val label = found.firstOrNull()?.second
         return ClipData(ClipDescription(label, types.distinct().toTypedArray()), items.first()).apply { items.drop(1).forEach(::addItem) }
     }
 
@@ -152,6 +159,10 @@ internal object DragOut {
     }
 
     private const val MOST_PIXELS = 1024.0 * 1024
+
+    /** The local state of the app's own drags: Android gives it only to the app's own windows ([DragIn] reads it), so
+     * a drop that carries it is the app's own, whose files the app may read without a grant. */
+    val OWN = Any()
 
     /** What is journaled for a drag not begun while the window has yet to hear an earlier drag's end. */
     const val UNHEARD = "drag: not begun: the window has yet to hear the end of the drag before it"

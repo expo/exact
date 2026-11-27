@@ -80,10 +80,16 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        match contract::tests(&text)
-            .and_then(|tests| contract::properties(&text).map(|p| (tests, p)))
-        {
-            Ok((tests, mut declarations)) => {
+        match contract_syntax::parse(&text) {
+            Ok(parsed) => {
+                if let Err(errors) = contract::check_test_substitutes(&file, &parsed, Some(&plan)) {
+                    for e in errors {
+                        println!("SCRIPT {}:{e}", show(path));
+                    }
+                    ok = false;
+                }
+                let tests = contract::tests_with_defaults(parsed.tests, &parsed.launch);
+                let mut declarations = parsed.properties;
                 for test in &tests {
                     if let Err(e) = crate::script::check_answers(&plan, test) {
                         println!("SCRIPT {}:{e}", show(path));
@@ -490,7 +496,7 @@ fn verify_js(
             .collect();
         let cases: Vec<_> = selected.iter().map(|l| l.scripted.case.clone()).collect();
         let verdicts = js::check(&compiler, &cases, 16, "verify")?;
-        let mut passed = js::report(&compiler, &cases, &verdicts, None, false, true)?;
+        let mut passed = js::report(&compiler, &cases, &verdicts, None, false, true, true)?;
         let always: Vec<_> = properties
             .iter()
             .filter(|p| p.kind == PropertyKind::Always)

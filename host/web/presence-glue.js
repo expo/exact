@@ -19,9 +19,10 @@
 // behind it (the element's background, border, radius, shadow and backdrop
 // filter, which it stops painting for the while) grows or shrinks from its
 // top-left corner; an element that clips its children clips them to the
-// shown box. A spring is lowered here, per move, from its displacement and
-// velocity in points, on the grid and rest threshold the engine settles on
-// natively (`exact_motion::spring`).
+// shown box. A native button, whose chrome the browser draws, keeps its
+// laid-out size and moves by its centre. A spring is lowered here, per move,
+// from its displacement and velocity in points, on the grid and rest threshold
+// the engine settles on natively (`exact_motion::spring`).
 import { unwrapListItem, viewParent } from './navigation.js';
 import { translation } from './motion-glue.js';
 const LAYOUT = '--exact-layout-transition';
@@ -223,6 +224,14 @@ function measure() {
   };
 }
 
+// What a layout transition moves: an element's box, or a native button's centre with no size, as the kernel's
+// `layout_box` gives it. The browser draws its chrome at its laid-out size, so only its place moves (LLP 1069.011 D6).
+const moving = (el, at) => at && el.matches('button[data-button-style]') ? [at[0] + at[2] / 2, at[1] + at[3] / 2, 0, 0] : at;
+
+// Whether a batch changes no tree: the JS target says so (`still`, rt.js `commit`); the wasm host's holds only its clock
+// stamp (`at`).
+const changesNoTree = batch => batch.still ?? !batch.ops?.some(op => op.op !== 'at');
+
 // `exact_motion::spring`: displacement and velocity at `t` seconds after a
 // release at `d` moving at `v`, closed form in all three regimes.
 function spring([k, c, m], d, v, t) {
@@ -249,9 +258,10 @@ function settle(config, d, v) {
 function createPresence(root) {
   // Every view that declared the row before this module arrived.
   const tracked = new Set([...root.querySelectorAll('[style*="--exact-layout-transition"]')]);
-  // element -> { animation, parts, surface, d, v, config }: the move,
-  // the animations that show its size, and the surface's stand-in.
-  const flips = new WeakMap();
+  // element -> { animation, parts, surface, d, v, config }: each move
+  // running now, the animations that show its size, and the surface's
+  // stand-in.
+  const flips = new Map();
   const surfaces = new Set();
   // A ghost cannot escape its parent's turn (LLP 1083.000 D4). Keep the
   // parent's current row beneath this temporary write, including changes
@@ -276,6 +286,10 @@ function createPresence(root) {
     for (const [el, letGo] of globalThis.exact?.motionHolds ?? []) if (leaving.contains(el)) letGo();
   };
   let first = new Map();
+  // Whether the batch `before` last read changes no tree, which `after` reads for the same batch; a batch `before` did
+  // not read counts as changing one
+  let stillBatch = false;
+  const exitBoxes = new Map();
 
   // Read the element's presented paint without our transparent surface or
   // layout offset. Paint animations keep their clocks: only their painted
@@ -441,38 +455,42 @@ function createPresence(root) {
     // says which (`still`, rt.js `commit`), and the wasm host's then holds
     // only its clock stamp (`at`). A view the page no longer holds is
     // tracked no longer, whether or not the batch measures.
-    before(batch, views) {
+    before(batch, views, departures = []) {
       first = new Map();
+      const place = measure();
       for (const el of surfaces) reveal(flips.get(el));
       for (const el of tracked) if (!el.isConnected) tracked.delete(el);
-      const still = batch.still ?? !batch.ops?.some(op => op.op !== 'at');
+      const still = stillBatch = changesNoTree(batch);
       if (batch.presenceSnap) { for (const el of tracked) stop(el); }
       else if (!still) {
-        const place = measure();
         const gains = (batch.ops ?? []).filter(op => op.op === 'style' && op.css?.includes(LAYOUT)).map(op => views.get(op.id));
         for (const el of new Set([...tracked, ...gains])) {
-          const at = el && place(el);
+          // (A hidden element has no box to move from, though its computed size stays what was written)
+          const at = el && el.getClientRects().length ? moving(el, place(el)) : null;
           if (at) first.set(el, [at, going(el)]);
         }
       }
       // The batch's leaving views, each read before any exit takes one out of flow
       const exits = (batch.ops ?? []).filter(op => op.op === 'exit').map(op => [views.get(op.id), op.css]).filter(([el]) => el?.isConnected);
+      exitBoxes.clear();
+      // Only a confirmed exit releases holds. A JS region may rescue portal content as it leaves.
       for (const [el] of exits) release(el);
-      const readings = exits.map(([el]) => kept(el));
+      for (const el of new Set([...departures, ...exits.map(([el]) => el)])) {
+        exitBoxes.set(el, { kept: kept(el), block: el.offsetParent, local: place(el) });
+      }
       // Let this commit update the underlying row before reapplying the
       // ghost policy in after(). Both run in the same task, before paint.
       for (const [parent, held] of ghostParents) {
         restoreIsolation(parent, held);
         held.released = true;
       }
-      exits.forEach(([el, css], i) => this.exit(el, css, readings[i]));
+      for (const [el, css] of exits) this.exit(el, css);
     },
-    // `at`: what `kept` returned for it, when `before` read it ahead of the batch's exits
-    exit(el, css, at) {
+    exit(el, css) {
       if (!el?.isConnected || !css) return;
       stop(el);
       release(el);
-      const [box, ranked] = at ?? kept(el), s = el.style;
+      const [box, ranked] = exitBoxes.get(el)?.kept ?? kept(el), s = el.style;
       if (el.parentElement.hasAttribute('data-exact-list-item')) unwrapListItem(el.parentElement);
       const parent = el.parentElement;
       // No input, no accessibility, no focus, no ids: a view re-created with
@@ -509,6 +527,8 @@ function createPresence(root) {
       s.animation = list && list !== 'none' ? `${list}, ${css}` : css;
       const leaving = el.getAnimations().filter(a => a.animationName !== undefined && !playing.has(a));
       const done = () => {
+        // The moves inside it go with it, which no later batch would see
+        for (const [child] of [...flips]) if (el.contains(child)) stop(child);
         el.remove();
         if (--held.count === 0) {
           restoreIsolation(parent, held);
@@ -524,6 +544,16 @@ function createPresence(root) {
     // whose box moved plays back from where it was. All are measured before
     // any starts, so no move reads another's first frame.
     after(batch, views) {
+      // A restyle can establish or drop the containing block the saved offsets were relative to.
+      // Express the old box in the new block before measuring surviving layout transitions.
+      const locate = measure(), corrections = [];
+      for (const [el, { block, local }] of exitBoxes) {
+        if (!local || !el.hasAttribute('data-exiting') || block === el.offsetParent) continue;
+        const at = locate(el);
+        if (at) corrections.push([el.style, parseFloat(el.style.left) + local[0] - at[0], parseFloat(el.style.top) + local[1] - at[1]]);
+      }
+      for (const [style, x, y] of corrections) { style.left = `${x}px`; style.top = `${y}px`; }
+      exitBoxes.clear();
       const restyled = new Set((batch.ops ?? []).filter(op => op.op === 'style').map(op => views.get(op.id)));
       for (const [parent, held] of ghostParents) {
         if (held.released || restyled.has(parent)) {
@@ -540,17 +570,24 @@ function createPresence(root) {
         if (el.style.getPropertyValue(LAYOUT)) tracked.add(el);
         else { tracked.delete(el); stop(el); }
       }
-      // A move whose box is gone (a restyle to `display: none`) ends with it.
-      for (const el of [...surfaces]) {
-        const sf = flips.get(el)?.surface;
-        sf?.unclip?.effect.setKeyframes([]);
-        if (!size(getComputedStyle(el))) stop(el);
+      // A move whose box is gone (a restyle to `display: none`) ends with it, a native button's too, which moves with no
+      // stand-in. A batch that changes no tree, as `before` read it (the JS target's batch here holds only what it
+      // synthesizes), hides none, so a move with no surface reads no box (GitHub #747), though a surface's size and hold
+      // are read again after each batch; a removed element is let go unmeasured.
+      const still = stillBatch, running = [...flips];
+      stillBatch = false;
+      // Every hold off first, so one an ancestor's surface holds (`flow-root`) gives no box to what it hides
+      for (const [, { surface: sf }] of running) sf?.unclip?.effect.setKeyframes([]);
+      for (const [el, { surface: sf }] of running) {
+        if (!el.isConnected) { stop(el); continue; }
+        // (Its computed size stays what was written, so the box is what tells; a surface needs a size to place)
+        if (!still && !el.getClientRects().length || sf && !size(getComputedStyle(el))) stop(el);
         else if (sf?.unclip) unclip(sf.unclip, el, sf.sticky);
       }
       const place = measure(), moves = [];
       for (const [el, [was, [d, v]]] of first) {
         if (!tracked.has(el)) continue;
-        const at = place(el);
+        const at = el.isConnected && el.getClientRects().length ? moving(el, place(el)) : null;
         if (at && at.some((x, i) => Math.abs(x - was[i]) >= 0.01)) moves.push([el, at.map((x, i) => was[i] + d[i] - x), v, at]);
       }
       for (const [el, d, v, at] of moves) move(el, d, v, at[2], at[3], measure());

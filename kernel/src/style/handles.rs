@@ -3,6 +3,7 @@ use super::intern::{Table, Value};
 use super::{Comparison, Env};
 use std::cell::RefCell;
 use std::sync::{Arc, LazyLock, Mutex};
+use taffy::style::CalcHandle;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Key {
@@ -53,9 +54,9 @@ impl Drop for Lowering {
     }
 }
 
-fn intern(key: Key, tree: Option<Comparison>) -> *const () {
+fn intern(key: Key, tree: Option<Comparison>) -> CalcHandle {
     let value = Table::intern(&HANDLES, key, tree);
-    let handle = (value.id << 3) as *const ();
+    let handle = CalcHandle::from_bits((value.id as u64) << 3);
     LOWERING.with(|stack| {
         stack
             .borrow_mut()
@@ -66,10 +67,10 @@ fn intern(key: Key, tree: Option<Comparison>) -> *const () {
     handle
 }
 
-pub(super) fn calc_handle(percent: f32, points: f32) -> *const () {
+pub(super) fn calc_handle(percent: f32, points: f32) -> CalcHandle {
     calc_handle_in(percent, points, false, 0.0)
 }
-pub(crate) fn calc_handle_in(percent: f32, points: f32, floor: bool, added: f32) -> *const () {
+pub(crate) fn calc_handle_in(percent: f32, points: f32, floor: bool, added: f32) -> CalcHandle {
     intern(
         Key::Pair {
             percent: percent.to_bits(),
@@ -81,7 +82,7 @@ pub(crate) fn calc_handle_in(percent: f32, points: f32, floor: bool, added: f32)
         None,
     )
 }
-pub(crate) fn tree_handle(tree: Comparison, floor: bool, added: f32) -> *const () {
+pub(crate) fn tree_handle(tree: Comparison, floor: bool, added: f32) -> CalcHandle {
     intern(
         Key::Tree {
             tree: tree.identity(),
@@ -95,9 +96,9 @@ pub(crate) fn tree_handle(tree: Comparison, floor: bool, added: f32) -> *const (
 
 /// `handle`'s calculation with `points` more after its floor: a padding
 /// that a reservation adds to (LLP 1123 D11). An unknown handle stays.
-pub(crate) fn plus(handle: *const (), points: f32) -> *const () {
+pub(crate) fn plus(handle: CalcHandle, points: f32) -> CalcHandle {
     let found = (HANDLES.lock().unwrap_or_else(|e| e.into_inner()))
-        .get(handle as usize >> 3)
+        .get((handle.to_bits() >> 3) as usize)
         .map(|calc| (calc.key, calc.value.clone()));
     let Some((mut key, tree)) = found else {
         return handle;
@@ -123,7 +124,7 @@ pub(crate) fn less(
         _ => raw.calc_value(),
     };
     let found = (HANDLES.lock().unwrap_or_else(|e| e.into_inner()))
-        .get(handle as usize >> 3)
+        .get((handle.to_bits() >> 3) as usize)
         .map(|calc| (calc.key, calc.value.clone()));
     let Some((mut key, tree)) = found else {
         return side;
@@ -161,9 +162,9 @@ impl Drop for LayoutEnv {
 /// percentage and a length does, `calc(100px + 0%)` among them, and a tree
 /// does where a percentage stands at a leaf (`Comparison::has_percent`). A
 /// released or unknown handle holds none.
-pub(crate) fn calc_has_percent(handle: *const ()) -> bool {
+pub(crate) fn calc_has_percent(handle: CalcHandle) -> bool {
     let table = HANDLES.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(calc) = table.get(handle as usize >> 3) else {
+    let Some(calc) = table.get((handle.to_bits() >> 3) as usize) else {
         return false;
     };
     match calc.key {
@@ -173,11 +174,11 @@ pub(crate) fn calc_has_percent(handle: *const ()) -> bool {
 }
 
 /// Resolve a live handle; a released or unknown handle fails closed.
-pub(crate) fn resolve_calc(handle: *const (), basis: f32) -> f32 {
+pub(crate) fn resolve_calc(handle: CalcHandle, basis: f32) -> f32 {
     let Some(calc) = HANDLES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .get(handle as usize >> 3)
+        .get((handle.to_bits() >> 3) as usize)
     else {
         return 0.0;
     };
@@ -216,7 +217,7 @@ mod tests {
     use super::*;
     use crate::Dimension;
 
-    fn left_handle(style: &taffy::Style) -> *const () {
+    fn left_handle(style: &taffy::Style) -> CalcHandle {
         let taffy::style::ExpandedLengthPercentageAuto::Calc(handle) = style.inset.left.expand()
         else {
             panic!("expected calculation");
@@ -240,21 +241,29 @@ mod tests {
                     .set_dynamic(crate::StyleId::Left, &crate::StyleValue::Text(text.into()))
                     .unwrap();
                 let lowered = style.to_taffy(crate::NodeType::View, &env);
-                released.push(left_handle(&lowered) as usize);
+                released.push(left_handle(&lowered));
             }
         }
         drop(style);
         drop(survivor);
         for handle in released {
-            assert!(HANDLES.lock().unwrap().get(handle >> 3).is_none());
-            assert_eq!(resolve_calc(handle as *const (), 100.), 0.);
+            assert!(HANDLES
+                .lock()
+                .unwrap()
+                .get((handle.to_bits() >> 3) as usize)
+                .is_none());
+            assert_eq!(resolve_calc(handle, 100.), 0.);
         }
         assert_eq!(detached.at_basis(&env, 100.), 37.);
         drop(detached);
         assert_eq!(resolve_calc(live, 100.), 37.);
         assert_eq!(resolve_calc(live, 40.), 20.);
         drop(retained);
-        assert!(HANDLES.lock().unwrap().get(live as usize >> 3).is_none());
+        assert!(HANDLES
+            .lock()
+            .unwrap()
+            .get((live.to_bits() >> 3) as usize)
+            .is_none());
         assert_eq!(resolve_calc(live, 100.), 0.);
         style = crate::StyleProps::default();
         style.left = Dimension::Calc(3., 7.);
@@ -287,7 +296,11 @@ mod tests {
         assert_eq!(resolve_calc(handle, 100.), 31.);
         assert_eq!(resolve_calc(handle, 40.), 20.);
         drop(copy);
-        assert!(HANDLES.lock().unwrap().get(handle as usize >> 3).is_none());
+        assert!(HANDLES
+            .lock()
+            .unwrap()
+            .get((handle.to_bits() >> 3) as usize)
+            .is_none());
     }
 
     #[test]

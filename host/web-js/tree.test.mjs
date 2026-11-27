@@ -223,3 +223,52 @@ test('a box whose transform changes every frame is promoted while it changes', (
   });
   expect(result).toEqual({ once: '', moving: 'scale, translate', held: 'scale, translate', settled: '' });
 }), 60_000);
+
+test('owned checkpoint answers with colliding paths take linear work in page order', () => fixture(async page => {
+  const result = await page.evaluate(async () => {
+    const rt = await import('/host/web-js/rt.js');
+    const { keptOwned } = await import('/host/web-js/each.js');
+    const path = '0=s:a/1=s:b/1=s:c', other = '0=s:other';
+    let visits = 0, argumentReads = 0;
+    const answers = Array.from({ length: 128 }, (_, i) => [[i], `answer ${i}`, false, false, path]);
+    const candidates = new Proxy(answers.map((_, i) => i), {
+      get(target, key, receiver) {
+        if (/^\d+$/.test(String(key))) visits++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const kept = { source: 'mirror', answers, next: 0, byPath: new Map([[path, candidates]]) };
+    rt.checkpoint().kept = new Map([['answer', kept]]);
+    const read = (i, at = path) => keptOwned('answer', 'mirror', () => { argumentReads++; return [i]; }, 's', at)?.[1] ?? null;
+    const values = [];
+    let reordered, wrongPath, moved, missing, typed, orderedVisits, orderedReads, missingReads;
+    rt.mount(() => {
+      for (let i = 0; i < answers.length; i++) values.push(read(i));
+      orderedVisits = visits;
+      orderedReads = argumentReads;
+      // The cursor can point at another instance, even when its arguments match.
+      answers.push([[0], 'other instance', false, false, other]);
+      kept.byPath.set(other, [128]);
+      wrongPath = read(0);
+      reordered = read(100);
+      moved = read(128);
+      const beforeMissing = argumentReads;
+      missing = read(0, 'absent');
+      missingReads = argumentReads - beforeMissing;
+      kept.next = answers.length;
+      candidates.push(answers.length, answers.length + 1);
+      answers.push([[7], 42, false, false, path], [[7], 'typed answer', false, false, path]);
+      typed = read(7);
+    });
+    return { values, visits: orderedVisits, argumentReads: orderedReads, wrongPath, reordered, moved, missing, missingReads, typed };
+  });
+  expect(result.values).toEqual(Array.from({ length: 128 }, (_, i) => `answer ${i}`));
+  expect(result.argumentReads).toBe(128);
+  expect(result.visits).toBeLessThanOrEqual(128);
+  expect(result.wrongPath).toBe('answer 0');
+  expect(result.reordered).toBe('answer 100');
+  expect(result.moved).toBeNull();
+  expect(result.missing).toBeNull();
+  expect(result.missingReads).toBe(0);
+  expect(result.typed).toBe('typed answer');
+}));

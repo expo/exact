@@ -22,6 +22,7 @@ name = "exact_painted"
 crate-type = ["rlib"]
 
 [dependencies]
+accesskit = "0.25.1"
 exact-ink = { path = "../ink" }
 exact-grants = { path = "../../grants" }
 exact-canvas = { path = "../../canvas" }
@@ -77,6 +78,7 @@ swash = "0.2"
 # Canvas 2D's vertical metrics read `hhea` and `OS/2` (the version Parley uses).
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 memmap2 = "0.9"
+material-colors = { version = "0.5.0", default-features = false, features = ["libm"] }
 # Scratch reservation is audited against this decoder's row-buffer growth.
 png = "=0.18.1"
 libc = "0.2"
@@ -90,6 +92,8 @@ wgpu = { version = "30", default-features = false, features = ["std", "parking_l
 
 # Android presents into the window's swapchain (gpu/present.rs).
 [target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
+icu_locale = "2.3"
 raw-window-handle = "0.6"
 jni-sys = "0.3"
 mimalloc = { version = "0.1", default-features = false, features = ["local_dynamic_tls", "v2"] }
@@ -117,6 +121,7 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32
 test-budget = []
 
 [dev-dependencies]
+icu_locale = "2.3"
 # A recorded device stream holds instances as their bytes (src/ink/stream_tests.rs).
 bytemuck = "1"
 exact-bake = { path = "../../bake" }

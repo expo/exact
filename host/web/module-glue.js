@@ -3,7 +3,7 @@
 // guest builtin is patched. Loaded only after the page's first pixel.
 import { bindAnswerStorage, createStorage, finishLetGo } from './storage.js';
 import { agentSeed, agentStream, keyStore, refuseCodeFromStrings, storageKey } from './storage-environment.js';
-import { admitsNetwork, grantError, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
+import { admittingGrant, grantError, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
 import { faultMatches } from './faults.js';
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
@@ -81,7 +81,8 @@ export function fetchEarly(request, grants) {
   // A GET a driver fault will fail is not started early: the request fails it, counted once (LLP 1103 D1).
   // A GET that does not follow redirects is never sent early, nor one a tool, a wake or the device asked,
   // which `request` checks against the local network's rule first (LLP 1133.036 D6).
-  if ((request.origin ?? 'app') !== 'app' || grantError(grants) || request.method !== 'GET' || (request.redirect ?? 'follow') !== 'follow' || (request.cache ?? 'default') !== 'default' || request.body || request.body_base64 != null || !admitsNetwork(grants, request.url, 'fetch') || faultMatches(request.url)) return null;
+  const scope = scopedGrantSet(grants, request.scope);
+  if ((request.origin ?? 'app') !== 'app' || grantError(grants) || request.method !== 'GET' || (request.redirect ?? 'follow') !== 'follow' || (request.cache ?? 'default') !== 'default' || request.body || request.body_base64 != null || !admittingGrant(scope, request.url, 'fetch', undefined, false) || faultMatches(request.url)) return null;
   const key = earlyKey(request.url, request.headers), controller = new AbortController();
   const entry = { controller, response: fetch(request.url, { method: 'GET', headers: request.headers, redirect: 'follow', cache: 'default', signal: controller.signal }) };
   entry.response.catch(() => {});
@@ -128,8 +129,10 @@ export async function prepare(payload, admitted, id = nextId++) {
   const frame = document.createElement('iframe'); frame.hidden = true;
   frame.setAttribute('aria-hidden', 'true'); document.body.append(frame);
   const win = frame.contentWindow;
-  let context = null, initializationError = null, disposed = false, tail = Promise.resolve();
+  let context = null, initializationError = null, disposed = false, tail = Promise.resolve(), moduleClock = false, moduleEntropy = false;
   const seed = agentSeed(), stream = seed === null ? null : agentStream(seed, 'typescript');
+  const randomStream = seed === null ? null : agentStream(seed, 'ts-random');
+  const randomInitStream = seed === null ? null : agentStream(seed, 'ts-init');
   let storage;
   // The module's journal (LLP 1097 D8): the runtime's own lines (a failed
   // storage operation, an unhandled rejection) and its `console`, which the
@@ -157,8 +160,25 @@ export async function prepare(payload, admitted, id = nextId++) {
     if (op === 16) { const t = Number(name), m = requestMaps.get(t); requestMaps.delete(t); m?.delete(t); return; }
     // The runner's clock as the turn was dispatched: when a timer armed now is due; none outside a turn.
     if (op === 21) return context?.clock === undefined ? undefined : String(context.clock);
-    // The prelude asks at load whether this host has a local listener (LLP 1133.005): a page never does.
+    // The prelude asks at load whether this host has a local listener (LLP 1133.005), is baking, or is dev.
     if (op === 12 && name === 'listen') return '';
+    if (op === 12 && (name === 'bake' || name === 'dev')) return undefined;
+    // Virtualized clock & Math.random() (LLP 1195.000 D2): allowed at module init too.
+    if (op === 30) {
+      moduleClock = true;
+      if (context) context.clockRead = true;
+      const epoch = context?.epoch !== undefined ? context.epoch : (seed !== null ? 1767225600000 : Date.now());
+      return `${epoch},${context?.clock ?? 0}`;
+    }
+    if (op === 31) {
+      const s = name === 'init' ? randomInitStream : randomStream;
+      return s ? hex(s(7)) : undefined;
+    }
+    if (op === 8 && name === 'ambient') {
+      moduleEntropy = true;
+      if (context) context.entropy = true;
+      return;
+    }
     if (!context) throw new Error('host call outside an answer');
     if (op === 6) {
     // A page module answers `native.later` on the page; nothing here can answer at once.
@@ -213,12 +233,12 @@ export async function prepare(payload, admitted, id = nextId++) {
     // A cell belongs to the answer that accepted the call. The adapter runs
     // later, when the operation is issued, which may be a background round.
     bindAnswerStorage(win, storage, () => context.owner);
-    // Disable accidental browser I/O before the module captures globals: a
-    // function, so `new WebSocket(url)` refuses by name too, as the JS target's
-    // ts-fetch.js does. The prelude refuses the clock and every timer but an
-    // answer's own (time.js `timers`), by name, as Hermes does.
+    // Remove browser-only I/O constructors so `typeof WebSocket === "undefined"`
+    // matches Hermes and the web JS target (LLP 1195.000 D1.4).
     for (const key of ['XMLHttpRequest', 'WebSocket', 'EventSource']) {
-      Object.defineProperty(win, key, { value: function () { throw new Error(`${key} is unavailable in data sources`); }, configurable: false });
+      for (let o = win; o && o !== win.Object.prototype; o = win.Object.getPrototypeOf(o)) {
+        if (win.Object.getOwnPropertyDescriptor(o, key)?.configurable) delete o[key];
+      }
     }
     refuseCodeFromStrings(win);
     // A LAN dev page has no `crypto.subtle`: the realm's SHA-256 digest is
@@ -270,9 +290,17 @@ export async function prepare(payload, admitted, id = nextId++) {
       const run = tail.then(() => finishLetGo(storage, owed, letGoHooks)).then(() => { if (parked.length) return resettle(); });
       tail = run.catch(() => {});
     };
-    let parked = [], deliveries = 0; // `deliveries`: storage completions delivered to answers, for `resettle`
+    let parked = [], resettling = [], deliveries = 0, current = null; // `deliveries`: storage completions delivered to answers, for `resettle`
+    const queued = new Set();
+    const dropParked = (list, keep) => list.filter(p => {
+      if ((p.request.target ?? null) === null || keep.has(key(p.request))) return true;
+      unindex(p.context.requests);
+      release(p.context.owner, p.answer.call);
+      p.done.reject(new Error('the runner let this answer go'));
+      return false;
+    });
     const finish = (answer, request) => {
-      const result = {...answer, reads:context.reads, writes:context.writes, externalRead:context.externalRead,entropy:context.entropy,topics:context.topics, leaseWrites:context.leaseWrites, secretEffect:context.secretEffect};
+      const result = {...answer, reads:context.reads, writes:context.writes, externalRead:context.externalRead,entropy:context.entropy,topics:context.topics, leaseWrites:context.leaseWrites, secretEffect:context.secretEffect, ...(context.clockRead ? {clockRead:true} : {}), ...(moduleClock ? {moduleClock:true} : {}), ...(moduleEntropy ? {moduleEntropy:true} : {})};
       if (answer.tag === 1) requestMaps.delete(answer.ticket);
       const reported = answer.tag === 1 ? context.early.get(answer.ticket) : null;
       for (const drop of context.early.values()) if (drop !== reported) drop();
@@ -291,18 +319,28 @@ export async function prepare(payload, admitted, id = nextId++) {
       context = null;
       return result;
     };
+    const cancelActive = (callId, done) => {
+      for (const drop of context?.early.values() ?? []) drop();
+      unindex(context?.requests);
+      release(context.owner, callId);
+      context = null;
+      done.reject(new Error('the runner let this answer go'));
+    };
     // An answer between its storage steps keeps its store context and the
     // realm's turn until its value is ready. One waiting behind the
     // background's storage parks and lets the turn go; a background delivery
     // asks it again (LLP 1097 D7).
-    const proceed = async (answer, request, done) => {
+    const proceed = async (answer, request, done, active) => {
       for (;;) {
         // A `scheduler.yield()`: its yields resolve in a task of their own.
         if (answer.tag === 1 && answer.yielded) {
           await checkpoint();
           if (disposed) throw new Error('module environment disposed');
+          if (active?.forgotten) { cancelActive(answer.call, done); return; }
           win.__exact_yielded(String(answer.call));
           await checkpoint();
+          if (disposed) throw new Error('module environment disposed');
+          if (active?.forgotten) { cancelActive(answer.call, done); return; }
           answer = JSON.parse(win.__exact_settle(String(answer.call)));
           continue;
         }
@@ -311,15 +349,18 @@ export async function prepare(payload, admitted, id = nextId++) {
           deliveries++;
           await checkpoint();
           if (disposed) throw new Error('module environment disposed');
+          if (active?.forgotten) { cancelActive(answer.call, done); return; }
           answer = JSON.parse(win.__exact_settle(String(answer.call)));
           continue;
         }
         if (answer.tag === 1 && answer.waiting) {
           if (disposed) throw new Error('module environment disposed'); // dispose rejected what was parked then
+          if (active?.forgotten) { cancelActive(answer.call, done); return; }
           parked.push({answer, request, context, done});
           context = null;
           return;
         }
+        if (active?.forgotten && answer.tag === 1) { cancelActive(answer.call, done); return; }
         done.resolve(finish(answer, request));
         return;
       }
@@ -336,15 +377,19 @@ export async function prepare(payload, admitted, id = nextId++) {
         const before = deliveries;
         if (owed.size) await finishLetGo(storage, owed, letGoHooks);
         if (disposed) return;
-        const waiting = parked; parked = [];
-        for (const p of waiting) {
+        resettling = parked; parked = [];
+        while (resettling.length) {
+          const p = resettling.shift();
           if (disposed) { p.done.reject(new Error('module environment disposed')); continue; }
+          const active = { request: p.request, forgotten: false };
+          current = active;
           context = p.context;
           try {
             const answer = JSON.parse(win.__exact_settle(String(p.answer.call)));
-            await proceed(answer, p.request, p.done);
+            await proceed(answer, p.request, p.done, active);
           }
-          catch (error) { for (const drop of context?.early.values() ?? []) drop(); storage.retire(context?.owner); context = null; p.done.reject(error); }
+          catch (error) { for (const drop of context?.early.values() ?? []) drop(); unindex(context?.requests); storage.retire(context?.owner); context = null; p.done.reject(error); }
+          finally { if (current === active) current = null; }
         }
         if (deliveries === before || !(parked.length || owed.size)) break;
       }
@@ -374,7 +419,7 @@ export async function prepare(payload, admitted, id = nextId++) {
     };
     const begin = request => {
       if (disposed) throw new Error('module environment disposed');
-      context = {owner:{},store:new Map(request.store),grants:new Set(request.grants),reads:[],writes:[],externalRead:false,entropy:false,topics:[],requests:new Map(),early:new Map(),clock:request.clock};
+      context = {owner:{},store:new Map(request.store),grants:new Set(request.grants),reads:[],writes:[],externalRead:false,entropy:false,clockRead:false,topics:[],requests:new Map(),early:new Map(),clock:request.clock,epoch:request.epoch};
       if (request.op === 'answer') return JSON.parse(win.__exact_call(request.source,JSON.stringify(request.args)));
       const parked = pending.get(key(request));
       if (!parked) throw new Error('reply for an answer not in flight');
@@ -392,13 +437,25 @@ export async function prepare(payload, admitted, id = nextId++) {
       // `request.store` is replaced at dispatch, on the runner's thread,
       // with the store as committed then (LLP 1027.002 D3, change 1).
       turns.set(token, {id, request, run: () => {
+        const entry = { request, forgotten: false };
+        queued.add(entry);
         const run = tail.then(async () => {
+          queued.delete(entry);
           if (disposed) throw new Error('module environment disposed');
+          if (entry.forgotten) throw new Error('the runner let this answer go');
+          current = entry;
           try {
             let answer = begin(request);
             if (answer.tag === 3) {
               await checkpoint();
               if (disposed) throw new Error('module environment disposed');
+              if (entry.forgotten) {
+                for (const drop of context?.early.values() ?? []) drop();
+                unindex(context?.requests);
+                release(context.owner, answer.call);
+                context = null;
+                throw new Error('the runner let this answer go');
+              }
               answer = JSON.parse(win.__exact_settle(String(answer.call)));
             }
             // Keep this answer's store context while its own storage is
@@ -406,12 +463,13 @@ export async function prepare(payload, admitted, id = nextId++) {
             // turn normally, and so does an answer that parks.
             const done = {}; done.promise = new Promise((resolve, reject) => { done.resolve = resolve; done.reject = reject; });
             const before = deliveries;
-            await proceed(answer, request, done);
+            await proceed(answer, request, done, entry);
             // In a turn of its own, after this one: a storage delivery may
             // have made a parked answer ready.
             if (deliveries !== before && (parked.length || owed.size)) { const again = tail.then(resettle); tail = again.catch(() => {}); }
             return done;
-          } catch (error) { for (const drop of context?.early.values() ?? []) drop(); storage.retire(context?.owner); context = null; throw error; }
+          } catch (error) { for (const drop of context?.early.values() ?? []) drop(); unindex(context?.requests); storage.retire(context?.owner); context = null; throw error; }
+          finally { if (current === entry) current = null; }
         });
         tail = run.catch(() => {});
         return run.then(done => done.promise);
@@ -450,12 +508,18 @@ export async function prepare(payload, admitted, id = nextId++) {
         if (disposed) return { error: 'module environment disposed' };
         const k = key(request), open = streams.get(k);
         if (!open) return { error: 'a message for a stream not open' };
+        const prev = context;
         context = {owner:{},store:new Map(request.store),grants:new Set(request.grants),reads:[],writes:[],externalRead:false,entropy:false,topics:[],requests:new Map(),early:new Map()};
         try {
           const answer = JSON.parse(win.__exact_message(String(open.call), JSON.stringify(request.outcome)));
           if (!request.outcome.message) { streams.delete(k); release(open.owner, open.call); }
           return finish(answer, request);
-        } catch (error) { context = null; return { error: String(error?.message ?? error) }; }
+        } catch (error) {
+          for (const drop of context?.early.values() ?? []) drop();
+          unindex(context?.requests);
+          storage.retire(context?.owner);
+          return { error: String(error?.message ?? error) };
+        } finally { context = prev; }
       },
       // The runner let go of every targeted call not in flight (LLP 1016 D5):
       // drop it, its storage owner, and its call in the prelude.
@@ -470,21 +534,20 @@ export async function prepare(payload, admitted, id = nextId++) {
           if (JSON.parse(streamKey)[0] === null || keep.has(streamKey)) continue;
           streams.delete(streamKey); release(open.owner, open.call);
         }
-        parked = parked.filter(p => {
-          if ((p.request.target ?? null) === null || keep.has(key(p.request))) return true;
-          unindex(p.context.requests);
-          release(p.context.owner, p.answer.call);
-          p.done.reject(new Error('the runner let this answer go'));
-          return false;
-        });
+        parked = dropParked(parked, keep);
+        resettling = dropParked(resettling, keep);
+        for (const entry of queued) {
+          if ((entry.request.target ?? null) !== null && !keep.has(key(entry.request))) entry.forgotten = true;
+        }
+        if (current && (current.request.target ?? null) !== null && !keep.has(key(current.request))) current.forgotten = true;
         forgetTurns(id, keep, key);
       },
       dispose() {
         disposed = true; forgetSecretTurns(id); storage.dispose(); pending.clear(); realms.delete(id); frame.remove();
         for (const [token,turn] of turns) if (turn.id === id) turns.delete(token);
         // A parked answer settles too, or a wait raced against it (`clock settle`) runs out its deadline.
-        for (const p of parked) p.done.reject(new Error('module environment disposed'));
-        parked = [];
+        for (const p of [...parked, ...resettling]) p.done.reject(new Error('module environment disposed'));
+        parked = []; resettling = []; queued.clear();
       },
     };
     realms.set(id, realm); return realm;
@@ -560,7 +623,7 @@ export function call(request) {
   if (request.op === 'dispatch') {
     const turn = turns.get(request.token);
     if (!turn || turn.id !== request.id) return { error: 'browser continuation is no longer live' };
-    turn.request.store = request.store; turn.request.grants = request.grants; turn.request.clock = request.clock;
+    turn.request.store = request.store; turn.request.grants = request.grants; turn.request.clock = request.clock; turn.request.epoch = request.epoch;
     return { ok: true };
   }
   if (request.op === 'discard') {
@@ -680,6 +743,7 @@ export async function run(token, deliver) {
       delete result.leaseWrites;
       for (const field of ['reads', 'writes', 'topics']) result[field] = [...carried[field], ...(result[field] ?? [])];
       result.externalRead ||= carried.externalRead; result.entropy ||= carried.entropy;
+      if (result.clockRead || carried.clockRead) result.clockRead = true;
       if (result.secret !== undefined) {
         // An answer holds one lease at a time: the completed one ends before the next is asked for.
         if (held && result.secretComplete) {

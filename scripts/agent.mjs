@@ -29,7 +29,7 @@
 //   tap @<id> <choice> | type @<id> <value> (by the node it answers at, or its capability: files F11)
 //   clock <ms|+ms|+ms real [until <path>]|settle|data|held [<target>…] [<n>s]|until state <path> == <literal> within
 //     <ms>> (+ms real until: a test harness's signal file, ending the real wait early; until state: the wall clock, the
-//     clock frozen, until state reads the JSON literal) | resize <w>x<h> | resize <w> <h> | post [<surface>] <text>
+//     clock frozen, until state reads the JSON literal) | fold <degrees> | rotate <orientation> | resize <w>x<h> | resize <w> <h> | post [<surface>] <text>
 //     (type <surface> message <text>: a world's Input::messages) | close | sample <x> <y> […] (extended linear sRGB on Apple, screenshot sRGB elsewhere
 //     under view points, LLP 1100 D12) | prefer <media feature or page fact> <value> […] | perf [<target>] [during
 //     "<op>" …] | perf frames [late <n>] | perf hatches [during "<op>" …] | perf streams [start]
@@ -81,6 +81,7 @@ import {
   layoutArgs,
 } from './agent-inspect.mjs';
 import { guardFlags } from './help.mjs';
+import { writeSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkOp } from './agent-check.mjs';
@@ -120,8 +121,9 @@ export {
   tapWords,
   pointerGap,
 } from './agent-keys.mjs';
+import { parsePreferArgs } from './agent-prefer.mjs';
 // `prefer`'s tables and the web carrier's CDP path
-export { LAUNCH_MEDIA, PREFERENCES, PAGE_FACTS, FOLD_FACTS, displayFeatures } from './agent-prefer.mjs';
+export { LAUNCH_MEDIA, PREFERENCES, PAGE_FACTS, FOLD_FACTS, displayFeatures, parsePreferArgs } from './agent-prefer.mjs';
 /** `fail fetch <url-prefix> [times <n>]` and `pass fetch <url-prefix>` as the `prefer` request with `faults` every
  * carrier answers (LLP 1103 D3): the network is the environment, so this is a form of `prefer`, not another
  * operation (LLP 1012 §1). */
@@ -143,6 +145,24 @@ export const heartbeat = ({ name, line, last, op, since }, now) => {
 };
 
 export const DRIVEN_HOSTS = ['web', 'macos', 'mac', 'ios', 'linux', 'android', 'windows', 'host', 'host-ios'];
+const RAW_CONSOLE_LOG = console.log;
+async function writeLine(text) {
+  if (console.log !== RAW_CONSOLE_LOG) { console.log(text); return; }
+  const buf = Buffer.from(`${text}\n`);
+  for (let off = 0; off < buf.length; ) {
+    try {
+      const n = writeSync(1, buf, off, buf.length - off);
+      if (n <= 0) await new Promise(ok => setTimeout(ok, 1));
+      else off += n;
+    } catch (e) {
+      if (e?.code === 'EAGAIN' || e?.code === 'EWOULDBLOCK') {
+        await new Promise(ok => setTimeout(ok, 1));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
 export async function main(argv, injected = {}) {
   const { flags, rest } = parseFlags(argv);
   guardFlags(flags.test ? 'test' : 'agent', rest, { parsed: true }); // --help, or a flag parseFlags left (never an op)
@@ -210,14 +230,16 @@ export async function main(argv, injected = {}) {
     beat.unref?.();
     return (await import('./app-server.mjs')).withAppServer(
       resolveApp(flags.app).dir,
-      async (running) => {
+      async (running, appServerUrl) => {
         const r = await (injected.runTests ?? runTests)({
           atLine,
           atResult: (t) => { at = null; report(t); },
           host,
           running,
+          appServerUrl,
           browser,
           file: flags.test,
+          only: flags.only,
           plan: flags.plan,
           app: flags.app,
           size: flags.size,
@@ -274,7 +296,7 @@ export async function main(argv, injected = {}) {
     const t = await readTrace(file, traceLocators, flags.plan);
     // A trace asked of a process is kept with its map, so it reads on any machine (LLP 1142 D2).
     if (flags.out || flags.pid) writeTrace(t, flags.out ?? file);
-    console.log(flags.json ? JSON.stringify(t) : renderTrace(t));
+    await writeLine(flags.json ? JSON.stringify(t) : renderTrace(t));
     return 0;
   }
   if (!host || !ops.length) {
@@ -322,6 +344,7 @@ export async function main(argv, injected = {}) {
             'fingers <2-5> [at <x> <y>] (fingers tapped together; iOS --touch platform: four open the dev menu)',
             'pinch <scale> [at <x> <y>]',
             'mediasession <action> [seconds]',
+            "swipe <left|right|up|down> [at <x> <y>] (the platform's swipe as a real 120-point flick; iOS --touch platform)",
             "pictureinpicture minimize|back|close|hover (Exact's picture-in-picture window, macOS)",
             'drag <dx> <dy> [from <x> <y>] [mouse: the left button, desktop pointers] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [into keyboard: iOS --touch platform, keyboard up; end above the screen bottom safe area] [during "<op>" …: after the move, the finger down; inside the hold under --touch platform] [then <dx> <dy> [over <ms>] [hold <ms>] [during "<op>" …]: another leg, same iOS touch]',
             'drag to <target> [at <x> <y>: from its top left] [same options]]',
@@ -340,6 +363,8 @@ export async function main(argv, injected = {}) {
             "post [<surface>] <text> (one word or one quoted string: a message the world reads from Input::messages next tick, as the page's postMessage(text, surface) sends it; no surface, the page's one world)",
             'tap @N|@<id> <choice>',
             'type @N|@<id> <value>',
+            'rotate portrait|portraitUpsideDown|landscapeLeft|landscapeRight (iOS simulator scene orientation)',
+            'fold <degrees> (0 through 180 on an iOS simulator with a hinge)',
             'background <milliseconds> (iOS: leave the app for real time, then resume the same session)',
             "clock <ms|+ms|+ms real [until <path>]|settle|data|held [<target>…] [<n>s]|until state <path> == <literal> within <ms> (real time, the clock frozen, until state <path> reads the JSON literal; a miss fails naming the last value: a stream's state after its first message)>",
             'sample <x> <y> […]',
@@ -403,6 +428,7 @@ export async function main(argv, injected = {}) {
     try {
       return await (injected.open ?? open)({
         host,
+        appServerUrl: served?.url,
         browser,
         ax: ops.some(line => /^\s*tree\s+--ax(?:\s|$)/.test(line)),
         env: {
@@ -547,7 +573,8 @@ export async function main(argv, injected = {}) {
         // `tap hold`, `tap up`, `tap cancel` only while a contact is down;
         // with none down those words are targets like any other.
         if (holdOf(args[0]))
-          r = await s.tap(args[0], { choice: args[1] }); // `tap @7 cancel` is the hold, even while a contact is down
+          // `tap @7 cancel` is the hold, even while a contact is down; `tap @7 swipe down`, a swipe, is refused
+          r = await s.tap(args[0], args[1] === 'swipe' && args[2] !== undefined ? { swipe: args[2] } : { choice: args[1] });
         else if (args[1] === 'drag' && !(s.contact && ['move', 'hold', 'up', 'cancel'].includes(args[0]))) {
           const tail = named ? named[3] : trimmed.replace(/^\S+\s+\S+\s+/, '');
           const drag = parseDrag(s, tail.replace(/^drag(?:\s+|$)/, ''));
@@ -563,6 +590,13 @@ export async function main(argv, injected = {}) {
           const [target, { phase, ...opts }] = tapWords(args, !!s.contact);
           r = target === null && !opts.midi ? await s.pointer(phase, opts) : await s.tap(target, opts);
         }
+        break;
+      case 'rotate':
+        r = await s.rotate(args.join(' '));
+        break;
+      case 'fold':
+        if (args.length !== 1 || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(args[0])) throw new MalformedOperation('fold <degrees> (0 through 180)');
+        r = await s.fold(Number(args[0]));
         break;
       case 'background':
         if (args.length !== 1 || !/^\d+$/.test(args[0])) throw new MalformedOperation('background <milliseconds>');
@@ -592,11 +626,7 @@ export async function main(argv, injected = {}) {
         break;
       // A module's value is the line's whole tail, so a JSON string keeps its spaces (`…heard="pick up milk"`).
       case 'prefer':
-        r = await s.prefer(
-          args[0] === 'extension' && args.length > 2
-            ? { extension: trimmed.replace(/^prefer\s+extension\s+/, '') }
-            : Object.fromEntries(args.flatMap((a, i) => (i % 2 ? [] : [[a, args[i + 1]]]))),
-        );
+        r = await s.prefer(parsePreferArgs(trimmed));
         break;
       // A system's call of a tool (LLP 1133.023 §10): `call <tool> <json> [--door <door>]`, run as the door would.
       case 'call': {
@@ -636,7 +666,7 @@ export async function main(argv, injected = {}) {
         );
       default:
         throw new MalformedOperation(
-          `unknown op: ${op} (tree, layout, state, logs, check, screenshot, sample, tap, type, post, pick, reload, clock, background, resize, close, back, prefer, call, perf, fail fetch, pass fetch)`,
+          `unknown op: ${op} (tree, layout, state, logs, check, screenshot, sample, tap, type, post, pick, reload, clock, background, fold, rotate, resize, close, back, prefer, call, perf, fail fetch, pass fetch)`,
         );
     }
     return [op, r, how];
@@ -666,7 +696,7 @@ export async function main(argv, injected = {}) {
       at = k + 1;
       const done = await step(line);
       for (const [op, r, how] of [...(s.heldReads?.splice(0) ?? []), ...(done ? [done] : [])]) {
-        console.log(flags.json ? JSON.stringify(r) : render(op, r, how));
+        await writeLine(flags.json ? JSON.stringify(r) : render(op, r, how));
         await notes(op, r);
       }
     }
@@ -690,17 +720,23 @@ export async function main(argv, injected = {}) {
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const flush = stream => new Promise(ok => stream.write('', ok));
+  const finish = async code => {
+    await flush(process.stdout);
+    await flush(process.stderr);
+    process.exit(code);
+  };
   (await import('./tool-drive.mjs'))
     .toolDrive('agent', process.argv.slice(2))
     .then(main)
     .then(
-      code => process.exit(code),
+      code => finish(code),
       e => {
         if (refusalMessage(e.reply)) console.error(refusalMessage(e.reply));
         else console.error(e.message);
         if (process.env.EXACT_AGENT_DEBUG || process.argv.includes('--json')) console.error(e.stack);
         if (e.steps && !refusalMessage(e.reply)) console.error(render('type', { steps: e.steps }));
-        process.exit(e.stale ? 3 : 1);
+        return finish(e.stale ? 3 : 1);
       },
     );
 }

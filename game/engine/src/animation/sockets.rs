@@ -109,31 +109,35 @@ pub fn socket(w: &World, target: impl crate::Target, joint: &str) -> Result<Tran
         position,
     })
 }
+const MAX_ATTACHMENT_DEPTH: usize = 64;
+
+enum SocketError {
+    Missing(String),
+    Cycle(String),
+}
+impl SocketError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Missing(m) | Self::Cycle(m) => m,
+        }
+    }
+}
+
 /// Full affine tick-boundary socket, preserving shear from non-uniform ancestors.
 pub fn socket_matrix(w: &World, target: impl crate::Target, joint: &str) -> Result<Mat4, String> {
     let e = target
         .entity(w)
         .ok_or_else(|| format!("socket target does not exist: `{}`", target.label()))?;
-    socket_matrix_with(w, e, joint, w.len() + 1)
-}
-pub(crate) fn socket_matrix_with(
-    w: &World,
-    e: Entity,
-    joint: &str,
-    remaining: usize,
-) -> Result<Mat4, String> {
     let label = || {
         w.name(e)
             .map(str::to_owned)
             .unwrap_or_else(|| format!("#{}", e.index()))
     };
-    if remaining == 0 {
-        return Err(format!("socket target `{}` has a follower cycle", label()));
-    }
     if socket_stale(w, e) {
         return Err(format!("socket target `{}` has a stale pose; call animation::step(w), apply Motion, then query socket", label()));
     }
-    compose_socket(w, e, joint, remaining)
+    let mut visited = Vec::new();
+    compose_socket(w, e, joint, &mut visited).map_err(SocketError::into_message)
 }
 /// Whether an animated socket needs this tick's animation step. Setup's bind pose is valid.
 pub fn socket_stale(w: &World, e: Entity) -> bool {
@@ -148,36 +152,54 @@ pub fn socket_stale(w: &World, e: Entity) -> bool {
                     .checked_sub(1)
                     .is_some_and(|tick| stepped == Some(tick)))))
 }
-fn compose_socket(w: &World, e: Entity, joint: &str, remaining: usize) -> Result<Mat4, String> {
-    if remaining == 0 {
-        return Err("socket follower cycle".into());
-    }
-    let label = w.name(e).unwrap_or("unnamed");
-    let pose = w.get::<Pose>(e);
-    let node = socket_node(w, e, joint)?;
-    let mesh = w.get::<Mesh>(e).unwrap();
-    let Mesh::Asset(name) = &*mesh else {
-        unreachable!()
+fn compose_socket(
+    w: &World,
+    e: Entity,
+    joint: &str,
+    visited: &mut Vec<Entity>,
+) -> Result<Mat4, SocketError> {
+    let label = w.name(e).unwrap_or("unnamed").to_owned();
+    let node = socket_node(w, e, joint).map_err(SocketError::Missing)?;
+    // Drop row leases before stepping to ancestors so deep chains hold O(1) leases.
+    let joint_mat = {
+        let pose = w.get::<Pose>(e);
+        let mesh = w.get::<Mesh>(e).unwrap();
+        let Mesh::Asset(name) = &*mesh else {
+            unreachable!()
+        };
+        let model = w.model(name).ok_or_else(|| {
+            SocketError::Missing(format!(
+                "socket target `{label}` needs declared model `{name}`"
+            ))
+        })?;
+        let rest;
+        let local = if let Some(pose) = &pose {
+            if pose.local.len() != model.nodes.len() * 10 {
+                return Err(SocketError::Missing(format!(
+                    "saved pose on `{label}` does not match model `{name}`"
+                )));
+            }
+            &pose.local
+        } else {
+            rest = bind_pose(model);
+            &rest
+        };
+        joint_matrix(model, local, node)
     };
-    let model = w
-        .model(name)
-        .ok_or_else(|| format!("socket target `{label}` needs declared model `{name}`"))?;
-    let rest;
-    let local = if let Some(pose) = &pose {
-        if pose.local.len() != model.nodes.len() * 10 {
-            return Err(format!(
-                "saved pose on `{label}` does not match model `{name}`"
-            ));
+    let global = match w.current_global_visited(e, visited) {
+        Ok(Some(global)) => global,
+        Ok(None) => {
+            return Err(SocketError::Missing(format!(
+                "socket target `{label}` has no Transform"
+            )));
         }
-        &pose.local
-    } else {
-        rest = bind_pose(model);
-        &rest
+        Err(()) => {
+            return Err(SocketError::Cycle(format!(
+                "socket target `{label}` has a follower cycle"
+            )));
+        }
     };
-    let global = w.current_global_depth(e, remaining - 1).ok_or_else(|| {
-        format!("socket target `{label}` has no Transform or has a follower cycle")
-    })?;
-    Ok(Mat4::from(global) * joint_matrix(model, local, node))
+    Ok(Mat4::from(global) * joint_mat)
 }
 
 impl Component for SocketFollow {
@@ -186,26 +208,115 @@ impl Component for SocketFollow {
         w.register::<Pose>();
         w.attachments = Some(crate::world::Attachments {
             pose: follower_pose,
+            validate: validate_attachments,
         });
     }
 }
-fn follower_pose(w: &World, e: Entity, remaining: usize) -> Option<crate::Affine3A> {
-    let follow = w.get::<SocketFollow>(e)?;
-    let target = match &follow.target {
-        crate::FollowTarget::Entity(e) => *e,
-        crate::FollowTarget::Name(n) => w.named(n)?,
+fn follower_pose(w: &World, e: Entity, visited: &mut Vec<Entity>) -> crate::world::AttachmentPose {
+    let Some((target, joint, offset)) = (|| {
+        let follow = w.get::<SocketFollow>(e)?;
+        let target = match &follow.target {
+            crate::FollowTarget::Entity(e) => *e,
+            crate::FollowTarget::Name(n) => w.named(n)?,
+        };
+        Some((target, follow.joint.clone(), follow.offset))
+    })() else {
+        return crate::world::AttachmentPose::None;
     };
     if !w.contains(target) {
-        return None;
+        return crate::world::AttachmentPose::None;
     }
-    let socket = compose_socket(w, target, &follow.joint, remaining).ok()?;
-    let pose = crate::Affine3A::from_mat4(socket)
-        * crate::Affine3A::from_scale_rotation_translation(
-            follow.offset.scale,
-            follow.offset.rotation,
-            follow.offset.position,
-        );
-    Some(pose)
+    if visited.len() >= MAX_ATTACHMENT_DEPTH || visited.contains(&e) {
+        return crate::world::AttachmentPose::Cycle;
+    }
+    visited.push(e);
+    let result = compose_socket(w, target, &joint, visited);
+    visited.pop();
+    match result {
+        Ok(socket) => crate::world::AttachmentPose::Pose(
+            crate::Affine3A::from_mat4(socket)
+                * crate::Affine3A::from_scale_rotation_translation(
+                    offset.scale,
+                    offset.rotation,
+                    offset.position,
+                ),
+        ),
+        Err(SocketError::Missing(_)) => crate::world::AttachmentPose::None,
+        Err(SocketError::Cycle(_)) => crate::world::AttachmentPose::Cycle,
+    }
+}
+fn validate_attachments(w: &World, r: &mut dyn crate::Reader) -> Result<(), crate::DataError> {
+    let Some(followers) = w.storage::<SocketFollow>() else {
+        return Ok(());
+    };
+    if followers.is_empty() {
+        return Ok(());
+    }
+    let slots = w.alive_mask.len() * 64;
+    let mut marks = Vec::new();
+    crate::data::limits::reserve(r, &mut marks, slots)?;
+    marks.resize(slots, 0u8);
+    let mut starts = Vec::new();
+    crate::data::limits::reserve(r, &mut starts, followers.len())?;
+    starts.extend(w.query::<&SocketFollow>().iter().map(|(e, _)| e));
+    let mut stack: Vec<(Entity, u8)> = Vec::new();
+    let socket_target = |u: Entity| -> Option<Entity> {
+        let follow = w.get::<SocketFollow>(u)?;
+        let target = match &follow.target {
+            crate::FollowTarget::Entity(e) => *e,
+            crate::FollowTarget::Name(n) => w.named(n)?,
+        };
+        w.contains(target).then_some(target)
+    };
+    let parent_target = |u: Entity| -> Option<Entity> {
+        w.get::<crate::Parent>(u)
+            .map(|p| p.0)
+            .filter(|p| w.contains(*p))
+    };
+    for start in starts {
+        let idx = start.index() as usize;
+        if marks[idx] != 0 {
+            continue;
+        }
+        marks[idx] = 1;
+        crate::data::limits::reserve(r, &mut stack, 1)?;
+        stack.push((start, 0));
+        while let Some(&mut (u, ref mut edge)) = stack.last_mut() {
+            let next = match *edge {
+                0 => {
+                    *edge = 1;
+                    socket_target(u)
+                }
+                1 => {
+                    *edge = 2;
+                    parent_target(u)
+                }
+                _ => {
+                    marks[u.index() as usize] = 2;
+                    stack.pop();
+                    continue;
+                }
+            };
+            if let Some(v) = next {
+                let vi = v.index() as usize;
+                match marks[vi] {
+                    1 => {
+                        return Err(crate::DataError::new(format!(
+                            "SocketFollow cycle at #{}",
+                            v.index()
+                        )));
+                    }
+                    0 => {
+                        marks[vi] = 1;
+                        crate::data::limits::reserve(r, &mut stack, 1)?;
+                        stack.push((v, 0));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -230,5 +341,72 @@ mod apply_tests {
         motion.apply_local(&w, "fox");
         assert_eq!(w.require::<Transform>("fox").position, expected.position);
         assert!(motion.crossed("fox", "step"));
+    }
+
+    #[test]
+    fn socket_follow_cycles_terminate_without_overflow_and_refuse_on_load() {
+        let mut w = World::new(60, 0);
+        w.register::<Transform>()
+            .register::<crate::Parent>()
+            .register::<Mesh>()
+            .register::<SocketFollow>();
+        let model = crate::asset::Model {
+            nodes: vec![crate::asset::Node {
+                name: "j".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        w.assets.declared.insert("rig.model".into());
+        w.assets.models.insert("rig.model".into(), model.into());
+        let a = w.spawn_named("a", (Transform::at(1., 0., 0.), Mesh::asset("rig.model")));
+        let b = w.spawn_named("b", (Transform::at(2., 0., 0.), Mesh::asset("rig.model")));
+        w.insert(a, SocketFollow::new(b, "j"));
+        w.insert(b, SocketFollow::new(a, "j"));
+        // Pad to 25,000 entities so an unguarded O(world.len()) walk would overflow the stack.
+        for _ in 0..25_000 {
+            w.spawn(());
+        }
+        assert!(w.global(a).is_none());
+        assert!(w.globals().get(a).is_none());
+        let err = socket_matrix(&w, a, "j").unwrap_err();
+        assert!(err.contains("cycle"), "{err}");
+        let save = w.save();
+        let mut restored = World::new(60, 0);
+        restored
+            .register::<Transform>()
+            .register::<crate::Parent>()
+            .register::<Mesh>()
+            .register::<SocketFollow>();
+        let load_err = restored.load(&save).unwrap_err();
+        assert!(load_err.to_string().contains("cycle"), "{load_err}");
+
+        // Mixed Parent + SocketFollow cycle.
+        let mut mixed = World::new(60, 0);
+        mixed
+            .register::<Transform>()
+            .register::<crate::Parent>()
+            .register::<Mesh>()
+            .register::<SocketFollow>();
+        mixed.assets.declared.insert("rig.model".into());
+        mixed.assets.models.insert(
+            "rig.model".into(),
+            crate::asset::Model {
+                nodes: vec![crate::asset::Node {
+                    name: "j".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+            .into(),
+        );
+        let c = mixed.spawn((Transform::at(1., 0., 0.), Mesh::asset("rig.model")));
+        let d = mixed.spawn((Transform::at(2., 0., 0.), Mesh::asset("rig.model")));
+        mixed.insert(c, crate::Parent(d));
+        mixed.insert(d, SocketFollow::new(c, "j"));
+        assert!(mixed.global(c).is_none());
+        assert!(mixed.global(d).is_none());
+        assert!(socket_matrix(&mixed, c, "j").unwrap_err().contains("cycle"));
+        assert!(restored.load(&mixed.save()).is_err());
     }
 }

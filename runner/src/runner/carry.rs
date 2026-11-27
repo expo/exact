@@ -54,6 +54,11 @@ pub struct Carried {
     /// is not asked again by a store change after the reload either
     /// (LLP 1069.005 D2).
     pub read_contents: Vec<(String, String, bool)>,
+    /// (Resource name, source name) pairs whose answer read the ambient clock
+    /// (LLP 1195.000 D2.2): excluded from carry across a launch whose epoch changed.
+    pub clock_readers: Vec<(String, String)>,
+    /// Launch wall-clock epoch at `clock_ms == 0` when this carry was taken.
+    pub epoch_at_zero: f64,
     /// The clock, milliseconds.
     pub now_ms: f64,
     /// The store's kept values (LLP 1018): what the host has persisted.
@@ -87,6 +92,8 @@ impl Carried {
         self.store_readers = validated.store_readers;
         self.keepers = validated.keepers;
         self.read_contents = validated.read_contents;
+        self.clock_readers = validated.clock_readers;
+        self.epoch_at_zero = validated.epoch_at_zero;
         self
     }
 
@@ -235,12 +242,60 @@ impl<D: super::DataSource> super::Runner<D> {
                     )
                 })
                 .collect(),
+            clock_readers: self.declared_where(|i| self.resource_ambient_taint(i).0),
+            epoch_at_zero: self.time.epoch_at_zero,
             now_ms: self.now_ms,
             store: self.store.snapshot(),
             forgot_waiting: self.queued(),
             faults: (!self.faults.is_empty()).then(|| self.faults.spec()),
             modes: self.modes(),
             uploads: self.carried_uploads(),
+        }
+    }
+
+    /// Adopt carried resource answers at boot (LLP 1007 §6) while excluding
+    /// ambient `clock_reader` answers when the launch epoch changed by at least
+    /// one second (LLP 1195.000 D2.2).
+    pub(super) fn adopt_carried_resources(&mut self, carried: Option<&Carried>, same_logic: bool) {
+        let Some(c) = carried.filter(|_| same_logic) else {
+            return;
+        };
+        let epoch_changed = (self.time.epoch_at_zero - c.epoch_at_zero).abs() >= 1000.0;
+        let carried_states: Vec<_> = (0..self.plan.resources.len())
+            .map(|i| {
+                let name = self.plan.str(self.plan.resources[i].name);
+                let source = self.plan.str(self.plan.resources[i].source);
+                let is_clock = c
+                    .clock_readers
+                    .iter()
+                    .any(|(n, s)| n == name && s == source);
+                if is_clock && epoch_changed {
+                    return (true, None);
+                }
+                let state = c
+                    .resources
+                    .iter()
+                    .find(|(n, s, _, _)| n == name && s == source)
+                    .filter(|(_, _, _, value)| self.check_shape(i, value).is_ok())
+                    .map(|(_, _, args, value)| super::ResourceState {
+                        inspection_generation: 0,
+                        args: args.clone(),
+                        value: crate::held::Held::new(value.clone()),
+                        store_revision: self.store.revision(),
+                        placeholder: false,
+                        kept_seed: false,
+                        from_page: false,
+                        answered_for: None,
+                        asleep: false,
+                        slept: false,
+                        origin: 0,
+                    });
+                (is_clock, state)
+            })
+            .collect();
+        for (row, (is_clock, state)) in self.resources.iter_mut().zip(carried_states) {
+            row.clock_reader |= is_clock;
+            row.state = state;
         }
     }
 }

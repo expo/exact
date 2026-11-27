@@ -106,6 +106,8 @@ impl Table {
                 patterns.push(segments);
             }
             let own = names_in(&route.pattern);
+            let own_canonical = canonical(&route.pattern);
+            let own_segs = segments(&own_canonical);
             let mut seen = vec![i];
             let mut parent = route.parent;
             while let Some(p) = parent {
@@ -116,10 +118,13 @@ impl Table {
                         format!("invalid or cyclic parent of {}", route.name),
                     ));
                 };
+                let anc_canonical = canonical(&ancestor.pattern);
+                let anc_segs = segments(&anc_canonical);
                 if ancestor.notfound
-                    || names_in(&ancestor.pattern)
-                        .iter()
-                        .any(|name| !own.contains(name))
+                    || (!is_structural_prefix(&anc_segs, &own_segs)
+                        && names_in(&ancestor.pattern)
+                            .iter()
+                            .any(|name| !own.contains(name)))
                 {
                     return Err(reject(
                         "route-parent-param",
@@ -313,25 +318,40 @@ impl Table {
             indices.push(root);
         }
         indices.reverse();
+        let leaf_canonical =
+            (!self.routes[index].notfound).then(|| canonical(&self.routes[index].pattern));
+        let leaf_segs = leaf_canonical.as_deref().map(segments);
+        let url_parts = segments(url.split('?').next().unwrap_or(&url));
         indices
             .into_iter()
             .map(|i| {
                 let route = &self.routes[i];
+                let anc_canonical = canonical(&route.pattern);
+                let anc_segs = segments(&anc_canonical);
+                let positional = i != index
+                    && leaf_segs
+                        .as_deref()
+                        .is_some_and(|leaf| is_structural_prefix(&anc_segs, leaf));
+                let mut own = self.empty_params();
+                let mut values: Vec<String> = Vec::new();
+                for (j, segment) in anc_segs.iter().enumerate() {
+                    let Some(name) = segment.strip_prefix(':') else {
+                        continue;
+                    };
+                    let value = if positional {
+                        decode(url_parts[j], false)
+                    } else {
+                        params.get(name).cloned().unwrap_or_default()
+                    };
+                    own.insert(name.into(), value.clone());
+                    values.push(value);
+                }
                 let entry_url = if i == index {
                     url.clone()
                 } else {
-                    let values: Vec<&str> = names_in(&route.pattern)
-                        .iter()
-                        .map(|name| params.get(name).map(String::as_str).unwrap_or(""))
-                        .collect();
-                    canonical(&self.path(&route.name, &values).unwrap_or_default())
+                    let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+                    canonical(&self.path(&route.name, &refs).unwrap_or_default())
                 };
-                let mut own = self.empty_params();
-                for name in names_in(&route.pattern) {
-                    if let Some(value) = params.get(name) {
-                        own.insert(name.into(), value.clone());
-                    }
-                }
                 Destination {
                     name: route.name.clone(),
                     url: entry_url,
@@ -403,6 +423,19 @@ fn segments(path: &str) -> Vec<&str> {
     } else {
         path.strip_prefix('/').unwrap_or(path).split('/').collect()
     }
+}
+
+/// Whether `ancestor` is a structural prefix of `descendant` (LLP 1156.008.000 D3):
+/// each ancestor segment matches positionally by literal equality or parameter slot.
+fn is_structural_prefix(ancestor: &[&str], descendant: &[&str]) -> bool {
+    ancestor.len() <= descendant.len()
+        && ancestor.iter().zip(descendant).all(|(a, b)| {
+            if a.starts_with(':') {
+                b.starts_with(':')
+            } else {
+                a == b
+            }
+        })
 }
 
 /// Whether `item` is new to `seen`, adding it. A table's names, a pattern's

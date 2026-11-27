@@ -218,21 +218,36 @@ fn session_transport_reads_the_runtime_host_and_is_not_baked() {
 #[test]
 fn initialization_and_captured_aliases_cannot_obtain_ambient_inputs() {
     let mut module = module();
+    let timer_forms = ["interval", "computed-interval", "frame"];
     for &(form, api) in FORMS {
         let message = module.query("atInit", &[Value::str(form)]).unwrap();
-        diagnostic(message.as_str().unwrap(), api);
-        // query is also the no-store bake path.
-        refused(module.query("ambient", &[Value::str(form)]), api);
+        let text = message.as_str().unwrap();
+        if timer_forms.contains(&form) {
+            diagnostic(text, api);
+            refused(module.query("ambient", &[Value::str(form)]), api);
+        } else {
+            // Virtualized clock & Math.random() succeed at init and in answers (LLP 1195.000 D2).
+            assert!(
+                text.starts_with("UNGUARDED: "),
+                "{form} at init should run virtualized, got: {text}"
+            );
+            assert!(
+                module.query("ambient", &[Value::str(form)]).is_ok(),
+                "{form} should succeed virtualized"
+            );
+        }
     }
-    let error = Module::loaded(INIT_HBC.to_vec(), APP, GRANTS).unwrap_err();
-    assert!(error.contains("module did not load"), "{error}");
-    diagnostic(&error, "Date.now()");
+    // Module-level Date.now() + imported inputs.ts Math.random() load cleanly and
+    // latch module-sticky clock & entropy taint (LLP 1195.000 D2.5).
+    let init_mod = Module::loaded(INIT_HBC.to_vec(), APP, GRANTS).unwrap();
+    assert_eq!(init_mod.ambient_taint(""), (true, true));
 }
 
 #[test]
 fn ambient_reads_still_refuse_after_the_host_fulfills_a_fetch() {
     let mut module = module();
     let mut store = Store::new(GRANTS, vec![]);
+    let timer_forms = ["interval", "computed-interval", "frame"];
     for &(form, api) in FORMS {
         let args = [Value::str(form)];
         assert!(matches!(
@@ -245,7 +260,14 @@ fn ambient_reads_still_refuse_after_the_host_fulfills_a_fetch() {
                 Answer::Now(value) => value,
                 Answer::Later(_) => panic!("second request"),
             });
-        refused(result, api);
+        if timer_forms.contains(&form) {
+            refused(result, api);
+        } else {
+            assert!(
+                result.is_ok(),
+                "{form} after fetch should succeed virtualized: {result:?}"
+            );
+        }
     }
     assert_eq!(module.in_flight(), 0);
 }
@@ -360,19 +382,35 @@ fn new_date_formatters_follow_the_system_time_zone() {
 
 #[test]
 fn bake_refuses_ambient_reads_and_keeps_explicit_inputs_as_compiled_data() {
+    let timer_forms = ["interval", "computed-interval", "frame"];
     for &(form, api) in FORMS {
         let source = SRC.replace("explicit(elapsedMs, seed)", &format!("ambient(\"{form}\")"));
         let mut baking = Module::inspect(HBC.to_vec()).unwrap();
         baking.set_budget_ms(f64::INFINITY);
-        let error = contract::bake(contract::compile(&source).unwrap(), baking).unwrap_err();
-        diagnostic(&error.to_string(), api);
+        if timer_forms.contains(&form) {
+            let error = contract::bake(contract::compile(&source).unwrap(), baking).unwrap_err();
+            diagnostic(&error.to_string(), api);
+        } else {
+            // Virtualized clock & Math.random() bake cleanly while excluding tainted answers (LLP 1195.000 D2).
+            let baked = contract::bake(contract::compile(&source).unwrap(), baking).unwrap();
+            let row = &baked.resources[0];
+            assert_eq!(
+                row.initial.len, 0,
+                "{form}: tainted answer must not be baked"
+            );
+            if form.contains("random") {
+                assert!(row.reader, "{form}: entropy draw marks reader");
+            }
+        }
     }
+    // `inputs.ts` runs Date.now() and Math.random() at module initialization (`atInit`),
+    // so module-sticky taint excludes its answers from bake (LLP 1195.000 D2.5).
     let a = contract::bake(plan(), module()).unwrap();
     let b = contract::bake(plan(), module()).unwrap();
     assert_eq!(a.encode(), b.encode());
-    assert!(
-        a.resources[0].initial.len > 0,
-        "explicit boot inputs can be baked"
+    assert_eq!(
+        a.resources[0].initial.len, 0,
+        "module-sticky init taint excludes answers from bake"
     );
 }
 

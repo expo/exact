@@ -1,9 +1,9 @@
 // app.json keys the web manifest standard defines (scripts/app.schema.json).
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 test('launch modules must provide a part for every declared host', async () => {
   const { buildBake, readManifest } = await import('./app.mjs');
@@ -72,6 +72,93 @@ test('Apple Swift products require a URL, exact semantic version and named produ
     assert.ok(assertSwiftLock(app([dependency]), graph).length);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test.skipIf(process.platform !== 'darwin')('shipped Swift products are contained, checked by SwiftPM and counted as native inputs', async () => {
+  const { swiftPackageGraph, assertSwiftLock, packageCompiler } = await import('../host/apple/compose.mjs');
+  const { swiftPackageInventories, swiftPackageInputChanged } = await import('./package-libraries.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'shipped-swift-')), root = resolve(dir, 'node_modules/probe');
+  const source = resolve(root, 'apple/exact.json'), kit = resolve(root, 'apple/Kit'), file = resolve(kit, 'Package.swift');
+  const local = { path: 'Kit', products: ['Kit'] }, remote = { url: 'https://example.org/vendor.git', exactVersion: '1.2.3', products: ['Vendor'] };
+  const app = { dir, manifest: {} };
+  const bound = entries => [{ swiftPackageRoot: root, swiftPackageInterface: 'probe', swiftPackagesSource: source, swiftPackages: entries }];
+  const graph = (entries = [local]) => {
+    writeFileSync(source, JSON.stringify({ kind: 'implementation', implements: 'probe@1.0.0', targets: ['macos'], swiftPackages: entries }));
+    return swiftPackageGraph(app, bound(entries));
+  };
+  const manifest = (dependencies = '', flags = '') => writeFileSync(file, `// swift-tools-version:5.9
+import PackageDescription
+let package = Package(name: "Example", products: [.library(name: "Kit", targets: ["Lib"])],
+  dependencies: [${dependencies}], targets: [.target(name: "Lib", swiftSettings: [${flags}])])
+`);
+  try {
+    mkdirSync(kit, { recursive: true });
+    writeFileSync(resolve(root, 'package.json'), JSON.stringify({ name: 'probe', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+    writeFileSync(resolve(root, 'exact.json'), JSON.stringify({ kind: 'interface', name: 'probe' }));
+    assert.throws(() => graph(), /Kit has no Package.swift/);
+    for (const path of [kit, '../../outside', './Kit', 'a/../Kit', 'Bad\\Kit', 'Map Kit']) {
+      assert.throws(() => graph([{ ...local, path }]), error => error.message.includes(JSON.stringify(path)) && error.message.includes('swiftPackages'));
+    }
+    symlinkSync(dir, resolve(kit, 'outside'));
+    manifest();
+    assert.throws(() => graph(), /outside escapes/);
+    rmSync(resolve(kit, 'outside'));
+    mkdirSync(resolve(root, 'apple/.swiftpm'));
+    symlinkSync('../Kit', resolve(root, 'apple/.swiftpm/Alias.git'));
+    assert.equal(graph([{ path: '.swiftpm/Alias.git', products: ['Kit'] }])[0].identity, 'alias');
+    const [p] = graph();
+    assert.equal(p.identity, 'kit');
+    assert.equal(assertSwiftLock(app, [p]), null);
+    const implementation = resolve(root, 'apple/Bridge.swift'), dest = resolve(dir, 'macos');
+    mkdirSync(resolve(kit, 'Sources/Lib'), { recursive: true });
+    writeFileSync(resolve(kit, 'Sources/Lib/Value.swift'), 'public func value() -> Int { 1327 }');
+    writeFileSync(implementation, `import ExactPackage
+import Lib
+public final class Bridge: ExactPackage {
+    public init(context: ExactPackageContext) {}
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) { reply(["value": value()]) }
+}`);
+    const pkg = { ...bound([local])[0], module: 'ExactPkg_probe', className: 'Bridge', sources: [implementation] };
+    const compiler = packageCompiler({ app, packages: [pkg], extensions: {}, packageDir: dest, packagesRoot: dir, packageCopies: [[implementation]],
+      packageTargets: new Map([[dest, ['macosx', ['-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macosx14.0`]]]]),
+      swiftInputs: swiftPackageInventories(app, [pkg], 'macos').map(input => ({ ...input, identity: Object.fromEntries(Object.entries(input.identity).reverse()) })),
+      seam: resolve(import.meta.dir, '../host/apple/modules/ExactPackage.swift') });
+    const copied = resolve(compiler.graph[0].path, 'Sources/Lib/Value.swift'), captured = readFileSync(copied);
+    writeFileSync(copied, 'public func value() -> Int { 0 }');
+    assert.throws(() => compiler.place(dest), /cached Swift package changed/);
+    writeFileSync(copied, captured);
+    compiler.place(dest);
+    assert.ok(readFileSync(resolve(dest, 'libExactPkg_probe.dylib')).length);
+    const [{ identity }] = swiftPackageInventories(app, bound([local]), 'macos');
+    assert.equal(swiftPackageInputChanged(dir, identity), false);
+    mkdirSync(resolve(root, '.build'));
+    writeFileSync(resolve(root, '.build/CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55');
+    writeFileSync(resolve(root, '.build/log'), 'SwiftPM scratch');
+    assert.equal(swiftPackageInputChanged(dir, identity), false);
+    writeFileSync(resolve(root, 'flavor.txt'), 'a manifest input outside Kit');
+    assert.equal(swiftPackageInputChanged(dir, identity), true);
+    assert.throws(() => swiftPackageGraph({ dir, manifest: { host: { ios: { swiftPackages: [local] } } } }), /app.json.*swiftPackages/);
+    assert.throws(() => graph([{ ...local, products: ['Missing'] }]), /Kit.*does not declare product Missing/);
+    assert.throws(() => graph([local, { ...remote, url: 'https://example.org/kit' }]), /conflict.*Kit.*example.org/);
+    const second = resolve(root, 'apple/v:2/Kit');
+    mkdirSync(second, { recursive: true });
+    writeFileSync(resolve(second, 'Package.swift'), readFileSync(file));
+    assert.equal(graph([{ path: 'v:2/Kit', products: ['Kit'] }])[0].identity, 'kit');
+    assert.throws(() => graph([local, { path: 'v:2/Kit', products: ['Kit'] }]), /conflict.*apple\/Kit.*apple\/v:2\/Kit/);
+    manifest('', '.unsafeFlags(["-O"], .when(configuration: .release))');
+    assert.throws(() => graph(), /Package.swift: Lib uses unsafeFlags/);
+    manifest('', 'ProcessInfo.processInfo.environment["EXACT_FIXTURE_UNUSED"] == nil ? .define("SAFE") : .unsafeFlags(["-O"])');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('import PackageDescription', 'import PackageDescription\nimport Foundation'));
+    assert.equal(graph()[0].identity, 'kit');
+    for (const requirement of ['from: "1.2.3"', 'branch: "main"', 'revision: "abc"']) {
+      manifest(`.package(url: "${remote.url}", ${requirement})`);
+      assert.throws(() => graph([remote, local]), /vendor.git.*exact version/);
+    }
+    manifest(`.package(url: "${remote.url}", exact: "1.2.3")`);
+    assert.throws(() => graph(), /Package.swift.*vendor.git.*1.2.3.*exact.json/);
+    assert.throws(() => graph([{ ...remote, exactVersion: '2.0.0' }, local]), /vendor.git.*1.2.3/);
+    assert.deepEqual(graph([local, remote]).map(p => p.identity), ['kit', 'vendor']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 120_000);
 
 test('Swift lock discovery follows reachable interfaces and inherited dependencies', async () => {
   const { appSwiftPackageGraph } = await import('../host/apple/compose.mjs');
@@ -306,7 +393,16 @@ test('http and https come as a pair: a Mac web browser, refused on iOS and dropp
       save(bad);
       assert.throws(() => readManifest(dir, 'links'), /http and https come together/);
     }
-    for (const platform of ['ios', 'macos']) {
+    const android = (scheme, handlers = []) => writeFileSync(resolve(dir, 'app.json'), JSON.stringify({
+      name: 'Links', app: { id: 'dev.exact.links', name: 'Links' }, protocol_handlers: handlers, host: { android: { urlSchemes: [scheme] } },
+    }));
+    android('Notes+test.2');
+    assert.deepEqual(readManifest(dir, 'links').host.android.urlSchemes, ['Notes+test.2']);
+    android('a:b');
+    assert.throws(() => readManifest(dir, 'links'), /urlSchemes/);
+    android('Notes', [{ protocol: 'notes', url: '/open?u=%s', distribution_only: true }]);
+    assert.throws(() => readManifest(dir, 'links'), /host.android.urlSchemes: Notes is also declared in protocol_handlers/);
+    for (const platform of ['ios', 'macos', 'android']) {
       writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Links', app: { id: 'dev.exact.links', name: 'Links' }, host: { [platform]: { urlSchemes: ['links', 'HTTPS'] } } }));
       assert.throws(() => readManifest(dir, 'links'), new RegExp(`host\\.${platform}\\.urlSchemes: HTTPS is the web's own scheme; declare http and https together in protocol_handlers`));
     }
@@ -952,8 +1048,8 @@ test('a launch colour of a host\'s own or Expo\'s splash is refused for backgrou
 test('host.android.launchImage takes a PNG in the app up to the starting window\'s 192 dp icon, or false', async () => {
   const { readManifest, nativeManifestMetadata } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'manifest-launch-image-'));
-  const read = (launchImage) => {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Launch', app: { id: 'dev.exact.launch', name: 'Launch' }, background_color: '#B50000', host: { android: { launchImage } } }));
+  const read = (launchImage, platform = 'android') => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Launch', app: { id: 'dev.exact.launch', name: 'Launch' }, background_color: '#B50000', host: { [platform]: { launchImage } } }));
     return readManifest(dir, 'launch');
   };
   try {
@@ -961,6 +1057,33 @@ test('host.android.launchImage takes a PNG in the app up to the starting window\
     const manifest = read({ src: 'logo.png', width: 192 });
     // A native input: the Android binary's record names it, so an update cannot change it.
     assert.deepEqual(nativeManifestMetadata(manifest, 'android').host.launchImage, { src: 'logo.png', width: 192 });
+    for (const host of ['ios', 'android']) {
+      // The base picture is held to the dark one's rule: an existing file outside the app, or reached through a link
+      // out of it, is refused (#1595).
+      const outside = resolve(dir, '..', `${basename(dir)}-outside.png`);
+      writeFileSync(outside, 'png');
+      symlinkSync(outside, resolve(dir, 'linked.png'));
+      try {
+        assert.throws(() => read({ src: `../${basename(outside)}`, width: 128 }, host), new RegExp(`host\\.${host}\\.launchImage: \\.\\./.*-outside\\.png must name a PNG inside the app directory`));
+        assert.throws(() => read({ src: outside, width: 128 }, host), /launchImage: .* must name a PNG inside the app directory/);
+        assert.throws(() => read({ src: 'linked.png', width: 128 }, host), /launchImage: linked\.png must name a PNG inside the app directory/);
+      } finally { rmSync(outside); rmSync(resolve(dir, 'linked.png')); }
+      mkdirSync(resolve(dir, 'folder.png'));
+      assert.throws(() => read({ src: 'folder.png', width: 128 }, host), /launchImage\.src: folder\.png must be a PNG file/);
+      rmSync(resolve(dir, 'folder.png'), { recursive: true });
+      const launch = { src: 'logo.png', width: 128, color_scheme_dark: { src: 'night.png' } };
+      assert.throws(() => read(launch, host), /launchImage.color_scheme_dark: night.png.*does not exist/);
+      assert.throws(() => read({ ...launch, color_scheme_dark: { src: '../outside.png' } }, host), /inside the app directory/);
+      mkdirSync(resolve(dir, 'night.png'));
+      assert.throws(() => read(launch, host), /must be a PNG file/);
+      rmSync(resolve(dir, 'night.png'), { recursive: true });
+      writeFileSync(resolve(dir, 'night.png'), 'png');
+      const declared = read(launch, host);
+      assert.deepEqual(declared.host[host].launchImage, launch);
+      assert.deepEqual(nativeManifestMetadata(declared, host).host.launchImage, launch);
+      assert.throws(() => read({ ...launch, color_scheme_dark: { src: 'night.png', width: 20 } }, host), /color_scheme_dark.width/);
+      rmSync(resolve(dir, 'night.png'));
+    }
     assert.equal(read(false).host.android.launchImage, false);
     assert.throws(() => read(true), /host\.android\.launchImage: true is not a picture/);
     assert.throws(() => read({ src: 'logo.png', width: 200 }), /host\.android\.launchImage\.width: outside the allowed numeric range/);
@@ -1045,6 +1168,79 @@ test('a generated workspace names the checkout relatively, and is rewritten when
     assert.notDeepEqual(paths(moved), before);
   } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 60000);
+
+test('a variant builds every native shell in the base workspace without rewriting it', async () => {
+  const { ensureShells, namePlatform } = await import('./app-shells.mjs');
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-variant-shell-'));
+  const base = { name: 'Web title', app: { id: 'dev.example.notes', name: 'Field Notes' },
+    host: { ios: {}, macos: {}, linux: {}, android: {} }, variants: { dev: { idSuffix: '.dev', name: 'Notes Dev' } } };
+  const { EXACT_VARIANT, EXACT_VARIANT_APP } = process.env;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(base));
+    process.env.EXACT_VARIANT = 'dev';
+    process.env.EXACT_VARIANT_APP = dir;
+    const variant = readManifest(dir, 'notes');
+    assert.equal(variant.app.name, 'Notes Dev');
+    const initial = ensureShells(dir, base);
+    const times = () => ['.stamp.json', 'Cargo.toml', 'Cargo.lock', 'web/src/lib.rs', 'linux/src/main.rs', 'android/src/lib.rs']
+      .map(file => statSync(resolve(initial.workspace, file), { bigint: true }).mtimeNs);
+    const wroteAt = times();
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...base, host: { web: {} } }));
+    assert.equal(ensureShells(dir, { ...variant }).wrote, false);
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(base));
+    assert.equal(ensureShells(dir).wrote, false);
+    assert.deepEqual(times(), wroteAt);
+    namePlatform(dir, 'windows');
+    const saved = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+    assert.deepEqual(saved.app, base.app);
+    assert.equal(saved.variant, undefined);
+    assert.equal(ensureShells(dir).wrote, true);
+    assert.match(readFileSync(resolve(initial.workspace, 'windows/src/main.rs'), 'utf8'), /run_baked.*"Field Notes"/);
+    assert.equal(ensureShells(dir, readManifest(dir, 'notes')).wrote, false);
+  } finally {
+    if (EXACT_VARIANT === undefined) delete process.env.EXACT_VARIANT; else process.env.EXACT_VARIANT = EXACT_VARIANT;
+    if (EXACT_VARIANT_APP === undefined) delete process.env.EXACT_VARIANT_APP; else process.env.EXACT_VARIANT_APP = EXACT_VARIANT_APP;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test('a variant icon leaves the locked workspace alone until a native verb adds the platform', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const { ensureShells, bringPlatform, namesPlatform, settleLock, withoutPlatformKeys } = await import('./app-shells.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-variant-platform-')), file = resolve(dir, 'app.json');
+  const base = { name: 'Notes', app: { id: 'dev.example.notes', name: 'Notes' }, host: { web: {} },
+    variants: { dev: { idSuffix: '.dev', name: 'Notes Dev', host: { macos: { icon: 'Dev.icon' } } } } };
+  const { EXACT_VARIANT, EXACT_VARIANT_APP } = process.env;
+  try {
+    const first = ensureShells(dir, { ...base, variants: {} });
+    writeFileSync(resolve(dir, 'Cargo.lock'), readFileSync(resolve(first.workspace, 'Cargo.lock')));
+    writeFileSync(file, JSON.stringify(base));
+    process.env.EXACT_VARIANT = 'dev';
+    process.env.EXACT_VARIANT_APP = dir;
+    const selected = readManifest(dir, 'notes');
+    assert.equal(selected.host.macos.icon, 'Dev.icon');
+    assert.equal(ensureShells(dir, selected).wrote, false);
+    settleLock(dir, first.workspace);
+    assert.equal(namesPlatform(selected, 'macos'), false);
+    const missing = [{ required: true, ok: false, name: 'Xcode', have: 'missing', want: 'installed', fix: 'install Xcode' }];
+    assert.match((await bringPlatform(dir, 'macos', { os: 'darwin', report: missing })).refused, /lacks.*macos build/);
+    assert.deepEqual(JSON.parse(readFileSync(file)), base);
+    const brought = await bringPlatform(dir, 'macos', { os: 'darwin' });
+    assert.match(brought.lines[0], /host.macos, deploy.store.macos added/);
+    const saved = JSON.parse(readFileSync(file));
+    assert.deepEqual(saved.app, base.app);
+    assert.deepEqual(saved.variants, base.variants);
+    assert.deepEqual(ensureShells(dir).crates, ['web', 'apple']);
+    withoutPlatformKeys(dir, 'macos');
+    assert.deepEqual(ensureShells(dir).crates, ['web']);
+    settleLock(dir, first.workspace);
+  } finally {
+    if (EXACT_VARIANT === undefined) delete process.env.EXACT_VARIANT; else process.env.EXACT_VARIANT = EXACT_VARIANT;
+    if (EXACT_VARIANT_APP === undefined) delete process.env.EXACT_VARIANT_APP; else process.env.EXACT_VARIANT_APP = EXACT_VARIANT_APP;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 60_000);
 
 test('adding and removing preload regenerates native shells with the baked accessor', async () => {
   const { ensureShells } = await import('./app-shells.mjs');
@@ -1249,4 +1445,52 @@ test('the web manifest keeps a file handler’s file types and drops only its fo
   ];
   assert.deepEqual(webAppManifest({ file_handlers }, 'Docs').file_handlers,
     [{ action: '/', name: 'Documents', accept: { 'application/pdf': ['.pdf'] } }]);
+});
+
+test('the module roster validates each tag once and checks factories on their host', async () => {
+  const { checkModuleRoster, readManifest, resolveApp, validate } = await import('./app.mjs');
+  const { moduleRoster } = await import('./launch-modules.mjs');
+  const schema = JSON.parse(readFileSync(new URL('./app.schema.json', import.meta.url)));
+  const dir = mkdtempSync(resolve(tmpdir(), 'module-roster-'));
+  const read = modules => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'R', app: { id: 'dev.test.roster', name: 'R' }, modules }));
+    return readManifest(dir, 'roster');
+  };
+  try {
+    for (const items of [
+      ['phone-view', { tag: 'phone-view' }], [{ tag: 'phone-view' }, { tag: 'phone-view', hosts: ['ios'] }],
+      [{ tag: 'phone-view', hosts: [] }], [{ tag: 'phone-view', hosts: ['phone'] }], [{ tag: 'phone-view', slots: [] }],
+    ]) {
+      assert.match(validate(items, schema.properties.modules, 'modules', schema).join('\n'), /modules\[\d\].*phone-view/);
+      assert.throws(() => read(items), /modules\[\d\].*phone-view/);
+    }
+    assert.throws(() => read([{ tag: 'font-face' }]), /font-face/);
+    assert.throws(() => read([{ tag: 'phone-view', constructor: 0 }]), /constructor/);
+    const roster = moduleRoster(read(['shared-view', { tag: 'other-view' }, { tag: 'phone-view', hosts: ['android'] }]).modules);
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    shared-view\n');
+    mkdirSync(resolve(dir, 'ios/modules'), { recursive: true });
+    writeFileSync(resolve(dir, 'ios/modules/Input.swift'), '');
+    const app = resolveApp(dir, { useOutput: false });
+    assert.deepEqual(app.modules.tags, ['shared-view', 'other-view', 'phone-view']);
+    const tv = app.modulesFor('tvos', 'ios');
+    assert.deepEqual(tv.tags, ['shared-view', 'other-view']);
+    assert.deepEqual(tv.apple.map(file => basename(file)), ['Input.swift']);
+    assert.deepEqual(roster.tagsFor('ios'), ['shared-view', 'other-view']);
+    checkModuleRoster(roster.tagsFor('ios'), ['shared-view', 'other-view', 'phone-view'], 'ios', true);
+    assert.throws(() => checkModuleRoster(roster.tagsFor('android'), ['shared-view', 'other-view'], 'android', true), /phone-view/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('manifest app and variant display names reject control characters and blank strings', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-display-name-'));
+  const read = value => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify(value)); return readManifest(dir, 'name-check'); };
+  try {
+    assert.equal(read({ name: 'A/B Tester', app: { id: 'dev.exact.ab', name: 'A/B Tester' }, variants: { dev: { idSuffix: '.dev', name: 'A/B Dev' } } }).app.name, 'A/B Tester');
+    for (const bad of ['Foo\necho pwned', 'Foo\rBar', 'Foo\x00Bar', 'Foo\u2028Bar', '   ']) {
+      assert.throws(() => read({ name: bad, app: { id: 'dev.exact.ab', name: 'Safe' } }), /name/);
+      assert.throws(() => read({ name: 'Safe', app: { id: 'dev.exact.ab', name: bad } }), /app\.name/);
+      assert.throws(() => read({ name: 'Safe', app: { id: 'dev.exact.ab', name: 'Safe' }, variants: { dev: { idSuffix: '.dev', name: bad } } }), /variants\.dev\.name/);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

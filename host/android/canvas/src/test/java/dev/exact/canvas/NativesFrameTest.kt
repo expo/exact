@@ -43,16 +43,25 @@ import java.util.concurrent.Executor
 @SuppressLint("RestrictedApi")
 class NativesFrameTest {
     data class Load(val id: Int, val slot: Int, val generation: Int, val session: Long)
+    data class Msg(val id: Int, val slot: Int, val generation: Int, val session: Long, val text: String)
 
     @Implements(Native::class, isInAndroidSdk = false)
     class Host {
         companion object {
             @JvmStatic @Implementation fun __staticInitializer__() {}
             val loads = ArrayList<Load>()
+            val messages = ArrayList<Msg>()
+            var mediaGrants = 0
 
             @JvmStatic @Implementation fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long) {
                 loads.add(Load(id, slot, generation, session))
             }
+
+            @JvmStatic @Implementation fun frameMessage(id: Int, slot: Int, generation: Int, session: Long, text: String) {
+                messages.add(Msg(id, slot, generation, session, text))
+            }
+
+            @JvmStatic @Implementation fun frameMediaGrants(): Int = mediaGrants
         }
     }
 
@@ -77,7 +86,9 @@ class NativesFrameTest {
         companion object {
             val listeners = HashMap<WebView, NavigationListener>()
             val messages = HashMap<WebView, WebViewCompat.WebMessageListener>()
+            val bridgeMessages = HashMap<WebView, WebViewCompat.WebMessageListener>()
             val startScripts = HashMap<WebView, String>()
+            val bridgeScripts = HashMap<WebView, String>()
 
             @JvmStatic @Implementation
             fun addNavigationListener(web: WebView, executor: Executor, listener: NavigationListener) {
@@ -86,11 +97,16 @@ class NativesFrameTest {
 
             @JvmStatic @Implementation
             fun addWebMessageListener(web: WebView, name: String, origins: Set<String>, listener: WebViewCompat.WebMessageListener) {
-                messages[web] = listener
+                if (name == FrameBridge.CHANNEL) bridgeMessages[web] = listener else messages[web] = listener
             }
 
             @JvmStatic @Implementation
             fun addDocumentStartJavaScript(web: WebView, script: String, origins: Set<String>): ScriptHandler {
+                if (script.contains("window.${FrameBridge.CHANNEL};")) {
+                    assertTrue(bridgeMessages.containsKey(web))
+                    assertNull(bridgeScripts.put(web, script))
+                    return ScriptHandler { bridgeScripts.remove(web) }
+                }
                 assertTrue(messages.containsKey(web))
                 assertNull(startScripts.put(web, script))
                 return ScriptHandler { startScripts.remove(web) }
@@ -156,8 +172,12 @@ class NativesFrameTest {
         Features.navigationListener = true
         Features.webMessages = false
         Features.documentStart = false
+        Host.messages.clear()
+        Host.mediaGrants = 0
         Compat.messages.clear()
+        Compat.bridgeMessages.clear()
         Compat.startScripts.clear()
+        Compat.bridgeScripts.clear()
     }
 
     @Test fun aFrameTakesTheContactsTheEngineNamesItFor() {
@@ -705,6 +725,98 @@ class NativesFrameTest {
         natives.ensure(2, 1, 0, 0, props(), 20)
         natives.near(setOf(20), setOf(20), setOf(20))
         assertNotSame(web, natives.getChildAt(0))
+        natives.destroyAll()
+    }
+
+    @Test fun unpartitionedFrameSupportsBidirectionalPostMessageAndPoolCleanup() {
+        Features.webMessages = true
+        Features.documentStart = true
+        Host.messages.clear()
+        val natives = natives().apply { lazy = true }
+        val p1 = JSONObject(props()).put("slot", 2).put("generation", 5).put("session", 99L).toString()
+        natives.ensure(1, 1, 100, 50, p1, 10)
+        natives.near(setOf(10), setOf(10), setOf(10))
+        val p1Cmd = JSONObject(p1)
+            .put("commands", org.json.JSONArray().put(org.json.JSONArray(listOf(1, "postMessage", "queued-reply")))).toString()
+        natives.ensure(1, 1, 100, 50, p1Cmd, 10)
+        val web = natives.getChildAt(0) as WebView
+        val channel = Compat.bridgeMessages.getValue(web)
+        assertTrue(Compat.bridgeScripts.containsKey(web))
+        // Handshake delivers the queued host->iframe reply with the document's nonce.
+        channel.onPostMessage(web, WebMessageCompat("d:nonce-1"), Uri.parse("https://example.com"), true, Document())
+        assertTrue(shadowOf(web).lastEvaluatedJavascript.contains("__exactHostReply?.(\"queued-reply\", \"nonce-1\")"))
+        // Valid main-frame same-origin message reaches Native.frameMessage with full allocation identity.
+        channel.onPostMessage(web, WebMessageCompat("m:nonce-1:hi-host"), Uri.parse("https://example.com"), true, Document())
+        // Cross-origin, subframe, and wrong-nonce messages are dropped.
+        channel.onPostMessage(web, WebMessageCompat("m:nonce-1:bad-origin"), Uri.parse("https://evil.test"), true, Document())
+        channel.onPostMessage(web, WebMessageCompat("m:nonce-1:subframe"), Uri.parse("https://example.com"), false, Document())
+        channel.onPostMessage(web, WebMessageCompat("m:stale:wrong-nonce"), Uri.parse("https://example.com"), true, Document())
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(Msg(1, 2, 5, 99L, "hi-host")), Host.messages)
+        // Pool recycling clears the document-start script and nonce so old messages cannot leak to the borrower.
+        natives.near(emptySet(), emptySet(), emptySet())
+        assertFalse(Compat.bridgeScripts.containsKey(web))
+        finishUrl(web, shadowOf(web).lastLoadedUrl)
+        val p2 = JSONObject(props()).put("slot", 4).put("generation", 1).put("session", 99L).toString()
+        natives.ensure(2, 1, 100, 50, p2, 20)
+        natives.near(setOf(20), setOf(20), setOf(20))
+        assertSame(web, natives.getChildAt(0))
+        channel.onPostMessage(web, WebMessageCompat("m:nonce-1:leaked"), Uri.parse("https://example.com"), true, Document())
+        channel.onPostMessage(web, WebMessageCompat("d:nonce-2"), Uri.parse("https://example.com"), true, Document())
+        channel.onPostMessage(web, WebMessageCompat("m:nonce-2:fresh"), Uri.parse("https://example.com"), true, Document())
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(Msg(1, 2, 5, 99L, "hi-host"), Msg(2, 4, 1, 99L, "fresh")), Host.messages)
+        natives.destroyAll()
+    }
+
+    @Test fun webChromePermissionRequestEnforcesBootGrantsRuntimePermissionOriginAndPartition() {
+        val app = RuntimeEnvironment.getApplication()
+        fun makeRequest(origin: String, vararg resources: String): Pair<android.webkit.PermissionRequest, MutableList<String>> {
+            val outcome = ArrayList<String>()
+            val req = object : android.webkit.PermissionRequest() {
+                override fun getOrigin() = Uri.parse(origin)
+                override fun getResources() = resources.toList().toTypedArray()
+                override fun grant(granted: Array<out String>) { outcome.add("grant:" + granted.joinToString(",")) }
+                override fun deny() { outcome.add("deny") }
+            }
+            return req to outcome
+        }
+        val natives = natives()
+        natives.ensure(1, 1, 100, 50, props(), 0)
+        val web = natives.getChildAt(0) as WebView
+        val chrome = shadowOf(web).webChromeClient
+        // Without boot grants -> denied even if runtime permission is held.
+        Host.mediaGrants = 0
+        shadowOf(app).grantPermissions(android.Manifest.permission.CAMERA)
+        makeRequest("https://example.com", android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE).let { (r, out) ->
+            chrome.onPermissionRequest(r); assertEquals(listOf("deny"), out)
+        }
+        // With boot grant + runtime permission + matching origin -> granted.
+        Host.mediaGrants = FrameBridge.GRANT_CAMERA
+        makeRequest("https://example.com", android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE).let { (r, out) ->
+            chrome.onPermissionRequest(r); assertEquals(listOf("grant:" + android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE), out)
+        }
+        // Cross-origin, file:// origin, missing mic grant, and unknown resource -> denied.
+        makeRequest("https://other.test", android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE).let { (r, out) ->
+            chrome.onPermissionRequest(r); assertEquals(listOf("deny"), out)
+        }
+        makeRequest("file:///app/index.html", android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE).let { (r, out) ->
+            chrome.onPermissionRequest(r); assertEquals(listOf("deny"), out)
+        }
+        makeRequest("https://example.com", android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE).let { (r, out) ->
+            chrome.onPermissionRequest(r); assertEquals(listOf("deny"), out)
+        }
+        makeRequest("https://example.com", android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID).let { (r, out) ->
+            chrome.onPermissionRequest(r); assertEquals(listOf("deny"), out)
+        }
+        // Partitioned frame (even with profile == null) unconditionally denies permission requests and attaches no bridge.
+        val partitionedProps = JSONObject(props()).put("partition", "persist:a").toString()
+        natives.ensure(2, 1, 100, 50, partitionedProps, 0)
+        val partWeb = natives.getChildAt(1) as WebView
+        assertFalse(Compat.bridgeMessages.containsKey(partWeb))
+        makeRequest("https://example.com", android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE).let { (r, out) ->
+            shadowOf(partWeb).webChromeClient.onPermissionRequest(r); assertEquals(listOf("deny"), out)
+        }
         natives.destroyAll()
     }
 }

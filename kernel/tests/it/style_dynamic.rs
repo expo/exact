@@ -612,34 +612,35 @@ fn enum_rows_resolve_names_and_others_do_not() {
         StyleId::FlexDirection.enum_names(),
         &["row", "column", "row-reverse", "column-reverse"]
     );
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../tables/schema.json")).unwrap();
+    let rows = schema["styles"].as_array().unwrap();
+    assert_eq!(rows.len(), StyleId::ALL.len());
     for id in StyleId::ALL {
+        let row = &rows[id.bit() as usize];
+        assert_eq!(row["field"], id.name());
+        let enumeration = row["codec"].as_str().unwrap().strip_prefix("enum:");
+        let vocabulary = enumeration.or(row["keywords"].as_str());
         let names = id.enum_names();
-        // A keyword row (a bit set named by CSS keywords) lists its words too.
-        let keywords = matches!(
-            id,
-            StyleId::FontVariantNumeric
-                | StyleId::FontVariantLigatures
-                | StyleId::SafeArea
-                | StyleId::SafeAreaIgnore
-                | StyleId::SafeAreaBar
-                | StyleId::LayoutMarginsPreserved
-                | StyleId::LayoutMarginsFromSafeArea
-                | StyleId::LayoutMarginsMinimum
-                | StyleId::SafeAreaReachEdges
-                | StyleId::SafeAreaExtend
-                | StyleId::ScrollEdgeEffectSoft
-                | StyleId::ScrollEdgeEffectHard
-                | StyleId::ScrollEdgeEffectHidden
-        );
         assert_eq!(
-            names.is_empty(),
-            id.codec() != exact_kernel::StyleCodec::Enum && !keywords,
+            id.codec() == exact_kernel::StyleCodec::Enum,
+            enumeration.is_some(),
             "{id:?}"
         );
+        if let Some(vocabulary) = vocabulary {
+            assert!(!names.is_empty(), "{id:?}");
+            assert_eq!(
+                serde_json::json!(names),
+                schema["enums"][vocabulary]["values"],
+                "{id:?}"
+            );
+        } else {
+            assert!(names.is_empty(), "{id:?}");
+        }
         for (ordinal, name) in names.iter().enumerate() {
             assert_eq!(
                 id.enum_from_name(name),
-                (!keywords).then_some(ordinal as u8),
+                enumeration.map(|_| ordinal as u8),
                 "{id:?}: {name}"
             );
             StyleProps::default()

@@ -75,6 +75,9 @@ impl Default for Body {
 /// so two of them written alone cannot collide.
 macro_rules! record {
     ($ty:ident { $($field:ident),* $(,)? } named { $($opt:ident),* $(,)? }) => {
+        $crate::types::record!($ty { $($field),* } named { $($opt),* } validate |_| Ok(()));
+    };
+    ($ty:ident { $($field:ident),* $(,)? } named { $($opt:ident),* $(,)? } validate $check:expr) => {
         impl exact_game::Data for $ty {
             const TYPE_ID: &'static str = concat!("table:", module_path!(), "::", stringify!($ty));
             fn set_field(&mut self, field: &str, text: &str) -> Result<(), exact_game::DataError> {
@@ -118,6 +121,7 @@ macro_rules! record {
                 if let Some(i) = seen.iter().position(|s| !s).filter(|_| r.complete()) {
                     return Err(exact_game::DataError::new("missing field").at(fields[i]));
                 }
+                ($check)(self)?;
                 Ok(())
             }
         }
@@ -366,7 +370,7 @@ crate::types::record!(Physics {
     coulomb_friction,
     friction_gravity,
     friction_slip_speed,
-});
+} validate Physics::validate);
 impl exact_game::Resource for Physics {
     const NAME: &'static str = "Physics";
     const AMBIENT: bool = true;
@@ -388,6 +392,27 @@ impl Default for Physics {
     }
 }
 impl Physics {
+    pub(crate) fn validate(&self) -> Result<(), exact_game::DataError> {
+        if !self.gravity.is_finite() {
+            return Err(exact_game::DataError::new("physics: invalid gravity"));
+        }
+        if !(self.solver_iterations >= 1
+            && [self.contact_frequency, self.static_contact_frequency]
+                .iter()
+                .all(|f| f.is_finite() && *f > 0.0)
+            && self.contact_damping_ratio.is_finite()
+            && self.contact_damping_ratio > 0.0
+            && [self.friction_gravity, self.friction_slip_speed]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0)
+            && (self.friction_gravity == 0.0 || self.coulomb_friction))
+        {
+            return Err(exact_game::DataError::new(
+                "physics: invalid solver settings",
+            ));
+        }
+        Ok(())
+    }
     /// Refresh the saved Rapier bytes if dirty; return their length.
     /// Save/hash/JSON invoke this automatically through Data, never each tick.
     pub fn refresh_snapshot(&self) -> usize {

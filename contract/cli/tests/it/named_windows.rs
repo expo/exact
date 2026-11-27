@@ -80,6 +80,35 @@ fn a_target_is_a_keyword_or_a_window_name() {
     }
 }
 
+#[test]
+fn a_panel_link_opens_a_named_secondary_window() {
+    let compile = |declaration: &str| {
+        contract::compile(&format!(
+            "component A\n  state t = \"tools\"\n  view\n    {declaration}\n      text \"Go\"\n"
+        ))
+    };
+    for target in ["t", "\"tools\"", "\"window-palette\""] {
+        compile(&format!(
+            "link href=\"/x\" target={target} windowKind=\"panel\""
+        ))
+        .unwrap();
+    }
+    for declaration in [
+        "link href=\"/x\" target=\"main\" windowKind=\"panel\"",
+        "link href=\"/x\" target=\"_blank\" windowKind=\"panel\"",
+        "link href=\"/x\" windowKind=\"panel\"",
+        "link target=t windowKind=\"panel\"",
+        "link href=\"/x\" target=t windowKind=\"hud\"",
+        "box href=\"/x\" target=t windowKind=\"panel\"",
+    ] {
+        let why = compile(declaration).unwrap_err().to_string();
+        assert!(
+            why.contains("windowKind") || why.contains("panel target"),
+            "{declaration}: {why}"
+        );
+    }
+}
+
 /// A bound `target` is resolved at the press, so the compiler does not check it.
 #[test]
 fn a_bound_target_compiles() {

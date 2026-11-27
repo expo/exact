@@ -5,6 +5,7 @@
 // person's pick does; a live scan reads the back camera the viewfinder shows,
 // which can be hidden.
 use getSupportedFormats, detectBarcodes, detectedBarcodes, BarcodeFormats, DetectedBarcodeList, BarcodeScan from "@exact/barcode-detection"
+use detectFaces, DetectedFaceList from "@exact/face-detection"
 use textDetectorAvailability, detectText, TextDetectorAvailability, DetectedTextList from "@exact/text-detection"
 use translatorAvailability, createTranslator, translate, destroyTranslator, languageDetectorAvailability, createLanguageDetector, detectLanguage, destroyLanguageDetector, TranslatorAvailability, TranslatorInfo, TranslatorResult, LanguageDetectorAvailability, LanguageDetectorInfo, LanguageDetectionResults, TranslationDone from "@exact/translation"
 use getUserMedia, stopTrack, MediaStream, MediaStreamTrack from "@exact/media-capture"
@@ -25,6 +26,7 @@ component Fixture
   resource pair = translatorAvailability(sourceLanguage=src, targetLanguage=dst) as shape TranslatorAvailability else empty()
   resource identifier = languageDetectorAvailability() as shape LanguageDetectorAvailability else empty()
   mutation found as shape DetectedBarcodeList then tally
+  mutation faces as shape DetectedFaceList
   mutation read as shape DetectedTextList
   mutation opened as shape MediaStream then arm
   mutation stopped as shape MediaStreamTrack
@@ -58,6 +60,10 @@ component Fixture
     send found = detectBarcodes(image="app:/data/none.png")
   action detectMissing
     send found = detectBarcodes(image="app:/tmp/picked/missing.png")
+  action detectFacesInPick
+    send faces = detectFaces(image=image)
+  action detectMissingFace
+    send faces = detectFaces(image="app:/tmp/picked/missing.jpg")
   action readText
     send read = detectText(image=image)
   action readMissing
@@ -111,6 +117,25 @@ component Fixture
       text `${answers}` testId="answers"
       text `${reader.availability} ${match reader.reason { case some(r) => r, case none => "-" }} ${reader.languages.length}` testId="reader"
       text `${readerEn.availability} ${match readerEn.reason { case some(r) => r, case none => "-" }} ${readerEn.languages.join(",")}` testId="reader-en"
+      column testId="face-answer"
+        match faces
+          case some(r)
+            text `${r.width}x${r.height} ${r.faces.length}` testId="faces"
+            for f in r.faces key=`${f.boundingBox.x},${f.boundingBox.y}`
+              text `${f.boundingBox.x} ${f.boundingBox.y} ${f.boundingBox.width} ${f.boundingBox.height}` testId="face-box"
+              text f.landmarks.map(l => `${match l.type { case some(t) => t, case none => "-" }},${l.locations.map(p => `${p.x},${p.y}`).join(",")}`).join(" ") testId="face-points"
+              match f.pose
+                case some(p)
+                  text `${p.yaw} ${p.pitch} ${p.roll}` testId="face-pose"
+                case none
+                  text "absent" testId="face-pose"
+              match f.android
+                case some(a)
+                  text `${match a.leftEyeOpenProbability { case some(v) => v, case none => -1 }} ${match a.rightEyeOpenProbability { case some(v) => v, case none => -1 }}` testId="face-eyes"
+                case none
+                  text "absent" testId="face-eyes"
+          case none
+            text (match failure(faces) { case some(e) => e.code, case none => "waiting" }) testId="faces"
       match read
         case some(r)
           text `${r.width}x${r.height} ${r.texts.length}` testId="read"
@@ -162,6 +187,10 @@ component Fixture
           text "Outside"
         button press=detectMissing testId="detect-missing"
           text "Missing"
+        button press=detectMissingFace testId="detect-faces-missing"
+          text "Missing face image"
+        button press=detectFacesInPick testId="detect-faces"
+          text "Faces"
         button press=readText testId="read-text"
           text "Read"
         button press=readMissing testId="read-missing"

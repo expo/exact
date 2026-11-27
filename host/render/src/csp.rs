@@ -4,34 +4,85 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+/// Whether `host` matches CSP3's `host-part` (`1*host-char *("." 1*host-char) ["."]`).
+/// Rejects bracketed IPv6 literals, percent-encoded delimiters, and non-ASCII bytes.
+fn is_csp_host(host: &str) -> bool {
+    let body = host.strip_suffix('.').unwrap_or(host);
+    !body.is_empty()
+        && body.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+/// Serialize a parsed network grant origin as a CSP3 host source, omitting the
+/// scheme's default port and rejecting hosts that are not valid CSP3 `host-part`s.
+fn csp_origin(origin: &ibex2::grant::Origin, wildcard: bool) -> Option<String> {
+    let default_port = match origin.scheme.as_str() {
+        "http" | "ws" => 80,
+        "https" | "wss" => 443,
+        _ => return None,
+    };
+    if !is_csp_host(&origin.host) {
+        return None;
+    }
+    let prefix = if wildcard { "*." } else { "" };
+    if origin.port == default_port {
+        Some(format!("{}://{prefix}{}", origin.scheme, origin.host))
+    } else {
+        Some(format!(
+            "{}://{prefix}{}:{}",
+            origin.scheme, origin.host, origin.port
+        ))
+    }
+}
+
 /// Exact's policy (D11): scripts only from the app's origin or by hash, the
 /// wasm, and fetches and sockets to the origins the app's grants name.
 pub(crate) fn csp(grants: &str, dist: &Path) -> String {
     let mut connect = String::from("'self'");
     for line in grants.lines() {
-        let mut words = line.split_whitespace();
-        let Some(capability @ ("net.fetch" | "net.websocket")) = words.next() else {
+        let Ok(set) = ibex2::grant::GrantSet::parse(line) else {
             continue;
         };
-        if let Some(target) = words.next() {
-            // An origin is scheme://host[:port]: the target up to its path.
-            // A scheme-wide line (`ws:`) is already a CSP scheme source.
-            // `local-network` (LLP 1133.036 D5): CSP has no source for an
-            // address range, and a scheme source would admit the internet,
-            // so a served page reaches `.local` names alone by it.
-            let origin = match target.strip_suffix(':').map(str::to_ascii_lowercase) {
-                _ if target == "local-network" && capability == "net.fetch" => {
+        for grant in set.iter() {
+            // An origin is the one the grant admits, serialized as a CSP3 host
+            // source (ASCII `host-char`, dotted-decimal IPv4, no default port,
+            // no path). `local-network` (LLP 1133.036 D5) has no CSP source for
+            // private address ranges, so it emits `.local`. `loopback` (LLP 1016
+            // D6) has no CSP3 grammar for CIDR ranges or bracketed IPv6 literals,
+            // so it emits the spellable subset (`127.0.0.1:*`, `localhost:*`,
+            // `localhost.:*`).
+            use ibex2::grant::Grant;
+            let source = match grant {
+                Grant::Fetch(origin) | Grant::WebSocket(origin) => csp_origin(origin, false),
+                Grant::FetchSubdomains(origin) | Grant::WebSocketSubdomains(origin) => {
+                    csp_origin(origin, true)
+                }
+                Grant::FetchScheme(scheme) | Grant::WebSocketScheme(scheme) => {
+                    Some(format!("{scheme}:"))
+                }
+                Grant::FetchLocalNetwork { .. } => {
                     Some("http://*.local:* https://*.local:*".to_owned())
                 }
-                _ if target == "local-network" => Some("ws://*.local:* wss://*.local:*".to_owned()),
-                Some(s) if matches!(&*s, "http" | "https" | "ws" | "wss") => Some(s + ":"),
-                _ => target.split_once("://").map(|(scheme, rest)| {
-                    format!("{scheme}://{}", rest.split('/').next().unwrap_or(""))
-                }),
+                Grant::WebSocketLocalNetwork { .. } => {
+                    Some("ws://*.local:* wss://*.local:*".to_owned())
+                }
+                Grant::FetchLoopback => Some(
+                    "http://127.0.0.1:* https://127.0.0.1:* http://localhost:* https://localhost:* http://localhost.:* https://localhost.:*"
+                        .to_owned(),
+                ),
+                Grant::WebSocketLoopback => Some(
+                    "ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://localhost.:* wss://localhost.:*"
+                        .to_owned(),
+                ),
+                _ => None,
             };
-            if let Some(origin) = origin {
+            if let Some(source) = source {
                 connect.push(' ');
-                connect.push_str(&origin);
+                connect.push_str(&source);
             }
         }
     }
@@ -93,6 +144,20 @@ pub(crate) fn headers(
             let text = script.text.replace("\r\n", "\n").replace('\r', "\n");
             let hash = exact_data::envelope::base64(&Sha256::digest(text.as_bytes()));
             let _ = write!(scripts, " 'sha256-{hash}'");
+        }
+    }
+    if let Some(inline) = crate::page::inline_js_entry(shell) {
+        let text = inline.replace("\r\n", "\n").replace('\r', "\n");
+        let token = format!(
+            " 'sha256-{}'",
+            exact_data::envelope::base64(&Sha256::digest(text.as_bytes()))
+        );
+        let already = exact
+            .iter()
+            .find(|(name, _)| name == "script-src")
+            .is_some_and(|(_, value)| value.contains(&token));
+        if !already {
+            scripts.push_str(&token);
         }
     }
     if let Some((_, value)) = exact.iter_mut().find(|(name, _)| name == "script-src") {

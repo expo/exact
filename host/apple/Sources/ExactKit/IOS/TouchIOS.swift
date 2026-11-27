@@ -149,11 +149,17 @@ enum TouchLog {
                                         "at": [InspectionValue.r2(p.x), InspectionValue.r2(p.y)], "type": touch.type == .direct ? "direct" : "\(touch.type.rawValue)"]
             // A touch a system recognizer takes (iOS 26's tab bar selects with
             // one on the window) has no view: where the window's hit test put it.
-            for (key, value) in landing(touch.view ?? window.hitTest(p, with: nil)) { entry[key] = value }
+            let hitView = touch.view ?? window.hitTest(p, with: nil)
+            for (key, value) in landing(hitView) { entry[key] = value }
             if gone.contains(touch) { entry["viewGone"] = true }
             // When the window had a touch down. One it had only after the finger lifted comes with its lift, which a
             // list cell's `UISwitch` takes as no tap
-            if phase == "began" { entry["dispatched"] = dispatched }
+            if phase == "began" {
+                entry["dispatched"] = dispatched
+                PartLanding.view = hitView
+                PartLanding.point = p
+                PartLanding.delivered = true
+            }
             entries.append(entry)
             if entries.count > capacity { entries.removeFirst(); dropped += 1 }
         }
@@ -297,6 +303,7 @@ extension Agent {
         }
         // A plain tap's aim: the target's own press (`AgentAddressedTap.swift`).
         let press = (req["aim"] as? [String: Any])?["press"] as? Bool == true
+        if press, at["at"] == nil, at["x"] == nil, at["y"] == nil, let refusal = inertDialogTap(req) { return refusal }
         // A row a grouped list draws, or its toggle's or detail button's
         // control (LLP 1084 D5): the finger aims at UIKit's cell or
         // accessory, never the hidden authored node beneath it.
@@ -323,8 +330,12 @@ extension Agent {
             }
             target = field; barred = true
         }
+        #if os(iOS)
+        // A header's pressable group the bar's title stands for: the title.
+        if flat == nil, target === v, let title = presenter.navigation.titleSurface(for: v) { target = title; barred = true }
+        #endif
         // A tab a tab bar shows, UIKit's or the one its tablist is drawn as: its item there.
-        if flat == nil, target === v, let item = tabItem(v) {
+        if flat == nil, target === v, let item = tabItem(v, forPress: true) {
             switch item {
             case .failure(let refusal): return ["error": "tap #\(v.id): \(refusal.why)"]
             case .success(let control): target = control; region = control.bounds; barred = true
@@ -358,7 +369,7 @@ extension Agent {
                          native: ["kind": "contextMenuDismissal", "label": "Dismiss context menu"])
         }
         #endif
-        if let why = obscured(inBar ? barItemTarget(v, bar: target, frame: region ?? .null, hit: seen!) : target, at: p, hit: seen!)
+        if let why = obscured(target, at: p, hit: seen!, barItem: inBar, request: at)
             ?? flat.flatMap({ flatObscured($0, at: p, hit: seen!) }) { return ["error": "tap #\(v.id): \(why)"] }
         // Named, it presses what it names, as the activation's tap does.
         var avoided: PressReach?

@@ -86,7 +86,7 @@ fn padding_floors_an_item_whose_max_width_is_zero() {
     let root = tree
         .new_with_children(
             Style {
-                justify_content: Some(JustifyContent::CENTER),
+                justify_content: JustifyContent::CENTER,
                 ..row(100.0)
             },
             &[item],

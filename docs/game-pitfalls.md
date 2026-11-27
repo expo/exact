@@ -122,6 +122,9 @@ diagnose it. **Candidate diagnostic** marks one that could become a check cheapl
   bake, not by Cargo. Fix: run `bun exact.mjs test-rust`, which regenerates the member
   first, or `bun exact.mjs shells` before a direct Cargo command in `.shells/`.
   (Fishslop runs 1 and 2, 2026-10-18; LLP 1132.000 F17.)
+- **An Android window draws while the game reports that it is at rest.** Capture the
+  foreground app once while moving and once at rest. The [Android canvas trace](../game/README.md#android-canvas-draws)
+  shows each canvas's draw decision, changed render inputs and consumed sensor count alongside window replays.
 - **A phone's world frame rate read in the first seconds after Play is far below its
   steady rate.** The scaffold's starter on a Pixel 5 drew 2.2 fps over the 10 s after
   Play and 16 fps from 20 s on, at the same rung. The renderer makes each pipeline

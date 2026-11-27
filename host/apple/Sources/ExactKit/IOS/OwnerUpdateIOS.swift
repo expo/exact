@@ -16,6 +16,9 @@ package struct OwnerUpdateIOS: Equatable {
         package var generation: UInt64 = 1
         /// In the view's own coordinates; `nil` while it is out of a window.
         package var insets: UIEdgeInsets?
+        /// Its view's bounds converted into its window's coordinates, a bounding rectangle under a transform
+        /// (D9), `nil` out of a window; its insets stay in the view's own coordinates.
+        package var frame: CGRect?
     }
 
     /// An entry of the native chain: a controller's view and the kinds it is.
@@ -56,6 +59,7 @@ package struct OwnerUpdateIOS: Equatable {
         package static let session: UInt8 = 1
         package static let root: UInt8 = 2
         package static let window: UInt8 = 3
+        package static let tabContent: UInt8 = 4
     }
 
     /// The owner view's raw `safeAreaInsets`; `nil` while it is out of a window (D3, D9).
@@ -66,9 +70,61 @@ package struct OwnerUpdateIOS: Equatable {
     package var chain: [ChainEntry] = []
     package var relations: [Related] = []
     package var margins: Margins?
+    /// What the host knows of the keyboard (D7), the kernel's `KeyboardReport`.
+    package var keyboard: KeyboardReport = .unreported
+
+    package enum KeyboardReport: Equatable {
+        /// The owner's window has no keyboard sampler, which comes with its first keyboard editor,
+        /// or the owner is out of a window.
+        case unreported
+        case dismissed
+        /// The keyboard in the owner's view, from its origin, and whether it is docked: its window's
+        /// sample (`KeyboardSampleIOS`) converted into the view as it is now.
+        case shown(KeyboardSampleIOS.Sample)
+
+        package var shown: KeyboardSampleIOS.Sample? {
+            if case .shown(let sample) = self { return sample }
+            return nil
+        }
+    }
     /// The owner's segments (D16): its active division regions split as the document's
     /// are (`Segments.split`); `nil` where it lies on one.
     var segments: ViewportFold?
+    /// UIKit's bar layout region on each edge of the owner's view, top, right, bottom, left (D12,
+    /// "Region"): `nil` before iOS 27.1, which has none, and out of a window.
+    package var barRegions: [BarRegion?] = [nil, nil, nil, nil]
+    /// The owner's chrome (D6), `nil` out of a window.
+    package var chrome: Chrome?
+    /// The owner view's map into its window from its bounds' origin, where its block's space starts
+    /// (D6's `"window"` space): UIKit's conversion of that origin and the points a point right of
+    /// and below it, so a sheet UIKit scales back maps scaled; `nil` out of a window.
+    package var windowMap: CGAffineTransform?
+    /// The owner's configuration's identity (D9, "Moving edges"): whether its navigation bar, toolbar
+    /// and tab bar are hidden, whether its title can show large, its size classes, its scene's
+    /// orientation and its window's size, which the largest band an `observed-max` reader settles
+    /// against is kept for; not a large title's collapse, which moves the band within one. `nil` out
+    /// of a window.
+    package var configuration: UInt64?
+    /// The owner view's reserved regions (D16), from its bounds' origin; `nil` out of a window and
+    /// before iOS 27.1.
+    package var regions: [ReservedRegions.Region]?
+
+    /// What the owner's chrome is: its view's vertical bar edge, as the kernel's
+    /// `VerticalBarEdge` takes it, `nil` before iOS 27.1; and whether the sidebar of the tab
+    /// controller holding it is available, which is not whether it shows, `nil` before iOS 27 and
+    /// where no tab controller holds it.
+    package struct Chrome: Equatable {
+        package var verticalBarEdge: Int?
+        package var sidebarAvailable: Bool?
+    }
+
+    /// A bar layout region on one edge: how far in from that edge it begins, and how far in from
+    /// the two edges beside it it runs, left and right for the top or bottom, top and bottom for a side.
+    package struct BarRegion: Equatable {
+        package var distance: CGFloat
+        package var sides: (CGFloat, CGFloat)
+        package static func == (a: Self, b: Self) -> Bool { a.distance == b.distance && a.sides == b.sides }
+    }
 
     /// The update of the owner whose controller is `controller` and whose view is `view` (its
     /// surface), in a session shown by `session`. `controller` manages `view`: for a route shown
@@ -113,21 +169,100 @@ package struct OwnerUpdateIOS: Equatable {
             (Relation.window, view.window),
         ]
         update.relations = related.compactMap { r, v in v.map { Related(relation: r, target: target($0)) } }
+        // The tab controller containing the owner, whose guide clears its tab bar or sidebar
+        let tabs = sequence(first: controller, next: \.parent).lazy.compactMap { $0 as? UITabBarController }.first
+        if #available(iOS 26.0, *), let tabs {
+            update.relations.append(Related(relation: Relation.tabContent, target: target(tabs.contentLayoutGuide)))
+        }
         // Out of a window the guides were never laid out: no margins, as there is no band
         guard view.window != nil else { return update }
         let minimum = controller.systemMinimumLayoutMargins
         let rtl = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        // The root's margins less Exact's contributions, as the band is (D8, D11): UIKit measures them from the safe area,
+        // which the contributions move one for one, so they come off as measured, and the result is clamped at 0
+        let effect = update.contributions.map(\.effect).reduce(UIEdgeInsets.zero) {
+            UIEdgeInsets(top: $0.top + $1.top, left: $0.left + $1.left, bottom: $0.bottom + $1.bottom, right: $0.right + $1.right)
+        }
+        let given = view.layoutMargins
+        let root = UIEdgeInsets(top: max(0, given.top - effect.top), left: max(0, given.left - effect.left),
+                                bottom: max(0, given.bottom - effect.bottom), right: max(0, given.right - effect.right))
         update.margins = Margins(
-            root: view.layoutMargins, plain: UIView().layoutMargins,
+            root: root, plain: UIView().layoutMargins,
             minimum: UIEdgeInsets(top: minimum.top, left: rtl ? minimum.trailing : minimum.leading,
                                   bottom: minimum.bottom, right: rtl ? minimum.leading : minimum.trailing),
             readableWidth: ReadableWidthIOS.of(in: session.flatMap { $0.window === view.window ? $0 : nil } ?? view))
-        // The regions are in the view's bounds, the segments from its origin
+        // The regions are in the view's bounds; the segments and the keyboard are reported from its origin
         let origin = view.bounds.origin
+        if let window = view.window, let sampler = KeyboardSampleIOS.existing(in: window) {
+            update.keyboard = .dismissed
+            if var keys = sampler.sample {
+                keys.frame = view.convert(keys.frame, from: window).offsetBy(dx: -origin.x, dy: -origin.y)
+                update.keyboard = .shown(keys)
+            }
+        }
         let active = (ReservedRegions.divisions(of: view) ?? []).filter(\.active).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
         let fold = Segments.split(viewport: view.bounds.size, dividers: active)
         update.segments = fold.cols * fold.rows > 1 ? fold : nil
+        if #available(iOS 27.1, *) { update.barRegions = barRegions(of: view) }
+        var sidebar: Bool?
+        if #available(iOS 27.0, *), let tabs { sidebar = tabs.sidebar.isAvailable }
+        update.chrome = Chrome(verticalBarEdge: view.traitCollection.verticalBarEdgeRaw, sidebarAvailable: sidebar)
+        let at = view.convert(origin, to: nil)
+        let right = view.convert(CGPoint(x: origin.x + 1, y: origin.y), to: nil)
+        let below = view.convert(CGPoint(x: origin.x, y: origin.y + 1), to: nil)
+        update.windowMap = CGAffineTransform(a: right.x - at.x, b: right.y - at.y, c: below.x - at.x, d: below.y - at.y, tx: at.x, ty: at.y)
+        update.configuration = configuration(of: controller, view: view, tabs: tabs)
+        update.regions = ReservedRegions.all(of: view)
         return update
+    }
+
+    /// The identity of `controller`'s configuration in `view`'s window, from the values UIKit gives it.
+    private static func configuration(of controller: UIViewController, view: UIView, tabs: UITabBarController?) -> UInt64? {
+        guard let window = view.window else { return nil }
+        var hasher = Hasher()
+        let navigation = controller.navigationController
+        hasher.combine(navigation?.isNavigationBarHidden)
+        hasher.combine(navigation?.isToolbarHidden)
+        hasher.combine(navigation?.navigationBar.prefersLargeTitles)
+        hasher.combine(controller.navigationItem.largeTitleDisplayMode.rawValue)
+        hasher.combine(tabs?.tabBar.isHidden)
+        // iPadOS's floating tab bar hides through `isTabBarHidden` and leaves `tabBar.isHidden` as it was
+        if #available(iOS 18, tvOS 18, *) { hasher.combine(tabs?.isTabBarHidden) }
+        let traits = view.traitCollection
+        hasher.combine(traits.horizontalSizeClass.rawValue)
+        hasher.combine(traits.verticalSizeClass.rawValue)
+        hasher.combine(window.windowScene?.effectiveGeometry.interfaceOrientation.rawValue)
+        hasher.combine(window.bounds.width)
+        hasher.combine(window.bounds.height)
+        return UInt64(bitPattern: Int64(hasher.finalize()))
+    }
+
+    /// `view`'s bar layout regions, read after the ledger's writes, so each lies past the owner's own
+    /// additional insets and safe-area padding as UIKit places it on the safe area they make (measured
+    /// on an iPhone Duo, iOS 27.1). The extent changes only the region's depth, which a bar's slot does
+    /// not take from it: UIKit gives a 50- and a 120-point bottom region the same insets.
+    @available(iOS 27.1, *)
+    private static func barRegions(of view: UIView) -> [BarRegion?] {
+        let edges: [UIRectEdge] = [.top, .right, .bottom, .left]
+        return edges.map { edge in
+            let i = view.edgeInsets(for: .bar(onEdge: edge, extent: 50))
+            switch edge {
+            case .top: return BarRegion(distance: i.top, sides: (i.left, i.right))
+            case .right: return BarRegion(distance: i.right, sides: (i.top, i.bottom))
+            case .bottom: return BarRegion(distance: i.bottom, sides: (i.left, i.right))
+            default: return BarRegion(distance: i.left, sides: (i.top, i.bottom))
+            }
+        }
+    }
+
+    /// `guide` as a target (D9's `tab-content`): its edges' distances from its owning view's
+    /// bounds, in that view's coordinates, with that view's frame in its window; unavailable while
+    /// that view is out of a window.
+    static func target(_ guide: UILayoutGuide) -> Target {
+        guard let view = guide.owningView, view.window != nil else { return Target(id: TargetIds.id(of: guide), insets: nil) }
+        let (b, g) = (view.bounds, guide.layoutFrame)
+        let insets = UIEdgeInsets(top: g.minY - b.minY, left: g.minX - b.minX, bottom: b.maxY - g.maxY, right: b.maxX - g.maxX)
+        return Target(id: TargetIds.id(of: guide), insets: insets, frame: view.convert(b, to: nil))
     }
 
     /// `view` as a target, unavailable while it is out of a window; a window is in itself,
@@ -135,74 +270,42 @@ package struct OwnerUpdateIOS: Equatable {
     package static func target(_ view: UIView?) -> Target {
         guard let view else { return Target(id: 0, insets: nil) }
         let attached = view is UIWindow || view.window != nil
-        return Target(id: TargetIds.id(of: view), insets: attached ? view.safeAreaInsets : nil)
+        return Target(id: TargetIds.id(of: view), insets: attached ? view.safeAreaInsets : nil,
+                      frame: attached ? view.convert(view.bounds, to: nil) : nil)
     }
 
-    /// The update in the kernel's wire form (`OwnerUpdate::encode`): each field in order, an
-    /// optional one after a presence byte, a list after its `u32` length, little-endian;
-    /// insets top, right, bottom, left. A contribution is its node, its operation and its
-    /// effect. The keyboard is absent: its executor samples it.
-    package func encode() -> Data {
-        var out = Data()
-        func u8(_ v: UInt8) { out.append(v) }
-        func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        func f32(_ v: CGFloat) { u32(Float(v).bitPattern) }
-        func edges(_ i: UIEdgeInsets) { [i.top, i.right, i.bottom, i.left].forEach(f32) }
-        func optional<T>(_ value: T?, _ each: (T) -> Void) {
-            u8(value == nil ? 0 : 1)
-            if let value { each(value) }
+    /// The kernel's encoding of the update (`OwnerUpdateWire.encode`).
+    package func encode() -> Data { wire.encode() }
+
+    /// The update in the form both Apple hosts encode.
+    package var wire: OwnerUpdateWire {
+        var w = OwnerUpdateWire()
+        w.band = band.map(Self.edges)
+        w.contributions = contributions.map { .init(node: $0.identity.node, operation: $0.identity.operation.rawValue, effect: Self.edges($0.effect)) }
+        w.chain = chain.map { (Self.wire($0.target), $0.kinds) }
+        w.relations = relations.map { ($0.relation, Self.wire($0.target)) }
+        w.margins = margins.map { .init(root: Self.edges($0.root), plain: Self.edges($0.plain), minimum: Self.edges($0.minimum), readableWidth: $0.readableWidth) }
+        switch keyboard {
+        case .unreported: w.keyboard = .unreported
+        case .dismissed: w.keyboard = .dismissed
+        case .shown(let k): w.keyboard = .shown(frame: k.frame, docked: k.docked)
         }
-        func target(_ t: Target) { out.append(Self.encode(target: t)) }
-        optional(band, edges)
-        u32(UInt32(contributions.count))
-        for c in contributions {
-            u32(c.identity.node)
-            u8(c.identity.operation.rawValue)
-            edges(c.effect)
-        }
-        u32(UInt32(chain.count))
-        for entry in chain {
-            target(entry.target)
-            u8(entry.kinds)
-        }
-        u32(UInt32(relations.count))
-        for r in relations {
-            u8(r.relation)
-            target(r.target)
-        }
-        optional(margins) { m in
-            edges(m.root)
-            edges(m.plain)
-            edges(m.minimum)
-            f32(m.readableWidth)
-        }
-        u8(0)
-        optional(segments) { fold in
-            u8(UInt8(fold.cols))
-            u8(UInt8(fold.rows))
-            for r in fold.rects { [r.minX, r.minY, r.width, r.height].forEach(f32) }
-        }
-        return out
+        w.segments = segments.map { .init(cols: UInt8($0.cols), rows: UInt8($0.rows), rects: $0.rects) }
+        w.barRegions = barRegions.map { $0.map { .init(distance: $0.distance, start: $0.sides.0, end: $0.sides.1) } }
+        w.chrome = chrome.map { .init(verticalBarEdge: $0.verticalBarEdge, sidebarAvailable: $0.sidebarAvailable) }
+        w.windowMap = windowMap
+        w.configuration = configuration
+        w.regions = regions?.map { .init(id: $0.id, kind: $0.kind, frame: $0.frame, margins: Self.edges($0.margins), active: $0.active) }
+        return w
     }
+
+    static func edges(_ i: UIEdgeInsets) -> OwnerUpdateWire.Edges { .init(top: i.top, right: i.right, bottom: i.bottom, left: i.left) }
+    static func wire(_ t: Target) -> OwnerUpdateWire.Target { .init(id: t.id, generation: t.generation, insets: t.insets.map(edges), frame: t.frame) }
 }
 
 extension OwnerUpdateIOS {
-    /// A target in the kernel's wire form: its id and generation (`u64` each) and its
-    /// insets after a presence byte, top, right, bottom, left.
-    static func encode(target t: Target) -> Data {
-        var out = Data()
-        func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        u64(t.id)
-        u64(t.generation)
-        out.append(t.insets == nil ? 0 : 1)
-        if let i = t.insets {
-            for v in [i.top, i.right, i.bottom, i.left] {
-                withUnsafeBytes(of: Float(v).bitPattern.littleEndian) { out.append(contentsOf: $0) }
-            }
-        }
-        return out
-    }
+    /// A target in the kernel's wire form (`OwnerUpdateWire.encode(target:)`).
+    static func encode(target t: Target) -> Data { OwnerUpdateWire.encode(target: wire(t)) }
 }
 
 /// The width UIKit keeps text to (LLP 1123 D8), read from a hidden view that no margins clamp:
@@ -242,18 +345,4 @@ enum ReadableWidthIOS {
     }
 }
 
-/// The host's identities for native targets: one per view for its life, never reused, so a
-/// new view at a freed view's address is a new target (D9).
-package enum TargetIds {
-    nonisolated(unsafe) private static var next: UInt64 = 1
-    nonisolated(unsafe) private static var key: UInt8 = 0
-
-    package static func id(of view: UIView) -> UInt64 {
-        if let id = objc_getAssociatedObject(view, &key) as? NSNumber { return id.uint64Value }
-        let id = next
-        next += 1
-        objc_setAssociatedObject(view, &key, NSNumber(value: id), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        return id
-    }
-}
 #endif

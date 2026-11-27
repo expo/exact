@@ -71,6 +71,9 @@ final class CanvasesHost {
         var wants = false
         /// The box (points and scale) its last render drew at.
         var drawnBox: SIMD3<Float>?
+        var offscreenBox: SIMD3<Float>?
+        var offscreenPending = false
+        var presentedAt: Double?
         var performance = false
         var wantsInput = false
         var logCursor = 0
@@ -338,12 +341,20 @@ final class CanvasesHost {
 
     /// Every canvas whose children changed since its last capture is painted
     /// again (LLP 1014 D3): the overlay's subtree into a bitmap at the
-    /// window's scale, uploaded as the surface's children texture. Called at
-    /// the end of every batch, and once per run-loop turn for changes that
-    /// arrive outside one (D4 b, c).
+    /// window's scale, uploaded as the surface's children texture. Deepest-first
+    /// order ensures nested canvases upload before their enclosing ancestors.
     func captureIfNeeded() {
-        for e in Array(entries.values) where live(e.view.id) === e && e.presentable && e.through && e.view.needsCapture {
-            if let m = e.module { capture(m, e) }
+        guard entries.values.contains(where: { $0.through && $0.view.needsCapture }) else { return }
+        let ordered = entries.values.filter { $0.presentable && $0.through }.map { e in
+            var depth = 0, above = e.view.canvasAbove
+            while let canvas = above { depth += 1; above = canvas.canvasAbove }
+            return (e, depth)
+        }.sorted { $0.1 > $1.1 }
+        for (e, _) in ordered where live(e.view.id) === e && e.view.needsCapture {
+            if let m = e.module {
+                capture(m, e)
+                if let outer = e.view.canvasAbove, entries[outer.id]?.through == true { outer.needsCapture = true }
+            }
         }
     }
 
@@ -377,6 +388,10 @@ final class CanvasesHost {
             return
         }
         let t0 = CACurrentMediaTime()
+        let wasPainted = e.view.paintedThisTurn
+        var uploaded = false
+        e.view.paintedThisTurn = true
+        defer { if !uploaded { e.view.paintedThisTurn = wasPainted } }
         guard let rep = Capture.bitmap(of: overlay, scale: scale), let data = rep.bitmapData else { return }
         guard live(e.view.id) === e else { return }
         let t1 = CACurrentMediaTime()
@@ -384,14 +399,17 @@ final class CanvasesHost {
         let len = rep.pixelsHigh * rep.bytesPerRow
         let r = m.texture(e.id, w, h, UnsafePointer(data), len)
         let t2 = CACurrentMediaTime()
-        if r != 0 { FileHandle.standardError.write(Data("exact gpu: \(m.error())\n".utf8)); return }
+        if r != 0 {
+            FileHandle.standardError.write(Data("exact gpu: \(m.error())\n".utf8))
+            return
+        }
+        uploaded = true
         e.uploaded = true
         captures += 1
         // Painted through the surface from here on: the overlay stays laid
         // out — hit-testable, in the accessibility hierarchy — and is no
         // longer composited itself (D5: pixels may distort, boxes may not).
         overlay.alphaValue = 0
-        e.view.paintedThisTurn = true
         DispatchQueue.main.async { e.view.paintedThisTurn = false }
         if ExactEnv.agentMode {
             FileHandle.standardError.write(Data(String(format: "canvas %d: captured %dx%d in %.2f ms, uploaded %d KiB in %.2f ms\n", Int(e.view.id), Int(w), Int(h), (t1 - t0) * 1000, len / 1024, (t2 - t1) * 1000).utf8))
@@ -458,9 +476,8 @@ final class CanvasesHost {
     /// and nothing wants a frame until the window is seen again, when the
     /// delegate asks `Frames` to run.
     var visible: Bool {
-        guard let viewport = session?.presenter.viewport else { return false }
-        // An unmounted view wants no frames (LLP 1031 D3).
-        return !NSApplication.shared.isHidden && (viewport.window?.screenOcclusionState.contains(.visible) ?? false)
+        guard let window = session?.presenter.viewport.window else { return false }
+        return !NSApplication.shared.isHidden && window.isVisible && window.screenOcclusionState.contains(.visible)
     }
 
     /// Whether any surface has something to render — or an edit is under a
@@ -492,11 +509,17 @@ final class CanvasesHost {
             if ExactEnv.agentMode {
                 for e in Array(entries.values) where !visible || e.waiting || e.starvedUntil > CACurrentMediaTime() {
                     if let outer = e.view.canvasAbove, outer.overlay != nil, entries[outer.id]?.through == true { continue }
-                    if readback(view: e.view) != nil { e.waiting = false }
+                    if e.module?.renderOffscreen == nil {
+                        if readback(view: e.view) != nil { e.waiting = false }
+                        continue
+                    }
+                    if let metal = e.view.canvasMetal, settleOffscreen(e, box: box(metal), now: now), let m = e.module {
+                        readPlacements(m, e)
+                    }
                 }
             }
             for e in Array(entries.values) { messages(e) }
-            guard entries.values.contains(where: { $0.view.needsCapture }) else { return }
+            guard entries.values.contains(where: { $0.view.needsCapture || $0.offscreenPending }) else { return }
         }
     }
 
@@ -507,25 +530,30 @@ final class CanvasesHost {
         frameNow = now
         defer { frameNow = previous }
         drainSensors()
-        var more = false
-        for e in Array(entries.values) where live(e.view.id) === e && e.presentable {
+        let current = Array(entries.values)
+        for e in current where live(e.view.id) === e && e.presentable {
             guard let m = e.module else { continue }
             refreshChildren(m, e)
-            if e.through && e.view.needsCapture { capture(m, e) }
+            if let outer = e.view.canvasAbove, entries[outer.id]?.through == true,
+               m.dirty(e.id) != 0 || (e.wants && now != e.readAt) { outer.needsCapture = true }
+            // D4 (d): every frame while editing under the overlay — but not
+            // twice on the turn a batch already captured.
+            if e.through, !e.view.paintedThisTurn, let overlay = e.view.overlay, CanvasesHost.editing(under: overlay) { e.view.needsCapture = true }
+        }
+        captureIfNeeded()
+        var more = false
+        for e in current where live(e.view.id) === e && e.presentable {
+            guard let m = e.module else { continue }
             // Nested under a canvas painted through its surface (LLP 1014):
             // its Metal layer is never composited, so presenting to it would
             // block on a drawable nobody takes. It is only ever read back into
             // the ancestor's capture — which a change asks for here — and it
             // never wants frames of its own.
             if let outer = e.view.canvasAbove, outer.overlay != nil, entries[outer.id]?.through == true {
-                if m.dirty(e.id) != 0 || (e.wants && now != e.readAt) { outer.needsCapture = true }
                 continue
             }
-            // D4 (d): every frame while editing under the overlay — but not
-            // twice on the turn a batch already captured.
-            if e.through, !e.view.paintedThisTurn, let overlay = e.view.overlay, CanvasesHost.editing(under: overlay) { capture(m, e) }
             m.syncDynamicRange(e.id, view: e.view, layer: e.view.canvasMetal?.layer)
-            guard live(e.view.id) === e, let metal = e.view.canvasMetal, e.wants || m.dirty(e.id) != 0 || e.resized(box(metal)) else { continue }
+            guard live(e.view.id) === e, let metal = e.view.canvasMetal, e.offscreenBox != nil || e.wants && (!settling || e.presentedAt != now) || m.dirty(e.id) != 0 || e.resized(box(metal)) else { continue }
             let wall = CACurrentMediaTime()
             if wall < e.starvedUntil { more = true; continue }
             // Under its frame-rate cap (`Surface::max_fps`), a canvas skips the frames before its deadline.
@@ -543,7 +571,7 @@ final class CanvasesHost {
             rendered += 1
             // A render that drew nothing, as without its drawable, draws when one lands (`renderStarved`)
             e.waiting = (m.presentationFlags?(e.id) ?? 0) & 4 == 0 && !(m.drew.map { $0(e.id) != 0 } ?? (m.starved?(e.id) != 1))
-            if !e.waiting { drawn += 1 }
+            if !e.waiting { e.presentedAt = now; e.offscreenPending = false; e.offscreenBox = nil; drawn += 1 }
             more = more || e.wants
             readPlacements(m, e)
             messages(e)
@@ -580,7 +608,7 @@ final class CanvasesHost {
             rendered += 1
             // A render that drew nothing, as without its drawable, draws when one lands (`renderStarved`)
             e.waiting = (m.presentationFlags?(e.id) ?? 0) & 4 == 0 && !(m.drew.map { $0(e.id) != 0 } ?? (m.starved?(e.id) != 1))
-            if !e.waiting { drawn += 1 }
+            if !e.waiting { e.presentedAt = now; e.offscreenPending = false; e.offscreenBox = nil; drawn += 1 }
             readPlacements(m, e)
             messages(e)
         }

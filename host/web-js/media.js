@@ -9,13 +9,16 @@
 // so a late `pause`, `timeupdate` or refused play never reaches whatever now
 // holds its place (jukebox F1, F5, F6, F20).
 import { onEnd, inflight, journal, data, clock } from "./rt.js"; import { liveById } from "./navigation.js";
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 
 // The media session's actions (LLP 1098 D2, D6): the glue sends them as it
 // sends the element's events, with `seekOffset seekTime fastSeek`.
 const SESSION = ["seekbackward", "seekforward", "seekto", "previoustrack", "nexttrack", "stop"];
 const BOOL = new Set(["autoplay", "controls", "loop", "muted", "playsinline", "disablepictureinpicture", "disableremoteplayback"]);
 export const MEDIA_EVENTS = new Set(["loadedmetadata", "durationchange", "timeupdate", "play", "playing", "pause", "ended", "waiting", "seeking", "seeked", "ratechange", "volumechange", "error", "canplay", "fullscreenchange", ...SESSION]);
-let Glue = null, Install = null;
+let Install = null;
 // Nodes whose props changed: handed to the glue together after the commit
 // that built or changed them, when they are in the document.
 const Dirty = new Set();
@@ -39,14 +42,13 @@ function install(e) {
   if (e.$media.retired) return;
   if (!Dirty.size && Install) queueMicrotask(flush);
   Dirty.add(e);
-  if (Glue) return;
+  if (loads.Glue) return;
   inflight.n++;
-  Glue = new Promise(r => requestAnimationFrame(r)).then(() => { globalThis.exact ??= {}; return import("./media-glue.js"); })
-    .then(() => { Install = globalThis.exact.installMedia; flush(); })
-    .catch(err => journal.push(`media: unavailable: ${err.message}`)).finally(() => inflight.n--);
+  loadOnce(loads, "Glue", () => new Promise(r => requestAnimationFrame(r)).then(() => { globalThis.exact ??= {}; return import("./media-glue.js"); })
+    .then(() => { Install = globalThis.exact.installMedia; flush(); }), err => journal.push(`media: unavailable: ${err.message}`)).finally(() => inflight.n--);
 }
 /** The glue on its way (the agent waits for it before an operation). */
-export const mediaPiece = () => Glue;
+export const mediaPiece = () => loads.Glue;
 /** A `video` built or adopted with its static props (`h`). */
 export function media(e, attrs) {
   if (typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
@@ -56,8 +58,18 @@ export function media(e, attrs) {
   e.exactMedia = { props, handlers: [] };
   if (attrs["data-app-src"]) appSource(e, attrs["data-app-src"]);
   if (attrs["data-app-poster"]) appPoster(e, attrs["data-app-poster"]);
+  const exitFloating = () => {
+    if (document.pictureInPictureElement === e) document.exitPictureInPicture().catch(() => {});
+  };
+  // A route or document can leave while the browser still owns its floating window.
+  const entered = () => e.$media.retired ? exitFloating() : window.addEventListener("pagehide", exitFloating);
+  const left = () => window.removeEventListener("pagehide", exitFloating);
+  e.addEventListener("enterpictureinpicture", entered);
+  e.addEventListener("leavepictureinpicture", left);
   onEnd(() => {
+    left();
     e.$media.retired = true;
+    exitFloating();
     e.$media.release?.();
     globalThis.exact?.removeMedia?.(e);
     // As the wasm host retires a video: stopped, its source let go.
@@ -86,8 +98,8 @@ export function mediaProp(e, name, v) {
 // one; counted in flight, so `clock settle` waits for it. A path with no
 // file is handed to the element as written, which refuses it
 // (`src-not-supported`), as HTML refuses a source it cannot fetch.
-let Files = null;
-const appURL = v => (Files ??= import(new URL("./picker-glue.js", import.meta.url).href).then(() => globalThis.exact.appURL)).then(f => f(v, data.appId));
+
+const appURL = v => (loadOnce(loads, "Files", () => import(new URL("./picker-glue.js", import.meta.url).href).then(() => globalThis.exact.appURL))).then(f => f(v, data.appId));
 function appSource(e, v, then) {
   e.$media.app = v;
   inflight.n++;

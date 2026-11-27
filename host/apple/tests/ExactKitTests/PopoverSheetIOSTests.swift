@@ -962,8 +962,30 @@ final class PopoverSheetIOSTests: XCTestCase {
 
     func testACancelledInteractiveSheetDismissalKeepsItsEntry() throws {
         guard hasScene else { throw missing("scene", "UIKit must run and cancel an interactive dismissal") }
-        let p = try page(), dialog = try XCTUnwrap(p.views[2])
+        let session = ExactApp.shared.makeSession(label: "interactive-sheet")
+        let p = try page(session: session), dialog = try XCTUnwrap(p.views[2])
+        p.session = session
+        p.apply(wireBatch([
+            ["op": "create", "id": 30, "kind": "text", "style": ["font_size": 16]],
+            ["op": "paragraph", "id": 30, "runs": [
+                ["id": 31, "parent": 30, "paint": true, "props": ["text": "Page action"], "style": [:], "handlers": ["press"]]
+            ]],
+            ["op": "frame", "id": 30, "x": 20, "y": 80, "w": 160, "h": 44],
+            ["op": "children", "id": 1, "ids": [30, 2, 20]],
+        ]))
+        var presses: [UInt32] = []
+        p.onPress = { presses.append($0) }
+        let agent = Agent(session: session), tap = ["id": NSNumber(value: 31)]
+        let before = agent.tap(tap)
+        XCTAssertNil(before["error"], "\(before)")
+        XCTAssertEqual(presses, [31])
+        func assertInert(file: StaticString = #filePath, line: UInt = #line) {
+            let refusal = agent.tap(tap)
+            XCTAssertTrue((refusal["error"] as? String)?.contains("inert") == true, "\(refusal)", file: file, line: line)
+            XCTAssertEqual(presses, [31], file: file, line: line)
+        }
         let transition = SheetDismissal(), owner = SheetPresenter(try XCTUnwrap(window?.rootViewController), transition: transition)
+        owner.willPresent = { assertInert() }
         XCTAssertTrue(p.dialogHost.show(dialog, from: nil, over: owner))
         settle { !p.menus.inTransition }
         let sheet = try XCTUnwrap(p.dialogHost.top as? DialogSheetController)
@@ -975,6 +997,7 @@ final class PopoverSheetIOSTests: XCTestCase {
         settle { sheet.transitionCoordinator?.isInteractive == true && transition.started }
         transition.interaction.update(0.4)
         XCTAssertTrue(p.dialogHost.isOpen(dialog))
+        assertInert()
         transition.interaction.cancel()
         settle { sheet.transitionCoordinator == nil && !p.menus.inTransition }
         flushCallbacks()

@@ -145,14 +145,17 @@ extension Agent {
     func nativePointer(_ node: NodeView, request: [String: Any], at point: CGPoint? = nil) -> Bool {
         let snapshot = HeldNode(node)
         let positioned = ["at", "x", "y"].contains { request[$0] != nil }
-        var point = positioned ? tapPoint(request, node: node).map { windowPoint($0) } : point
-        if point == nil, case .success(let item)? = tabItem(node) {
-            point = item.convert(CGPoint(x: item.bounds.midX, y: item.bounds.midY), to: nil)
+        var point = point
+        if positioned || point == nil {
+            // The tap already checked coverage. Waiting for UIKit again here
+            // can deliver another event before pointerdown.
+            var frame: CGRect?
+            if let (control, segment) = presenter.segments.drawn(node) { frame = box(control, region: segment) }
+            else if case .success(let item)? = barItem(node) { frame = box(item.bar, region: item.item) }
+            else if case .success(let tab)? = tabItem(node) { frame = box(tab) }
+            point = tapPoint(request, node: node, drawn: frame).map(windowPoint)
         }
-        if point == nil, case .success(let item)? = barItem(node) {
-            point = item.bar.convert(CGPoint(x: item.item.midX, y: item.item.midY), to: nil)
-        }
-        let at = point ?? windowPoint(tapPoint(request, node: node) ?? .zero)
+        let at = point ?? windowPoint(.zero)
         let path = Agent.fingerPath(from: node), held = Agent.heldPrefix(request)
         fingerPointer(.down, path, at: at, held: held)
         fingerPointer(.up, path, at: at, held: held)
@@ -282,7 +285,10 @@ extension Agent {
         while let cur = f {
             if let node = cur as? NodeView, let field = (node.textArea as UIView?) ?? node.field {
                 // A pill's press, as its tap recognizer takes a finger's (FieldAtoms.swift, LLP 1045.000 D7).
-                if let area = field as? TextArea, let hit = area.atom(at: area.convert(p, from: nil)) { area.pressAtom(hit.range); return ["pressed": Int(node.id), "atom": hit.atom.kind] }
+                if let area = field as? TextArea, let hit = area.atom(at: area.convert(p, from: nil)) {
+                    guard area.pressAtom(hit.range) else { return ["pressed": NSNull()] }
+                    return ["pressed": Int(node.id), "atom": hit.atom.kind]
+                }
                 handoff = presenter.beginPress(control: field)
                 if !field.isFirstResponder { _ = field.becomeFirstResponder() }
                 took = true; break

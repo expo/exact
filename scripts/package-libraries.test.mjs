@@ -3,11 +3,12 @@
 // link is checked on every build. A Linux target's library is the shared object itself, made here as a minimal ELF
 // file, so these cases need no toolchain. Cases that compile a real macOS dylib still need a Mac.
 import { afterAll, expect, test } from 'bun:test';
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { zipSync } from 'fflate';
 import { directDependencies, fetchLibrary, libraryFor, missingDependencies, prepareLibrary, sharedObjectName } from './package-libraries.mjs';
@@ -232,3 +233,114 @@ test('an app\'s dependencies that are not installed are named', () => {
   expect(directDependencies(app).map((d) => d.name)).toEqual(['@scope/above', 'here']);
   expect(missingDependencies(join(scratch, 'no-package-json-here'))).toEqual([]);
 });
+
+for (const scenario of ['ordinary identifier', 'platform conditions', 'product closure', 'unused dependency', 'bundled dependency', 'contained alias', 'workspace sibling', 'workspace example', 'root dependency', 'host tool', 'optional trait', 'receipt alias', 'edited snapshot']) {
+  test.skipIf(process.platform !== 'darwin')(`shipped Swift package with ${scenario}`, async () => {
+    const { swiftPackageGraph } = await import('../host/apple/compose.mjs');
+    const { swiftPackageInventories, swiftPackageInputChanged } = await import('./package-libraries.mjs');
+    const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'swift-input-'))), app = { dir: resolve(dir, 'app'), manifest: {} };
+    const installed = resolve(app.dir, 'node_modules/probe'), authored = resolve(dir, 'probe'), alias = resolve(dir, 'alias');
+    const kit = resolve(authored, 'apple/Kit'), file = 'Sources/Lib/Value.swift';
+    const path = scenario === 'contained alias' ? 'Alias' : 'Kit', swiftPackages = [{ path, products: ['Kit'] }];
+    const source = resolve(installed, 'apple/exact.json');
+    const impl = { swiftPackageRoot: installed, swiftPackagesSource: source, swiftPackages, swiftPackageInterface: 'probe', swiftPackageTarget: scenario === 'host tool' ? 'ios' : 'macos' };
+    const graph = () => swiftPackageGraph(app, [impl])[0];
+    const manifest = (settings = '', extra = '', dependencies = '') => `// swift-tools-version:5.9
+import PackageDescription
+enum Options { static let unsafeFlags = false }
+let package = Package(name: "Kit", products: [.library(name: "Kit", targets: ["Lib"])], targets: [
+  .target(name: "Lib", dependencies: [${dependencies}], swiftSettings: [${settings}])${extra}])
+`;
+    try {
+      mkdirSync(resolve(kit, dirname(file)), { recursive: true });
+      mkdirSync(resolve(installed, 'apple/Kit', dirname(file)), { recursive: true });
+      symlinkSync(authored, alias);
+      writeFileSync(resolve(app.dir, 'package.json'), '{"dependencies":{"probe":"file:../probe"}}');
+      writeFileSync(resolve(authored, 'package.json'), JSON.stringify({ name: 'probe', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+      writeFileSync(resolve(authored, 'exact.json'), '{"kind":"interface","name":"probe"}');
+      writeFileSync(resolve(authored, 'apple/exact.json'), JSON.stringify({ kind: 'implementation', implements: 'probe@1.0.0', platform: 'apple', class: 'Bridge', sources: { swift: ['Bridge.swift'] }, targets: ['macos'], swiftPackages }));
+      writeFileSync(resolve(kit, file), 'public let value = 1327');
+      const pkg = resolve(kit, 'Package.swift');
+      writeFileSync(pkg, manifest());
+      for (const name of ['package.json', 'exact.json', 'apple/exact.json', 'apple/Kit/Package.swift', `apple/Kit/${file}`]) {
+        symlinkSync(resolve(scenario === 'receipt alias' ? alias : authored, name), resolve(installed, name));
+      }
+      if (scenario === 'receipt alias') {
+        const { addedSwiftPackageInputs } = await import('./package-libraries.mjs');
+        assert.deepEqual(addedSwiftPackageInputs(app.dir, 'macos', { probe: 'probe' }, []), ['probe/apple Swift package']);
+        const [{ identity }] = swiftPackageInventories(app, [impl], 'macos');
+        assert.equal(swiftPackageInputChanged(app.dir, identity), false);
+        writeFileSync(resolve(kit, file), 'public let value = 1328');
+        assert.equal(swiftPackageInputChanged(app.dir, identity), true);
+      } else if (scenario === 'edited snapshot') {
+        const first = graph();
+        writeFileSync(resolve(first.path, file), 'public let value = 1327 // cached edit');
+        const next = graph();
+        assert.equal(next.digest, first.digest);
+        assert.equal(readFileSync(resolve(next.path, file), 'utf8'), 'public let value = 1327');
+      } else {
+        if (scenario === 'ordinary identifier') writeFileSync(pkg, manifest('Options.unsafeFlags ? .define("A") : .define("B")'));
+        if (scenario === 'platform conditions') writeFileSync(pkg, manifest('.unsafeFlags(["-O"], .when(platforms: [.linux, .windows]))'));
+        if (scenario === 'unused dependency' || scenario === 'bundled dependency') {
+          const bundled = scenario === 'bundled dependency';
+          const helper = resolve(installed, 'node_modules/Helper');
+          if (bundled) {
+            mkdirSync(helper, { recursive: true });
+            writeFileSync(resolve(helper, 'Package.swift'), manifest().replaceAll('"Kit"', '"Helper"'));
+          }
+          const used = bundled ? '.product(name: "Helper", package: "Helper")' : '';
+          writeFileSync(pkg, manifest('', '', used).replace('], targets:', '], dependencies: [.package(path: "../../node_modules/Helper")], targets:'));
+        }
+        if (scenario === 'contained alias') symlinkSync('../../probe/apple/Kit', resolve(authored, 'apple/Alias'));
+        if (scenario === 'workspace sibling') {
+          mkdirSync(resolve(installed, 'node_modules'));
+          symlinkSync(dir, resolve(installed, 'node_modules/sibling'));
+          mkdirSync(resolve(installed, 'example/node_modules'), { recursive: true });
+          symlinkSync(dir, resolve(installed, 'example/node_modules/sibling'));
+        }
+        if (scenario === 'workspace example') {
+          const example = { dir: resolve(authored, 'example'), manifest: {} };
+          const root = resolve(example.dir, 'node_modules/probe');
+          mkdirSync(dirname(root), { recursive: true });
+          symlinkSync(authored, root);
+          const bound = [{ ...impl, swiftPackageRoot: root, swiftPackagesSource: resolve(root, 'apple/exact.json') }];
+          const initial = swiftPackageGraph(example, bound)[0];
+          assert.equal(swiftPackageGraph(example, bound)[0].path, initial.path);
+        }
+        if (scenario === 'root dependency') {
+          mkdirSync(resolve(installed, 'node_modules'));
+          symlinkSync(dir, resolve(installed, 'node_modules/sibling'));
+          const local = (path, name) => manifest('', '', `.product(name: "Support", package: "${name}")`).replace('], targets:', `], dependencies: [.package(path: "${path}")], targets:`);
+          writeFileSync(pkg, local('../../node_modules/sibling', 'sibling'));
+          assert.throws(graph, /sibling escapes the package directory/);
+          writeFileSync(resolve(installed, 'Package.swift'), manifest('.unsafeFlags(["-O"])').replaceAll('"Kit"', '"Support"'));
+          writeFileSync(pkg, local('../..', 'probe'));
+          assert.throws(graph, /Lib uses unsafeFlags/);
+          writeFileSync(resolve(installed, 'Package.swift'), manifest().replaceAll('"Kit"', '"Support"'));
+        }
+        if (scenario === 'host tool') {
+          const plugin = manifest().replace('swiftSettings: []', 'plugins: [.plugin(name: "Gen")]')
+            .replace('])])', ']), .plugin(name: "Gen", capability: .buildTool(), dependencies: ["Tool"]), .executableTarget(name: "Tool", swiftSettings: [.unsafeFlags(["-O"], .when(platforms: [.macOS]))])])');
+          writeFileSync(pkg, plugin);
+          assert.throws(graph, /Tool uses unsafeFlags/);
+          writeFileSync(pkg, plugin.replace('.macOS', '.iOS'));
+        }
+        if (scenario === 'optional trait') {
+          const traits = manifest('', ', .target(name: "Bench", swiftSettings: [.unsafeFlags(["-O"])])',
+            '.target(name: "Bench", condition: .when(traits: ["Benchmarks"]))')
+            .replace('version:5.9', 'version:6.1').replace('], targets:', '], traits: ["Benchmarks"], targets:');
+          writeFileSync(pkg, traits.replace('traits: ["Benchmarks"], targets:', 'traits: ["Benchmarks", .default(enabledTraits: ["Benchmarks"])], targets:'));
+          assert.throws(graph, /Bench uses unsafeFlags/);
+          writeFileSync(pkg, traits);
+        }
+        if (scenario === 'product closure') {
+          const helper = ', .target(name: "Helper", swiftSettings: [.unsafeFlags(["-O"], .when(platforms: [.macOS]))])';
+          writeFileSync(pkg, manifest('', helper, '.target(name: "Helper", condition: .when(platforms: [.macOS]))'));
+          assert.throws(graph, /Helper uses unsafeFlags/);
+          writeFileSync(pkg, manifest('', helper, '.target(name: "Helper", condition: .when(platforms: [.iOS]))'));
+        }
+        assert.equal(graph().identity, path.toLowerCase());
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 120_000);
+}

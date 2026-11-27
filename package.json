@@ -57,6 +57,7 @@
     "@exact/pedometer": "workspace:*",
     "@exact/altimeter": "workspace:*",
     "@exact/barcode-detection": "workspace:*",
+    "@exact/face-detection": "workspace:*",
     "@exact/text-detection": "workspace:*",
     "@exact/translation": "workspace:*",
     "@exact/calls": "workspace:*",

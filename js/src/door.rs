@@ -142,7 +142,7 @@ pub(crate) unsafe extern "C" fn host_door(
                 if state.baking || (state.validating && !b.is_empty()) {
                     Err("bake".into())
                 } else {
-                    super::storage::kept(state.kept, &b)
+                    super::storage::kept(state.kept, &mut state.replacing, &b)
                 }
             } else if a == "later" {
                 Ok(state.later.then(|| "later".into()))
@@ -150,15 +150,14 @@ pub(crate) unsafe extern "C" fn host_door(
                 if let Some(store) = state.store {
                     (*store).observe_external_read();
                 }
-                // A package's synchronous form is the host's app module's,
-                // beside a native module too.
-                let extension = state.native.is_some()
-                    && state.hosted_call.is_some()
+                // A synchronous package read belongs to the host, even when
+                // the app has a native data module of its own.
+                let extension = state.hosted_call.is_some()
                     && serde_json::from_str::<serde_json::Value>(&b)
                         .ok()
                         .is_some_and(|v| exact_runner::Native::sync_form(&v).is_some());
                 match (&mut state.native, state.store) {
-                    (Some(_), Some(_)) if extension => {
+                    (_, Some(_)) if extension => {
                         let call = state.hosted_call.as_ref().expect("checked above");
                         call(b.as_bytes())
                             .map(|reply| Some(String::from_utf8_lossy(&reply).into_owned()))
@@ -178,6 +177,10 @@ pub(crate) unsafe extern "C" fn host_door(
                     // `code: 'bake'` refusal for it (LLP 1067 D4).
                     _ if state.baking => Err("bake".into()),
                     _ if state.between_answers => Err(no_store("native.call")),
+                    (None, Some(_)) => Err(
+                        "NotSupportedError: no app native module is installed for native.call"
+                            .into(),
+                    ),
                     _ => Err(
                         "native storage is unavailable during bake or in an unconfigured host"
                             .into(),
@@ -186,9 +189,13 @@ pub(crate) unsafe extern "C" fn host_door(
             }
         }
         7 => pure::call(&a, &b).map(Some),
-        // The answer drew secure randomness (LLP 1069.005 D2): the device's,
-        // so bake compiles none of it. No store (an in-process query): no mark.
+        // The answer drew randomness (LLP 1069.005 D2, LLP 1195.000 D2.3/D2.5):
+        // `a == "ambient"` is `Math.random()`, which also latches module-sticky
+        // entropy taint even when no store is attached (module init).
         8 => {
+            if a == "ambient" {
+                state.module_tainted_entropy = true;
+            }
             if let Some(store) = state.store {
                 (*store).observe_entropy();
             }
@@ -345,6 +352,53 @@ pub(crate) unsafe extern "C" fn host_door(
                 }
                 None => Err("report: no such request".into()),
             }
+        }
+        // Ambient wall/monotonic clock read (LLP 1195.000 D2.1, D2.2, D2.5):
+        // latches persistent module clock taint (even with no store at init)
+        // and records `observe_clock` on the store, returning "{epoch},{clock_ms}".
+        30 => {
+            state.module_tainted_clock = true;
+            let (epoch, clock_ms) = match state.store {
+                Some(store) => {
+                    (*store).observe_clock();
+                    let store_epoch = (*store).epoch_at_zero();
+                    if store_epoch > 0.0 {
+                        state.epoch_at_zero = store_epoch;
+                    }
+                    let epoch = if state.baking {
+                        0.0
+                    } else if store_epoch > 0.0 {
+                        store_epoch
+                    } else {
+                        state.epoch_at_zero
+                    };
+                    (epoch, (*store).clock_ms())
+                }
+                None => (
+                    if state.baking {
+                        0.0
+                    } else {
+                        state.epoch_at_zero
+                    },
+                    0.0,
+                ),
+            };
+            Ok(Some(format!("{epoch},{clock_ms}")))
+        }
+        // Isolated --seed substream for Math.random() (LLP 1195.000 D2.3, D2.5):
+        // separate from op 11 (`crypto.getRandomValues`) so SDK jitter never shifts
+        // cryptographic UUIDs. Returns 7 random bytes as hex under agent, else None.
+        31 => {
+            let stream = if a == "init" {
+                state.agent_random_init.as_mut()
+            } else {
+                state.agent_random.as_mut()
+            };
+            Ok(stream.map(|s| {
+                let mut bytes = [0u8; 7];
+                s.fill(&mut bytes);
+                crypto::hex(&bytes)
+            }))
         }
         other => Err(format!("__exact_host: no op {other}")),
     };

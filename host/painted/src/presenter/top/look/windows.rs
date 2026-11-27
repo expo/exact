@@ -288,6 +288,7 @@ pub(super) fn alert(
         menu: None,
         symbols: exact_kernel::SymbolSet::Fluent,
         symbol_weight: 400,
+        non_uniform_radius: false,
     }
 }
 
@@ -350,12 +351,15 @@ mod tests {
                 .map(|(i, title)| Row {
                     node: i as ViewId + 2,
                     title: title.into(),
+                    menu_label: None,
+                    subtitle: None,
                     direction: exact_kernel::Direction::Ltr,
                     symbol: None,
                     destructive: i == 1,
                     enabled: true,
                     cancel: i == 0,
                     checked: false,
+                    checkable: false,
                     opens: None,
                 })
                 .collect(),

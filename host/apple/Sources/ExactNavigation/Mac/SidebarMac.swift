@@ -63,6 +63,8 @@ final class SidebarHost {
     private(set) weak var controller: ExactSidebarController?
     /// The authored tablist the sidebar stands for, hidden while it does.
     private weak var projected: NodeView?
+    /// The root tablist while the sidebar stands for it, which projects the sidebar's split item (LLP 1123 D15).
+    var tablist: NodeView? { projected }
     private var savedAccessibilityHidden = false
     private var syncing = false
     /// The tablist's subtree: a batch that touches none of it leaves the rows.
@@ -185,6 +187,7 @@ final class SidebarHost {
     /// Show what was read, where a controller holds this session's view,
     /// and say in the same step that the tablist's box is the platform's.
     private func present() {
+        defer { controller?.applyItemControls() }
         if rooted, let shown { controller?.showFooter(nil); return project(shown) }
         guard let shown, let controller, controller.hasSidebar, controller.holds(presenter) else { return unproject() }
         controller.show(shown)

@@ -17,6 +17,14 @@ impl<'w, C: Component> Components<'w, C> {
             storage: world.storage::<C>(),
         }
     }
+    /// Visit members in slot order without leasing their values.
+    pub(crate) fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.world.sim_reads::<C>();
+        self.storage
+            .into_iter()
+            .flat_map(|s| s.indices(None))
+            .map(|i| self.world.entity_at(i))
+    }
     /// Test membership without borrowing values, rejecting stale entity handles.
     pub fn has(&self, entity: Entity) -> bool {
         self.world.sim_reads::<C>();

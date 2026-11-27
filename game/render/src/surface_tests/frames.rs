@@ -191,8 +191,24 @@ fn a_resting_world_ticks_input_before_deciding_to_draw() {
         Ready(true),
         "a one-tick change of pose"
     );
-    for _ in 0..4 {
+    let mut reasons = Vec::new();
+    world.draw_reasons(true, &mut |reason| reasons.push(reason.to_owned()));
+    assert!(
+        reasons.iter().any(|s| s == "world:Transform"),
+        "{reasons:?}"
+    );
+    for frame in 0..4 {
         fixture::render(&gpu, &mut world, &live(now)).unwrap();
+        assert_eq!(
+            world.finish_draw_trace(true),
+            crate::development_build().then_some(if frame == 0 { 4 } else { 0 })
+        );
+        reasons.clear();
+        world.draw_reasons(true, &mut |reason| reasons.push(reason.to_owned()));
+        assert!(
+            !reasons.iter().any(|s| s == "world:Transform"),
+            "{reasons:?}"
+        );
         if world.resting {
             break;
         }
@@ -202,6 +218,12 @@ fn a_resting_world_ticks_input_before_deciding_to_draw() {
     now += 3. * PERIOD;
     world.input(&sample(now - PERIOD, 9.8));
     assert_eq!(world.redraw_for_input(now, PERIOD), Ready(true));
+    reasons.clear();
+    world.draw_reasons(true, &mut |reason| reasons.push(reason.to_owned()));
+    assert!(
+        reasons.iter().any(|s| s == "world:Transform"),
+        "{reasons:?}"
+    );
     let tick = world.sim().unwrap().world().tick();
     assert!(fixture::render(&gpu, &mut world, &live(now)).unwrap().1);
     assert_eq!(world.sim().unwrap().world().tick(), tick);
@@ -212,6 +234,63 @@ fn a_resting_world_ticks_input_before_deciding_to_draw() {
         assert_eq!(world.redraw_for_input(now, PERIOD), Ready(true));
         assert!(fixture::render(&gpu, &mut world, &live(now)).unwrap().1);
     }
+}
+
+#[test]
+fn resting_engine_systems_keep_the_picture_when_sensor_samples_arrive() {
+    use exact_game::{Emitter, Follow};
+    struct AtRest;
+    impl Game for AtRest {
+        const ID: &'static str = "resting-systems";
+        type Args = DiceArgs;
+        fn setup(w: &mut World, a: &DiceArgs) {
+            Dice::setup(w, a);
+            if a.rough == 1 {
+                w.spawn((Emitter::sparks().rate(0.),));
+            } else {
+                w.spawn((Transform::default(), Follow::new("die")));
+            }
+        }
+        fn tick(_: &mut World, _: &Input, _: &DiceArgs) {}
+        fn render_idle(_: &World, _: &DiceArgs) -> bool {
+            true
+        }
+    }
+    for kind in [1, 2] {
+        let mut sim = exact_game::Sim::<AtRest>::new(DiceArgs {
+            rough: kind,
+            ..Default::default()
+        })
+        .unwrap();
+        sim.run(100.);
+        let revisions = |w: &World| (w.revision::<Emitter>(), w.revision::<Transform>());
+        let before = revisions(sim.world());
+        sim.sensor(exact_game::SensorKind::Accelerometer, [0.01, 9.8, 0., 0.]);
+        sim.run(100.);
+        assert_eq!(revisions(sim.world()), before, "resting system {kind}");
+    }
+    let Some(gpu) = gpu() else { return };
+    let decisions = [1, 2].map(|kind| {
+        let mut canvas = WorldSurface::<AtRest>::default();
+        canvas.poll_input_before_draw();
+        canvas.clock(false);
+        canvas.bind(&args(false, kind, 0), None).unwrap();
+        let rest = (0..10)
+            .map(|i| f64::from(i) * PERIOD)
+            .find(|&now| !fixture::render(&gpu, &mut canvas, &live(now)).unwrap().1)
+            .expect("the scene settled");
+        (1..=4).all(|i| {
+            let now = rest + f64::from(i) * 100.;
+            canvas.input(&InputEvent::Sensor {
+                sensor: exact_gpu::SensorKind::Accelerometer,
+                values: [i as f32 * 0.01, 9.8, 0., 0.],
+                dropped: 0,
+                at_ms: now - 1.,
+            });
+            canvas.redraw_for_input(now, PERIOD) == std::task::Poll::Ready(false)
+        })
+    });
+    assert_eq!(decisions, [true; 2], "emitter and follower");
 }
 
 #[test]
@@ -339,6 +418,22 @@ fn a_quiet_hook_redraws_for_an_observed_tick_or_a_paused_sensor_change() {
             s.redraw_for_input(1000., PERIOD),
             std::task::Poll::Ready(true),
             "paused={paused}"
+        );
+        let mut reasons = Vec::new();
+        s.draw_reasons(true, &mut |r| reasons.push(r.to_owned()));
+        let expected = if paused {
+            format!("hook:{}", std::any::type_name::<exact_game::SensorState>())
+        } else {
+            "hook:tick".to_owned()
+        };
+        assert!(reasons.iter().any(|s| *s == expected), "{reasons:?}");
+        reasons.clear();
+        s.draw_reasons(false, &mut |r| reasons.push(r.to_owned()));
+        assert!(!reasons.iter().any(|s| s.starts_with("hook:")));
+        fixture::render(&gpu, &mut s, &live(1000.)).unwrap();
+        assert_eq!(
+            s.finish_draw_trace(true),
+            crate::development_build().then_some(1)
         );
     }
 }

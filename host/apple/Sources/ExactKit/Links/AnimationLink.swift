@@ -22,10 +22,20 @@ package protocol BoxAnimating: AnyObject {
     func animatesBox(_ id: UInt32) -> Bool
     /// Whether `id`'s layer plays transform animations (none while it flies).
     func playsTransform(_ id: UInt32, flying: Bool, clock: Double?) -> Bool
+    /// Whether `BoxAnimations` retains any animation, fill, proxy, clip or visibility state for `id`.
+    func tracks(_ id: UInt32) -> Bool
     func forget(_ id: UInt32)
+    func reset()
     /// `id`'s box paints its background colour on `fill` (nil for its own layer), as a box's extension holds its
     /// picture (LLP 1123 D13): its background-colour animations play there.
     func setFill(_ id: UInt32, _ fill: CALayer?, clock: Double?)
+    /// `id`'s translate and scale animations play on `proxy` (nil for its own layer), which the node samples each
+    /// frame: a grouped glass on macOS takes its transform by geometry, which a layer animation never moves.
+    func setTransformProxy(_ id: UInt32, _ proxy: CALayer?, clock: Double?)
+    /// `id`'s clip is `clip`, its layer's own mask (nil while it is none, or
+    /// another mask holds it): its `path` animations play there (LLP
+    /// 1003.003 D7), and a replaced clip takes them in phase.
+    func setClip(_ id: UInt32, _ clip: CALayer?, clock: Double?)
 }
 
 /// No CSS animations: no box animates.
@@ -33,11 +43,15 @@ package final class NoBoxAnimations: BoxAnimating {
     package init() {}
     package func animations(_ id: UInt32, _ payload: [String: Any], layer: CALayer?, clock: Double?) {}
     package func setFill(_ id: UInt32, _ fill: CALayer?, clock: Double?) {}
+    package func setTransformProxy(_ id: UInt32, _ proxy: CALayer?, clock: Double?) {}
+    package func setClip(_ id: UInt32, _ clip: CALayer?, clock: Double?) {}
     package func boxVisibility(_ id: UInt32, hidden: Bool, clock: Double?) {}
     package func seek(clock: Double?) {}
     package func animatesBox(_ id: UInt32) -> Bool { false }
     package func playsTransform(_ id: UInt32, flying: Bool, clock: Double?) -> Bool { false }
+    package func tracks(_ id: UInt32) -> Bool { false }
     package func forget(_ id: UInt32) {}
+    package func reset() {}
 }
 
 /// The slots are set before any session is made; `read` is called on the

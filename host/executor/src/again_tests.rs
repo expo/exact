@@ -12,12 +12,20 @@ struct TestWork;
 impl exact_runner::HostWork for TestWork {}
 
 fn again(core: &Core, ticket: u64) {
-    core.again(ticket)
+    core.again(ticket, RequestClass::Local)
         .expect("a re-ask is never refused for room");
 }
 
 fn state(core: &Core) -> std::sync::MutexGuard<'_, State> {
     core.shared.state.lock().unwrap()
+}
+
+fn waiting_tickets(core: &Core) -> Vec<u64> {
+    state(core)
+        .waiting
+        .iter()
+        .map(|(ticket, _)| *ticket)
+        .collect()
 }
 
 /// Wait, pumping wakes but draining nothing, until `n` ordered outcomes are
@@ -37,7 +45,7 @@ fn work_in_flight(core: &Core) -> (usize, usize) {
     (state.jobs[0].len(), state.running.len())
 }
 
-fn effect(core: &Core, ticket: u64, request: Request) -> Result<(), &'static str> {
+fn effect(core: &Core, ticket: u64, request: Request) -> Result<(), String> {
     // Each candidate meets its own count check, not an earlier refusal's fence.
     core.resume_ordered();
     core.run(job(ticket, request), None)
@@ -101,7 +109,7 @@ fn past_sixteen_reads_and_re_asks_wait_and_effects_are_refused() {
     native.http = HttpScheduling::Ordered;
     let mut auth = Request::auth(vec![]);
     auth.http = HttpScheduling::Ordered;
-    let limit = Err("native executor admission limit reached");
+    let limit = Err("19 ordered request slots requested (18 in use, maximum 16). An effect needs a free ordered slot".into());
     for request in [write(19), Request::storage(vec![]), native, auth] {
         assert_eq!(effect(&core, 19, request), limit);
     }
@@ -141,7 +149,7 @@ fn finished_effects_hold_the_sixteen_until_drained_and_finished_reads_do_not() {
     assert_eq!(state(&core).light, 0);
     assert_eq!(
         core.run(job(16, write(16)), None),
-        Err("native executor admission limit reached")
+        Err("17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into())
     );
     core.resume_ordered();
     assert_eq!(core.drain()[0].0, 0);
@@ -180,7 +188,7 @@ fn a_full_window_of_finished_reads_refuses_the_next_read() {
     until_complete(&core, &woke, 128);
     assert_eq!(
         core.run(job(128, Request::get("https://example.test/read")), None),
-        Err("native executor admission limit reached")
+        Err("129 ordered requests requested (128 in use, maximum 128)".into())
     );
     core.resume_ordered();
     assert_eq!(tickets(collect(&core, &woke, 128)).len(), 128);
@@ -239,7 +247,7 @@ fn room_a_forget_frees_places_a_waiting_re_ask() {
     core.begin_pump();
     core.forget(|ticket| ticket != 0);
     assert!(state(&core).waiting.is_empty());
-    assert_eq!(*state(&core).ordered.back().unwrap(), 128);
+    assert_eq!(state(&core).ordered.back().unwrap().ticket, 128);
     woke.recv_timeout(Duration::from_secs(5)).expect("a wake");
     assert_eq!(
         tickets(collect(&core, &woke, 128)),
@@ -255,7 +263,7 @@ fn room_a_forget_frees_places_a_waiting_re_ask() {
 fn a_forgotten_re_ask_is_dropped_in_every_state() {
     let (core, fixture, woke) = fenced_core();
     again(&core, 17); // behind the refusal: waiting
-    assert_eq!(state(&core).waiting, [17]);
+    assert_eq!(waiting_tickets(&core), [17]);
     fixture.release();
     assert_eq!(
         tickets(collect(&core, &woke, 16)),
@@ -272,7 +280,7 @@ fn a_forgotten_re_ask_is_dropped_in_every_state() {
     for ticket in 100..229 {
         again(&core, ticket);
     }
-    assert_eq!(state(&core).waiting, [228]);
+    assert_eq!(waiting_tickets(&core), [228]);
     core.forget(|ticket| ticket != 228);
     assert!(state(&core).waiting.is_empty());
     // Complete in the window, then forgotten.
@@ -296,7 +304,7 @@ fn re_asks_behind_a_refusal_wait_and_enter_after_it() {
             .unwrap();
     }
     again(&core, 300);
-    assert_eq!(state(&core).waiting, [17, 300]);
+    assert_eq!(waiting_tickets(&core), [17, 300]);
     assert_eq!(state(&core).fenced.len(), 127);
     fixture.release();
     assert_eq!(
@@ -395,12 +403,12 @@ fn lifting_the_fence_with_the_window_full_keeps_re_asks_in_order() {
     core.run(job(501, invalid(501)), None).unwrap();
     again(&core, 602);
     core.run(job(503, write(503)), None).unwrap();
-    assert_eq!(state(&core).waiting, [600, 602]);
+    assert_eq!(waiting_tickets(&core), [600, 602]);
     // The runner let refusal 500 go: the host lifts the fence at once.
     let refused = core.resume_ordered();
     assert_eq!(refused.len(), 1);
     assert_eq!(refused[0].0, 501);
-    assert_eq!(state(&core).waiting, [600, 602]);
+    assert_eq!(waiting_tickets(&core), [600, 602]);
     assert_eq!(state(&core).waiting_set.len(), 2);
     assert_eq!(
         tickets(collect(&core, &woke, 128)),
@@ -439,7 +447,7 @@ fn a_background_round_beside_re_asks_is_admitted_and_behind_writes_refused() {
             job(30, background()),
             Some(Box::new(|| Outcome::Storage(vec![])))
         ),
-        Err("native executor admission limit reached")
+        Err("17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into())
     );
 }
 
@@ -459,5 +467,76 @@ fn retirement_drops_re_asks_and_refuses_later_ones() {
     drop(state);
     let (core, _fixture, _woke) = setup();
     core.shared.state.lock().unwrap().retired = true;
-    assert_eq!(core.again(1), Err("native executor retired"));
+    assert_eq!(
+        core.again(1, RequestClass::Local),
+        Err("native executor retired".into())
+    );
+}
+
+/// A resource re-ask (`RequestClass::Local`) passes an earlier held HTTP read
+/// without waiting for it, but stays behind an earlier `Ordered` send—even
+/// after that non-cancellable send is forgotten while in flight (tombstone).
+/// A mutation re-ask (`RequestClass::Ordered`) keeps its barrier place behind
+/// earlier reads.
+#[test]
+fn resource_re_asks_pass_reads_but_wait_behind_ordered_and_forgotten_sends() {
+    let (core, fixture, woke) = setup();
+    let mut read = job(1, Request::get("https://example.test/hold"));
+    read.class = RequestClass::Read;
+    core.run(read, None).unwrap();
+    fixture.wait_held(1);
+
+    // Resource re-ask passes the held read.
+    core.again(2, RequestClass::Local).unwrap();
+    assert_eq!(tickets(collect(&core, &woke, 1)), [2]);
+
+    // Mutation re-ask waits behind the held read.
+    core.again(3, RequestClass::Ordered).unwrap();
+    assert!(core.drain().is_empty());
+
+    // Release read 1 -> drains 1 then mutation re-ask 3.
+    fixture.release();
+    assert_eq!(tickets(collect(&core, &woke, 2)), [1, 3]);
+    until_settled(&core);
+
+    // Fresh fixture for a forgotten non-cancellable POST barrier holding a resource re-ask.
+    let (core, fixture, woke) = setup();
+    let mut post = Request::get("https://example.test/hold");
+    post.method = "POST".into();
+    core.run(job(10, post), None).unwrap();
+    fixture.wait_held(1);
+    core.again(11, RequestClass::Local).unwrap();
+    assert!(
+        core.drain().is_empty(),
+        "resource re-ask must wait behind an ordered POST"
+    );
+    // Forgetting the running POST leaves a barrier tombstone until it ends.
+    core.forget(|ticket| ticket != 10);
+    assert!(
+        core.drain().is_empty(),
+        "resource re-ask must still wait behind a forgotten running POST"
+    );
+    fixture.release();
+    assert_eq!(tickets(collect(&core, &woke, 1)), [11]);
+    until_settled(&core);
+
+    // A forgotten fenced parallel send readmitted after a fence lifts keeps its
+    // barrier tombstone until it completes, so a later resource re-ask waits.
+    let (core, fixture, woke) = setup();
+    core.shared.state.lock().unwrap().ordered_barrier = true;
+    let mut fenced_post = job(30, Request::get("https://example.test/hold"));
+    fenced_post.request.method = "POST".into();
+    fenced_post.class = RequestClass::Parallel(1);
+    core.run(fenced_post, None).unwrap();
+    core.forget(|ticket| ticket != 30);
+    assert!(core.resume_ordered().is_empty());
+    fixture.wait_held(1);
+    core.again(31, RequestClass::Local).unwrap();
+    assert!(
+        core.drain().is_empty(),
+        "resource re-ask must wait behind a forgotten fenced parallel POST after readmission"
+    );
+    fixture.release();
+    assert_eq!(tickets(collect(&core, &woke, 1)), [31]);
+    until_settled(&core);
 }

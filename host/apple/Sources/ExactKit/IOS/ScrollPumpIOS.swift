@@ -239,6 +239,9 @@ package final class ScrollPump: NSObject, UIScrollViewDelegate {
             p.owners.publish()
         }
         presenter?.stickies.scrolled(nil); scrolled(nil)
+        #if os(iOS)
+        presenter?.textSelection.scrolled(scrollView)
+        #endif
     }
     // The page's element reveals (`IntoView.swift`).
     #if os(iOS)
@@ -250,7 +253,15 @@ package final class ScrollPump: NSObject, UIScrollViewDelegate {
     package func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         presenter?.elementScrolls.userScrolled(scrollView)
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
+        #if os(iOS)
+        presenter?.textSelection.scrollWillBeginDragging(scrollView)
+        #endif
     }
+    #if os(iOS)
+    package func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        if PinchLift.consume(for: scrollView) { targetContentOffset.pointee = scrollView.contentOffset }
+    }
+    #endif
     package func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) } }
     package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { presenter?.session?.frameHealth.endScroll(scrollView) }
     package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { presenter?.elementScrolls.revealEnded(scrollView) }

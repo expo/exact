@@ -3,10 +3,18 @@ import { spawn as systemSpawn, spawnSync as systemSpawnSync } from 'node:child_p
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { plistCommand } from './plist.mjs';
 import { windowsMetalCommand } from './metal.mjs';
+import { resolveAppleLLVM, writtenPath } from '../../scripts/paths.mjs';
+
+export function appleLLVMTool(name, env = process.env) {
+  const bin = env.EXACT_APPLE_LLVM_BIN;
+  if (!bin) return name;
+  const dir = writtenPath(bin);
+  return dir + (dir.endsWith('/') || dir.endsWith(sep) ? '' : '/') + name;
+}
 
 /** `EXACT_EXPERIMENTAL=1` turns on the Apple build's experimental features; each says where it applies. With any other
  *  value, or unset, a build is byte for byte the one it is without them. */
@@ -104,6 +112,7 @@ function cargoEnvironment(args, options, env) {
   const apple = targets.filter(target => /^(aarch64|x86_64)-apple-(ios(-sim)?|watchos(-sim)?|darwin)$/.test(target ?? ''));
   if (!apple.length) return options;
   const environment = { ...env };
+  resolveAppleLLVM(environment);
   let selectedSdk;
   for (const target of apple) {
     const mac = target.endsWith('-darwin'), watch = /-watchos(-sim)?$/.test(target), sim = target.endsWith('-sim') || target === 'x86_64-apple-ios';
@@ -246,7 +255,7 @@ export function appleCommand(command, args, { macDevelopmentSign, ...options } =
   if (command === 'assetutil' && args[0] === '--info' && args.length === 2) return [process.execPath, [fileURLToPath(new URL('./car.mjs', import.meta.url)), ...args], options];
   if (command === 'sips') return [process.execPath, [fileURLToPath(new URL('./image.mjs', import.meta.url)), ...args], options];
   const llvm = { dsymutil: 'dsymutil', lipo: 'llvm-lipo', otool: 'llvm-otool', nm: 'llvm-nm', size: 'llvm-size', strip: 'llvm-strip', install_name_tool: 'llvm-install-name-tool' };
-  if (Object.hasOwn(llvm, command)) command = env.EXACT_APPLE_LLVM_BIN ? resolve(env.EXACT_APPLE_LLVM_BIN, llvm[command]) : llvm[command];
+  if (Object.hasOwn(llvm, command)) command = appleLLVMTool(llvm[command], env);
   return [command, args, options];
 }
 

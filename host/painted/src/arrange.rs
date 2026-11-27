@@ -106,6 +106,13 @@ impl<D: DataSource> Host<D> {
         for receipt in receipts {
             self.arrange_receipt(Some(receipt))?;
         }
+        if let Some(row) = self
+            .runner
+            .section_step_anchor(token)
+            .and_then(|(anchor, _)| self.kernel().node(anchor).map(|node| node.key))
+        {
+            self.flights.reveal.push(row);
+        }
         Ok(())
     }
     /// A grouped drop on its target, which may hold (LLP 1094 D8).

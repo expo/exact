@@ -6,6 +6,7 @@ component App
   state on = true
   state level = 60
   state choice = "b"
+  state interval = "Day"
   state words = "Typed"
   state empty = ""
   action toggle
@@ -18,6 +19,8 @@ component App
     level = value
   action choose(value: string)
     choice = value
+  action selectInterval(value: string)
+    interval = value
   action write(value: string)
     words = value
   action clear(value: string)
@@ -46,6 +49,10 @@ component App
         input value=empty change=clear placeholder="Placeholder" aria-label="Empty field" testId="field-placeholder"
         textarea value=words change=write aria-label="Area" testId="textarea"
         textarea value=empty change=clear placeholder="Placeholder" aria-label="Empty area" testId="textarea-placeholder"
+        row role="radiogroup" aria-label="Interval" testId="segmented-group"
+          for label in ["Day", "Week"] key=label
+            button press=selectInterval(label) role="radio" aria-checked=(label == interval)
+              text label
       // Outside the accent's column: the design's AccentColor alone reaches it.
       row
         progress width=44 height=44 testId="spinner"

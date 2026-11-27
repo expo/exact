@@ -92,7 +92,8 @@ impl WarningSelection {
 /// Warnings from a checked file when analysis refused it.
 pub fn warnings(checked: &Checked<'_>, selection: &WarningSelection) -> Vec<LowerError> {
     crate::control_roles::unlowered();
-    with_text_styles(checked, &TextStyles::new(), Vec::new(), selection)
+    crate::icons::clear(None);
+    with_text_styles(checked, &TextStyles::new(), true, Vec::new(), selection)
 }
 
 pub(crate) use text_styles::{TextStyle, TextStyles};
@@ -105,11 +106,16 @@ fn guards_in<'a>(guards: &[&'a Expr], bindings: Binds<'_>) -> Vec<&'a Expr> {
         .collect()
 }
 
-type WarningContext<'a> = (bool, Option<&'a str>, Vec<&'a Expr>);
+type WarningContext<'a> = (
+    bool,
+    Option<&'a str>,
+    Vec<&'a Expr>,
+    Vec<(&'a str, Option<&'a Expr>)>,
+);
 
 fn warning_regions<'a>(
     node: Visit<'a>,
-    (in_root, back, guards): &WarningContext<'a>,
+    (in_root, back, guards, view_bindings): &WarningContext<'a>,
 ) -> [Option<WarningContext<'a>>; 2] {
     let (in_root, mut back) = (*in_root, *back);
     if let Some((_, _, attrs)) = node.element() {
@@ -117,21 +123,41 @@ fn warning_regions<'a>(
         if keyed && !in_root {
             back = literal(attrs, "navigationBack").filter(|name| !name.is_empty());
         }
-        let inner = (in_root || keyed, back, guards.clone());
+        let inner = (
+            in_root || keyed,
+            back,
+            guards.clone(),
+            view_bindings.clone(),
+        );
         return [Some(inner), None];
     }
     let [then_bindings, else_bindings] = node.bindings();
     let mut then = guards_in(guards, then_bindings);
     then.extend(node.condition().into_iter().flat_map(ruled_out));
+    let mut then_view = view_bindings.clone();
+    if let Some((subject, var)) = node.option_match() {
+        then_view.push((var, Some(subject)));
+    } else if let Some((_, var, index, ..)) = node.repetition() {
+        then_view.push((var, None));
+        if let Some(idx) = index {
+            then_view.push((idx, None));
+        }
+    }
     [
-        Some((in_root, back, then)),
-        Some((in_root, back, guards_in(guards, else_bindings))),
+        Some((in_root, back, then, then_view)),
+        Some((
+            in_root,
+            back,
+            guards_in(guards, else_bindings),
+            view_bindings.clone(),
+        )),
     ]
 }
 
 pub(crate) fn with_text_styles(
     checked: &Checked<'_>,
     lowered: &TextStyles,
+    refused: bool,
     mut out: Vec<LowerError>,
     selection: &WarningSelection,
 ) -> Vec<LowerError> {
@@ -144,14 +170,20 @@ pub(crate) fn with_text_styles(
     let controlled = roles::controlled(&checked_view);
     crate::menu_rows::notes(&checked_view, &mut out);
     crate::symbols::tints(&root.view, checked.file, lowered, &mut out);
-    let start = (false, None, Vec::new());
+    let start = (false, None, Vec::new(), Vec::new());
     let visits = checked_view
         .structure()
         .walk_regions_with(start, warning_regions);
     let (mut seen, mut platform) = (BTreeSet::new(), Vec::new());
     let mut seen_buttons = BTreeSet::new();
-    for (visit, (in_root, back, guards)) in visits {
+    let mut seen_alert_font = BTreeSet::new();
+    let mut role_cache = crate::alert_role::RoleCache::default();
+    let (var_tokens, mut undeclared) =
+        (crate::var_tokens::FileTokens::new(checked.file), Vec::new());
+    for (visit, (in_root, back, guards, view_bindings)) in visits {
         if let Some((tag, positional, attrs)) = visit.element() {
+            // @ref LLP 1123 D5 — an argument's `var()` that only its fallback answers, where a row reads it.
+            crate::var_tokens::carried_undeclared(attrs, &var_tokens, &mut undeclared);
             // A component used twice is inlined twice: one line for its source.
             let span = visit.span();
             let fresh = seen.insert((span.source_id, span.line, span.col, span.end_col));
@@ -168,12 +200,38 @@ pub(crate) fn with_text_styles(
                 roles::button(tag, attrs, visit, span, &guards)
                     .filter(|w| seen_buttons.insert((w.id, w.span))),
             );
-            out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
-            out.extend(roles::alert_font(tag, attrs, &checked.file.styles).filter(|_| fresh));
-            out.extend(roles::level_without_heading(tag, attrs, span).filter(|_| fresh));
-            out.extend(roles::keys(attrs, visit, span, &controlled).filter(|_| fresh));
+            // A later specialization of a component may be the first whose role reaches alertdialog.
+            out.extend(
+                roles::alert_font(
+                    tag,
+                    attrs,
+                    &checked.file.styles,
+                    root,
+                    &view_bindings,
+                    &checked.file.fns,
+                    &mut role_cache,
+                )
+                .filter(|w| seen_alert_font.insert(w.span)),
+            );
+            if fresh {
+                out.extend(roles::dialog_role(tag, attrs, span));
+                out.extend(roles::level_without_heading(tag, attrs, span));
+                out.extend(roles::keys(attrs, visit, span, &controlled));
+            }
             if fresh {
                 line_height::multiplier(attrs, &mut out);
+                if tag == "video" && !has(attrs, "metadata") {
+                    if let Some(policy) = attrs.iter().find(|a| {
+                        a.name == "audiovisualBackgroundPlaybackPolicy"
+                            && crate::media::may_continue(&a.value)
+                    }) {
+                        out.push(LowerError {
+                            id: "lower-video-background-metadata",
+                            message: "Give this video `metadata=` for background playback. Its Android notification otherwise uses the app name.".into(),
+                            span: policy.span,
+                        });
+                    }
+                }
             }
             let keyed = has(attrs, "navigationKey");
             // @ref LLP 1116.010 D5 — a name or a key that meets nothing.
@@ -185,7 +243,16 @@ pub(crate) fn with_text_styles(
                 let declared = checked.file.routes.as_ref().map(|r| r.span);
                 miswiring::navigation_keys(attrs, visit.regions()[0], declared, fresh, &mut out);
             }
-            miswiring::navigation_split(tag, attrs, keyed, keyed && !in_root, fresh, &mut out);
+            // `navigationSplit` as lowering folded it at this instance, where it recorded a constant
+            let split = visit
+                .instance()
+                .and_then(|i| lowered.get(&(span, i, tag.to_owned())));
+            let split = split.and_then(|style| style.as_ref()?.split.as_deref());
+            // Where a value is read speaks of a build lowering takes: while lowering, which judges the value and its place,
+            // refuses this build, its refusals stand alone
+            if !refused {
+                miswiring::navigation_split(tag, attrs, keyed, keyed && !in_root, split, &mut out);
+            }
             let route = in_root && keyed && !has(attrs, "navigationBack");
             // A route that says it has no bar (LLP 1115.000 D5.2) draws its header as written.
             let no_bar = literal(attrs, "navigationBar") == Some("none");
@@ -203,6 +270,7 @@ pub(crate) fn with_text_styles(
             }
         }
     }
+    out.extend(crate::var_tokens::undeclared_warning(&undeclared));
     (checked.file.styles.iter()).for_each(|s| line_height::multiplier(&s.attrs, &mut out));
     out.extend(screens::screen_by_state(checked));
     out.extend(select_after_push::select_after_push(checked));
@@ -222,6 +290,11 @@ pub(crate) fn with_text_styles(
     out.extend(parts::empty_state_in_list(&checking));
     // @ref LLP 1116.021 D7 — a summary card in a grouped list's card.
     out.extend(parts::summary_card_in_list(&checking));
+    // @ref LLP 1057.001 §8.1 — a swipe inside a grouped list, which UIKit draws itself.
+    out.extend(crate::handlers::swipe::unseen_in_grouped(
+        &checking,
+        &checked.file.styles,
+    ));
     // @ref LLP 1121 D8 — a node's own state part it never meets.
     states::dead(&checked_view, &mut out);
     performance_now(root, &checked.file.fns, &mut out);
@@ -238,6 +311,7 @@ pub(crate) fn with_text_styles(
     border::check(&checked_view, &checked.file.styles, lowered, &mut out);
     width::text_px_width(&checked_view, &checked.file.styles, lowered, &mut out);
     svg::use_foreign_object(&checked_view, &mut out);
+    out.extend(crate::icons::warnings());
     out.extend(
         contract_analyze::warnings(checked)
             .into_iter()
@@ -436,7 +510,10 @@ fn pair(op: BinOp, x: Kinds, y: Kinds) -> Kinds {
             TIME | UNSEEN => SPAN,
             _ => TIME,
         },
-        BinOp::Sub if y == TIME => TIME,
+        BinOp::Sub if y == TIME => match x {
+            UNSEEN => SPAN,
+            _ => TIME,
+        },
         _ => join,
     }
 }
@@ -1254,7 +1331,15 @@ mod tests {
         let checking = Checking::new(&checked);
         let element = checking.expanded().structure().roots().next().unwrap();
         let guard = Expr::Str(String::new(), Span::default());
-        let context = (true, Some("back"), vec![&guard]);
+        let context = (true, Some("back"), vec![&guard], vec![]);
         assert_eq!(warning_regions(element, &context), [Some(context), None]);
+    }
+
+    #[test]
+    fn countdown_subtraction_produces_span_while_addition_stays_time() {
+        assert_eq!(pair(BinOp::Sub, UNSEEN, TIME), SPAN);
+        assert_eq!(pair(BinOp::Sub, TIME, UNSEEN), SPAN);
+        assert_eq!(pair(BinOp::Add, UNSEEN, TIME), UNSEEN | TIME);
+        assert_eq!(pair(BinOp::Add, SPAN, TIME), TIME);
     }
 }

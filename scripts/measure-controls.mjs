@@ -52,6 +52,7 @@ export const ROWS = [
   ['radio:disabled', 'accent-color', 'radio-disabled', ACCENT],
   ['range', 'accent-color', 'range', ACCENT],
   ['range:disabled', 'accent-color', 'range-disabled', ACCENT],
+  ['segmented-group', 'accent-color', 'segmented-group', ACCENT],
   ['progress', 'accent-color', 'progress', ACCENT],
   ['spinner', 'accent-color', 'spinner', ACCENT],
   ['select', 'accent-color', 'select', ACCENT],

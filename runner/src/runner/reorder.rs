@@ -34,27 +34,39 @@ impl<D: DataSource> Runner<D> {
         };
         let handle = self.kernel.node_by_key(binding.handle).unwrap().id;
         let grouped = group.is_some();
-        let (accepted, ops) = self.edit_reorder(binding.list, |c, u, _| {
-            if !c.begin_preview(u, binding, token, handle)? {
+        let (section, item, key, ops) = if binding.unwrapped() {
+            let Some((mut section, key)) =
+                super::mounted_reorder::MountedSection::new(self, binding)
+            else {
                 return Ok(None);
-            }
-            let item = c.preview_item();
-            if grouped {
-                c.set_grouped();
-                if ghost {
-                    c.set_hidden(u, item.as_ref().map(|(ident, _)| ident.clone()))?;
+            };
+            let ops = section.paint(&self.kernel, true, ghost);
+            (Some(Box::new(section)), format!("s:{key}"), key, ops)
+        } else {
+            let (accepted, ops) = self.edit_reorder(binding.list, |c, u, _| {
+                if !c.begin_preview(u, binding, token, handle)? {
+                    return Ok(None);
                 }
-            }
-            Ok(item)
-        })?;
-        let Some(Some((item, key))) = accepted else {
-            return Ok(None);
+                let item = c.preview_item();
+                if grouped {
+                    c.set_grouped();
+                    if ghost {
+                        c.set_hidden(u, item.as_ref().map(|(ident, _)| ident.clone()))?;
+                    }
+                }
+                Ok(item)
+            })?;
+            let Some(Some((item, key))) = accepted else {
+                return Ok(None);
+            };
+            (None, item, key, ops)
         };
         self.reorder_owner = Some(binding.list);
         self.reorder_session = Some(Box::new(Session {
             token,
             target: binding.list,
             group,
+            section,
             phase: ReorderPhase::Active,
             ending: None,
             deadline_ms: None,
@@ -71,6 +83,12 @@ impl<D: DataSource> Runner<D> {
     }
     /// True only while the original source binding, pin and action capability live.
     pub(super) fn has_reorder_linked(&self, token: ReorderToken) -> bool {
+        if let Some(s) = self
+            .session()
+            .filter(|s| s.token == token && s.section.is_some())
+        {
+            return s.phase == ReorderPhase::Active && s.section.as_ref().unwrap().current(self);
+        }
         let Some(c) = self.reorder_collection(token.list) else {
             return false;
         };
@@ -151,6 +169,16 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         token: ReorderToken,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        if let Some(s) = self
+            .session()
+            .filter(|s| s.token == token && s.section.is_some())
+        {
+            if s.phase != ReorderPhase::Active {
+                return Ok(None);
+            }
+            let ops = self.end_session(None, false)?;
+            return self.apply_reorder_ops(ops);
+        }
         let Some(c) = self.reorder_collection(token.list) else {
             return Ok(None);
         };
@@ -175,6 +203,13 @@ impl<D: DataSource> Runner<D> {
     /// It says where the session stands, its target, and which mounted
     /// wrapper holds the dragged row now (LLP 1094 D4, D8).
     pub(super) fn reorder_frame_linked(&self, token: ReorderToken) -> Option<ReorderFrame> {
+        if let Some(frame) = self
+            .session()
+            .filter(|s| s.token == token)
+            .and_then(|s| self.mounted_frame(s))
+        {
+            return Some(frame);
+        }
         let mut frame = self
             .reorder_collection(token.list)?
             .preview_frame(&self.kernel, token)?;
@@ -197,7 +232,7 @@ impl<D: DataSource> Runner<D> {
     /// Whether `token` is a live session on a grouped list.
     pub(super) fn is_grouped(&self, token: ReorderToken) -> bool {
         self.session()
-            .is_some_and(|s| s.token == token && s.group.is_some())
+            .is_some_and(|s| s.token == token && (s.group.is_some() || s.section.is_some()))
     }
     fn set_phase(&mut self, token: ReorderToken, phase: ReorderPhase) {
         if let Some(s) = self.session_mut().filter(|s| s.token == token) {
@@ -214,6 +249,20 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<Option<CommitReceipt>, RunnerError> {
         if self.reorder_owner != Some(token.list) {
             return Ok(None);
+        }
+        if let Some(s) = self
+            .session()
+            .filter(|s| s.token == token && s.section.is_some())
+        {
+            if !matches!(s.phase, ReorderPhase::Cancelling | ReorderPhase::Settling) {
+                return Ok(None);
+            }
+            let ops = self
+                .edit_section(|section, kernel| section.restore(kernel))
+                .unwrap();
+            self.reorder_session = None;
+            self.reorder_owner = None;
+            return self.apply(ops).map(Some);
         }
         let Some(c) = self.reorder_collection(token.list) else {
             self.reorder_owner = None;
@@ -295,6 +344,9 @@ impl<D: DataSource> Runner<D> {
         let Some(owner) = self.reorder_owner else {
             return Ok(Vec::new());
         };
+        if self.mounted_section().is_some() {
+            return self.reconcile_group();
+        }
         let Some(c) = self.reorder_collection(owner) else {
             self.reorder_owner = None;
             self.reorder_session = None;

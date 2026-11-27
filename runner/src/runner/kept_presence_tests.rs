@@ -538,3 +538,216 @@ fn presence_retry_deadline_preserves_the_virtual_request_stop_when_recovery_asks
     assert_eq!(r.store.occupancy("token"), Some(Occupancy::Plain));
     assert_eq!(r.timer_due_ms(), None);
 }
+
+/// Two mutations, each data code's `store.unlock` of `token`: fetch tickets
+/// 1, 2, …; `aborted` is what the module's door said since the last take.
+#[derive(Default)]
+struct Unlocks {
+    fetches: u64,
+    aborted: Arc<Mutex<Vec<u64>>>,
+}
+
+impl DataSource for Unlocks {
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        unreachable!("the fixture implements answer")
+    }
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        self.fetches += 1;
+        let mut request = Request::native(br#"{"presence":"unlock","name":"token"}"#.to_vec());
+        request.fetch = Some(self.fetches);
+        Ok(Answer::Later(request))
+    }
+    fn parse(
+        &mut self,
+        _: &mut Store,
+        _: &str,
+        _: &[Value],
+        _: Outcome,
+    ) -> Result<Answer, DataError> {
+        Ok(Answer::Now(Value::Bool(true)))
+    }
+    fn take_aborted(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.aborted.lock().unwrap())
+    }
+    fn ready(&self) -> bool {
+        true
+    }
+    fn grants(&self) -> &str {
+        GRANTS
+    }
+}
+
+const UNLOCKS: &str = r#"component App
+  mutation first as shape bool
+  mutation second as shape bool
+  action one
+    send first = unlock()
+  action two
+    send second = unlock()
+  view
+    column
+      button press=one testId="one"
+        text "One"
+      button press=two testId="two"
+        text "Two"
+"#;
+
+type Slot = Arc<Mutex<Option<Outcome>>>;
+
+/// A session whose `token` is locked, and its two unlocks pressed and
+/// dispatched in order: each one's ticket and reply slot.
+fn two_unlocks() -> (Runner<Unlocks>, Arc<Mutex<Vec<u64>>>, [(u64, Slot); 2]) {
+    let vault = MemoryVault::default();
+    vault.clone().put_plain("token", Some(b"id001")).unwrap();
+    let policy = crate::grants::parse(GRANTS)
+        .unwrap()
+        .presence()
+        .next()
+        .unwrap()
+        .1;
+    let mut backend = Backend::new(Box::new(vault), vec![("token".into(), Some(policy))]);
+    backend.enqueue("token", crate::presence::Op::Protect, None);
+    backend.pump(&crate::presence::Env {
+        can_lock: true,
+        moves: true,
+        now_ms: 0.,
+        faults: crate::presence::Faults::NONE,
+    });
+    let source = Unlocks::default();
+    let aborted = source.aborted.clone();
+    let plan = contract::compile(UNLOCKS).expect("the fixture compiles");
+    let snapshot = backend.snapshot_entries(true);
+    let mut r = Runner::boot_stored(
+        plan,
+        source,
+        Kernel::with_monospace(),
+        snapshot,
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.install_presence(backend, None);
+    assert!(r.store.locked("token"));
+    let calls = ["one", "two"].map(|id| {
+        let k = r.kernel();
+        let button = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id;
+        r.dispatch(button, crate::Event::Press).unwrap();
+        let out = r.take_requests().remove(0);
+        let (slot, reply) = pending();
+        let Dispatch::Run(Work::Later(work)) = r.native_work(&out.request) else {
+            panic!("the unlock waits for the person")
+        };
+        work(reply);
+        (out.ticket, slot)
+    });
+    (r, aborted, calls)
+}
+
+/// The app aborts fetch `fetch`, and the host answers its request aborted.
+fn abort(r: &mut Runner<Unlocks>, aborted: &Mutex<Vec<u64>>, fetch: u64) -> u64 {
+    aborted.lock().unwrap().push(fetch);
+    assert!(r.collected_aborts());
+    let (ticket, outcome) = r.take_request_refusal(false).expect("an answer is owed");
+    r.fulfill(ticket, outcome).unwrap();
+    ticket
+}
+
+#[test]
+fn an_unlock_the_app_aborts_while_queued_leaves_its_queue_and_never_asks() {
+    let (mut r, aborted, [(_, first), (second_ticket, second)]) = two_unlocks();
+    let holds = r.device_holds();
+    assert_eq!(holds.len(), 1, "one check at a time on a name");
+    let hold = holds[0].clone();
+    assert_eq!(abort(&mut r, &aborted, 2), second_ticket);
+    r.answer_hold(hold.ticket, &HoldAnswer::Choice("allow".into()))
+        .unwrap();
+    assert_eq!(
+        body(&first.lock().unwrap().take().unwrap()),
+        r#"{"value":"id001"}"#
+    );
+    assert!(
+        r.device_holds().is_empty(),
+        "the aborted unlock asked: {:?}",
+        r.device_holds()
+    );
+    assert!(!matches!(second.lock().unwrap().take(), Some(o) if body(&o).contains("value")));
+    assert!(r
+        .journal()
+        .any(|l| l.contains("store unlock token: let go")));
+}
+
+#[test]
+fn an_unlock_the_app_aborts_during_its_check_retires_the_ticket_and_frees_the_name() {
+    let (mut r, aborted, [(first_ticket, first), (_, second)]) = two_unlocks();
+    let hold = r.device_holds()[0].clone();
+    assert_eq!(abort(&mut r, &aborted, 1), first_ticket);
+    // The agent's ticket for the first is retired, and the next call on the
+    // name is asked at once rather than behind an answer no one will give.
+    let holds = r.device_holds().to_vec();
+    assert_eq!(holds.len(), 1, "{holds:?}");
+    assert_ne!(holds[0].ticket, hold.ticket);
+    assert!(r
+        .answer_hold(hold.ticket, &HoldAnswer::Choice("allow".into()))
+        .is_err());
+    r.answer_hold(holds[0].ticket, &HoldAnswer::Choice("allow".into()))
+        .unwrap();
+    assert_eq!(
+        body(&second.lock().unwrap().take().unwrap()),
+        r#"{"value":"id001"}"#
+    );
+    assert!(!matches!(first.lock().unwrap().take(), Some(o) if body(&o).contains("value")));
+}
+
+#[test]
+fn a_presence_call_respects_narrowed_request_grants() {
+    let vault = MemoryVault::default();
+    vault.clone().put_plain("token", Some(b"alice")).unwrap();
+    let (backend, snapshot) = reconciled(&vault);
+    let mut r = launch(true, snapshot);
+    r.install_presence(backend, None);
+    // Lock `token` under the app's full grants first.
+    let protect = Request::native(br#"{"presence":"protect","name":"token"}"#.to_vec());
+    let Dispatch::Run(Work::Later(work)) = r.as_person(|r| r.native_work(&protect)) else {
+        panic!("protect runs")
+    };
+    let (slot, reply) = pending();
+    work(reply);
+    assert!(slot.lock().unwrap().take().is_some());
+    r.adopt_presence();
+    assert!(r.store.locked("token"));
+
+    for op in ["unlock", "protect", "unprotect"] {
+        let mut denied = Request::native(
+            serde_json::json!({ "presence": op, "name": "token", "reason": "Read" })
+                .to_string()
+                .into_bytes(),
+        );
+        denied.grants = Some(String::new());
+        let Dispatch::Run(Work::Now(work)) = r.as_person(|r| r.native_work(&denied)) else {
+            panic!("{op} outside narrowed request.grants must be refused at once");
+        };
+        let said: serde_json::Value = serde_json::from_str(&body(&work())).unwrap();
+        assert_eq!(said["error"], "NotSupportedError", "{op}: {said}");
+        assert!(r.device_holds().is_empty(), "{op} must create no hold");
+    }
+
+    let mut allowed = Request::native(
+        serde_json::json!({ "presence": "unlock", "name": "token", "reason": "Read" })
+            .to_string()
+            .into_bytes(),
+    );
+    allowed.grants = Some(GRANTS.to_owned());
+    let Dispatch::Run(Work::Later(work)) = r.as_person(|r| r.native_work(&allowed)) else {
+        panic!("unlock within narrowed request.grants proceeds");
+    };
+    let (slot, reply) = pending();
+    work(reply);
+    assert_eq!(r.device_holds().len(), 1);
+    let hold = r.device_holds()[0].clone();
+    r.answer_hold(hold.ticket, &HoldAnswer::Choice("allow".into()))
+        .unwrap();
+    assert_eq!(
+        body(&slot.lock().unwrap().take().unwrap()),
+        r#"{"value":"alice"}"#
+    );
+}

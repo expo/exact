@@ -251,9 +251,276 @@ impl<D: DataSource> Runner<D> {
     }
 }
 
+impl FieldSelection {
+    /// Carry both UTF-16 offsets through the changed middle (LLP 1102 §3.16).
+    pub fn through_rewrite(self, typed: &str, accepted: &str) -> Self {
+        let a: Vec<_> = typed.encode_utf16().collect();
+        let b: Vec<_> = accepted.encode_utf16().collect();
+        let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+        let suffix = a[prefix..]
+            .iter()
+            .rev()
+            .zip(b[prefix..].iter().rev())
+            .take_while(|(x, y)| x == y)
+            .count();
+        let old_end = (a.len() - suffix) as u32;
+        let new_end = (b.len() - suffix) as u32;
+        let prefix = prefix as u32;
+        let carry = |p: u32| {
+            if p <= prefix {
+                p
+            } else if p < old_end {
+                p.min(new_end)
+            } else {
+                new_end + (p - old_end)
+            }
+        };
+        Self {
+            start: carry(self.start),
+            end: carry(self.end),
+            ..self
+        }
+    }
+}
+
+pub(super) struct InputEdit {
+    view: ViewId,
+    node: exact_plan::NodesId,
+    typed: Option<Value>,
+}
+
+impl<D: DataSource> Runner<D> {
+    pub(super) fn run_input(
+        &mut self,
+        view: ViewId,
+        node: exact_plan::NodesId,
+        handler: &exact_plan::HandlersRow,
+        args: Vec<Value>,
+        frames: &[crate::vm::Frame],
+        composing: bool,
+    ) -> Result<exact_kernel::CommitReceipt, super::RunnerError> {
+        let edit = args
+            .get(handler.args.len as usize)
+            .filter(|v| v.is_str())
+            .map(|v| InputEdit {
+                view,
+                node,
+                typed: (!composing).then(|| v.clone()),
+            });
+        let was = self.poisoned;
+        let result = self.run_action_from(handler.action, args, frames, edit);
+        self.record_ran(
+            "handler",
+            self.plan.action(handler.action).name,
+            was,
+            &result,
+        );
+        result
+    }
+
+    /// Only an equal binding needs a value op that the normal prop diff cannot emit.
+    pub(super) fn reconciled_input(
+        &self,
+        edit: InputEdit,
+        frames: &[crate::vm::Frame],
+        writes: &crate::vm::Outcome,
+    ) -> Option<(exact_kernel::NodeKey, String)> {
+        if writes.writes.is_empty() && writes.row_writes.is_empty() {
+            return None;
+        }
+        let node = self.kernel.node(edit.view)?;
+        if node.node_type != exact_kernel::NodeType::TextInput
+            || !matches!(
+                node.props.str(PropId::Type).unwrap_or("text"),
+                "text" | "search" | "email" | "tel" | "url" | "password"
+            )
+        {
+            return None;
+        }
+        let old = exact_kernel::control::bound_field_value(node.props);
+        if edit.typed.as_ref().and_then(Value::as_str) == Some(old.as_ref()) {
+            return None;
+        }
+        let binding = self
+            .plan
+            .node(edit.node)
+            .bindings
+            .iter()
+            .map(|b| self.plan.binding(b))
+            .find(|b| b.kind == exact_plan::BindingKind::Prop && b.id == PropId::Value as u16)?;
+        let env = self.env(&[], frames);
+        // A direct echo needs no value op. During composition an equal op can
+        // clear the widget's previously held rewrite without replacing its text.
+        let (code, read_frames) =
+            self.plan
+                .read_code_in(self.plan.code(binding.expr), frames, |f| f.region)?;
+        if let [op, a, b, c, d, ret] = code {
+            if *op == exact_plan::Opcode::LoadSlot as u8 && *ret == exact_plan::Opcode::Return as u8
+            {
+                let slot = u32::from_le_bytes([*a, *b, *c, *d]);
+                let written =
+                    if let Some(owner) = self.plan.owner_region(&self.plan.slots[slot as usize]) {
+                        let row = crate::vm::Frame::row_of(read_frames, owner.0)?;
+                        writes
+                            .row_writes
+                            .iter()
+                            .rev()
+                            .find(|(s, _, r)| *s == slot && std::rc::Rc::ptr_eq(r, row))
+                            .map(|(_, v, _)| v)
+                    } else {
+                        writes
+                            .writes
+                            .iter()
+                            .rev()
+                            .find(|(s, _)| *s == slot)
+                            .map(|(_, v)| v)
+                    }?;
+                return (edit.typed.as_ref() != Some(written))
+                    .then(|| (node.key, old.into_owned()));
+            }
+        }
+        reads_assignment(&env, binding.expr, writes).then(|| (node.key, old.into_owned()))
+    }
+}
+
+fn reads_assignment(
+    env: &crate::vm::Env<'_>,
+    expr: exact_plan::Code,
+    writes: &crate::vm::Outcome,
+) -> bool {
+    use crate::vm::{observe_reads, Frame};
+    use exact_plan::Opcode;
+    use std::{
+        cell::{Cell, RefCell},
+        collections::HashSet,
+        rc::Rc,
+    };
+
+    let found = Cell::new(false);
+    let derives = RefCell::new(Vec::new());
+    let observe = |here: &crate::vm::Env<'_>, ins: &crate::vm::Instruction| {
+        let slot = ins.args[0] as u32;
+        match ins.op {
+            Opcode::LoadSlot => {
+                if writes.writes.iter().any(|(s, _)| *s == slot)
+                    || here
+                        .plan
+                        .owner_region(&here.plan.slots[slot as usize])
+                        .and_then(|owner| Frame::row_of(here.frames, owner.0))
+                        .is_some_and(|row| {
+                            writes
+                                .row_writes
+                                .iter()
+                                .any(|(s, _, r)| *s == slot && Rc::ptr_eq(r, row))
+                        })
+                {
+                    found.set(true);
+                }
+            }
+            Opcode::LoadDerive if here.plan.unsettled_body(slot).is_none() => {
+                derives.borrow_mut().push(slot)
+            }
+            _ => {}
+        }
+    };
+    observe_reads(env.plan.code(expr), env, &observe);
+    let mut seen = HashSet::new();
+    while !found.get() {
+        let Some(id) = derives.borrow_mut().pop() else {
+            break;
+        };
+        if seen.insert(id) {
+            observe_reads(
+                env.plan.code(env.plan.derives[id as usize].body),
+                &crate::vm::Env {
+                    frames: &[],
+                    ..*env
+                },
+                &observe,
+            );
+        }
+    }
+    found.get()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_common_suffix_can_include_one_surrogate() {
+        assert_eq!(
+            FieldSelection::caret(2).through_rewrite("abc\u{10000}", "\u{10400}"),
+            FieldSelection::caret(1)
+        );
+    }
+
+    #[test]
+    fn an_input_receipt_names_only_the_editor_whose_action_assigned_a_read_slot() {
+        let plan = contract::compile(
+            r#"shape Form
+  name: string
+  count: number
+
+component App
+  state form = Form(name="A", count=0)
+  state other = "A"
+  state enabled = false
+  derive value = enabled ? other : form.name
+  action update(v: string)
+    form = Form(form, count=form.count + 1)
+  action validate(v: string)
+    other = v
+  action flip(v: string)
+    enabled = true
+  action guarded(v: string)
+    if v == "ok"
+      other = v
+  view
+    column
+      Child(term=value, edit=update)
+      input value=value input=validate testId="observe"
+      input value=value input=flip testId="switch"
+      input value=value input=guarded testId="guard"
+      input input=update testId="free"
+
+component Child
+  props
+    term: string
+    edit: action
+  action write(v: string)
+    edit(v)
+  view
+    input value=term input=write testId="child"
+"#,
+        )
+        .unwrap();
+        let mut runner = Runner::boot(
+            plan,
+            (),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        for (field, text, reconciled) in [
+            ("child", "denied", true),
+            ("free", "raw", false),
+            ("observe", "A", false),
+            ("switch", "switch", true),
+            ("child", "denied", false),
+            ("guard", "ignored", false),
+        ] {
+            let key = runner.kernel().find_first_by_test_id(field).unwrap();
+            let id = runner.kernel().node_by_key(key).unwrap().id;
+            let receipt = runner.dispatch(id, Event::Input(text.into())).unwrap();
+            assert_eq!(
+                receipt.reconcile_field,
+                reconciled.then_some(key),
+                "{field}"
+            );
+        }
+    }
 
     #[test]
     fn edit_payload_keeps_null_empty_and_utf8_data_distinct() {

@@ -1,0 +1,25 @@
+component Settings
+  state rows = ["Account", "Privacy", "Notifications", "Display", "Sound", "Network", "Language", "Storage"]
+  state last = ""
+  action drop(item: string, before: option<string>, event: ReorderEvent)
+    let rest = rows.filter(v => v != item)
+    let at = match before { case some(key) => rest.indexOf(key), case none => rest.length }
+    rows = rest.slice(0, at).concat([item]).concat(rest.slice(at))
+    last = `${item} in ${event.from} to ${event.to}`
+  view
+    column height="100%" padding-top="env(safe-area-inset-top)"
+      text last testId="last"
+      list id="settings" testId="settings" appearance="auto" reorderdrop=drop flex=1
+        section
+          header
+            text "Settings"
+          for name in rows key=name
+            row testId=`row-${name}`
+              text name
+              box reorderFor="settings" testId=`move-${name}` aria-label=`Move ${name}` width="2.5rem" height=36 touch-action="none"
+                text "≡"
+        section
+          header
+            text "About"
+          row
+            text "Version"

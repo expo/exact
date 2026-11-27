@@ -74,7 +74,6 @@ const { backendOrigin, literalBackendOrigin } = await import('../js/bake/src/typ
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
 const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url)) ? await import('../snapback4/web/device-build.mjs') : null;
 const { generate: gameVocabulary } = await import('../game/vocab.mjs');
-
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 /** The app's assembled bundle in this repo — `host/apple/build.mjs --bundle`'s one stable output. */
 export const bundleOf = (app) => appleArtifacts(app).bundle;
@@ -231,6 +230,7 @@ function developerID() {
  * keychain (`xcrun notarytool store-credentials`), and this passes the
  * profile's name; an app-specific password on a command line ends up in the
  * shell history and the process table. */
+export const releaseArtifacts = (app, out) => { const name = appleExecutableName(app); return { name, staged: resolve(out, `${name}.app`), symbols: resolve(out, `${name}.dSYM`), zip: resolve(out, `${name}.zip`), dmg: resolve(out, `${name}.dmg`) }; };
 function release(app) {
   const identity = developerID();
   if (!identity) {
@@ -246,10 +246,9 @@ function release(app) {
   const out = resolve(app.target, 'dist', app.name);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
-  const staged = resolve(out, `${appleExecutableName(app)}.app`);
+  const { name: artifact, staged, symbols, zip, dmg } = releaseArtifacts(app, out);
   sh('/usr/bin/ditto', [bundle, staged]);
   // The production build already stripped the executable; keep its matching dSYM with the release.
-  const symbols = resolve(out, `${app.displayName}.dSYM`);
   sh('/usr/bin/ditto', [`${appleArtifacts(app, { trust: 'production' }).binary}.dSYM`, symbols]);
   console.log(`symbols: ${symbols}`);
   // Sign inside out, with the hardened runtime and a timestamp, which notarisation
@@ -262,7 +261,6 @@ function release(app) {
 
   // A zip is what notarytool takes for an app; ditto and not zip, which
   // mangles the bundle's symlinks and its signature.
-  const zip = resolve(out, `${app.displayName}.zip`);
   sh('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', staged, zip]);
 
   const notarise = (artifact, label) => {
@@ -285,13 +283,13 @@ function release(app) {
   notarise(zip, app.displayName);
   // Staple the ticket into the app, then sign, notarise and staple the DMG (LLP 1156.007 §5.1).
   sh('xcrun', ['stapler', 'staple', staged]);
-  const dmg = resolve(out, `${app.displayName}.dmg`), image = mkdtempSync(resolve(out, '.dmg-'));
-  sh('/usr/bin/ditto', [staged, resolve(image, `${appleExecutableName(app)}.app`)]);
+  const image = mkdtempSync(resolve(out, '.dmg-'));
+  sh('/usr/bin/ditto', [staged, resolve(image, `${artifact}.app`)]);
   symlinkSync('/Applications', resolve(image, 'Applications'));
   sh('hdiutil', ['create', '-volname', app.displayName, '-srcfolder', image, '-ov', '-format', 'UDZO', '-quiet', dmg]);
   rmSync(image, { recursive: true, force: true });
   sh('codesign', ['--force', '--sign', identity, '--timestamp', dmg]);
-  notarise(dmg, `${app.displayName}.dmg`);
+  notarise(dmg, `${artifact}.dmg`);
   sh('xcrun', ['stapler', 'staple', dmg]);
   // The zip carries no ticket of its own; rebuild it from the stapled app.
   rmSync(zip, { force: true });
@@ -346,7 +344,7 @@ export async function setup({check = false, platform = null, device = false, app
     // The nightly builds the web's wasm: with -Zbuild-std from rust-src for size, and without it (a --wasm dev build) from its own wasm32 std.
     // A game's web bake lints its logic on the same nightly, so it takes clippy too.
     run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'llvm-tools', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
-    webToolchainEnv(process.env); // Fetch the nightly standard library's locked sources too.
+    webToolchainEnv(process.env, { recheck: true }); // Fetch the nightly standard library's locked sources too.
     if (output('wasm-bindgen', ['--version']) !== `wasm-bindgen ${bindgen}`)
       run('cargo', [`+${pin.channel}`, 'install', 'wasm-bindgen-cli', '--version', bindgen, '--locked', '--force']);
     if (binaryenVersion(output('wasm-opt', ['--version'])) !== BINARYEN) {
@@ -415,6 +413,7 @@ export async function setup({check = false, platform = null, device = false, app
   const report = prebuilt ? rows : [...(platform ? await platformReport(platform, rows, { device, hermes }) : rows), cratesRow()];
   if (platform === 'android') report.push(...rows.filter(row => row.name === 'Android JDK JIT'));
   printReport(report);
+  if (check && process.platform === 'darwin' && !device && (!platform || platform === 'ios')) await (await import('../host/apple/touches.mjs')).checkSimulatorAccessibility(appDir, app?.id);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
   if (prebuilt) { console.log('Web tools ready for this app.'); return; }
@@ -549,12 +548,12 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
     rows.push(row('iOS SDK', sdk, swift ? `${HOST_SDKS[tv ? 'tvos' : 'ios']} or later (${sdkName})` : sdkName,
       !!sdk && !refused, refused ?? 'install Xcode and select it with DEVELOPER_DIR', tv ? 'tvOS' : 'iOS'));
   }
-  // Rust build scripts compile C with PATH's clang: another toolchain first on PATH can break an iOS build.
+  // Native builds resolve Apple's clang via xcrun --find; another clang earlier on PATH is only informational.
   if (process.platform === 'darwin' && want('clang on PATH')) {
-    const other = ['clang'].map(tool => [tool, Bun.which(tool, { PATH: env.PATH ?? '' }), output('xcrun', ['--find', tool])])
-      .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
-    rows.push(row('clang on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
-      `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
+    const xcode = output('xcrun', ['--find', 'clang']), onPath = Bun.which('clang', { PATH: env.PATH ?? '' });
+    const other = onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath)));
+    rows.push(row('clang on PATH', xcode ? (other ? `${xcode} (PATH has ${onPath})` : "Xcode's") : (onPath ?? 'missing'), "Xcode's (xcrun --find clang)", !!xcode,
+      'install Xcode Command Line Tools (`xcode-select --install`)', 'iOS and macOS builds'));
   } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env, spawnSync, device ? ['iphoneos'] : undefined));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).
   if (!only) { const room = freeSpace(homedir()); if (room) rows.push(row('Free disk', `${room.gb} GB`, `${ROOM_GB} GB for a cold native build`, room.gb >= ROOM_GB, room.text, 'native builds')); }
@@ -920,11 +919,11 @@ export function add(args, say = console.log) {
 export function hatch(args, say = console.log) {
   const scope = args.includes('--app') ? 'app' : args.includes('--window') ? 'window' : 'element';
   const names = args.filter(a => !a.startsWith('--')), word = scope === 'element' ? names.shift() : null;
-  if (scope === 'element' && !/^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$/.test(word ?? '')) throw new Error('hatch: name a word, lowercase letters and digits joined by "-" (exact hatch avatar), or --app, or --window');
+  if (scope === 'element' && !/^[a-z][a-z0-9-]*$/.test(word ?? '')) throw new Error('hatch: name a word, a lowercase letter followed by lowercase letters, digits or "-" (exact hatch avatar), or --app, or --window');
   const app = resolveApp(names[0]), dir = app.dir, manifestPath = resolve(dir, 'app.json');
-  const manifest = existsSync(manifestPath) ? app.manifest : {};
-  const title = manifest.app?.name ?? manifest.name ?? app.name;
-  const camel = (word ?? scope).replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase()), Camel = camel[0].toUpperCase() + camel.slice(1);
+  const manifest = existsSync(manifestPath) ? app.manifest : {}, raw = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {};
+  const title = String(manifest.app?.name ?? manifest.name ?? app.name).replace(/[\r\n\u2028\u2029]+/g, ' ');
+  const camel = (word ?? scope).replace(/-([a-z])/g, (_, c) => c.toUpperCase()).replaceAll('-', '_'), Camel = camel[0].toUpperCase() + camel.slice(1);
   const wrote = [], todo = [];
   const write = (path, text) => { if (existsSync(path)) return false; mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, text); wrote.push(path); return true; };
   // A line added above a marker in a file this verb wrote; in a module of the app's own there is none, and the line is shown.
@@ -1143,6 +1142,7 @@ pub type ExactHatches = AppHatches;
     if (scope === 'element') {
       mark(main, '// exact:functions', `/// The \`${word}\` hatch: built (\`element.is_new()\`) and changed (a \`data-*\` word or the box's size moved).
 /// What it gives up here: nothing beyond the call.
+#[allow(non_snake_case)]
 fn ${snake}_hatch<H: Hatches>(element: &Element, _context: &mut Context<'_, H>) {
     if element.is_new() {
         // element.overlay().draw(|c, w, h| { c.set_fill_style_str("#f59e0b"); c.fill_rect(0.0, 0.0, w, h); });
@@ -1151,6 +1151,7 @@ fn ${snake}_hatch<H: Hatches>(element: &Element, _context: &mut Context<'_, H>) 
 }
 
 /// The node has left: stop what the hatch started for it.
+#[allow(non_snake_case)]
 fn ${snake}_hatch_ended<H: Hatches>(_element: &Element, _context: &mut Context<'_, H>) {}
 `, 'add its functions to your hatches file');
       mark(main, '// exact:elementEnded', `            ${JSON.stringify(word)} => ${snake}_hatch_ended(element, context),`, 'call it from your element_ended');
@@ -1168,7 +1169,7 @@ import dev.exact.canvas.ExactApp
 import dev.exact.canvas.ExactElement
 import dev.exact.canvas.ExactHatches
 /**
- * ${title}'s hatches on Android. Written by \`exact hatch\`; yours from here. Called on the main thread. A node is
+ * ${title.replaceAll('*/', '* /')}'s hatches on Android. Written by \`exact hatch\`; yours from here. Called on the main thread. A node is
  * painted by exact2: a hatch has its box and words, acts on it as a person would (click, focus, blur, input), hears
  * its input (observe), shows a view of its own in its box (host), and keeps time by exact2's clock (frames, after).
  */
@@ -1213,20 +1214,20 @@ class Hatches : ExactHatches() {
   if (!platforms.length) throw new Error(`hatch: ${app.name} builds no target a hatch can be written for: name a host in app.json (web, ios, macos, android)`);
   if (scope === 'element') {
     // The declaration (§5): the word, with the platforms a stub was written for. A list means every platform.
-    const had = manifest.hatches;
+    const had = raw.hatches;
     if (Array.isArray(had)) { if (!had.includes(word)) had.push(word); }
-    else manifest.hatches = { ...(had ?? {}), [word]: [...new Set([...(had?.[word] ?? []), ...platforms])] };
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    else raw.hatches = { ...(had ?? {}), [word]: [...new Set([...(had?.[word] ?? []), ...platforms])] };
+    writeFileSync(manifestPath, JSON.stringify(raw, null, 2) + '\n');
   }
   // The app hatch reads state only through the root's data-* words, and a word app.json `data` lacks fails the bake.
-  const declare = scope === 'app' && !Array.isArray(manifest.data);
+  const declare = scope === 'app' && !Array.isArray(raw.data);
   if (declare) {
-    manifest.data = [];
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    raw.data = [];
+    writeFileSync(manifestPath, JSON.stringify(raw, null, 2) + '\n');
   }
   say(`${scope === 'element' ? `hatch="${word}"` : `the ${scope} hatch`} for ${platforms.join(', ')}${wrote.length ? `:\n  wrote ${wrote.map(f => f.slice(dir.length + 1)).join('\n  wrote ')}` : ': its files were already there'}`);
-  if (scope === 'element') say(`  app.json hatches: ${JSON.stringify(manifest.hatches)}\n  mark a node in app.contract: column hatch="${word}"`);
-  if (scope === 'app') say(`  app.json data: ${JSON.stringify(manifest.data)}${declare ? ' (added)' : ''}: name each data-* word on the root that the hatch reads ("booted" for data-booted); Swift reads it as app.data[.booted]`);
+  if (scope === 'element') say(`  app.json hatches: ${JSON.stringify(raw.hatches)}\n  mark a node in app.contract: column hatch="${word}"`);
+  if (scope === 'app') say(`  app.json data: ${JSON.stringify(raw.data)}${declare ? ' (added)' : ''}: name each data-* word on the root that the hatch reads ("booted" for data-booted); Swift reads it as app.data[.booted]`);
   for (const line of todo) say(`  to do, in ${line}`);
   return { wrote, todo, platforms };
 }
@@ -1272,19 +1273,19 @@ function sections(text) {
 const TOPICS = {
   log: 'The driver\'s operations', sheet: 'Recipe: a navigation stack', push: 'Recipe: a navigation stack',
   'tab bar': 'Recipe: tabs', 'back button': 'Recipe: a navigation stack', share: 'Host commands',
-  'dark mode': 'Recipe: theme: colours, light and dark, icons',
+  'dark mode': 'Recipe: theme: colours, light and dark, icons', colour: 'Recipe: theme: colours, light and dark, icons',
   // An icon's `svg` file; a drawing in a row (the waveform recipe) is `docs waveform`.
   svg: 'Recipe: theme: colours, light and dark, icons',
   'safe area': 'Declarations',
   // A module's `func call`; the tools recipe's title says "calls" of tool lines, which `docs tool` finds.
-  call: 'Recipe: a native module in Swift',
+  call: 'Answer a native call in Swift or Kotlin',
   // Said densely in passing elsewhere: the declared sources' bullets, a native module's `later(…)`.
   optimistic: 'Optimistic writes: the overlay', later: 'Rust data sources',
   font: 'Recipe: app.json, assets and modules', image: 'Recipe: app.json, assets and modules',
   deploy: 'Recipe: porting an app, a release build, splitting the work',
   accessibility: 'Native views: accessibility', strings: 'Recipe: app.json, assets and modules',
-  list: 'Recipe: list rows: search, swipe, filter and long-press', midi: 'MIDI: `exactMIDI`, `sendMIDI`, `midimessage`',
-  'sign-in provider': 'Sign-in providers (`@exact/oauth`)', transition: 'Recipe: motion', storage: 'Recipe: files, SQLite and grants',
+  list: 'Recipe: list rows: search, swipe, filter and long-press', swipe: 'Recipe: list rows: search, swipe, filter and long-press', midi: 'MIDI: `exactMIDI`, `sendMIDI`, `midimessage`',
+  'sign-in provider': 'Sign-in providers (`@exact/oauth`)', transition: 'Recipe: motion', storage: 'Recipe: files, SQLite and grants', 'text overflow': 'Porting a React Native app',
 };
 
 const STOP = new Set(['a', 'an', 'and', 'by', 'for', 'in', 'it', 'its', 'of', 'on', 'or', 'the', 'to', 'you']);
@@ -1372,7 +1373,6 @@ async function main(argv) {
   const [verb, name, ...rest] = argv;
   if (verb === 'tamber') { console.error('exact: rename the tamber verb to forma: use `exact forma`'); return process.exit(2); }
   if (!verb || verb === '--help' || verb === '-h' || verb === 'help') return console.log(USAGE);
-  // Help before any work (`setup --help` installed, `new --help` wrote an app); the compiler answers its own.
   if (verb !== 'contract' && argv.some(arg => arg === '--help' || arg === '-h')) return console.log(helpText(verb, { all: argv.includes('all') }) ?? USAGE);
   if (verb === 'game' && name === 'vocab') return import('../game/vocab.mjs').then(m => m.main(rest));
   if (verb === 'status' || verb === 'web' && rest.includes('--ready')) {
@@ -1462,6 +1462,7 @@ async function main(argv) {
     await snapbackDevice.devicePreflight(app, nextOrigin ? [nextOrigin] : []);
     return;
   }
+  if (verb === 'dev') { if (!name) { console.error('exact dev: name an app (exact list)'); process.exit(2); } const r = spawnSync(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', name, ...rest], { stdio: 'inherit' }); process.exit(r.status ?? 1); }
   if (!['run', 'install', 'uninstall', 'release', 'appstore'].includes(verb)) { console.error(`exact: no verb ${verb}\n\n${USAGE}`); process.exit(2); }
   if (!name) { console.error(`exact ${verb}: name an app (exact list)`); process.exit(2); }
   // An app outside the repository (EXACT_APP_DIR, or a path): a bare `run` of one that names no native platform runs
@@ -1492,7 +1493,6 @@ async function main(argv) {
   if (verb === 'install') return install(app, build(app));
   return uninstall(app);
 }
-
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { await main(process.argv.slice(2)); }
   catch (e) { console.error(`exact: ${e.message}`); process.exit(1); }

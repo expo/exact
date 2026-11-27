@@ -14,8 +14,10 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rm
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { drivable } from '../../scripts/coverage.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
-import { galleryCache } from './dev-gallery.mjs';
+import { whenRendered } from '../web/engagement.js';
+import { frameBuildQueue, galleryCache } from './dev-gallery.mjs';
 import { FRAME_ANCESTORS } from '../../scripts/forma-server.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -38,14 +40,14 @@ function copy(id) {
   return dir;
 }
 
-async function devLoop(dir, env = {}) {
+async function devLoop(dir, env = {}, args = []) {
   const listener = createServer();
   await new Promise((ok) => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
   await new Promise((ok) => listener.close(ok));
   // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): the dist sits in a directory of its own.
   const dist = join(mkdtempSync(join(tmpdir(), 'exact-dev-gallery-')), 'dist');
-  const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', dir, '--port', String(port)], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', dir, '--port', String(port), ...args], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   dev.stderr.on('data', (d) => { out = (out + d).slice(-20000); });
   await new Promise((ok, fail) => {
@@ -72,7 +74,7 @@ function frames(url) {
 
 const until = async (what, ms = 300_000) => {
   const end = Date.now() + ms;
-  while (!what()) { if (Date.now() > end) throw new Error('timed out'); await Bun.sleep(100); }
+  while (!await what()) { if (Date.now() > end) throw new Error('timed out'); await Bun.sleep(100); }
 };
 
 test('the gallery: made only once a page asks through the gate, its own build, stream and registration; a kept design edit is a batch to the app and a build to the gallery, never crossing; stopped when idle and with the loop', async () => {
@@ -380,3 +382,417 @@ export default { caption: ([title]) => prefix + title } satisfies Partial<TypeSc
     rmSync(dir, { recursive: true, force: true });
   }
 }, 300_000);
+
+test('two frame clients pin independently, pick their own source and take their own value batches', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-frame-channel-'));
+  mkdirSync(join(dir, 'frames'));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Canvas', app: { name: 'Canvas', id: 'test.frame-channel' } }));
+  writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "App"\n');
+  const theme = join(dir, 'app.forma'), source = 'forma canvas\n\naxes\n  tone = warm | cool\n\ntheme\n  ink = #123456\n';
+  writeFileSync(theme, source);
+  const frame = 'component Frame\n  view\n    text "Pick me" margin-top=50 color="ink" testId="pick"\n      :hover\n        opacity=0.5\n';
+  for (const [name, prefix] of [['a', ''], ['b', '// Frame B\n'], ['late', '']]) writeFileSync(join(dir, 'frames', name + '.contract'), prefix + frame);
+  const loop = await devLoop(dir);
+  let browser;
+  try {
+    browser = await suiteBrowser('chromium');
+    const context = await browser.newContext();
+    const paths = ['/__dev/frames/a/', '/__dev/frames/b/', '/'];
+    const messages = [[], []];
+    const app = await context.newPage(), cdp = await context.newCDPSession(app), streams = new Map();
+    await cdp.send('Network.enable');
+    cdp.on('Network.requestWillBeSent', ({ requestId, request }) => {
+      const i = paths.slice(0, 2).findIndex(path => request.url === loop.base + path + '__dev/stream');
+      if (i >= 0) streams.set(requestId, i);
+    });
+    cdp.on('Network.eventSourceMessageReceived', ({ requestId, data }) => {
+      if (streams.has(requestId)) messages[streams.get(requestId)].push(JSON.parse(data));
+    });
+    await app.goto(loop.base);
+    await app.getByText('App', { exact: true }).waitFor();
+    await app.evaluate(paths => {
+      for (const [i, src] of paths.entries()) document.body.append(Object.assign(document.createElement('iframe'), { src, name: 'frame' + i }));
+    }, paths.slice(0, 2));
+    await until(() => app.frame('frame0') && app.frame('frame1'));
+    const a = app.frame('frame0'), b = app.frame('frame1');
+    await Promise.all([a, b].map(f => f.getByText('Pick me', { exact: true }).waitFor({ timeout: 120_000 })));
+    const { token } = await (await fetch(loop.base + '/__forma/token')).json();
+    const call = async (body, path = '/__forma') => (await (await fetch(loop.base + path, { method: 'POST',
+      headers: { 'x-exact-forma-token': token }, body: JSON.stringify(body) })).json());
+    let builds;
+    await until(async () => { builds = (await call({ method: 'hello' })).ok.builds; return paths.every(p => builds.some(row => row.status?.location === p)); }, 10_000);
+    const id = path => builds.find(row => row.status.location === path).id;
+    const digest = builds.find(r => r.id === id(paths[1])).planDigest;
+    expect(digest).toBeString();
+    expect(builds.find(r => r.id === id(paths[0])).planDigest).toBe(digest);
+    const size = page => page.evaluate(() => getComputedStyle(document.documentElement).fontSize);
+    await call({ after: 0, wait: false, client: 'tool' }, '/__forma/events');
+    const otherSizes = await Promise.all([size(b), size(app)]);
+    expect((await call({ method: 'pin', client: 'tool', build: id(paths[0]), pin: { rootFontSize: 29 } })).ok).toBeTruthy();
+    await until(async () => await size(a) === '29px');
+    expect(await Promise.all([size(b), size(app)])).toEqual(otherSizes);
+    expect((await call({ method: 'preview', client: 'tool', build: id(paths[1]), axis: 'tone', value: 'cool' })).ok).toBeTruthy();
+    await until(() => messages[1].some(m => m.kind === 'pin' && m.pin?.mode?.tone === 'cool'));
+    expect(messages[0].some(m => m.pin?.mode?.tone === 'cool')).toBe(false);
+    for (const [i, page] of [a, b].entries()) {
+      await page.evaluate(() => { window.originalFrame = true; });
+      messages[i].length = 0;
+    }
+    writeFileSync(theme, source.replace('#123456', '#654321'));
+    await until(() => loop.said().includes('the batch stands'), 30_000);
+    for (const [i, page] of [a, b].entries()) {
+      await until(async () => await page.getByTestId('pick').evaluate(el => getComputedStyle(el).color) === 'rgb(101, 67, 33)', 30_000);
+      expect(messages[i].some(m => m.kind === 'forma-batch' && m.tokens.some(t => t.name === 'ink'))).toBe(true);
+      expect(messages[i].some(m => m.reload)).toBe(false);
+      expect(await page.evaluate(() => window.originalFrame)).toBe(true);
+    }
+    const files = (await call({ method: 'hello' })).ok.files;
+    const scrub = await call({ method: 'scrub', client: 'tool', files, ops: [{ op: 'set-token', name: 'ink', value: '#123123' }] });
+    expect(scrub.ok?.scrub).toBeString();
+    const color = page => page.getByTestId('pick').evaluate(el => getComputedStyle(el).color);
+    await until(async () => (await Promise.all([color(a), color(b)])).every(c => c === 'rgb(18, 49, 35)'));
+    const late = await context.newPage();
+    await late.goto(loop.base + '/__dev/frames/late/');
+    await late.getByTestId('pick').waitFor();
+    await until(async () => await color(late) === 'rgb(18, 49, 35)', 8_000);
+    await late.close();
+    expect((await call({ method: 'scrub-cancel', client: 'tool', scrub: scrub.ok.scrub })).ok?.ended).toBe('cancelled');
+    await until(async () => (await Promise.all([color(a), color(b)])).every(c => c === 'rgb(101, 67, 33)'));
+    const keep = await call({ method: 'scrub', client: 'tool', files, ops: [{ op: 'set-token', name: 'ink', value: '#123123' }] });
+    const snapshot = async i => (await fetch(loop.base + paths[i] + '__dev/design')).json();
+    const beforeRelease = await Promise.all([snapshot(0), snapshot(1)]);
+    expect((await call({ method: 'scrub-release', client: 'tool', scrub: keep.ok.scrub })).ok?.scrub).toBe(keep.ok.scrub);
+    await until(async () => readFileSync(theme, 'utf8').includes('#123123') && (await Promise.all([color(a), color(b)])).every(c => c === 'rgb(18, 49, 35)'));
+    for (const [i, page] of [a, b].entries()) {
+      await until(async () => (await snapshot(i)).scrub?.rev > beforeRelease[i].scrub.rev, 8_000);
+      const { structure, design, tokens } = beforeRelease[i];
+      expect(await snapshot(i)).toMatchObject({ structure, design, tokens });
+      const cursor = await call({ after: 0, wait: false, client: 'tool' }, '/__forma/events');
+      const build = id(paths[i]);
+      expect((await call({ method: 'inspect', client: 'tool', build, on: true })).ok).toBeTruthy();
+      await page.locator('#exact-inspect').waitFor();
+      const table = await (await fetch(loop.base + paths[i] + '__dev/dev-inspect.json')).json();
+      expect(table.plan).toBe(digest);
+      await page.getByTestId('pick').scrollIntoViewIfNeeded();
+      const box = await page.getByTestId('pick').boundingBox();
+      await app.mouse.click(box.x + 3, box.y + box.height / 2);
+      let picked;
+      await until(async () => { const e = await call({ after: cursor.seq, epoch: cursor.epoch, wait: false, client: 'tool' }, '/__forma/events'); return picked = e.events?.find(e => e.event === 'selection' && e.build === build); }, 8_000);
+      expect(picked.readOnly).toBeNull();
+      expect(picked.source).toMatchObject({ file: 'frames/' + ['a','b'][i] + '.contract', line: 3 + i, component: 'Frame' });
+      expect(picked.source.col).toBeGreaterThan(0);
+      const at = [{ file: picked.source.file, line: picked.source.line, col: picked.source.col }];
+      const outlined = await call({ method: 'outline', client: 'tool', at });
+      expect(outlined.ok?.builds).toContain(build);
+      const site = await page.getByTestId('pick').getAttribute('data-site');
+      expect((await call({ method: 'hold', client: 'tool', build, site: Number(site), state: 'hover', plan: digest })).ok?.held).toBe(true);
+      await until(async () => (await call({ method: 'hello' })).ok.builds.find(b => b.id === build)?.held?.state === 'hover', 5_000);
+      expect((await call({ method: 'hold', client: 'tool', build, state: null })).ok?.held).toBe(true);
+    }
+    const survivors = [id(paths[0]), id('/')].sort();
+    await app.locator('iframe[name="frame1"]').evaluate(node => node.remove());
+    await until(async () => (await call({ method: 'hello' })).ok.builds.length === 2);
+    expect((await call({ method: 'hello' })).ok.builds.map(row => row.id).sort()).toEqual(survivors);
+  } finally {
+    await browser?.close();
+    await loop.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 300_000);
+
+test('a frame rebuilds for a sound baked into its plan, both retry an unknown input, and public assets stay current without a frame build', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-frame-inputs-'));
+  const entry = 'component Frame\n  view\n    text "Preview"\n';
+  mkdirSync(join(dir, 'frames'));
+  mkdirSync(join(dir, 'assets'));
+  writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "App"\n');
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Inputs', app: { name: 'Inputs', id: 'test.frame-inputs' } }));
+  writeFileSync(join(dir, 'frames/a.contract'), 'sound "assets/click.wav"\n\n' + entry);
+  writeFileSync(join(dir, 'frames/b.contract'), entry);
+  const sound = join(dir, 'assets/click.wav'), note = join(dir, 'assets/card.svg');
+  const card = width => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="12"/>`;
+  cpSync(join(ROOT, 'apps/metronome/assets/click-high.wav'), sound);
+  writeFileSync(note, card(17));
+  let loop, browser;
+  const streams = [];
+  try {
+    loop = await devLoop(dir);
+    const pages = ['a', 'b'].map(name => loop.base + '/__dev/frames/' + name + '/');
+    streams.push(...pages.map(url => frames(url + '__dev/stream')));
+    await until(() => streams.every(s => s.got.some(m => m.reload === 1)));
+    const plans = () => Promise.all(pages.map(async url => Buffer.from(await (await fetch(url + 'app.plan')).arrayBuffer())));
+    const before = await plans();
+    browser = await suiteBrowser('chromium');
+    const page = await (await browser.newContext()).newPage();
+    await page.addInitScript(() => addEventListener('DOMContentLoaded', () => {
+      const image = document.body.appendChild(new Image());
+      image.id = 'dynamic-asset';
+      image.src = ['/assets/card', 'svg'].join('.');
+    }));
+    await page.goto(pages[0]);
+    const displayed = width => page.waitForFunction(w => document.getElementById('dynamic-asset')?.naturalWidth === w, width);
+    await displayed(17);
+    const mark = () => loop.said().length;
+    const started = at => [...loop.said().slice(at).matchAll(/^([ab]): building$/gm)].map(m => m[1]).sort();
+    let at = mark();
+    writeFileSync(note, card(23));
+    await displayed(23);
+    expect(await Promise.all(pages.map(async url => (await fetch(url + 'assets/card.svg')).text()))).toEqual([card(23), card(23)]);
+    await until(() => loop.said().slice(at).includes('edit → plan ready'));
+    expect(started(at)).toEqual([]);
+    await until(() => streams[0].got.some(m => m.reload === 2));
+
+    at = mark();
+    const oldSound = readFileSync(sound);
+    cpSync(join(ROOT, 'apps/metronome/assets/click-low.wav'), sound);
+    const servedSounds = () => Promise.all(pages.map(async url => Buffer.from(await (await fetch(url + 'assets/click.wav')).arrayBuffer())));
+    expect(await servedSounds()).toEqual([oldSound, readFileSync(sound)]);
+    await until(async () => !(await plans())[0].equals(before[0]));
+    expect(await servedSounds()).toEqual([readFileSync(sound), readFileSync(sound)]);
+    await until(() => loop.said().slice(at).includes('edit → plan ready'));
+    expect(started(at)).toEqual(['a']);
+    expect((await plans())[1]).toEqual(before[1]);
+
+    at = mark();
+    writeFileSync(join(dir, 'new-input.dat'), 'new');
+    await until(() => started(at).length >= 2);
+    expect(started(at)).toEqual(['a', 'b']);
+  } catch (error) {
+    throw new Error(`${error.message}\n${loop?.said() ?? ''}`, { cause: error });
+  } finally {
+    await browser?.close();
+    for (const stream of streams) stream.close();
+    await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test('fifty frames share build slots, favor open streams and read the latest waiting edit once', async () => {
+  const queue = frameBuildQueue(3), builds = [], finish = [], values = new Map(), held = new Set();
+  let active = 0, peak = 0;
+  const jobs = Array.from({ length: 50 }, (_, id) => async () => {
+    peak = Math.max(peak, ++active);
+    builds.push([id, values.get(id)]);
+    await new Promise(resolve => finish.push(resolve));
+    --active;
+  });
+  const ask = id => queue.add(jobs[id], () => held.has(id));
+  jobs.forEach((_, id) => ask(id));
+  await until(() => builds.length === 3);
+  held.add(49);
+  for (let value = 1; value <= 5; ++value) { values.set(49, value); ask(49); }
+  queue.remove(jobs[9]);
+  finish.shift()();
+  await until(() => builds.length === 4);
+  expect(builds[3]).toEqual([49, 5]);
+  while (active) { finish.splice(0).forEach(done => done()); await Bun.sleep(0); }
+  expect(peak).toBe(3);
+  expect(builds.map(([id]) => id).sort((a, b) => a - b)).toEqual(jobs.map((_, id) => id).filter(id => id !== 9));
+});
+
+test('a streamless request advances while a connected frame keeps asking to build', async () => {
+  const queue = frameBuildQueue(1), calls = [];
+  let release;
+  queue.add(async () => { await new Promise(done => { release = done; }); }, () => true);
+  queue.add(async () => { calls.push('waiting'); }, () => false);
+  const edit = async () => { calls.push('editing'); if (calls.length < 5) queue.add(edit, () => true); };
+  queue.add(edit, () => true);
+  release();
+  await until(() => calls.includes('waiting'));
+  expect(calls.slice(0, 2)).toEqual(['editing', 'waiting']);
+});
+
+async function listedBuilds(base) {
+  const { token } = await (await fetch(base + '/__forma/token')).json();
+  return async () => (await (await fetch(base + '/__forma', {
+    method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"method":"hello"}',
+  })).json()).ok.builds;
+}
+
+for (const gallery of [true, false]) test(`${gallery ? 'real gallery' : 'numbered wasm'} pages report their rendered build`, async () => {
+  const engines = await drivable(['chromium', 'webkit']);
+  if (!engines.length) return;
+  const dir = gallery ? copy(`test.render-gallery-${process.pid}`) : 'theme-fixture';
+  const loop = gallery ? await devLoop(dir) : await devLoop(dir, {
+    EXACT_TEST_TIMING: '1', EXACT_DEV_LISTEN_DELAY_MS: 'generation',
+  }, ['--wasm']);
+  try {
+    const list = await listedBuilds(loop.base), path = gallery ? '/__dev/gallery/' : '/';
+    for (const engine of engines) {
+      const browser = await suiteBrowser(engine);
+      let connect;
+      try {
+        const page = await browser.newPage();
+        if (!gallery) {
+          const waiting = new Promise(resolve => { connect = resolve; });
+          await page.route(/\/__dev$/, async route => { await waiting; await route.continue(); });
+        }
+        const registration = page.waitForRequest(req => req.url().endsWith('/__dev/report') && req.postDataJSON()?.kind === 'register', { timeout: 90_000 });
+        await page.goto(loop.base + path);
+        if (connect) {
+          await page.waitForFunction(() => document.getElementById('exact-root')?.dataset.bootMs !== undefined);
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          connect();
+        }
+        const { id } = (await registration).postDataJSON();
+        await until(async () => (await list()).some(row => row.id === id && row.status?.location === path && row.status.rendered === 1 && row.planDigest && (gallery ? row.page === 'gallery' : row.host === 'web' && row.plan)), 90_000);
+      } finally { connect?.(); await browser.close(); }
+    }
+  } finally {
+    await loop.stop();
+    if (gallery) rmSync(dirname(dir), { recursive: true, force: true });
+  }
+}, 900_000);
+
+for (const engine of await drivable(['chromium', 'webkit'])) test(`${engine}: the app and two frames report only builds rendered in their own viewports`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-frame-render-'));
+  mkdirSync(join(dir, 'frames'));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Render', app: { name: 'Render', id: 'test.frame-render' } }));
+  writeFileSync(join(dir, 'app.forma'), 'forma canvas\n\ntheme\n  ink = #123456\n');
+  const entry = text => `component App\n  view\n    text "${text}" color="ink" testId="words"\n`;
+  for (const name of ['app', 'frames/a', 'frames/b']) writeFileSync(join(dir, name + '.contract'), entry(name));
+  const parent = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><body></body>'); });
+  await new Promise(ok => parent.listen(0, '127.0.0.1', ok));
+  const port = parent.address().port;
+  let browser, loop;
+  try {
+    loop = await devLoop(dir, { EXACT_TOOL_PORT: String(port) });
+    const list = await listedBuilds(loop.base);
+    const paths = ['/', '/__dev/frames/a/', '/__dev/frames/b/'];
+    const rows = async () => { const all = await list(); return paths.map(path => all.find(row => row.status?.location === path)); };
+    browser = await suiteBrowser(engine);
+    const page = await browser.newPage();
+    await page.goto(loop.base);
+    await until(async () => (await rows())[0]?.status.rendered === 1, 30_000);
+    const canvas = await browser.newPage();
+    const reports = [];
+    canvas.on('request', r => {
+      if (!r.url().endsWith('/__dev/report')) return;
+      const body = JSON.parse(r.postData());
+      if (body.rendered !== undefined) reports.push([r.frame().name(), body.rendered]);
+    });
+    await canvas.goto(`http://127.0.0.1:${port}/`);
+    // scale(0) keeps the layout viewport. A document loaded under display:none has none.
+    await canvas.evaluate(([a, b]) => {
+      for (const [name, src, style] of [['a', a, 'transform:scale(0)'], ['b', b, 'display:none']]) {
+        const frame = Object.assign(document.createElement('iframe'), { src, name });
+        frame.style.cssText = style;
+        document.body.append(frame);
+      }
+    }, paths.slice(1).map(path => loop.base + path));
+    await until(async () => { const [, a, b] = await rows(); return a?.status.rendered === 1 && b; }, 60_000);
+    const viewport = frame => canvas.frame(frame).evaluate(() => [innerWidth, innerHeight, document.visibilityState]);
+    expect(await viewport('a')).toEqual([300, 150, 'visible']);
+    expect(await viewport('b')).toEqual([0, 0, 'visible']);
+    expect((await rows()).map(row => row.status.rendered)).toEqual([1, 1, undefined]);
+    const old = (await rows())[2];
+    writeFileSync(join(dir, 'frames/b.contract'), entry('rebuilt'));
+    await until(async () => { const b = (await rows())[2]; return b && b.planDigest !== old.planDigest; }, 60_000);
+    expect((await rows()).map(row => row.status.rendered)).toEqual([1, 1, undefined]);
+
+    const frameB = canvas.locator('iframe[name=b]');
+    await frameB.evaluate(el => el.style.display = '');
+    await until(async () => (await rows())[2]?.status.rendered === 2, 15_000);
+    expect(reports).not.toContainEqual(['b', 1]);
+    expect(new Set((await rows()).map(row => row.id)).size).toBe(3);
+
+    const frame = canvas.frame('b'), color = () => getComputedStyle(document.querySelector('[data-testid=words]')).color;
+    const before = await frame.evaluate(color);
+    writeFileSync(join(dir, 'app.forma'), 'forma canvas\n\ntheme\n  ink = #654321\n');
+    await until(async () => await frame.evaluate(color) !== before, 30_000).catch(async error => {
+      throw new Error(`The frame's ink stayed ${await frame.evaluate(color)} after the edit.\n${loop.said()}`, { cause: error });
+    });
+    writeFileSync(join(dir, 'frames/b.contract'), 'component App\n  view\n    text unknownValue\n');
+    await canvas.frame('b').locator('pre').filter({ hasText: 'unknownValue' }).waitFor();
+    expect((await rows()).map(row => row.status.rendered)).toEqual([1, 1, 2]);
+
+    // A report already in flight can arrive after the embedder hides the frame.
+    await canvas.route('**/__dev/report', async route => {
+      if (route.request().frame().name() === 'b' && route.request().postDataJSON()?.rendered === 3)
+        await frameB.evaluate(el => el.style.display = 'none');
+      await route.continue();
+    });
+    writeFileSync(join(dir, 'frames/b.contract'), entry('recovered'));
+    await until(async () => (await rows())[2]?.status.rendered === 3, 60_000);
+    expect(await frameB.evaluate(el => el.style.display)).toBe('none');
+  } finally {
+    await browser?.close(); await loop?.stop(); parent.close(); rmSync(dir, { recursive: true, force: true });
+  }
+}, 180_000);
+
+for (const engine of await drivable(['chromium', 'webkit'])) test(`${engine}: replacing a pending render and detaching its document cancel the old report`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage();
+    const receipts = await page.evaluate(async source => {
+      const seen = [];
+      const child = () => {
+        const frame = document.body.appendChild(document.createElement('iframe'));
+        frame.contentDocument.documentElement.style.height = '100%';
+        const watch = frame.contentWindow.eval('(' + source + ')');
+        return { frame, watch };
+      };
+      const old = child();
+      old.watch(() => seen.push('detached'));
+      old.frame.remove();
+      const fresh = child();
+      const cancel = fresh.watch(() => seen.push('superseded'));
+      cancel();
+      await new Promise(resolve => fresh.watch(() => { seen.push('fresh'); resolve(); }));
+      return seen;
+    }, whenRendered.toString());
+    expect(receipts).toEqual(['fresh']);
+  } finally { await browser.close(); }
+}, 30_000);
+
+for (const engine of await drivable(['chromium', 'webkit'])) test(`${engine}: a viewport collapsed after commit waits for both dimensions`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage();
+    const reports = await page.evaluate(async source => {
+      const watch = eval('(' + source + ')'), reports = [];
+      for (const dimension of ['width', 'height']) {
+        const frame = document.body.appendChild(document.createElement('iframe'));
+        const child = frame.contentWindow;
+        const rendered = new Promise(resolve => child.eval('(' + source + ')')(() => {
+          reports.push([child.innerWidth, child.innerHeight]);
+          resolve();
+        }));
+        frame.style[dimension] = '0px';
+        await new Promise(resolve => watch(resolve));
+        frame.style[dimension] = '';
+        await rendered;
+        frame.remove();
+      }
+      return reports;
+    }, whenRendered.toString());
+    expect(reports).toEqual([[300, 150], [300, 150]]);
+  } finally { await browser.close(); }
+}, 30_000);
+
+for (const engine of await drivable(['chromium', 'webkit'])) test(`${engine}: cross-origin frames with visibility:hidden, a placeholder or a zero-height root report`, async () => {
+  const documentAt = html => Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
+  const frame = documentAt(`<!doctype html><html><style>html,body{margin:0;height:0}aside{position:fixed;width:80px;height:40px}</style><body><aside>words</aside><script>
+    (${whenRendered.toString()})(() => parent.postMessage(name + ':rendered', '*'));
+    </script></body></html>`);
+  const tool = documentAt(`<!doctype html><script>window.receipts=[];onmessage=e=>receipts.push(e.data)</script>
+    <iframe name="hidden" style="visibility:hidden" src="${frame.url}"></iframe>
+    <iframe name="covered" src="${frame.url}"></iframe><div style="position:fixed;inset:0;background:white"></div>`);
+  let browser;
+  try {
+    browser = await suiteBrowser(engine);
+    const page = await browser.newPage();
+    await page.goto(tool.url.href);
+    await page.waitForFunction(() => receipts.includes('hidden:rendered') && receipts.includes('covered:rendered'));
+    expect(await page.frame('covered').evaluate(() => [
+      document.documentElement.getBoundingClientRect().height, document.querySelector('aside').getBoundingClientRect().height,
+    ])).toEqual([0, 40]);
+    const hidden = page.frame('hidden');
+    await page.locator('iframe[name=hidden]').evaluate(el => el.style.transform = 'scale(0)');
+    await hidden.evaluate(source => {
+      document.documentElement.style.display = 'none';
+      eval('(' + source + ')')(() => parent.postMessage('boxless:rendered', '*'));
+    }, whenRendered.toString());
+    await page.waitForFunction(() => receipts.includes('boxless:rendered'));
+  } finally { await browser?.close(); tool.stop(true); frame.stop(true); }
+}, 45_000);

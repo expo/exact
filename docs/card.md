@@ -19,6 +19,7 @@ functions: call -> result
   formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
   formatDecimal(units, digits) -> string  (cents to "12.34"; literal digits)
   formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD"|digits) -> string  (1,234.5; 26%)
+  formatShortcut(chord) -> string  (⇧⌘O or Ctrl+Shift+O; empty on server)
   formatTime(ms, offset, "short"|"2-digit") -> string  ("2:13 PM"; offset: min east of UTC)
   fragment(entry) -> string
   frame(id) -> Geometry  (action)
@@ -89,9 +90,12 @@ parts: use X from "exact:content"; an option is none or some(…)
 test steps (app.test.contract, docs/contract-grammar.md)
   tap "id" (… contextmenu)
   type "id" "text", type "id" key "Enter"
+  tap "@browser" dismissed, type "@date" "…"
   expect text "id" == "…"
   expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
+  tap "intro" drag 0 -170 over 400 hold 200
+  rotate <orientation>
   back
   presence allow (cancel, fail, lockout, invalidated)
   fail fetch, pass fetch, drop stream "<prefix>"
@@ -100,12 +104,12 @@ test steps (app.test.contract, docs/contract-grammar.md)
   size 390x844, at "/item/7#moves", epoch, time-zone, locale, seed, before data
 
 ops:
-  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
+  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · rotate <orientation> (iOS simulator) · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
   tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up (testId, exact text or label)
-  type <target> <text>|key <Name>   (a select, date or checkbox: its value)
-  clock data|settle|held|+<ms> [real]    replies · transitions · push
-  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
+  type <target> <text>|key <Name>  (a select, date or checkbox: its value)
+  clock data|settle|held|+<ms> [real]  replies · transitions · push
+  check [dark|both] · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>
 
 how (snippets compile)
@@ -160,7 +164,7 @@ colour: Leave the accent unsaid (a brand is an app.forma) and controls unpainted
     text "Total" color="-exact-secondary-label"
     view padding=12 background-color="-exact-secondary-background"
       text "Over" color="-exact-system-red"
-reading and writing data: app.ts's `loadItems`, `addItem` answer exactly their shape; a refusal is a reply (`ok: false`), not a throw. `then act` after `refreshes` clears the field on ok; `pending(added)` stops a second send, `parallel` runs both.
+reading and writing data: app.ts's `loadItems`, `addItem` match their shape; refusals reply (`ok: false`), never throw. `then act` after `refreshes` runs on ok; `pending(added)` guards resends, `parallel` runs both.
   shape Reply
     ok: bool
   resource items = loadItems() as shape string[] else empty()
@@ -177,13 +181,13 @@ a dated record: The write reads the clock, not a ticked `now`; `performanceNow()
   action log
     let at = time.epochAtZero + performanceNow()
     days = days.concat([formatDate(at, time.utcOffset, "iso")])
-a test, and verify: Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
+a test, and verify: Fresh store per test; `reload` keeps it. `clock data` lands replies, `clock settle` ends motion. `bun exact.mjs verify` checks ends and relaunches (`verify ios` last; keep receipt and `--shots <dir>`).
   test "a pick survives a relaunch"
     tap "pick"
     clock data
     reload
     expect text "n" == "1"
-composing a screen: One focal point. Emphasis is a part, not paint on a `button`; the main action is `buttonStyle="filled"`. Search: `input type="search"` in the `header`, live. A form is a grouped list (`grouped-form`); no rows, an `EmptyState`, its `button` indented under it.
+composing a screen: One focal point. Use parts, a filled button and live header search. See `grouped-form`. Nest buttons under `EmptyState`.
   use SummaryCard from "exact:content"
   column gap=16 padding=16
     SummaryCard(label="Streak", value="12", detail="days in a row", progress=none, symbol=none)
@@ -191,7 +195,7 @@ composing a screen: One focal point. Emphasis is a part, not paint on a `button`
       text "Log today"
 
 rules
-- An event's payload follows captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; none for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
+- After captured arguments, fields, selects and dates pass text. Checkboxes and switches pass bools. Ranges pass numbers. `press` and `submit` pass none. `change=set(i.id)` calls `set(id, payload)`.
 
 ```contract
 component App
@@ -210,5 +214,5 @@ component App
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
 - No announce call: a screen reader reads a mounted `text role="status"` (or `"alert"`) as its text changes (`vocab live`).
 - Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
-idioms with code (vocab <name>): bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics symbol-effect status-bar live toast titlebar share use members svg env safe-area var media css cache rtl :active
-symbol roles ("symbol:<role>"; * has a <role>-fill; symbol:sf/<name> is Apple-only): back close compose add microphone send search copy select-text more delete forward home* person* messages notifications* settings repeat activity bookmark* document select* reorder list cart sort filter heart* reply share ellipsis photo play* pause* skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop* circle alert* minus-circle pencil waveform info* camera star* minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag* phone smartphone article radio running walking stopwatch timer history ruler speed location* location-off* skip-next* finish
+idioms with code: viewport-and-container-units bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics symbol-effect status-bar live toast titlebar share use members svg env edges safe-area var media css cache rtl :active
+symbol roles ("symbol:<role>"; * has a <role>-fill; symbol:sf/<name> is Apple-only): back close compose add microphone send search copy select-text more delete forward home* person* messages notifications* settings repeat activity bookmark* document select* reorder list cart sort filter heart* reply share ellipsis photo play* pause* skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop* circle alert* minus-circle pencil waveform info* camera star* minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag* phone smartphone article radio running walking stopwatch timer history ruler speed location* location-off* skip-next* finish globe sim-card*

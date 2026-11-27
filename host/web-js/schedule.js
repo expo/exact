@@ -48,7 +48,7 @@ const Q = {
   hold(m, source, args, undo) {
     if (!Asked.has(m) && idle(m) && !m.wait.length) { Asked.add(m); return false; }
     if (m.wait.length >= BOUND) throw new Refusal(`QueueFull { mutation: ${JSON.stringify(m.name)} }`);
-    m.wait.push([source, args, Invocation.id, Origin.now()]);
+    m.wait.push([source, args, Invocation.id, Origin.now(), Origin.input]);
     if (!m.pend.n.v) { undo.push([m.pend.n, false]); write(m.pend.n, true); }
     return true;
   },
@@ -74,7 +74,7 @@ const Q = {
   next(m) {
     m.next = Infinity; Q.own = null;
     // Its commit, and the one a refused ask makes, are the queued send's, as in the runner
-    const [, , invocation, origin] = m.wait[0], sender = f => Origin.run(origin, () => Invocation.run(invocation, f));
+    const [, , invocation, origin, input] = m.wait[0], sender = f => Origin.run(origin, () => Invocation.run(invocation, f), input);
     const ok = sender(() => commit(() => { const [source, args] = m.wait.shift(); say(`${m.name} next (${m.wait.length} waiting)`); M(m, source, args, true); }, `${m.name} next`));
     if (ok === true) return true;
     const e = refused();

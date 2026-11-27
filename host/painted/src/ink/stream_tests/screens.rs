@@ -41,7 +41,6 @@ impl<D: DataSource + Default> Pair<D> {
 
     fn each(&mut self, drive: impl Fn(&mut crate::Presenter<D>)) {
         for p in &mut self.0 {
-            // Two sessions live on this thread, and `wait_images` binds no roles of its own.
             let _roles = p.host().runner().bind_roles();
             drive(p);
         }

@@ -1022,6 +1022,14 @@ impl RasterSession {
     pub fn available_bytes(&self) -> u64 {
         self.owner.account.available()
     }
+    /// What a decode can have without lowering its resolution: the budget
+    /// less the pixels views hold. Cold pixels are evicted before a decode
+    /// waits, and a reservation is a decode in flight, released as it lands.
+    pub fn unheld_bytes(&self) -> u64 {
+        let s = *self.owner.account.usage.lock().unwrap();
+        self.budget()
+            .saturating_sub(s.resident_bytes.saturating_sub(s.cold_bytes))
+    }
     /// Reserve a distinct allocation before an upload/conversion CPU copy.
     pub fn reserve_allocation(&self, bytes: u64) -> Result<AllocationReservation, Refusal> {
         let state = self.owner.gate.inner.state.lock().unwrap();

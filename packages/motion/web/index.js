@@ -243,7 +243,8 @@ export function implementation({ changed, now = () => performance.now(), foregro
 
   const feed = (input, sample) => {
     if (input.writer.closed) return;
-    const values = ORIENTATIONS.has(input.name) ? sample.values : (input.screen ? toScreen(sample.values, angle()) : sample.values);
+    const turn = ORIENTATIONS.has(input.name) ? quaternionToScreen : toScreen;
+    const values = input.screen ? turn(sample.values, angle()) : sample.values;
     if (input.period && sample.at < input.next - input.period / 2) return;
     input.next = Math.max(input.next + input.period, sample.at + input.period / 2);
     input.writer.push({ t: 'sensor', sensor: input.sensor, values: [...values, 0, 0, 0, 0].slice(0, 4), dropped: input.dropped, at: sample.at });

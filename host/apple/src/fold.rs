@@ -90,8 +90,11 @@ impl<D: DataSource> Host<D> {
                     )
                 }
                 Err(e) => {
-                    return self
-                        .geometry_refused(format!("viewport geometry: {e:?}"), Some(previous))
+                    return self.geometry_refused(
+                        Batch::new(),
+                        format!("viewport geometry: {e:?}"),
+                        Some(previous),
+                    )
                 }
                 Ok(None) => {}
             }
@@ -102,14 +105,20 @@ impl<D: DataSource> Host<D> {
         self.finish(batch, error)
     }
 
-    pub(super) fn geometry_refused(&mut self, mut error: String, previous: Option<Env>) -> String {
+    /// Restore a refused environment while keeping any operations already
+    /// committed into `batch` (whose state `self.mirror` has already observed).
+    pub(super) fn geometry_refused(
+        &mut self,
+        mut batch: Batch,
+        mut error: String,
+        previous: Option<Env>,
+    ) -> String {
         if let Some(env) = previous {
             let kernel = self.runner.kernel_mut();
             let _ = kernel.set_env(env.clone());
             let _ = kernel.set_segments(env.cols, env.rows, env.segments);
         }
         // Rebuild dictionaries after the runner restores a refused environment.
-        let mut batch = Batch::new();
         for id in self.preorder() {
             self.update(id, &mut batch);
         }
@@ -134,11 +143,12 @@ impl<D: DataSource> Host<D> {
         let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
                                                // @ref LLP 1039 D2 — merge re-answer and relayout, once.
         let size = Some((f64::from(width), f64::from(height)));
-        let receipt = match self.runner.set_view(size, keyboard) {
+        let receipt = match self.runner.set_view(size, keyboard, None) {
             Ok(receipt) => receipt,
             Err(e) => {
                 return self.geometry_refused(
-                    error.unwrap_or_else(|| format!("viewport: {e:?}")),
+                    batch,
+                    join_error(error, format!("viewport: {e:?}")),
                     previous,
                 )
             }
@@ -218,6 +228,7 @@ impl<D: DataSource> Host<D> {
             size,
             segments,
             keyboard,
+            None,
             blocks,
             placements,
             crate::host::OwnerReports::default(),
@@ -236,6 +247,7 @@ impl<D: DataSource> Host<D> {
         size: Option<(f32, f32)>,
         segments: Option<Vec<exact_kernel::Rect>>,
         keyboard: Option<f32>,
+        fit: Option<Option<[f32; 4]>>,
         blocks: &[(exact_kernel::ViewId, Option<exact_kernel::HostBlock>)],
         placements: &[(exact_kernel::ViewId, Option<exact_runner::BlockPlacement>)],
         owners: crate::host::OwnerReports,
@@ -282,6 +294,20 @@ impl<D: DataSource> Host<D> {
         if let Some(why) = self.refused_report(&owners) {
             return self.finish(Batch::new(), Some(why));
         }
+        // The window's aspect-fit guide for the first root (LLP 1123 D16): the kernel refuses a
+        // malformed rectangle before it changes anything, and so before the blocks are applied
+        let fitted = match (fit, self.runner.roots().first().copied()) {
+            (Some(fit), Some(root)) => match self.runner.kernel_mut().set_root_fit(root, fit) {
+                Ok(fitted) => fitted,
+                Err(e) => {
+                    return self.finish(
+                        Batch::new(),
+                        Some(format!("view: the aspect-fit guide is refused: {e:?}")),
+                    )
+                }
+            },
+            _ => false,
+        };
         let (mut batch, error) = if size.is_some() {
             if let Some(now) = now_ms {
                 self.now_ms = now.max(self.now_ms);
@@ -296,15 +322,15 @@ impl<D: DataSource> Host<D> {
         let (blocked, owed) = self.blocks_into(blocks, placements, owners);
         let error = error.or(blocked);
         let changed = self.environment_into(env, segments, &mut batch);
-        if let Err(error) = changed {
-            return self.geometry_refused(error, Some(previous));
+        if let Err(env_error) = changed {
+            return self.geometry_refused(batch, join_error(error, env_error), Some(previous));
         }
         match size {
             Some((width, height)) => {
                 self.resize_inner(width, height, keyboard, batch, error, Some(previous))
             }
             None => {
-                match self.runner.set_view(None, keyboard) {
+                match self.runner.set_view(None, keyboard, None) {
                     Ok(Some(receipt)) => {
                         return self.commit_into(
                             &[Timed {
@@ -316,12 +342,15 @@ impl<D: DataSource> Host<D> {
                         )
                     }
                     Err(e) => {
-                        return self
-                            .geometry_refused(format!("viewport geometry: {e:?}"), Some(previous))
+                        return self.geometry_refused(
+                            batch,
+                            join_error(error, format!("viewport geometry: {e:?}")),
+                            Some(previous),
+                        )
                     }
                     Ok(None) => {}
                 }
-                if changed != Ok(true) && blocks.is_empty() && !owed {
+                if changed != Ok(true) && blocks.is_empty() && !owed && !fitted {
                     return self.finish(batch, error);
                 }
                 let laid_out = self.layout(&mut batch).err();
@@ -386,8 +415,19 @@ impl<D: DataSource> Host<D> {
                 self.finish(batch, error)
             }
             Ok(None) => self.finish(batch, None),
-            Err(e) => self.geometry_refused(format!("segments: {e:?}"), None),
+            Err(e) => self.geometry_refused(Batch::new(), format!("segments: {e:?}"), None),
         }
+    }
+}
+
+fn join_error(prior: Option<String>, next: String) -> String {
+    match prior {
+        Some(mut prior) => {
+            prior.push_str("; ");
+            prior.push_str(&next);
+            prior
+        }
+        None => next,
     }
 }
 

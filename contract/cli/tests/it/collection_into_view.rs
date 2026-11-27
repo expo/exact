@@ -1070,4 +1070,75 @@ mod sibling_inner {
         .unwrap();
         assert_eq!(r.collections(), before, "a refused seek changes no list");
     }
+
+    #[test]
+    fn scroll_into_view_action_reconciles_owned_resources_and_tasks() {
+        use super::{DataError, DataSource, Source};
+        struct LabelData;
+        impl DataSource for LabelData {
+            fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+                match source {
+                    "childLabel" => Ok(Value::str("settled-child")),
+                    _ => Err(DataError::UnknownSource(source.into())),
+                }
+            }
+        }
+        let src = r#"component App
+  state show = false
+  state rows = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  action mountAndSeek
+    show = true
+    scrollIntoView("feed", 20, block="start")
+  action unmountAndSeek
+    show = false
+    scrollIntoView("feed", 0, block="start")
+  view
+    column height=400 width=300
+      if show
+        Child()
+      list id="feed" virtualized=true height=200 width=300 estimated-item-height=50 testId="feed"
+        for i in rows key=i
+          text `${i}` height=50 testId=`r-${i}`
+
+component Child
+  state ticks = 0
+  resource label = childLabel() as shape string else empty()
+  task tick mount
+    every(100, bump)
+  action bump
+    ticks = ticks + 1
+  view
+    text `${label}:${ticks}` testId="child-label"
+"#;
+        let plan = contract::compile(src).unwrap();
+        let mut r = Runner::boot(
+            plan,
+            boxed(LabelData),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let text_of = |r: &Runner<Source>, id: &str| -> String {
+            let key = r.kernel().find_first_by_test_id(id).unwrap();
+            r.kernel()
+                .node_by_key(key)
+                .unwrap()
+                .props
+                .str(PropId::Text)
+                .unwrap()
+                .to_owned()
+        };
+
+        // Mounting Child alongside scrollIntoView reconciles its owned resource and arms its task.
+        r.act("mountAndSeek", vec![]).unwrap();
+        assert_eq!(text_of(&r, "child-label"), "settled-child:0");
+        r.advance(100.0).unwrap();
+        assert_eq!(text_of(&r, "child-label"), "settled-child:1");
+
+        // Unmounting Child alongside scrollIntoView disarms its task instead of trapping BadScope.
+        r.act("unmountAndSeek", vec![]).unwrap();
+        assert!(r.kernel().find_first_by_test_id("child-label").is_none());
+        r.advance(500.0).unwrap();
+    }
 }

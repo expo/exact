@@ -423,8 +423,10 @@ internal object Records {
                 val status = data.firstOrNull()?.toInt() ?: 0
                 val n = status and 0x3f
                 encoding = if (status and 0x80 == 0) "utf-8" else "utf-16be"
-                lang = String(data, 1, minOf(n, data.size - 1))
-                data = data.copyOfRange(minOf(1 + n, data.size), data.size)
+                // A tag's payload can be shorter than its status byte says, or empty.
+                val end = minOf(1 + n, data.size)
+                lang = String(data.copyOfRange(minOf(1, end), end))
+                data = data.copyOfRange(end, data.size)
                 text = String(data, if (encoding == "utf-8") Charsets.UTF_8 else Charsets.UTF_16BE)
             }
             "smart-poster" -> {

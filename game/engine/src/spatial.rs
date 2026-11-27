@@ -299,9 +299,13 @@ pub(crate) fn pick(w: &World, view: &View, point: Vec2) -> Option<(Entity, f32, 
         let Some(mut pose) = w.global(e) else {
             continue;
         };
-        let attached = w
-            .attachments
-            .is_some_and(|attachments| (attachments.pose)(w, e, w.len() + 1).is_some());
+        let attached = w.attachments.is_some_and(|attachments| {
+            let mut visited = Vec::new();
+            matches!(
+                (attachments.pose)(w, e, &mut visited),
+                crate::world::AttachmentPose::Pose(_)
+            )
+        });
         // Only a resolved follower draws its full socket affine. Other primitives
         // use absolute scales after decomposition, preserving a root's rotation.
         if !matches!(mesh, Mesh::Asset(_)) && !attached {

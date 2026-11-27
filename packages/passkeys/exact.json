@@ -161,7 +161,7 @@
               "code": "canceled"
             },
             "android": {
-              "type": "androidx.credentials.TYPE_GET_CREDENTIAL_CANCELLATION_EXCEPTION"
+              "type": "android.credentials.GetCredentialException.TYPE_USER_CANCELED"
             }
           },
           "choices": {
@@ -171,7 +171,7 @@
                 "code": "canceled"
               },
               "android": {
-                "type": "androidx.credentials.TYPE_NO_CREDENTIAL"
+                "type": "android.credentials.GetCredentialException.TYPE_NO_CREDENTIAL"
               }
             }
           },

@@ -591,6 +591,27 @@ fn resolved_language_is_published_at_boot_and_after_switching() {
     assert!(batch.contains(r#"{"op":"language","lang":"en","dir":"ltr"}"#));
 }
 
+#[test]
+fn the_web_vm_uses_the_browsers_keyboard_from_its_first_settlement() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let plan = contract::compile(
+        r#"component App
+  state cap = formatShortcut("Mod+Shift+O")
+  view
+    text `${cap}/${formatShortcut("Mod+ArrowUp")}`
+"#,
+    )
+    .unwrap()
+    .encode();
+    for (keyboard, expected) in [(1, "⇧⌘O/⌘↑"), (2, "Ctrl+Shift+O/Ctrl+Up arrow")] {
+        let mut bridge = exact_web::abi::Bridge::new();
+        bridge.set_launch_keyboard(keyboard);
+        let len = bridge.boot(&plan, Says(""), 390.0, 844.0, "/");
+        let batch = String::from_utf8_lossy(bridge.output_bytes(len as usize));
+        assert!(batch.contains(expected), "{batch}");
+    }
+}
+
 /// What the page knows at launch (`exact_set_launch`): the boot's first
 /// batch already says the place's language and the date's offset, which
 /// the page used to tell only after the boot; a fact that does not validate

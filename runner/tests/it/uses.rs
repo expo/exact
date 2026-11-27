@@ -40,7 +40,7 @@ fn motion_is_a_spring_or_a_gesture_that_holds_a_value() {
     );
     assert!(spring.has(Capability::Motion));
     let swipe = used(
-        "component A\n  state n = 0\n  action swipe\n    n = n + 1\n  view\n    text \"a\" swiperight=swipe\n",
+        "component A\n  state n = 0\n  action swipe\n    n = n + 1\n  view\n    text \"a\" swipe=swipe swipe-follow=\"right\"\n",
     );
     assert!(swipe.has(Capability::Motion));
     assert!(
@@ -415,6 +415,25 @@ fn documents_are_a_plan_that_runs_save_file_or_a_file_picker() {
         "component A\n  action open\n    showOpenFilePicker(\"opened\")\n  view\n    button \"Open\" press=open\n",
     );
     assert!(picks.has(Capability::Documents) && !picks.has(Capability::Share));
+}
+
+#[test]
+fn a_drag_into_the_app_is_a_plan_that_hears_a_drop_or_its_enter_or_leave() {
+    // @ref LLP 1094.001 D4 — linked by use on UIKit; the Mac's core and the web's documents glue take drops
+    for event in ["drop", "dragenter", "dragleave"] {
+        let heard = used(&format!(
+            "component A\n  state n = 0\n  action took(e: DragEvent)\n    n = n + 1\n  view\n    column {event}=took\n      text \"zone\"\n"
+        ));
+        assert!(
+            heard.has(Capability::DragIn) && heard.has(Capability::Documents),
+            "{event}"
+        );
+    }
+    let pasted = used(
+        "component A\n  state n = 0\n  action pasted(e: ClipboardEvent)\n    n = n + 1\n  view\n    textarea paste=pasted\n",
+    );
+    assert!(pasted.has(Capability::Documents) && !pasted.has(Capability::DragIn));
+    assert!(Uses::NATIVE.has(Capability::DragIn) && Uses::MAC_CORE.has(Capability::DragIn));
 }
 
 #[test]

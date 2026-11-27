@@ -484,3 +484,238 @@ fn an_incomplete_frame_is_retried_without_revealing_the_target() {
     assert!(m.sync());
     assert!(m.seen(p));
 }
+
+#[test]
+fn metal_children_snapshot_preserves_previous_across_in_place_overwrite() {
+    use exact_gpu::ChildrenMode;
+    use objc2_metal::{
+        MTLDevice, MTLOrigin, MTLPixelFormat, MTLRegion, MTLSize, MTLStorageMode, MTLTexture,
+        MTLTextureDescriptor, MTLTextureUsage,
+    };
+
+    const SPLIT_WGSL: &str = "
+@group(0) @binding(0) var cur: texture_2d<f32>;
+@group(0) @binding(1) var prev: texture_2d<f32>;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+}
+@fragment fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    if pos.x < 2.0 {
+        return textureLoad(cur, vec2<i32>(0, 0), 0);
+    }
+    return textureLoad(prev, vec2<i32>(0, 0), 0);
+}
+";
+
+    struct Composite {
+        pipeline: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+        views: Option<(wgpu::TextureView, wgpu::TextureView)>,
+    }
+    impl Surface for Composite {
+        fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+            Ok(())
+        }
+        fn children_mode(&self) -> ChildrenMode {
+            ChildrenMode::Composite { previous: true }
+        }
+        fn children(
+            &mut self,
+            current: Option<&wgpu::TextureView>,
+            previous: Option<&wgpu::TextureView>,
+        ) {
+            self.views = current.zip(previous).map(|(c, p)| (c.clone(), p.clone()));
+        }
+        fn render(
+            &mut self,
+            _: &Frame,
+            device: &wgpu::Device,
+            _: &wgpu::Queue,
+            encoder: &mut wgpu::CommandEncoder,
+            target: &wgpu::TextureView,
+            format: wgpu::TextureFormat,
+        ) -> bool {
+            let (pipeline, layout) = self.pipeline.get_or_insert_with(|| {
+                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
+                        binding,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    }),
+                });
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: None,
+                    source: wgpu::ShaderSource::Wgsl(SPLIT_WGSL.into()),
+                });
+                let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&layout)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&pl),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs"),
+                        targets: &[Some(format.into())],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                (pipeline, layout)
+            });
+            let (cur, prev) = self.views.as_ref().expect("children views");
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(cur),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(prev),
+                    },
+                ],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
+            false
+        }
+    }
+
+    static REG: Registry = Registry {
+        surfaces: &[("composite", 0, || {
+            Box::new(Composite {
+                pipeline: None,
+                views: None,
+            })
+        })],
+        shaders: &[],
+    };
+
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let raw_tex = {
+        // SAFETY: only allocates a test Metal texture from the device.
+        let hal = unsafe { gpu.device.as_hal::<wgpu::hal::api::Metal>() }.expect("Metal");
+        // SAFETY: valid 4x4 RGBA8Unorm descriptor.
+        let desc = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                MTLPixelFormat::RGBA8Unorm,
+                4,
+                4,
+                false,
+            )
+        };
+        desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+        desc.setStorageMode(MTLStorageMode::Shared);
+        hal.raw_device()
+            .newTextureWithDescriptor(&desc)
+            .expect("MTLTexture")
+    };
+    let fill = |rgba: [u8; 4]| {
+        let mut pixels = [rgba; 16];
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: 4,
+                height: 4,
+                depth: 1,
+            },
+        };
+        // SAFETY: `pixels` holds 4 rows of 16 bytes matching `region`.
+        unsafe {
+            raw_tex.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                region,
+                0,
+                std::ptr::NonNull::new(pixels.as_mut_ptr().cast()).unwrap(),
+                16,
+            );
+        }
+    };
+
+    let mut m = Module::new(&REG);
+    m.set_seekable(true);
+    m.set_gpu(gpu);
+    let id = m.create_headless("composite").expect("headless");
+    assert!(m.bind(id, &[], None));
+    let ptr = objc2::rc::Retained::as_ptr(&raw_tex) as *mut std::ffi::c_void;
+    let f = Frame {
+        width: 4.,
+        height: 4.,
+        scale: 1.,
+        now_ms: 0.,
+        seekable: true,
+        period_ms: 0.,
+        children_generation: 0,
+        shader_generation: 0,
+        headroom: 1.,
+    };
+
+    // First capture: red.
+    assert!(m.prepare_texture_metal(id));
+    fill([255, 0, 0, 255]);
+    assert!(unsafe { m.texture_from_metal(id, 4, 4, ptr) });
+
+    // Second capture reuses the same MTLTexture in place with green.
+    assert!(m.prepare_texture_metal(id));
+    fill([0, 255, 0, 255]);
+    assert!(unsafe { m.texture_from_metal(id, 4, 4, ptr) });
+    let (px, _) = m.readback(id, &f).expect("readback 2");
+    assert_eq!(
+        px.at(0, 0),
+        [0, 255, 0, 255],
+        "current holds second capture"
+    );
+    assert_eq!(
+        px.at(3, 0),
+        [255, 0, 0, 255],
+        "previous holds first capture"
+    );
+
+    // Third capture reuses the same MTLTexture in place with blue.
+    assert!(m.prepare_texture_metal(id));
+    fill([0, 0, 255, 255]);
+    assert!(unsafe { m.texture_from_metal(id, 4, 4, ptr) });
+    let (px, _) = m.readback(id, &f).expect("readback 3");
+    assert_eq!(px.at(0, 0), [0, 0, 255, 255], "current holds third capture");
+    assert_eq!(
+        px.at(3, 0),
+        [0, 255, 0, 255],
+        "previous holds second capture"
+    );
+}

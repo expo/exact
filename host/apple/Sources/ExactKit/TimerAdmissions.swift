@@ -37,6 +37,7 @@ final class TimerAdmissions {
     private(set) var enabled = false
     private(set) var waits: [Double] = []
     private var wake: Timer?
+    private var recentWake: Timer?
     private var observer: CFRunLoopObserver?
     private var generation = 0
     private var epoch: Int?
@@ -50,16 +51,19 @@ final class TimerAdmissions {
 
     init(session: ExactSession) { self.session = session }
     deinit {
-        wake?.invalidate()
+        wake?.invalidate(); recentWake?.invalidate()
         if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .defaultMode) }
     }
     #if DEBUG
     var hasPendingForTests: Bool { pending != nil }
+    var wakeForTests: Timer? { wake }
+    var recentWakeForTests: Timer? { recentWake }
+    func setLastUpdateForTests(_ time: Double) { lastUpdate = time }
     #endif
     var wantsFrame: Bool { waits.first == -2 && !PageFacts.hidden }
     func takeover() {
         pending = nil
-        generation += 1; wake?.invalidate(); wake = nil; lastUpdate = -Double.infinity
+        generation += 1; wake?.invalidate(); wake = nil; recentWake?.invalidate(); recentWake = nil; lastUpdate = -Double.infinity
         if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .defaultMode) }; observer = nil
         #if canImport(UIKit)
         if #available(iOS 18, tvOS 18, *) { (updateLink as? UIUpdateLink)?.isEnabled = false }
@@ -107,12 +111,23 @@ final class TimerAdmissions {
             scroll.addGestureRecognizer(TimerScrollTouch { [weak self] in self?.check() })
         }
         #endif
+        if waits.count != 4 || (waits[1] != -2 && waits[3] != -2) {
+            recentWake?.invalidate(); recentWake = nil
+        }
+        armWake()
+    }
+    private func armWake() {
         wake?.invalidate(); wake = nil
-        guard s.clock == nil, !ExactEnv.agentFreezes, let due = waits.filter({ $0 >= 0 }).min() else { return }
+        guard enabled, let s = session, s.state != .destroyed, s.clock == nil, !ExactEnv.agentFreezes,
+              let due = waits.filter({ $0 >= 0 }).min() else { return }
         let token = generation
-        wake = SessionClockTimer.schedule(after: max(0, due - s.now()) / 1000) { [weak self] _ in
+        wake = SessionClockTimer.schedule(after: max(0, due - s.now()) / 1000) { [weak self] timer in
             guard let self, self.generation == token else { return }
+            if self.wake === timer { self.wake = nil }
             self.check()
+            if self.wake == nil, let s = self.session, let next = self.waits.filter({ $0 >= 0 }).min(), next > s.now() {
+                self.armWake()
+            }
         }
     }
     private func scrolling(_ s: ExactSession) -> Bool {
@@ -186,13 +201,14 @@ final class TimerAdmissions {
         scheduleRecentWake()
     }
     private func scheduleRecentWake() {
-        guard let s = session else { return }
+        guard enabled, let s = session, s.state != .destroyed, s.clock == nil, !ExactEnv.agentFreezes else { return }
         if waits.count == 4, (waits[1] == -2 || waits[3] == -2), lastUpdate.isFinite,
-           s.now() <= lastUpdate + 1000 / 60, wake == nil {
+           s.now() <= lastUpdate + 1000 / 60, recentWake?.isValid != true {
             let token = generation
-            wake = SessionClockTimer.schedule(after: max(0.000001, (lastUpdate + 1000 / 60 - s.now()) / 1000)) { [weak self] _ in
+            recentWake = SessionClockTimer.schedule(after: max(0.000001, (lastUpdate + 1000 / 60 - s.now()) / 1000)) { [weak self] timer in
                 guard let self, self.generation == token else { return }
-                self.wake = nil; self.check()
+                if self.recentWake === timer { self.recentWake = nil }
+                self.check()
             }
         }
     }

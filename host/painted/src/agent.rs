@@ -13,6 +13,8 @@ pub mod attached;
 pub(crate) mod contact;
 mod held;
 mod sensors;
+#[cfg(any(target_os = "android", test))]
+pub(crate) use sensors::hold_framed;
 mod stdio;
 
 use crate::presenter::Presenter;
@@ -313,18 +315,15 @@ fn answer_line<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
                 return resize(p, &request);
             }
             // The window's close button (`beforeunload`, studio diary R17):
-            // the Linux presenter closes no window, as the guide says.
+            // the painted presenter closes no window, as the guide says.
             if request.get("close").is_some() {
-                return error("unsupported: the Linux presenter closes no window (no `beforeunload`); close drives a macOS window or the browser's page");
+                return error(&format!("unsupported: the {HOST_NAME} presenter closes no window (no `beforeunload`); close drives a macOS window or the browser's page"));
             }
             if ["drop", "dragenter", "dragleave"]
                 .iter()
                 .any(|k| request.get(*k).is_some())
             {
-                if cfg!(windows) {
-                    return p.agent_drag(id(), &request).unwrap_or_else(|e| error(&e));
-                }
-                return error(&format!("unsupported: the {HOST_NAME} host takes no drag from outside the app (no `drop`, `dragenter` or `dragleave`); drop is supported on web, macOS and Windows"));
+                return p.agent_drag(id(), &request).unwrap_or_else(|e| error(&e));
             }
             // @ref LLP 1116.006 D4 — the platform's Back, as Alt+Left or a Back key takes it.
             if request.get("back").is_some() {
@@ -757,7 +756,8 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
             _ => {
                 let message = format!("prefer: {name}: {value} is not a page fact this host sets");
                 // A real page fact this host does not set stays a delivery refusal.
-                return if name == "keyboard-navigation" || name == "bold-text" {
+                return if ["keyboard-navigation", "bold-text", "ask-siri"].contains(&name.as_str())
+                {
                     error(&message)
                 } else {
                     malformed(&message)
@@ -832,7 +832,7 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
         "device-posture": fold.posture.keyword(),
         "horizontal-viewport-segments": fold.cols,
         "vertical-viewport-segments": fold.rows,
-        "viewport-segments": p.segments.iter().map(|r| [r.x, r.y, r.width, r.height]).collect::<Vec<_>>(),
+        "viewport-segments": p.host().kernel().env().segments.iter().map(|r| [r.x, r.y, r.width, r.height]).collect::<Vec<_>>(),
     }, "mode": p.host().runner().modes().into_iter().map(|(a, v)| (a, v.into())).collect::<serde_json::Map<String, serde_json::Value>>()})
     .to_string()
 }
@@ -949,7 +949,7 @@ fn resize<D: DataSource>(p: &mut Presenter<D>, request: &serde_json::Value) -> S
 /// a native module's box but no module (LLP 1024 D1).
 fn tree<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
     p.boxes();
-    // @ref LLP 1080.002 D2 — this host exposes no AT-SPI tree (LLP 1015 §7).
+    // @ref LLP 1080.002 D2 — a headless drive has no platform window to query.
     if field_bool(line, "ax") {
         return serde_json::json!({"ax": {"unavailable": true, "reason": "no AT-SPI tree (LLP 1015 §7)"}})
             .to_string();
@@ -975,7 +975,9 @@ fn tree<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
                 let text = p.field_text(id);
                 row["props"]["value"] = exact_runner::agent::shown_value(node.props, &text).into();
             }
-            if row["type"] == "WebView" || row["type"] == "Video" {
+            if p.video_in_picture(id) {
+                row["pictureInPicture"] = serde_json::json!({ "presentation": "system" });
+            } else if row["type"] == "WebView" || row["type"] == "Video" {
                 row["unavailable"] = true.into();
             }
             // @ref LLP 1024 D1 — declared, but this host loads no module.
@@ -992,14 +994,14 @@ fn tree<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
     tree.to_string()
 }
 
-/// The engine's settle time, milliseconds, when a transition is in flight.
-/// A reorder ghost's return counts too (LLP 1094 D8), and a pad's effect.
+/// The engine's settle time (ms) while transitions, reorder ghosts, pads, or wheel snaps run.
 fn settle<D: DataSource>(p: &Presenter<D>) -> Option<f64> {
     field_num(&p.host().agent("{\"op\":\"settle\"}"), "settle")
         .into_iter()
         .chain(crate::pads::due())
         .chain(p.group_settles_at())
         .chain(p.scroll_end_due())
+        .chain(p.wheel_snap_due())
         .chain(p.brush.settles_at())
         .chain(p.stage_settles_at())
         .reduce(f64::max)

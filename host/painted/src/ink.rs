@@ -878,7 +878,7 @@ impl Backend for Ink {
         Some(
             self.finish_output(rotation, readback)
                 .and_then(|(target, pixels)| {
-                    let Selected::Wgpu(device) = &self.device;
+                    let Selected::Wgpu(device) = &mut self.device;
                     let view = device.scanout_view(target);
                     self.accept(view)
                         .map(|view| (view, pixels))

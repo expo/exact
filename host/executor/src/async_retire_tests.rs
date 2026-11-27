@@ -30,7 +30,12 @@ fn zero(state: &State) {
     assert_eq!(state.bytes, [0, 0]);
     assert_eq!(state.counts, [0, 0]);
     assert_eq!(
-        (state.light, state.agains, state.streams, state.fenced_bytes),
+        (
+            state.light,
+            state.agains,
+            state.streams.len(),
+            state.fenced_bytes
+        ),
         (0, 0, 0, 0)
     );
     assert!(!state.book.blocking);
@@ -108,7 +113,7 @@ fn retirement_discards_undrained_outcomes_reasks_and_fenced_requests() {
         declared_length: Some(2048),
     });
     wait(&core, |s| s.running.iter().all(|r| r.terminal));
-    core.again(2).unwrap();
+    core.again(2, RequestClass::Local).unwrap();
     assert_eq!(core.shared.state.lock().unwrap().light, 2);
     {
         let mut state = core.shared.state.lock().unwrap();
@@ -320,7 +325,10 @@ fn a_retired_stream_keeps_its_place_until_its_transport_returns() {
     core.run(job(1, request), None).unwrap();
     started.recv_timeout(HANG).unwrap();
     core.retire();
-    assert_eq!(core.shared.state.lock().unwrap().streams, 1);
+    {
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!((state.streams.len(), state.streams.network), (1, 1));
+    }
     assert_ne!(core.shared.state.lock().unwrap().bytes, [0, 0]);
     *release.0.lock().unwrap() = true;
     release.1.notify_all();

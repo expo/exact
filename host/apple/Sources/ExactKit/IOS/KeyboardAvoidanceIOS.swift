@@ -282,6 +282,8 @@ extension NodeView {
         switch props["keyboardDismissMode"] {
         case "interactive": return .interactive
         case "on-drag": return .onDrag
+        case "interactive-with-accessory": return .interactiveWithAccessory
+        case "on-drag-with-accessory": return .onDragWithAccessory
         case "none": return .none
         default:
             guard scrollsVertically else { return .none }
@@ -295,8 +297,11 @@ extension NodeView {
     /// Written again when the prop or the axes the node scrolls change; a
     /// grouped list's collection view takes it from here (`mount`).
     func updateKeyboardDismissal() {
-        guard let scroll = scrollView, scroll.keyboardDismissMode != keyboardDismissal else { return }
-        scroll.keyboardDismissMode = keyboardDismissal
+        guard let scroll = scrollView else { return }
+        #if os(iOS)
+        KeyboardDrag.watch(scroll) { [weak self] in self }
+        #endif
+        if scroll.keyboardDismissMode != keyboardDismissal { scroll.keyboardDismissMode = keyboardDismissal }
     }
 }
 

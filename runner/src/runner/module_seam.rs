@@ -8,7 +8,6 @@
 //! The runner's methods that reach the seam are in `module_seam/forward.rs`.
 
 use super::provenance::{CallOrigin, Cause};
-use super::reply::response;
 use super::{AppState, CommitReceipt, DataError, DataSource, Runner, RunnerError, Target};
 use crate::request::{Answer, Dispatch, Outcome, Request, Work};
 use crate::HoldAnswer;
@@ -31,6 +30,23 @@ pub(in crate::runner) struct ModuleState(pub(in crate::runner) Box<dyn Any>);
 /// The module readers a commit's checkpoint keeps: each bound live
 /// source's readers, by resource, with the arguments each last asked with.
 pub(in crate::runner) type Readers = BTreeMap<String, BTreeMap<usize, String>>;
+
+/// Refuse a data-code request whose package, name or verb has no matching row.
+pub(super) fn unsupported_call() -> Dispatch {
+    Dispatch::Run(Work::Now(Box::new(|| {
+        Outcome::module_refusal("NotSupportedError", None)
+    })))
+}
+
+/// The Android reader uses a nonempty source first, then a send. Admit the
+/// same name before handing the request to a package.
+pub(super) fn declared_call(v: &Json) -> Option<(&str, bool)> {
+    let source = v["source"].as_str().filter(|name| !name.is_empty());
+    let send = v["send"].as_str().filter(|name| !name.is_empty());
+    source
+        .map(|name| (name, false))
+        .or_else(|| send.map(|name| (name, true)))
+}
 
 /// The target this runner is built for, as a substitute's `targets` and a
 /// ceremony's `clientOrigin` name it.
@@ -65,6 +81,11 @@ pub trait Modules<D: DataSource> {
     /// implementation that delegates them delegates this too.
     fn state(&self) -> Box<dyn Any> {
         Box::new(())
+    }
+
+    /// Install the driver’s current substitutes before the first resource reads.
+    fn launch_substitutes(&self, r: &mut Runner<D>) -> Result<(), RunnerError> {
+        Ok(())
     }
 
     /// Invocation `id`'s held calls end `AbortError` with `message`.
@@ -389,6 +410,16 @@ pub trait Modules<D: DataSource> {
         r.log(format!("{extension}.{state}: a choice from an implementation whose list the runner does not keep here, refused"));
     }
 
+    /// The next local presentation on the session clock.
+    fn next_list_show(&self, r: &Runner<D>) -> Option<f64> {
+        None
+    }
+
+    /// Mark the entry presented and emit its event if the page is visible.
+    fn show_listed(&self, r: &mut Runner<D>) -> Result<Option<CommitReceipt>, RunnerError> {
+        Ok(None)
+    }
+
     /// The agent clock reached `now_ms`: each entry of a list with a due
     /// time that is now due fires, once; a list another session changed is
     /// announced to this one's readers.
@@ -454,20 +485,14 @@ pub trait Modules<D: DataSource> {
     fn module_call(&self, r: &mut Runner<D>, native: &crate::Request) -> Option<Dispatch> {
         let v: Json = serde_json::from_slice(&native.body).ok()?;
         let extension = v.get("extension")?.as_str()?;
-        let declared = match (v["source"].as_str(), v["send"].as_str()) {
-            (Some(name), None) | (None, Some(name)) => name,
-            _ => return None,
-        };
+        let (declared, _) = declared_call(&v)?;
         let owner = v["owner"]
             .as_str()
             .map(|s| format!("#{s}"))
             .unwrap_or_default();
         let key = format!("{extension}.{declared}{owner}");
         r.log(format!("{key}: not a module this app's plan names"));
-        let answer = json!({ "error": "NotSupportedError" });
-        Some(Dispatch::Run(Work::Now(Box::new(move || {
-            response(&answer)
-        }))))
+        Some(unsupported_call())
     }
 
     /// A typed answer to `ticket`, checked before the hold is spent, so it
@@ -618,7 +643,7 @@ pub trait Modules<D: DataSource> {
     /// The host refused a handler's request at admission: it settles in
     /// its turn, as a failure, an ordered one only once earlier ordered work
     /// has.
-    fn refuse_tool(&self, r: &mut Runner<D>, ticket: u64, reason: &'static str, ordered: bool) {}
+    fn refuse_tool(&self, r: &mut Runner<D>, ticket: u64, reason: String, ordered: bool) {}
 
     /// The substitute's readers no resource holds any longer are let go, with
     /// their grids and cursors (a released source's acquisition stops).
@@ -736,7 +761,7 @@ pub trait Modules<D: DataSource> {
     }
 
     /// A handler's refused request that may settle now.
-    fn tool_refusal(&self, r: &mut Runner<D>, allow_ordered: bool) -> Option<(u64, &'static str)> {
+    fn tool_refusal(&self, r: &mut Runner<D>, allow_ordered: bool) -> Option<(u64, String)> {
         None
     }
 
@@ -801,6 +826,11 @@ pub trait Modules<D: DataSource> {
 
     /// Whether `token` is a held module request.
     fn holds_token(&self, r: &Runner<D>, token: Option<u64>) -> bool {
+        false
+    }
+
+    /// Whether pending request `ticket` is waiting on a held data-code module call.
+    fn holds_data_request(&self, r: &Runner<D>, ticket: u64) -> bool {
         false
     }
 
@@ -892,6 +922,7 @@ mod tests {
         let Outcome::Response(response) = answer() else {
             panic!("a response");
         };
+        assert_eq!(response.status, 500);
         assert!(String::from_utf8_lossy(&response.body).contains("NotSupportedError"));
         assert!(said(&r, "geo.where: not a module this app's plan names"));
         // Announced topics pass through untouched.

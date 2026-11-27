@@ -54,6 +54,31 @@ fn on_pixels(frame: Frame, scale: f32) -> Frame {
     }
 }
 
+/// `rect` with each edge `outset` moved out to a whole device pixel, through `ts` at the display's `scale` (LLP 1123
+/// D13): a reach's edges and an extension's then meet the box's own paint where no seam of two antialiased edges
+/// shows. As drawn under a turn or a skew, `rect` stays as it is.
+pub(crate) fn outward(rect: Rect4, outset: [f32; 4], ts: Transform, scale: f32) -> Rect4 {
+    if outset == [0.0; 4] || ts.kx != 0.0 || ts.ky != 0.0 || ts.sx <= 0.0 || ts.sy <= 0.0 {
+        return rect;
+    }
+    let [top, right, bottom, left] = outset.map(|v| v > 0.0);
+    let edge = |v: f32, a: f32, b: f32, grows: bool, up: bool| {
+        let d = (v * a + b) * scale;
+        match (grows, up) {
+            (false, _) => v,
+            (true, true) => (d.ceil() / scale - b) / a,
+            (true, false) => (d.floor() / scale - b) / a,
+        }
+    };
+    let (x0, y0) = (
+        edge(rect.0, ts.sx, ts.tx, left, false),
+        edge(rect.1, ts.sy, ts.ty, top, false),
+    );
+    let x1 = edge(rect.0 + rect.2, ts.sx, ts.tx, right, true);
+    let y1 = edge(rect.1 + rect.3, ts.sy, ts.ty, bottom, true);
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
 /// Quantize to 1/64 of a device pixel before rounding half up. This keeps
 /// float noise close to a half pixel from choosing a different edge.
 pub(crate) fn device_pixel(v: f32, scale: f32) -> f64 {

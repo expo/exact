@@ -27,6 +27,11 @@ pub mod display;
 #[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
 #[path = "display/flip.rs"]
 mod display_flip;
+#[cfg(target_os = "linux")]
+mod drag_copy;
+#[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
+#[path = "window/drop_received.rs"]
+mod drop_received;
 #[cfg(any(target_os = "linux", all(test, unix, not(target_os = "android"))))]
 #[path = "display/event_loop.rs"]
 mod event_loop;
@@ -107,7 +112,10 @@ fn run_composed_with<D: DataSource + Default>(
     region: Option<ContentRegionRegistration>,
     composed: Composed,
 ) -> i32 {
-    row_reuse_from_env(false);
+    #[cfg(target_os = "linux")]
+    if let Some(code) = drag_copy_helper() {
+        return code;
+    }
     if print_baked_receipt(compat) {
         return 0;
     }
@@ -129,12 +137,21 @@ fn run_composed_with<D: DataSource + Default>(
     run_config::<D>(&mut config, started)
 }
 
+/// Copy a dragged `app:/` file, when this executable was started as the
+/// drag's copy helper (LLP 1094.000 D13): the exit code. Each entry asks
+/// first, before it reads its configuration or opens its updates.
+#[cfg(target_os = "linux")]
+pub fn drag_copy_helper() -> Option<i32> {
+    drag_copy::helper()
+}
+
 /// Run a configured app, optionally composed with a delivery adapter.
 pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant) -> i32 {
     if let Err(why) = exact_runner::delivery::refuse_analysis(&config.compat) {
         eprintln!("exact: {why}");
         return 1;
     }
+    row_reuse_from_env(false);
     exact_painted::app::show_neutral_look();
     #[cfg(target_os = "linux")]
     if !config.headless() && use_wayland(config) {
@@ -149,6 +166,13 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     };
     if config.headless() {
         config.output_rotation = rotation.unwrap_or_default();
+        config
+            .preferences
+            .get_or_insert_with(Default::default)
+            .orientation = Some(exact_runner::ScreenOrientation::rotated(
+            config.size.1 >= config.size.0,
+            (config.output_rotation.degrees() / 90) as u8,
+        ));
         let [w, h] = config.output_rotation.size([config.size.0, config.size.1]);
         config.size = (w, h);
         // @ref LLP 1178 D6 — the one display is the headless buffer.

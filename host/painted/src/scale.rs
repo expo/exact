@@ -90,6 +90,16 @@ impl<D: DataSource> Host<D> {
         insets: Option<[f32; 4]>,
         keyboard: Option<f32>,
     ) -> Result<bool, String> {
+        self.set_window_view(size, insets, keyboard, None)
+    }
+
+    pub(crate) fn set_window_view(
+        &mut self,
+        size: Option<(f32, f32)>,
+        insets: Option<[f32; 4]>,
+        keyboard: Option<f32>,
+        segments: Option<(exact_runner::Fold, Vec<exact_kernel::Rect>)>,
+    ) -> Result<bool, String> {
         let before = self.runner.kernel().env();
         let mut restyled = false;
         if let Some([top, right, bottom, left]) = insets {
@@ -97,12 +107,41 @@ impl<D: DataSource> Host<D> {
             restyled =
                 (self.runner.kernel_mut().set_env(env)).map_err(|e| format!("safe area: {e:?}"))?;
         }
+        let fold = segments.as_ref().map(|(fold, _)| *fold);
+        if let Some((fold, rects)) = segments {
+            let counts = u8::try_from(fold.cols)
+                .ok()
+                .zip(u8::try_from(fold.rows).ok());
+            let updated = match counts {
+                Some((cols, rows)) => self
+                    .runner
+                    .kernel_mut()
+                    .set_segments(cols, rows, rects)
+                    .map_err(|e| format!("segments: {e:?}")),
+                None => Err(format!(
+                    "segments: {}x{} is past the kernel's grid",
+                    fold.cols, fold.rows
+                )),
+            };
+            match updated {
+                Ok(changed) => restyled |= changed,
+                Err(error) => {
+                    self.runner.kernel_mut().set_env(before).ok();
+                    return Err(error);
+                }
+            }
+        }
         let told = size.map(|(w, h)| (f64::from(w), f64::from(h)));
-        let receipt = match self.runner.set_view(told, keyboard.map(f64::from)) {
+        let receipt = match self.runner.set_view(told, keyboard.map(f64::from), fold) {
             Ok(receipt) => receipt,
             Err(e) => {
+                let _ = self.runner.kernel_mut().set_env(before.clone());
+                let _ = self.runner.kernel_mut().set_segments(
+                    before.cols,
+                    before.rows,
+                    before.segments,
+                );
                 if restyled {
-                    let _ = self.runner.kernel_mut().set_env(before);
                     let _ = self.layout_unauthored();
                 }
                 return Err(format!("viewport: {e:?}"));
@@ -116,6 +155,16 @@ impl<D: DataSource> Host<D> {
             self.presence.unauthored |= restyled;
             let at_ms = self.now_ms;
             return (self.commit(&[Timed { at_ms, receipt }], None)).map_or(Ok(true), Err);
+        }
+        // A rotation can swap the cutout's side without changing the viewport
+        // or producing a commit. A centered sheet's overlap also follows its width.
+        if self.navigation.bars.room.is_some()
+            && (size.is_some()
+                || insets.is_some_and(|edges| {
+                    edges != [before.top, before.right, before.bottom, before.left]
+                }))
+        {
+            restyled |= self.project_bars();
         }
         if size.is_some() {
             let laid_out = self.layout().err();

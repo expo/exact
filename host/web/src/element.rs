@@ -453,16 +453,12 @@ fn element(node: &NodeFacts<'_>) -> &'static str {
     {
         return "textarea";
     }
-    if node.props.str(PropId::Href).is_some()
+    if node.props.has_link_destination()
         && (node.is_inline_run() || node.node_type == NodeType::Pressable)
     {
         return "a";
     }
-    if let Some(t) = node
-        .props
-        .str(PropId::SemanticTag)
-        .and_then(semantic::element)
-    {
+    if let Some(t) = node.props.semantic_element() {
         return t;
     }
     match node.node_type {
@@ -923,8 +919,11 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::BackgroundMaterial => "backgroundMaterial",
             // LLP 1053.000.000 D1: written, read by no rule, drawn nowhere.
             PropId::GlassGroup => "glassGroup",
-            // Interactive glass and a menu's order are UIKit's; a page has neither.
-            PropId::GlassInteractive | PropId::MenuOrder => continue,
+            // Interactive glass, a menu's order and a menu kept open at a pick are UIKit's; a page has none.
+            PropId::GlassInteractive
+            | PropId::MenuOrder
+            | PropId::KeepsMenuPresented
+            | PropId::Arrangement => continue,
             // A page has no tip system (LLP 1035.006.000 D4).
             PropId::Tip | PropId::TipMessage | PropId::TipImage | PropId::TipDone => continue,
             PropId::RetainFocus => "retainFocus",
@@ -943,6 +942,11 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             // Read by the JS target's midi.js (LLP 1125 D8): the inputs, newline-joined.
             PropId::MidiInputs => "data-exact-midiinputs",
             PropId::SwipeIndicator => "swipeIndicator",
+            PropId::PanelHref => {
+                // The panel command owns activation. The anchor has no browser destination.
+                out.get_or_insert_with("tabindex".into(), || "0".into());
+                continue;
+            }
             PropId::Href if node.props.link().is_none() => continue,
             PropId::Href => "href",
             PropId::Target => "target",
@@ -1002,11 +1006,11 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::SeekforwardOffset => "seekforwardOffset",
 
             PropId::Sandbox => "sandbox",
-            // @ref LLP 1020.002 D1, §9 — not honoured on the web. The glue
-            // keeps `partition` on the element for the agent's tree, never as a
-            // DOM attribute; the Apple words do not reach the page.
+            // The agent reads the partition from the element. Apple words stay off the DOM
+            // (@ref LLP 1020.002 D1, §9).
             PropId::Partition => "partition",
             PropId::AppleAllowsBackForwardNavigationGestures
+            | PropId::AppleMagnification
             | PropId::AppleAllowsMagnification
             | PropId::AppleInactiveSchedulingPolicy => continue,
             PropId::SemanticTag => continue,
@@ -1042,8 +1046,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::AccessibilityInvalid => "aria-invalid",
             PropId::AccessibilityDescribedBy => "aria-describedby",
             PropId::AccessibilityLabelledBy => "aria-labelledby",
-            // HTML's own attribute, so the browser makes the box focusable
-            // (LLP 1088 D7.3); `data-tabindex` would be ignored.
+            PropId::AccessibilityActions => "aria-actions",
+            // The browser owns focusability (LLP 1088 D7.3).
             PropId::TabIndex => "tabindex",
             PropId::AccessibilityRequired => "aria-required",
             PropId::AccessibilityHasPopup => "aria-haspopup",

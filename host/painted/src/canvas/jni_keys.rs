@@ -37,13 +37,41 @@ macro_rules! canvas_jni_keys {
             with(|h| h.named_key(&code, &key, down, repeat, shift));
         }
 
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_hostedBack(
+            env: *mut JNIEnv,
+            _class: jclass,
+            on: jboolean,
+        ) -> jboolean {
+            // Both the host and its JNI environment belong to this Java thread. Local references
+            // live only for one JNI entry, so resolve the reader in the notifying call's frame.
+            thread_local! {
+                static READER_ENV: std::cell::Cell<*mut JNIEnv> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+            }
+            fn notify(words: &[i32]) {
+                let env = READER_ENV.get();
+                unsafe {
+                    let class = ((**env).FindClass.expect("jni"))(env, c"dev/exact/canvas/Native".as_ptr());
+                    let method = ((**env).GetStaticMethodID.expect("jni"))(env, class, c"requestBack".as_ptr(), c"([I)V".as_ptr());
+                    let layers = ints(env, words);
+                    ((**env).CallStaticVoidMethodA.expect("jni"))(env, class, method, [$crate::canvas::jni_sys::jvalue { l: layers }].as_ptr());
+                    ((**env).DeleteLocalRef.expect("jni"))(env, layers);
+                    ((**env).DeleteLocalRef.expect("jni"))(env, class);
+                }
+            }
+            READER_ENV.set(env);
+            flag(with(|h| h.hosted_back((on != 0).then_some(notify))).is_some())
+        }
+
         /// System Back: whether the app took it.
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_back(
             _env: *mut JNIEnv,
             _class: jclass,
-        ) -> jboolean {
-            flag(with(|h| h.back()).unwrap_or(false))
+            kind: jint,
+            id: jint,
+        ) -> jint {
+            with(|h| h.back(kind, id as u32)).unwrap_or(0)
         }
 
         /// Predictive Back as it goes: whether exact2 previews it
@@ -52,11 +80,13 @@ macro_rules! canvas_jni_keys {
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_backProgress(
             _env: *mut JNIEnv,
             _class: jclass,
+            kind: jint,
+            id: jint,
             phase: jint,
             progress: jfloat,
             edge: jint,
         ) -> jboolean {
-            flag(with(|h| h.back_progress(phase, progress, edge)).unwrap_or(false))
+            flag(with(|h| h.back_progress(kind, id as u32, phase, progress, edge)).unwrap_or(false))
         }
 
         /// A URL given to the running app (`CanvasHost::open`).

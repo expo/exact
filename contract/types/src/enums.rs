@@ -1,5 +1,5 @@
 //! Finite strings: assignment admission differs from expression unification.
-use super::{checks, infer, Ref, Scope, Shapes, Ty};
+use super::{checks, err, infer, Ref, Scope, Shapes, Ty, TypeError};
 use contract_syntax::Expr;
 
 pub(super) fn contains(ty: &Ty) -> bool {
@@ -65,30 +65,135 @@ pub(super) fn accepts_expr(
     }
 }
 
+/// Infer a comparison operand before a list can widen its individual items.
+pub(super) fn operand(
+    e: &Expr,
+    opposite: &Expr,
+    scope: &Scope,
+    shapes: &Shapes,
+) -> Result<Ty, TypeError> {
+    let ty = match (e, opposite) {
+        (Expr::List(items, _), Expr::List(others, _)) => {
+            super::lists::literal(items, |i, item| match others.get(i) {
+                Some(other) => operand(item, other, scope, shapes),
+                None => infer(item, scope, shapes),
+            })?
+        }
+        (Expr::Some(value, _), Expr::Some(other, _)) => {
+            let item = operand(value, other, scope, shapes)?;
+            super::held::value(&item, value, "`some(…)`")?;
+            Ty::Option(Box::new(item))
+        }
+        _ => {
+            let ty = infer(e, scope, shapes)?;
+            compare_literal(&ty, opposite, shapes)?;
+            return Ok(ty);
+        }
+    };
+    shapes.bounded(&ty, e.span())?;
+    Ok(ty)
+}
+
+/// Equality with a dynamic string is valid even if its type is wider than the enum.
+pub(super) fn compare_literal(ty: &Ty, expr: &Expr, shapes: &Shapes) -> Result<(), TypeError> {
+    match (ty, expr) {
+        (Ty::Option(item), Expr::Some(value, _)) => compare_literal(item, value, shapes),
+        (Ty::List(item), Expr::List(values, _)) if item.contains_enum() => values
+            .iter()
+            .try_for_each(|value| compare_literal(item, value, shapes)),
+        (Ty::Enum(members), Expr::Str(value, span)) if !members.contains(value) => {
+            if let Some(candidate) = &shapes.expanded_comparison {
+                candidate.store(true, std::sync::atomic::Ordering::Relaxed);
+                return Ok(());
+            }
+            let nearest = members
+                .iter()
+                .min_by_key(|member| crate::literals::edit_distance(value, member))
+                .expect("an enum has at least one member");
+            err(
+                "type-enum-comparison",
+                format!("{value:?} is not a declared member of `{ty}`; did you mean {nearest:?}?"),
+                *span,
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A child's body was checked with its declared props. Substitution can turn
+/// a string read into a literal, or narrow it to an enum. If that produced a
+/// candidate, check the root as written, with the handler types its uses inferred.
+pub(super) fn check_authored_root(
+    file: &contract_syntax::File,
+    expanded: &contract_syntax::Expanded,
+    types: &mut super::Types,
+    sink: &mut super::Sink,
+) {
+    let Some(candidate) = types.shapes.expanded_comparison.take() else {
+        return;
+    };
+    if candidate.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut root = file.components[0].clone();
+        if file.routes.is_some() {
+            root.states.insert(0, expanded.root.states[0].clone());
+        }
+        let mut source = super::Sink::default();
+        super::component::check_component(
+            &root,
+            types,
+            expanded.owners.get(..root.states.len()),
+            &[],
+            &[],
+            &types.components[0].actions,
+            &mut source,
+        );
+        let scope = types.component_scope(&expanded.root, &types.components[0]);
+        super::uses::check_uses(&root.view, &scope, types, file, &mut source);
+        for b in &root.provides {
+            source.keep(infer(&b.expr, &scope, &types.shapes));
+        }
+        for error in source.errors {
+            if error.id == "type-enum-comparison" {
+                sink.push(error);
+            }
+        }
+    }
+    types.shapes.expanded_comparison = Some(candidate);
+}
+
 /// An assignment diagnostic keeps the rejected literal visible through wrappers.
 pub(super) fn assignment_error(target: &str, want: &Ty, expr: &Expr, have: &Ty) -> String {
-    let mut message = format!("`{target}` is `{want}`, cannot assign `{have}`");
-    if let Some(value) = rejected(want, expr) {
-        message.push_str(&format!("; {value:?} is not a declared member"));
-    }
-    message
+    format!(
+        "`{target}` is `{want}`, cannot assign `{have}`{}",
+        rejection(want, expr)
+    )
 }
 
 /// A state's initializer that does not fit its declared type, worded as an
 /// assignment's refusal is.
 pub(super) fn initializer_error(state: &str, want: &Ty, expr: &Expr, have: &Ty) -> String {
-    let mut message =
-        format!("state `{state}` is declared `{want}`, and its initializer is `{have}`");
-    if let Some(value) = rejected(want, expr) {
-        message.push_str(&format!("; {value:?} is not a declared member"));
-    }
-    message.push_str(": start it from a value of the declared type, or declare the type it holds");
-    message
+    format!(
+        "state `{state}` is declared `{want}`, and its initializer is `{have}`{}: start it from a value of the declared type, or declare the type it holds",
+        rejection(want, expr)
+    )
 }
 
-fn rejected<'a>(want: &Ty, expr: &'a Expr) -> Option<&'a str> {
+/// The literal in `expr` that `want`'s enum refuses, and the member it most
+/// plausibly misspells, as a clause to append; empty when there is none.
+pub(super) fn rejection(want: &Ty, expr: &Expr) -> String {
+    let Some((value, members)) = rejected(want, expr) else {
+        return String::new();
+    };
+    let mut clause = format!("; {value:?} is not a declared member");
+    if let Some(meant) = contract_syntax::suggestion(value, members.iter().map(String::as_str)) {
+        clause.push_str(&format!("; did you mean {meant:?}?"));
+    }
+    clause
+}
+
+fn rejected<'a>(want: &'a Ty, expr: &'a Expr) -> Option<(&'a str, &'a [String])> {
     match (want, expr) {
-        (Ty::Enum(values), Expr::Str(value, _)) if !values.contains(value) => Some(value),
+        (Ty::Enum(values), Expr::Str(value, _)) if !values.contains(value) => Some((value, values)),
         (Ty::Option(inner), Expr::Some(value, _)) => rejected(inner, value),
         (Ty::List(inner), Expr::List(values, _)) => values.iter().find_map(|v| rejected(inner, v)),
         (_, Expr::Ternary(_, a, b, _)) => rejected(want, a).or_else(|| rejected(want, b)),

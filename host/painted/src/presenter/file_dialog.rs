@@ -394,6 +394,24 @@ impl<D: DataSource> Presenter<D> {
         }
         failures
     }
+
+    /// Whether every accepted export's copy has finished, waiting until
+    /// `deadline` at most: an end that cannot wait without bound (a session's)
+    /// then joins them at once with [`Presenter::drain_file_exports`].
+    pub fn file_exports_done_by(&self, deadline: std::time::Instant) -> bool {
+        while self
+            .requests
+            .export_workers
+            .values()
+            .any(|w| !w.is_finished())
+        {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        true
+    }
 }
 
 #[cfg(test)]

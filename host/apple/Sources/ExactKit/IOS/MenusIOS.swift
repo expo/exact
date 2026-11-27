@@ -140,6 +140,7 @@ package final class MenuHost {
     }
 
     init(presenter: Presenter) { self.presenter = presenter }
+    let kept = KeptMenu() // The menu `items(of:)` last built (MenuUpdateIOS.swift).
     #if os(iOS)
     /// The context menus (LLP 1021 §5.1, ContextMenusIOS.swift).
     private(set) lazy var context = ContextMenuHost(presenter: presenter!, menus: self)
@@ -150,6 +151,8 @@ package final class MenuHost {
     private var sheets: any DialogHosting { presenter!.dialogs }
 
     private func isDialog(_ node: NodeView) -> Bool { node.props["semanticTag"] == "dialog" }
+    /// Whether `id` is a `dialog` or popover, whose cover only the menus tell: the kernel opens one told `nil` (`layOut`)
+    func ownsCover(_ id: UInt32) -> Bool { presenter?.views[id].map { $0.props["popover"] != nil || isDialog($0) } == true }
     package func isConfirmation(_ node: NodeView) -> Bool {
         isDialog(node) || node.props["accessibilityRole"] == "alertdialog"
     }
@@ -443,8 +446,8 @@ package final class MenuHost {
     /// `UIMenu(title:)`, taller header and all (LLP 1021, amended 2026-10-16).
     package func pullDown(of v: NodeView, titled heading: String, bar: (() -> UIView?)? = nil) -> UIMenu {
         let rows = rows(of: v, bar: bar, heading: heading)
-        if heading.isEmpty { return UIMenu(children: [rows]) }
-        return bar != nil ? UIMenu(title: heading, children: [rows]) : UIMenu(children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
+        if heading.isEmpty { return UIMenu(identifier: Self.menuIdentifier, children: [rows]) }
+        return bar != nil ? UIMenu(title: heading, identifier: Self.menuIdentifier, children: [rows]) : UIMenu(identifier: Self.menuIdentifier, children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
     }
     /// A `heading` outside a bar is an inline section's, whose title UIKit
     /// draws only over rows of its own: the first untitled section's rows
@@ -471,9 +474,7 @@ package final class MenuHost {
             let stale = bar != nil && self.barMenuClosed() // (closed unseen: Escape, VoiceOver's escape)
             let items = self.items(of: invocation.target, opener: invoker)
             if let bar, !items.isEmpty { self.barMenuOpened(invocation.target, from: invoker, in: bar, afterClose: stale) }
-            if self.recordsGiven, !heading.isEmpty { self.givenHeaders[invocation.target.id, default: []].insert(heading) }
-            guard headed, let first = items.first as? UIMenu, first.options.contains(.displayInline), first.title.isEmpty else { return completion(items) }
-            completion(first.children + items.dropFirst())
+            completion(self.shown(items, of: invocation.target, heading: heading, headed: headed))
         }
     }
     func eligible(_ node: NodeView, contextMenu: Bool = false, inertBoundary: UIView? = nil, inBar: Bool = false) -> Bool {
@@ -619,7 +620,9 @@ package final class MenuHost {
         // root controller, which might now present something unrelated.
         owner.alert.dismiss(animated: false) { [weak self, owner] in
             _ = owner
-            if preservingPending { DispatchQueue.main.async { [weak self] in self?.resumeAfterRouteDismissal() } }
+            DispatchQueue.main.async { [weak self] in
+                if preservingPending { self?.resumeAfterRouteDismissal() } else { self?.presenter?.navigation.presentationCleared() }
+            }
         }
     }
     package func retire(over controller: UIViewController, removing route: NodeView) -> () -> Void {
@@ -669,6 +672,7 @@ package final class MenuHost {
                 presenter.popoverEvents.changed(pop, open: false)
             }
         }
+        if confirmation == nil { presenter.navigation.presentationCleared() }
     }
     func reset() {
         focus.reset()
@@ -749,9 +753,8 @@ package final class MenuHost {
         }
         return waiting
     }
-    /// After one closes: what shows in Exact's views no more is covered
-    /// again, after this turn, unless it has stopped being a box of the top
-    /// layer (the host gave it back for good).
+    /// After one closes: what shows in Exact's views no more is covered again,
+    /// after this turn, unless it stopped being a top-layer box.
     package func coverClosed() {
         guard !laidOut.isEmpty, !coverPending else { return }
         coverPending = true
@@ -760,14 +763,15 @@ package final class MenuHost {
     private func coverClosedNow() {
         coverPending = false
         guard let presenter, let session = presenter.session else { return }
-        var covers: [(UInt32, HostCover?)] = []
-        for id in laidOut {
-            guard let node = presenter.views[id] else { laidOut.remove(id); continue }
-            guard !showsInViews(node) else { continue }
-            laidOut.remove(id)
-            if node.props["popover"] != nil || isDialog(node) { covers.append((id, .whole)) }
+        session.whenIdle(bound: true) { [weak self, weak presenter, weak session] in
+            guard let self, let presenter, let session else { return }
+            let covers: [(UInt32, HostCover?)] = laidOut.compactMap { id in
+                guard let node = presenter.views[id] else { self.laidOut.remove(id); return nil }
+                guard !self.showsInViews(node) else { return nil }; self.laidOut.remove(id)
+                return (node.props["popover"] != nil || self.isDialog(node)) ? (id, .whole) : nil
+            }
+            if !covers.isEmpty { session.apply(session.runtime.covers(covers)) }
         }
-        if !covers.isEmpty { session.apply(session.runtime.covers(covers)) }
     }
     private func showsInViews(_ node: NodeView) -> Bool {
         if sheets.owns(node) || agentOpen.values.contains(where: { $0.popover === node }) { return true }
@@ -818,7 +822,7 @@ package final class MenuHost {
         if entry.relay == nil { entry.relay = MountRelay(presenter, mount: entry.layer) }
         #endif
         entry.layer.mount(in: presenter)
-        if pop.superview !== entry.layer { entry.layer.addSubview(pop) }
+        if pop.superview !== entry.layer { pop.movingRoute(into: entry.layer) { entry.layer.addSubview(pop) } }
         #if os(iOS)
         if checking, entry.substitutesMenu { entry.checkHidden = true }
         #endif
@@ -848,8 +852,8 @@ package final class MenuHost {
         }
         let anchorView: UIView = source.isNativeButton ? presenter.controls.controls[source.id] ?? source : source
         var anchor = anchorView.convert(anchorView.bounds, to: entry.layer), scroll = presenter.anchorScroll(anchorView, outside: entry.layer)
-        // A bar item's popover opens from the item, not its hidden button (`agentOpen(barItem:)`).
-        if case .success(let (bar, item))? = presenter.navigation.barItem(source) { (anchor, scroll) = (bar.convert(item, to: entry.layer), .zero) }
+        // A popover opens from what the bar draws for its source (`barAnchor`), not the hidden node (`agentOpen(barItem:)`).
+        if let drawn = presenter.barAnchor(of: source, in: entry.layer) { (anchor, scroll) = (drawn, .zero) }
         // Sized in its option's region, as the web's (PopoverRegion.swift). The overflow's page: the
         // document less the bands past its area (status bar, home indicator).
         let at = presenter.placePainted(pop, laid: pop.bounds.size, anchor: anchor, scroll: scroll, pageScroll: presenter.viewport.contentOffset, overflow: PositionArea.overflow(of: pop, page: presenter.viewport.convert(CGRect(origin: .zero, size: presenter.viewport.contentSize).inset(by: presenter.pageMargins), to: entry.layer)),
@@ -863,8 +867,8 @@ package final class MenuHost {
     /// Out of the top layer, hidden, back where it was; the popovers nested
     /// in it first, as hiding a popover hides those above it in the stack.
     func drop(_ name: String) {
-        for (nested, entry) in agentOpen where entry.ancestor == name { drop(nested) }
         guard let entry = agentOpen.removeValue(forKey: name) else { return }
+        for (nested, child) in agentOpen where child.ancestor == name { drop(nested) }
         if let pop = entry.popover { presenter?.tellRegion(pop.id, nil, told: &entry.block) }
         coverClosed()
         entry.popover?.endEditing(true)
@@ -873,7 +877,7 @@ package final class MenuHost {
         presenter?.popoverEvents.changed(pop, open: false)
         pop.isHidden = true
         if presenter?.views[pop.id] === pop, let parent = entry.parent {
-            parent.insertSubview(pop, at: min(entry.index, parent.subviews.count))
+            pop.movingRoute(into: parent) { parent.insertSubview(pop, at: min(entry.index, parent.subviews.count)) }
             presenter?.regrid(pop) // a frame op while it was up was placed from the top layer
             // Its centre as it was, its origin on a whole pixel at its size now.
             let s = presenter?.gridScale ?? 1, size = pop.bounds.size
@@ -944,8 +948,9 @@ package final class MenuHost {
         #endif
     }
     func agentShow(_ pop: NodeView, named name: String, from row: UInt32?, context: Bool = false, invoked: Bool = false) {
+        guard agentOpen[name] == nil, !agentOpen.values.contains(where: { $0.popover === pop }) else { return }
         layOut(pop)
-        guard let presenter, live(pop) else { return }
+        guard let presenter, live(pop), agentOpen[name] == nil, !agentOpen.values.contains(where: { $0.popover === pop }) else { return }
         // A row of an open menu opens a popover that is no menu as the menu's own invoker would (LLP 1021's menu rule).
         let holder = { (id: UInt32?) in self.agentOpen.values.first { m in
             guard m.substitutesMenu, let menu = m.popover else { return false }
@@ -982,22 +987,21 @@ package final class MenuHost {
     /// Paint the context popover after its source's handler ran. Read the
     /// live run's props because the handler may replace it.
     @discardableResult
-    func agentContext(_ node: NodeView, inline inlineID: UInt32? = nil) -> Bool {
+    func agentContext(_ node: NodeView, inline inlineID: UInt32? = nil, inBar: Bool = false) -> Bool {
         // Its own action may have unmounted or disabled it, or renamed its popover.
-        guard ExactEnv.agentPaints, let presenter, eligible(node, contextMenu: true) else { return false }
+        guard ExactEnv.agentPaints, let presenter, eligible(node, contextMenu: true, inBar: inBar) else { return false }
         let props: [String: String]
         if let inlineID {
             guard presenter.textHost(inlineID) === node, !presenter.inlineInert(inlineID), let run = presenter.inlineText(inlineID) else { return false }
             props = run.props
         } else { props = node.props }
         guard let name = props["contextPopover"] else { return false }
-        // `agentShow` nests it in the open popovers holding `node`, as HTML's
-        // stack does, and closes every other auto popover, as a tap outside
-        // them would; a manual one stays.
+        // `agentShow` nests in open popovers holding `node` and closes other auto popovers; manual ones stay.
         guard let pop = presenter.carrying("popover").first(where: { $0.props["id"] == name && !isConfirmation($0) }) else {
             presenter.session?.log("context menu \(name) refused: no popover has that id")
             return false
         }
+        guard !isOpen(pop), agentOpen[name] == nil else { return false }
         agentShow(pop, named: name, from: node.id, context: true)
         return true
     }

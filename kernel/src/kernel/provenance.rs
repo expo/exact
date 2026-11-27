@@ -46,15 +46,24 @@ pub enum Operation {
     BarReservation,
     /// The keyboard's inset (D7).
     KeyboardInsets,
+    /// The host's clearance of what its container's own chrome or a box beside the routes covers,
+    /// and of the band nested containment withholds from a pane (D11).
+    ContainerClearance,
+    /// The host's clearance of what is still owed in a native view, through the view's own
+    /// controller, where its declaration consents (D15). That controller is no owner's, so no
+    /// owner update reports it; it is here to keep the hosts' ledgers numbered alike.
+    NativeViewInsets,
 }
 
 impl Operation {
     /// Every operation, in wire order (`OwnerUpdate::encode`).
-    pub const ALL: [Operation; 4] = [
+    pub const ALL: [Operation; 6] = [
         Operation::AdditionalInsets,
         Operation::SafeAreaPadding,
         Operation::BarReservation,
         Operation::KeyboardInsets,
+        Operation::ContainerClearance,
+        Operation::NativeViewInsets,
     ];
 }
 
@@ -87,4 +96,33 @@ pub(crate) fn check(contributions: &[Contribution]) -> Result<(), KernelError> {
         }
     }
     Ok(())
+}
+
+impl crate::Kernel {
+    /// What the owner `view`'s host writes to its controller's additional insets for its root (D11,
+    /// D3), in this order: the root's additional insets, then its safe-area padding, each top right
+    /// bottom left and with the root's id; an operation the root reserves nothing by is left out.
+    /// The kernel clears them around the content root; the host writes them so the controller's
+    /// own safe area holds them too, recording each as a contribution, whose effect it reports.
+    /// `None` for a view that is no owner. Activation delivers them live (stage 5).
+    pub fn owner_writes(&self, view: ViewId) -> Option<Vec<(ViewId, Operation, [f32; 4])>> {
+        let arena = &self.arena;
+        let slot = arena
+            .slot_of(view)
+            .filter(|&s| super::block::owns(arena, s))?;
+        let Some(r) = super::block::reservation::reserved(arena, slot) else {
+            return Some(Vec::new());
+        };
+        let writes = [
+            (Operation::AdditionalInsets, r.added),
+            (Operation::SafeAreaPadding, r.padding),
+        ];
+        Some(
+            writes
+                .into_iter()
+                .filter(|(_, insets)| insets.iter().any(|&v| v != 0.0))
+                .map(|(operation, insets)| (view, operation, insets))
+                .collect(),
+        )
+    }
 }

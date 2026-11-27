@@ -18,4 +18,4 @@ name = "exact_svg_file"
 exact-kernel = { path = "../../kernel" }
 exact-motion = { path = "../../motion" }
 exact-num = { path = "../../num" }
-cssparser = { version = "0.37.0", default-features = false }
+cssparser = { version = "0.38.0", default-features = false }

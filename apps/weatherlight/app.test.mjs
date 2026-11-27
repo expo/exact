@@ -285,3 +285,61 @@ test('overlapping deliveries count every tip once', async () => {
   expect(done).toBe(true);
   expect(JSON.parse(file)).toEqual({ tips: 9, tokens: ['t1', 't2', 't3'] });
 });
+
+test('a failed tip write leaves the tip unconsumed across overlapping retry passes', async () => {
+  const queue = ['t2', 't3'];
+  const consumed = [];
+  let releaseUnfinished, unfinishedCalled;
+  const firstUnfinished = new Promise(resolve => { unfinishedCalled = resolve; });
+  let unfinishedCount = 0;
+  mock.module('@exact/purchases', () => ({
+    acknowledge: async () => {},
+    consume: async ({ purchaseToken }) => {
+      consumed.push(purchaseToken);
+      const i = queue.indexOf(purchaseToken);
+      if (i >= 0) queue.splice(i, 1);
+    },
+    unfinishedPurchases: async () => {
+      unfinishedCount++;
+      if (unfinishedCount === 1) {
+        unfinishedCalled();
+        await new Promise(resolve => { releaseUnfinished = resolve; });
+      }
+      return queue.map(purchaseToken => ({ purchaseState: 'purchased', itemId: 'tip.small', purchaseToken }));
+    },
+  }));
+  const { answer } = await import('./app.ts?case=write-failure');
+  let file = JSON.stringify({ tips: 7, tokens: ['t1'] });
+  let failT3 = true;
+  let writeCalls = 0;
+  const storage = { fs: {
+    readFile: async () => new TextEncoder().encode(file).buffer,
+    atomicWriteFile: async (_path, bytes) => {
+      writeCalls++;
+      const text = new TextDecoder().decode(bytes);
+      if (failT3 && JSON.parse(text).tokens.includes('t3')) {
+        throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      }
+      file = text;
+    },
+  } };
+  const first = answer('deliverPurchases', [], {}, storage);
+  await firstUnfinished;
+  // Overlapping delivery while the first is active sets askedAgain = true.
+  const second = await answer('deliverPurchases', [], {}, storage);
+  expect(second).toEqual({ tips: 7 });
+  releaseUnfinished();
+  const result = await first;
+  expect(result).toEqual({ tips: 8 });
+  expect(consumed).toEqual(['t2']);
+  expect(queue).toEqual(['t3']);
+  expect(JSON.parse(file)).toEqual({ tips: 8, tokens: ['t1', 't2'] });
+  expect(writeCalls).toBe(3);
+
+  // Once storage recovers, the remaining tip persists and is consumed.
+  failT3 = false;
+  expect(await answer('deliverPurchases', [], {}, storage)).toEqual({ tips: 9 });
+  expect(consumed).toEqual(['t2', 't3']);
+  expect(queue).toEqual([]);
+  expect(JSON.parse(file)).toEqual({ tips: 9, tokens: ['t1', 't2', 't3'] });
+});

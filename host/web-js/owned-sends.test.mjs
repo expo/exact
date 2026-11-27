@@ -127,16 +127,18 @@ async function fixture(source, run) {
     browser = await open({ host: 'web', url: new URL('/', server.url).href, webDist: dist });
     const text = async id => (await browser.tree()).nodes.find(n => n.props.testId === id)?.props.text ?? null;
     const asks = () => browser.carrier.evaluate('globalThis.asks ?? []');
-    // Answers the held asks `which` picks (every one by default) and, once their replies have committed (the task
-    // after their promises'), lands their `then`s, the clock unmoved (Runner::land_then); how many. A settle would
-    // wait on the asks still held.
-    const land = async (which = '() => true') => {
-      const n = await browser.carrier.evaluate(`(() => {
-        const pick = ${which}, h = globalThis.held, mine = h.filter(pick);
-        globalThis.held = h.filter(x => !mine.includes(x));
-        mine.forEach(x => x.done());
-        return new Promise(done => setTimeout(() => done(mine.length)));
-      })()`);
+    // Answers the held asks `which` picks (every one by default) and waits for their replies to commit (the task
+    // after their promises'); how many. Their `then`s stay due.
+    const answer = (which = '() => true') => browser.carrier.evaluate(`(() => {
+      const pick = ${which}, h = globalThis.held, mine = h.filter(pick);
+      globalThis.held = h.filter(x => !mine.includes(x));
+      mine.forEach(x => x.done());
+      return new Promise(done => setTimeout(() => done(mine.length)));
+    })()`);
+    // Answers them and lands their `then`s, the clock unmoved (Runner::land_then); how many. A settle would wait on
+    // the asks still held.
+    const land = async (which) => {
+      const n = await answer(which);
       await thens();
       return n;
     };
@@ -148,7 +150,7 @@ async function fixture(source, run) {
     };
     // The mutations holding a ticket, by name: a send forgotten holds none.
     const held = () => browser.carrier.evaluate('globalThis.exact.mutations.filter(m => m.ticket || m.tickets.length).map(m => m.name)');
-    await run({ browser, text, asks, land, thens, openBook, held });
+    await run({ browser, text, asks, answer, land, thens, openBook, held });
   } finally {
     if (appDir === undefined) delete process.env.EXACT_APP_DIR;
     else process.env.EXACT_APP_DIR = appDir;
@@ -177,7 +179,7 @@ test("a screen's then runs in its frame and hands the lines to the root", () => 
   expect(await text('state-1')).toBe('idle');
 }), 180_000);
 
-test('leaving the screen before its answer forgets the send and runs no then', () => fixture(BOOKS, async ({ browser, text, land, openBook, held }) => {
+test('leaving the screen before its answer or its then runs no then', () => fixture(BOOKS, async ({ browser, text, answer, land, thens, openBook, held }) => {
   await openBook('1');
   await browser.tap('detect-1');
   expect(await held()).toEqual(['detected']);
@@ -194,6 +196,17 @@ test('leaving the screen before its answer forgets the send and runs no then', (
   expect(await text('state-1')).toBe('idle');
   expect(await land()).toBe(0);
   expect(await text('state-1')).toBe('idle');
+  expect(await text('shown')).toBe('');
+
+  // An answer that lands while the screen lives arms its `then`; leaving before the `then` runs drops it. The router
+  // leaves in its own commit, where a tap would first land the due `then`.
+  await browser.tap('detect-1');
+  expect(await answer("x => x.name === 'detect'")).toBe(1);
+  expect(await text('state-1')).toBe('detect 1');
+  expect(await text('shown')).toBe('');
+  expect(await browser.carrier.evaluate("globalThis.exact.goTo('/')")).toBe('');
+  expect(await text('state-1')).toBeNull();
+  await thens();
   expect(await text('shown')).toBe('');
 }), 180_000);
 

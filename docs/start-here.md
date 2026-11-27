@@ -9,7 +9,8 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
    buttons, a `tablist`, a `dialog role="alertdialog"`); each host draws its own control.
    A data table is HTML's `table` (`thead`, `tr`, `th scope="col"`, `td colspan=2`), terms and their descriptions a `dl` (`dt`, `dd`).
 2. **Leave the rest unsaid:** controls, bars, type and dark mode are the platform's, and so
-   are a `list`'s rows: its children are rows, so draw no separator and no press. A
+   are a `list`'s rows: its children are rows, so draw no separator and no press. So are the
+   edges: measure no inset, keyboard, bar or device (`contract vocab edges`). A
    colour or size names a role (`-exact-secondary-label`, `font="-exact-footnote"`; `bun
    <exact2>/scripts/no-tells.mjs .` lists literals). Leave the accent unsaid: it is the
    platform's blue, and a filled button keeps its white label (a pale accent under
@@ -29,8 +30,10 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
    and sheet is a route (`routes`, `push`, a row that is a `link href=path(…)`): on the web
    that is its URL, so Back, reload, a shared link and a new tab work, and focus moves to the
    new screen. A screen chosen by `if page == …` over a state has none of these, and the
-   build warns (`lower-screen-by-state`). Tabs (a sidebar) and a
-   list whose rows push (beside its detail) need no code. The rows of a list the person deletes from swipe to
+   build warns (`lower-screen-by-state`). Tabs (a sidebar) need no code; a list beside its
+   detail on a wide window is one attribute on the list's route, `navigationSplit="split"`,
+   on a route positioned as the patterns place it (`position="absolute" inset=0`), which the web
+   needs (in an iOS tab only an iPad splits, where the tab's first route asks). The rows of a list the person deletes from swipe to
    delete and open a menu on a long press (`list-detail`, `contract vocab swipe`).
    `haptic("selection")` marks a choice in your own control, `haptic("success")` a task done.
    A chat's messages are bubbles in a transcript that opens at the newest and follows each
@@ -50,7 +53,7 @@ a prefix that still collides gains `-app`. The prefix stays in `package.json`'s 
 updates and directory renames. Authored host crates keep their own names.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
 A machine without Rust can check a Contract and TypeScript app and build it for the web with matching prebuilt tools. From the app directory, `bun <exact2>/scripts/exact.mjs setup --check --platform web` reports the tools available for this checkout. Native builds and apps containing Rust need the Rust toolchain.
-Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone. A build for a phone (`share`, `ios --device`) needs more than a simulator's: add `--device`.
+Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone. On a booted iOS simulator, the check also reports accessibility settings that slow [app launches](recipes/porting-and-release.md). A build for a phone (`share`, `ios --device`) needs more than a simulator's: add `--device`.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
 On Linux or Windows through WSL, install the [iOS cross tools](../README.md#building-for-ios-on-linux-and-wsl)
@@ -65,6 +68,13 @@ an untouched starter is replaced, but an edited or manually emptied file needs
 `--force`. To try another app, create it with `new <path>` and invoke that app's
 `<path>/exact.mjs pattern <name>` (`pattern --help` shows an example).
 Your shell commands have no such help, so keep one directory.
+
+`test` discovers `*.test.contract` beside the app. To run a file in a subfolder,
+use `bun exact.mjs test macos tests/board.test.contract`. It uses this app's program.
+The standalone compiler, `contract test tests/board.test.contract`, looks for
+`board.contract` beside the test, then `app.contract` beside it, then `app.contract`
+beside the nearest enclosing `app.json`. Pass `--app <directory>` to select the app.
+
 |`bun exact.mjs …`|What it does|
 |---|---|
 |`contract build app.contract --json --errors-only`|A CI gate: `[]` and exit zero mean no errors (omit `--errors-only` for every unaccepted lowering warning); it rewrites the types `app.ts` imports and type-checks it.|
@@ -216,6 +226,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a chat header with an avatar, and day pills|`chat-header`|
 |a voice note's waveform, a bubble's tail (SVG in a row)|`waveform-and-tail`|
 |data the app ships and only reads (a JSON file `app.ts` imports)|`shipped-data`|
+|a floating button, a pinned row, a scroll bar's place, the keyboard, an iPhone Duo's hinge|`edges`|
 |a long list or grid that loads more|`long-lists`|
 |a large local history with live arrivals and offline sends|[`large-live-list`](recipes/large-live-list.md)|
 |a document or article longer than a screen, a long Markdown note|`long-text`|
@@ -250,6 +261,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a GPU module whose crates call into Java on Android: the app's Java VM and `Context`|`gpu-module-android`|
 |data answered in Rust instead of `app.ts` (`exact new --rust`, app.json's `rust.data`)|`bun exact.mjs docs Rust data sources`|
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
+|localised copy and plural strings (`t()`, `strings/<locale>.json`)|`t`, `rtl`|
 |labels in Arabic, Hebrew, Persian or Urdu, laid out right to left; a second language|`rtl`|
 |an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
 |a button outside the app: Control Center, the Lock Screen, a Quick Settings tile; recording from one|`system-controls`|
@@ -441,6 +453,12 @@ test "an item is added, a repeat refused, checked off and kept"
   expect text "left" == "0 items left"
 ```
 
+On Android, `agent` and `test` forward the app server's loopback port to the
+selected device. Set `ANDROID_SERIAL` to choose among attached devices.
+This also works when `agent` finds a server already answering. The last drive
+using a mapping Exact created removes it. A mapping you set up stays in place,
+and a conflicting one stops the launch.
+
 Every step, launch line and `verify` flag is on the card.
 
 Interactive web drives also accept `reload` (keeps storage and fetch faults) and
@@ -455,8 +473,10 @@ snapshot. The backend’s clock stays its own.
 | --- | --- | --- |
 | A node is there, or not | `expect tree has "<testId>"`, `expect tree missing "<testId>"` | `lacks`, `contains`, `not has`. It matches a `testId` only, never a label or text, unlike `tap` |
 | A node's text | `expect text "<testId>" == "the whole text"` | `contains`, `!=`. The text is compared whole, and a node with no text of its own reads its descendants' joined: a row's testId reads its buttons' labels too, so put the testId on the text node |
-| State | `expect state lib.notes.0.title == "Milk"` (two list indexes in a row take a space: `grid.0 .1`; a drive's `clock until state` takes the same path), `== []`, `== ["a", "b"]`, `== none`, `== true`, `!= "hint"`; numeric bounds `>= 90`, `<= 110`; literal alternatives `in 0 1 2`. Each also takes `state <path>` on the right: `expect state pinned == state locked`, `expect state mode in state allowedModes` | an arbitrary expression on the right |
+| State | `expect state lib.notes.0.title == "Milk"` (`grid.0.1` reads two list indexes; a drive's `clock until state` takes the same path), `== []`, `== ["a", "b"]`, `== none`, `== true`, `!= "hint"`; numeric bounds `>= 90`, `<= 110`; literal alternatives `in 0 1 2`. Each also takes `state <path>` on the right: `expect state pinned == state locked`, `expect state mode in state allowedModes` | an arbitrary expression on the right |
 | A failed resource or mutation request | `expect text` on the view's `match failure(x) { case some(f) => f.code, case none => "" }`; `failed(x)` accepts either slot | `failure(x).code` without extracting the option. A thrown refusal is a request failure; an authored `{ok: false}` is a normal result |
+
+On iOS, `layout` measures the navigation bar for a projected `header`, its placed buttons, the search text field, and the title. For system Back in a horizontal bar, use `expect layout "back" width >= 20`. A plain heading reports its visible title label when UIKit provides one identifiable frame. Otherwise the heading keeps its authored box. A tab bar and each tab UIKit can identify report their drawn boxes. When the navigation bar is hidden, the test reads the authored header and buttons. AppKit reports a window toolbar item’s geometry as system-owned.
 
 ## Pitfalls that cost the most
 

@@ -138,6 +138,7 @@ extension NodeView {
     var standsOnSheetGround: Bool {
         window is SheetWindow && groundIsTheWindows && (!wrote("background_color") || props["backgroundMaterial"] == nil)
     }
+    var standsOnPanelGround: Bool { panelRouteRoot && !wrote("background_color") }
     var needsSheetMaterial: Bool { standsOnSheetGround && wrote("background_color") && !(superview is BlockView) }
 
     private var hasGroupedCardFill: Bool {

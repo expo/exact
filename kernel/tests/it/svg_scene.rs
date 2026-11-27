@@ -18,6 +18,8 @@ mod lengths;
 mod object_box;
 #[path = "svg_scene/refs.rs"]
 mod refs;
+#[path = "svg_scene/text.rs"]
+mod text;
 
 fn style(id: u32, rows: &[(StyleId, &str)]) -> Op {
     exact_kernel::style::link_all();

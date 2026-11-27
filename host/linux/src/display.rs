@@ -1,7 +1,8 @@
 //! The Linux display uses the connected panel at its preferred mode. Ink
 //! presents directly when Vulkan supports the connector and presentation
 //! feedback. Other painters and failed Vulkan surfaces use KMS dumb buffers.
-//! One frame can be outstanding while the host services input and worker wakes.
+//! Direct Vulkan can submit one frame ahead of its pending presentation;
+//! KMS dumb buffers keep one pending flip while the host services other wakes.
 //! @ref LLP 1015 §6; expo/exact#145.
 
 #![allow(unsafe_code)]
@@ -183,10 +184,16 @@ impl event_loop::Output for Display {
             .as_ref()
             .map_or_else(|| self.flips.pending(), |d| d.pending())
     }
-    /// The vblank sequence of the last completed flip (LLP 1079 D3).
-    fn observed(&self) -> Option<Instant> {
-        self.direct.as_ref().and_then(|d| d.observed)
+    fn can_submit(&self) -> bool {
+        self.direct
+            .as_ref()
+            .map_or_else(|| !self.flips.pending(), |d| d.can_submit())
     }
+    /// When the Vulkan waiter observed the last completed presentation.
+    fn observed(&self) -> Option<Instant> {
+        self.direct.as_ref().and_then(|d| d.observed())
+    }
+    /// The vblank sequence of the last completed KMS flip (LLP 1079 D3).
     fn sequence(&self) -> Option<u32> {
         self.flips.sequence
     }
@@ -200,11 +207,11 @@ impl event_loop::Output for Display {
             .map_or_else(|| self.card.0.as_raw_fd(), |d| d.fd())
     }
 
-    // Copy/submit only when neither scanout nor an outstanding flip owns back.
-    // The first set_crtc is synchronous; later calls never wait for a vblank.
+    // The Vulkan swapchain owns its submitted images. KMS copies only into
+    // the back buffer unowned by scanout or a pending flip.
     fn submit(&mut self, frame: PanelFrame) -> Result<Completion, String> {
         if let Some(direct) = &mut self.direct {
-            let result = direct.submit(frame);
+            let result = direct.submit(frame)?;
             return Ok(self.finish_direct(result));
         }
         self.open_dumb_buffers()?;
@@ -217,6 +224,7 @@ impl event_loop::Output for Display {
         flips
             .submit(frame, |back, first, frame| {
                 let pixels = frame
+                    .picture
                     .mirror()
                     .ok_or("KMS dumb buffer requires panel pixels")?;
                 let (db, fb) = &mut buffers[back];
@@ -302,6 +310,13 @@ pub fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i3
     };
     let (pw, ph) = display.size();
     config.output_rotation = display.rotation;
+    config
+        .preferences
+        .get_or_insert_with(Default::default)
+        .orientation = Some(exact_runner::ScreenOrientation::rotated(
+        ph >= pw,
+        (display.rotation.degrees() / 90) as u8,
+    ));
     let [lw, lh] = display.rotation.size([pw, ph]);
     let viewport = (lw as f32 / config.scale, lh as f32 / config.scale);
     exact_painted::desktop::install_displays(std::rc::Rc::new(

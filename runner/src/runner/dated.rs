@@ -66,9 +66,40 @@ impl<D: DataSource> Runner<D> {
     /// source()` row is the bake's for every launch (LLP 1048.003 D6) and is
     /// never one.
     pub fn resources_reading_clock(&self) -> Vec<bool> {
+        let (dated, resources) = self.propagate_taint(|r| {
+            self.plan.str(self.plan.resources[r].source) == crate::time::SOURCE
+        });
+        (0..self.plan.resources.len())
+            .map(|r| !self.is_placeholder_row(r) && dated.reads(&resources[r]))
+            .collect()
+    }
+
+    /// Every declared resource whose answer must be excluded from a baked plan
+    /// because it depends directly or transitively (across module owners, e.g.,
+    /// a JS provider feeding a Rust provider) on `exactTime`, an ambient clock
+    /// read (`clock_reader`), an entropy draw (`entropy_reader`), or a
+    /// module-sticky ambient taint (LLP 1195.000 D2.2, D2.5).
+    pub fn resources_tainted_for_bake(&self) -> Vec<bool> {
+        let (dated, resources) = self.propagate_taint(|r| {
+            if self.plan.str(self.plan.resources[r].source) == crate::time::SOURCE {
+                return true;
+            }
+            let (clock, entropy) = self.resource_ambient_taint(r);
+            clock || entropy
+        });
+        (0..self.plan.resources.len())
+            .map(|r| {
+                !self.is_placeholder_row(r)
+                    && (dated.reads(&resources[r])
+                        || (dated.resources[r]
+                            && self.plan.str(self.plan.resources[r].source) != crate::time::SOURCE))
+            })
+            .collect()
+    }
+
+    fn propagate_taint(&self, seed: impl Fn(usize) -> bool) -> (Dated, Vec<Vec<Input>>) {
         let plan = &self.plan;
         let deps = self.sites.deps();
-        // Each row's inputs and each action's instructions, read once.
         let collect = |reads: &crate::instance::DepReads| deps.inputs(reads).collect::<Vec<_>>();
         let derives: Vec<Vec<Input>> = deps.derives.iter().map(collect).collect();
         let resources: Vec<Vec<Input>> = plan
@@ -98,12 +129,8 @@ impl<D: DataSource> Runner<D> {
         let mut dated = Dated {
             slots: vec![false; plan.slots.len()],
             derives: vec![false; plan.derives.len()],
-            resources: (0..plan.resources.len())
-                .map(|r| plan.str(plan.resources[r].source) == crate::time::SOURCE)
-                .collect(),
+            resources: (0..plan.resources.len()).map(seed).collect(),
         };
-        // To a fixed point: each round adds what reads the last one's, and
-        // the rows bound the rounds.
         loop {
             let mut changed = false;
             for (d, inputs) in derives.iter().enumerate() {
@@ -128,9 +155,7 @@ impl<D: DataSource> Runner<D> {
                 break;
             }
         }
-        (0..plan.resources.len())
-            .map(|r| !self.is_placeholder_row(r) && dated.reads(&resources[r]))
-            .collect()
+        (dated, resources)
     }
 }
 

@@ -104,7 +104,7 @@ pub(in crate::runner) struct Invocations {
     running: BTreeMap<u64, Running>,
     /// Requests the host refused at admission, settled in their turn, and
     /// whether each was ordered.
-    refused: Vec<(u64, &'static str, bool)>,
+    refused: Vec<(u64, String, bool)>,
     anchors: Anchors,
     /// The sends whose final handler runs, with when its budget ends.
     finals: BTreeMap<u64, f64>,
@@ -188,6 +188,53 @@ impl<D: DataSource> Runner<D> {
         let v: Json = serde_json::from_str(body).unwrap_or_default();
         let text = |field: &str| v[field].as_str().unwrap_or_default().to_owned();
         let (extension, handle, handler) = (text("extension"), text("handle"), text("handler"));
+        if extension == "browser-automation"
+            && handle == "script.message"
+            && handler == "script.message"
+        {
+            if !self.declares("browser.automation") {
+                return reply(json!({"error": "NotAllowedError", "message": "script.message requires browser.automation"}).to_string());
+            }
+            if v["args"]["retiredPost"] == true {
+                self.log("script.message: dropped a post from a retired web view");
+                return reply("{}".into());
+            }
+            if v["args"]["overflow"] == true {
+                self.log("script.message: dropped oldest unsent messages (queue limit 32)");
+                return reply("{}".into());
+            }
+            // Keep the guest's JSON as text through the native bridges. Valid data can exceed
+            // a native dictionary decoder's nesting limit or its range of representable numbers.
+            let params = &v["args"]["params"];
+            let Some(data) = params["json"].as_str().filter(|s| s.len() <= 65_536) else {
+                return reply(json!({"error": "QuotaExceededError"}).to_string());
+            };
+            let Ok(data) = serde_json::from_str::<&serde_json::value::RawValue>(data) else {
+                return reply(
+                    json!({"error": "TypeError", "message": "script.message needs JSON"})
+                        .to_string(),
+                );
+            };
+            let channel = &params["channel"];
+            let source = &params["source"];
+            if !channel.is_string()
+                || !["realm", "context", "origin"]
+                    .iter()
+                    .all(|key| source[key].is_string())
+            {
+                return reply(json!({"error":"TypeError", "message":"script.message needs a channel and a source with realm, context and origin strings"}).to_string());
+            }
+            let args = format!(r#"{{"channel":{channel},"source":{source},"data":{data}}}"#);
+            self.run_handler(
+                "script.message".into(),
+                crate::SCRIPT_MESSAGE.into(),
+                args,
+                Cause::device(),
+                To::Implementation(reply),
+                None,
+            );
+            return;
+        }
         let at = format!("{extension}: {handler} for {handle}");
         if let Some(n) = handle
             .strip_prefix("request:")
@@ -215,7 +262,14 @@ impl<D: DataSource> Runner<D> {
             cause.origin().word()
         ));
         let to = To::Implementation(reply);
-        self.run_handler(at, &handler, &v["args"], cause, to, None);
+        self.run_handler(
+            at,
+            format!("tool:{handler}"),
+            v["args"].to_string(),
+            cause,
+            to,
+            None,
+        );
     }
 
     /// [`Self::invoke_module`] for the send numbered `n`, while it is pending.
@@ -252,7 +306,14 @@ impl<D: DataSource> Runner<D> {
         }
         let to = To::Implementation(reply);
         let handler = handler.unwrap_or_default().to_owned();
-        self.run_handler(at, &handler, &v["args"], cause, to, last.then_some(n));
+        self.run_handler(
+            at,
+            format!("tool:{handler}"),
+            v["args"].to_string(),
+            cause,
+            to,
+            last.then_some(n),
+        );
     }
 
     /// The cause a handler that a call of `cause` granted runs under: no
@@ -261,28 +322,25 @@ impl<D: DataSource> Runner<D> {
         self.join_causes(cause.without_invocation(), Cause::model_tool())
     }
 
-    /// Run the data module's handler `handler` with `args` as a fresh answer
+    /// Run the data module's handler `source` with JSON arguments as a fresh answer
     /// of `cause`, its answer to `to`.
     pub(super) fn run_handler(
         &mut self,
         at: String,
-        handler: &str,
-        args: &Json,
+        source: String,
+        args: String,
         cause: Cause,
         to: To,
         final_of: Option<u64>,
     ) {
         let run = Running {
             completion: None,
-            module: self
-                .data
-                .module_identity(&format!("tool:{handler}"))
-                .map(|m| m.instance()),
+            module: self.data.module_identity(&source).map(|m| m.instance()),
             fetch: None,
             continuation: None,
             at,
-            source: format!("tool:{handler}"),
-            args: Value::from(args.to_string()),
+            source,
+            args: Value::from(args),
             cause,
             started: self.now_ms,
             to: Some(to),
@@ -290,7 +348,7 @@ impl<D: DataSource> Runner<D> {
             effects: false,
         };
         let answer = self.as_cause(cause, |r| {
-            r.store.set_clock_ms(r.now_ms);
+            r.sync_store_clock();
             (r.data).answer(&mut r.store, &run.source, std::slice::from_ref(&run.args))
         });
         self.tool_step(run, answer);
@@ -386,7 +444,7 @@ impl<D: DataSource> Runner<D> {
                 // D13): a handler's is refused before it reaches the host,
                 // so no ordered work waits on it.
                 match self.process_refusal(&request) {
-                    Some(why) => self.refuse_tool(ticket, why, false),
+                    Some(why) => self.refuse_tool(ticket, why.into(), false),
                     None => self.requests.push(RequestOut {
                         completion: None,
                         class: crate::RequestClass::Ordered,
@@ -510,7 +568,7 @@ impl<D: DataSource> Runner<D> {
         };
         let answer = self.as_cause(run.cause, |r| {
             let args = std::slice::from_ref(&run.args);
-            r.store.set_clock_ms(r.now_ms);
+            r.sync_store_clock();
             (r.data).parse_tool(
                 run.fetch,
                 run.continuation,
@@ -526,7 +584,7 @@ impl<D: DataSource> Runner<D> {
     /// The host refused a handler's request at admission: it settles in
     /// its turn, as a failure, an ordered one only once earlier ordered work
     /// has.
-    pub(super) fn refuse_tool_linked(&mut self, ticket: u64, reason: &'static str, ordered: bool) {
+    pub(super) fn refuse_tool_linked(&mut self, ticket: u64, reason: String, ordered: bool) {
         self.extensions
             .invocations
             .refused
@@ -545,10 +603,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A handler's refused request that may settle now.
-    pub(super) fn tool_refusal_linked(
-        &mut self,
-        allow_ordered: bool,
-    ) -> Option<(u64, &'static str)> {
+    pub(super) fn tool_refusal_linked(&mut self, allow_ordered: bool) -> Option<(u64, String)> {
         let refused = &mut self.extensions.invocations.refused;
         let at = refused
             .iter()

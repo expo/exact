@@ -14,11 +14,20 @@ final class AgentWebWindowMacTests: XCTestCase {
     }
 
     func testACoveredGuestRunsAndPaintsWithoutRaisingItsWindow() throws {
+        try checkCoveredGuest(inPanel: false)
+    }
+
+    func testACoveredPanelKeepsItsGuestLiveAtTheDrivenLevel() throws {
+        try checkCoveredGuest(inPanel: true)
+    }
+
+    private func checkCoveredGuest(inPanel: Bool) throws {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "behind-web")
         defer { session.destroy() }
         let rect = NSRect(x: 10, y: 10, width: 640, height: 500)
-        let window = ExactAgentWindow(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: false)
+        let window: NSWindow = inPanel ? RoutePanel(contentRect: rect, behind: true)
+                                       : ExactAgentWindow(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.level = .agentBehind
         defer { window.close() }

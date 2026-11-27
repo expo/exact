@@ -93,7 +93,7 @@ impl<D: DataSource> Presenter<D> {
         let mark = self.hatch_key_mark();
         self.hold_input(self.focus);
         self.key_shows_ring(key);
-        if self.shortcut(key, repeat, now) {
+        if self.shortcut(key, code, repeat, now) {
             self.hatch_key(mark, key, code, true, repeat);
             return (true, None);
         }
@@ -298,7 +298,7 @@ impl<D: DataSource> Presenter<D> {
                 if let Some(error) = self.edit_field(
                     id,
                     next,
-                    selection,
+                    field::EditSelection::Presenter(selection),
                     now,
                     InputDetails {
                         input_type: "deleteContentForward".into(),

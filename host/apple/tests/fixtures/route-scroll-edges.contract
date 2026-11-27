@@ -1,0 +1,69 @@
+// LLP 1123 D4, D9: the hero pads its text below the navigation bar. The
+// same scroller reaches under the tab bar, which has its own clearance.
+routes nav
+  tab home "/"
+    orientation "/orientation"
+
+component BarHero
+  state topOff = true
+  state bottomOff = false
+  state clearBar = false
+  state short = false
+  state layout = "normal"
+  action arrange(shape: string)
+    layout = shape
+  state hideTabs = false
+  action open
+    nav = push(nav, "/orientation")
+  action back
+    nav = back(nav)
+  action toggleTop
+    topOff = not topOff
+  action toggleBottom
+    bottomOff = not bottomOff
+  action toggleBar
+    clearBar = not clearBar
+  action toggleTabs
+    hideTabs = not hideTabs
+  action toggleHeight
+    short = not short
+  view
+    main navigationKey=`${top(nav).id}` position="absolute" inset=0 display="flex" flex-direction="column"
+      column id="panel-home" role="tabpanel"
+        for e in stack(nav) key=e.id
+          column navigationKey=`${e.id}` position="absolute" inset=0 testId="route"
+            navigationScroll=`content-${e.id}`
+            height=(layout == "short-route" ? "50%" : "auto")
+            padding-bottom=(layout == "padded" or layout == "footer" ? "env(safe-area-inset-bottom)" : "0px")
+            -exact-safe-area=(topOff ? (bottomOff ? "top bottom" : "top") : (bottomOff ? "bottom" : none))
+            navigationBar=(layout == "barless" ? "none" : (clearBar ? "transparent" : "auto"))
+            header display="flex"
+              if e.name == "orientation"
+                button "Back" id="back" press=back
+              text "Window" role="heading" aria-level=1
+            view position="absolute" width=0 height="env(safe-area-inset-top)" testId="window-top"
+            view position="absolute" width=0 height="env(safe-area-inset-bottom)" testId="window-bottom"
+            scroll id=`content-${e.id}` flex=1 min-height=0 testId="list"
+              max-height=(short ? "calc(100vh - var(--exact-safe-area-inset-bottom))" : "none")
+              column padding-top="var(--exact-safe-area-inset-top)" background-color="-exact-system-orange" testId="hero"
+                text "Start" testId="hero-text"
+                if e.name == "home"
+                  button "Open" testId="open" press=open
+                button "Top" testId="top" press=toggleTop
+                button "Bottom" testId="bottom" press=toggleBottom
+                button "Bar" testId="bar" press=toggleBar
+                button "Tabs" testId="tabs" press=toggleTabs
+                button "Height" testId="height" press=toggleHeight
+                for shape in ["clipped", "footer", "padded", "short-route", "barless"] key=shape
+                  button shape testId=shape press=arrange(shape)
+                column height=2400
+                text "End" testId="end"
+            if layout == "clipped"
+              column overflow="hidden" flex=1 min-height=0 testId="clip"
+                scroll testId="clipped-list" flex=1 min-height=0
+                  column height=2400
+            if layout == "footer"
+              text "Footer"
+      row role="tablist" display=(hideTabs ? "none" : "flex")
+        button role="tab" aria-controls="panel-home" aria-selected=true
+          text "Home"

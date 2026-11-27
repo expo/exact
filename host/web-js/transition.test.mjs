@@ -17,6 +17,7 @@ for (const target of ['js', 'wasm']) (target === 'wasm' && !process.env.EXACT_MO
   state changed = false
   state declaration = false
   state next = "none"
+  state initial = "unset"
   derive spring = "opacity -exact-spring()"
   action change
     changed = true
@@ -47,6 +48,12 @@ for (const target of ['js', 'wasm']) (target === 'wasm' && !process.env.EXACT_MO
       button "Same spring" press=sameSpring testId="sameSpring"
       button "Unset" press=unset testId="unset"
       button "Zero" press=zero testId="zero"
+      box testId="bar" width=40 height=(changed ? 200 : 40) background-color=(changed ? "#e33" : "#33e")
+        transition="height -exact-spring(170, 26, 1), background-color -exact-spring(170, 26, 1)"
+      box testId="bound" width=40 height=(changed ? "200px" : "40px") transition=(changed ? "all -exact-spring(170, 26, 1)" : initial)
+      box testId="css-height" width=40 height=(changed ? 200 : 40) transition=(changed ? "height 300ms linear" : "all -exact-spring()")
+      box testId="auto-height" width=40 height=(changed ? "200px" : "auto") transition="height -exact-spring()"
+      box testId="percent-height" width=40 height=(changed ? "200px" : "30%") transition="all -exact-spring()"
       box testId="ease" opacity=(changed ? 0.2 : 1) transition=(declaration ? next : "opacity 2s linear")
       box testId="spring" opacity=(changed ? 0.2 : 1) transition=(declaration ? next : spring)
 `);
@@ -86,9 +93,57 @@ for (const target of ['js', 'wasm']) (target === 'wasm' && !process.env.EXACT_MO
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    for (const next of ['none', 'other', 'otherSpring', 'sameSpring', 'unset', 'zero']) {
+    const open = async () => {
       await page.goto(server.url.href);
       await page.waitForFunction(() => document.querySelector('[data-testid="spring"]') && (typeof globalThis.exact?.settleAt === 'function' || globalThis.exact?.root?.dataset.moduleReady === 'true')).catch(error => { throw new Error(`${target}: ${errors.join('\n')}`, { cause: error }); });
+    };
+    const heightsAt50 = () => ['bar', 'bound'].map(id => {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      const spring = el.getAnimations().find(a => a.effect.getKeyframes().some(k => k.height));
+      if (spring) { spring.pause(); spring.currentTime = 50; }
+      return el.getBoundingClientRect().height;
+    });
+    await open();
+    await page.evaluate(() => {
+      for (const id of ['bar', 'css-height']) document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect();
+      document.querySelector('[data-testid="change"]').click();
+    });
+    for (const height of await page.evaluate(heightsAt50)) expect(height).toBeCloseTo(62.3, 0);
+    const extra = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="css-height"]');
+      const running = el.getAnimations();
+      for (const a of running) { a.pause(); a.currentTime = 100; }
+      return { transitions: running.map(a => a.transitionProperty), height: el.getBoundingClientRect().height,
+        adopted: ['auto-height', 'percent-height'].map(id => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().height) };
+    });
+    expect(extra.transitions).toEqual(['height']);
+    expect(extra.height).toBeCloseTo(40 + 160 / 3, 0);
+    expect(extra.adopted).toEqual([200, 200]);
+    const paint = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="bar"]');
+      const color = el.getAnimations().find(a => a.transitionProperty === 'background-color');
+      color.pause(); color.currentTime = 50;
+      const mid = getComputedStyle(el).backgroundColor;
+      el.getAnimations().forEach(a => a.finish());
+      return { mid, end: getComputedStyle(el).backgroundColor, height: el.getBoundingClientRect().height };
+    });
+    expect(paint.mid).not.toBe('rgb(51, 51, 238)');
+    expect(paint.mid).not.toBe('rgb(238, 51, 51)');
+    expect(paint.end).toBe('rgb(238, 51, 51)');
+    expect(paint.height).toBe(200);
+    if (target === 'js') {
+      let resume;
+      const held = new Promise(resolve => { resume = resolve; });
+      await page.route('**/motion-*.wasm', async route => { await held; await route.continue(); });
+      await page.goto(server.url.href);
+      await page.locator('[data-testid="change"]').evaluate(el => el.click());
+      resume();
+      await page.waitForFunction(() => typeof globalThis.exact?.settleAt === 'function');
+      for (const height of await page.evaluate(heightsAt50)) expect(height).toBeCloseTo(62.3, 0);
+      await page.unroute('**/motion-*.wasm');
+    }
+    for (const next of ['none', 'other', 'otherSpring', 'sameSpring', 'unset', 'zero']) {
+      await open();
       const rows = await page.evaluate(async next => {
         const elements = ['ease', 'spring'].map(id => document.querySelector(`[data-testid="${id}"]`));
         elements.forEach(el => getComputedStyle(el).opacity);
@@ -99,7 +154,8 @@ for (const target of ['js', 'wasm']) (target === 'wasm' && !process.env.EXACT_MO
         const before = elements.map(el => Number(getComputedStyle(el).opacity));
         document.querySelector(`[data-testid="${next}"]`).click();
         await Promise.resolve();
-        return elements.map((el, i) => ({ before: before[i], after: Number(getComputedStyle(el).opacity), retained: el.getAnimations().includes(animations[i]), state: animations[i].playState }));
+        const rows = elements.map((el, i) => ({ before: before[i], after: Number(getComputedStyle(el).opacity), retained: el.getAnimations().includes(animations[i]), state: animations[i].playState }));
+        return rows;
       }, next);
       for (const row of rows) {
         expect(row.before).toBeGreaterThan(0.2);

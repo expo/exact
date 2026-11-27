@@ -138,7 +138,6 @@ component Shelf
   state draftAuthor = ""
   state draftPages = ""
   state draftStatus = "want"
-  state submitted = false
   // The scan's camera track.
   state scanTrack = ""
   // The book a quote is for, the lines its photo read, and the lines turned
@@ -179,7 +178,8 @@ component Shelf
   derive aimedTitle = match first(lib.books.filter(b => b.id == aimed)) { case some(b) => b.title, case none => "This book" }
   derive finished = lib.books.filter(b => b.status == "done").length
   derive owned = lib.books.map(b => b.sourceKey)
-  derive titleError = draftTitle.trim() == "" ? "Enter a title." : ""
+  // Why Save is disabled, in the form's footers (HIG: a sheet disables its confirm until the form is valid)
+  derive titleHint = draftTitle.trim() == "" ? "Enter a title to save." : ""
   derive pagesError = draftPages == "" or wholePages(draftPages) ? "" : "Pages must be a whole number from 1 to 10,000."
   derive inProgress = lib.books.filter(b => b.status == "reading")
   derive indexKey = lib.books.map(b => `${b.id}|${b.title}|${b.author}|${b.status}`).join("\n")
@@ -231,8 +231,20 @@ component Shelf
   // swipe-down press).
   action pick(name: string)
     nav = select(nav, name)
+  // A book is the library's detail: another opened while one shows in the Library tab (a row, a tag, a link, the
+  // browser's history) takes its place as a new visit, as a split's detail is replaced; the book shown, at another
+  // address, keeps its visit; everything else goes where `go` takes it (a book a stack holds is gone back to, one opened
+  // over a sheet or in another tab is pushed there).
   action follow(url: string)
-    nav = go(nav, url)
+    let moved = go(nav, url)
+    let to = top(moved)
+    let fresh = to.name == "book" and nav.tabs.filter(t => t.stack.filter(e => e.id == to.id).length > 0).length == 0
+    if fresh and current.name == "book" and current.params.id == to.params.id
+      nav = replace(nav, url)
+    else if fresh and current.name == "book" and nav.tab == "library"
+      nav = push(back(nav), url)
+    else
+      nav = moved
   action back
     if current.name == "scan"
       endTrack()
@@ -242,7 +254,6 @@ component Shelf
     draftAuthor = ""
     draftPages = ""
     draftStatus = "want"
-    submitted = false
     nav = push(nav, "/add")
 
   // Library
@@ -258,12 +269,15 @@ component Shelf
     showModal("remove")
   action askRemoveAimed
     showModal("remove")
+  // A removed book closes its own page, and only its own, whichever way it was removed.
   action remove
-    if current.name == "book"
+    if current.name == "book" and current.params.id == aimed
       nav = back(nav)
     send changed = removeBook(aimed)
   // A full swipe is its own confirmation, as in Mail.
   action swipeRemove(id: string)
+    if current.name == "book" and current.params.id == id
+      nav = back(nav)
     send changed = removeBook(id)
 
   // The add sheet
@@ -304,8 +318,7 @@ component Shelf
     draftPages = found.pages > 0 ? `${found.pages}` : ""
     endScan()
   action save
-    submitted = true
-    if titleError == "" and pagesError == ""
+    if titleHint == "" and pagesError == ""
       let author = draftAuthor.trim() == "" ? "Unknown author" : draftAuthor.trim()
       send added = addBook(draftTitle.trim(), author, pagesValue(draftPages), draftStatus, "", "", time.epochAtZero + performanceNow())
   action addEnded
@@ -332,11 +345,13 @@ component Shelf
 
   // Add Quote from Photo: the lines a book's screen read from a photo, in a
   // sheet, into the notes.
+  // Only over the book whose photo was read: a read that answers after another book was opened opens no sheet.
   action showQuote(book: string, lines: string[])
-    quoteBook = book
-    quoteLines = lines
-    quoteOff = []
-    nav = push(nav, path("quote", book))
+    if current.name == "book" and current.params.id == book
+      quoteBook = book
+      quoteLines = lines
+      quoteOff = []
+      nav = push(nav, path("quote", book))
   action toggleLine(i: number, on: bool)
     quoteOff = on ? quoteOff.filter(x => x != i) : quoteOff.concat([i])
   action addQuote
@@ -370,7 +385,7 @@ component Shelf
     match found
       case some(o)
         if o.id != ""
-          nav = go(nav, path("book", o.id))
+          follow(path("book", o.id))
         else
           foundUrl = o.url
           showModal("not-on-shelf")
@@ -417,6 +432,7 @@ component Shelf
             for e in t.stack key = e.id
               if e.name == "library"
                 column navigationKey=`${e.id}`
+                  navigationSplit="split"
                   navigationScroll="library-list"
                   testId="route-library"
                   position="absolute"
@@ -534,14 +550,15 @@ component Shelf
                     align-items="center"
                     justify-content="space-between"
                     padding="8px 16px"
-                    button id="back" press=back testId="quote-cancel"
-                      text "Cancel"
+                    button id="back" press=back aria-label="Cancel" testId="quote-cancel"
+                      image "symbol:close"
                     text "Add Quote" role="heading"
                     button press=addQuote
                       buttonStyle="bordered-prominent"
                       disabled=(quoteChosen.length == 0)
+                      aria-label="Add"
                       testId="quote-add"
-                      text "Add"
+                      image "symbol:checkmark"
                   list id="quote-lines" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
                     section testId="quote-list"
                       if quoteLines.length == 0
@@ -571,14 +588,15 @@ component Shelf
                     align-items="center"
                     justify-content="space-between"
                     padding="8px 16px"
-                    button id="back" press=back testId="add-cancel"
-                      text "Cancel"
+                    button id="back" press=back aria-label="Cancel" testId="add-cancel"
+                      image "symbol:close"
                     text "New Book" role="heading"
                     if canScan
                       button press=openScan aria-label="Scan Barcode" testId="scan-barcode"
                         image "symbol:camera"
-                    button press=save buttonStyle="bordered-prominent" disabled=pending(added) testId="add-save"
-                      text "Save"
+                    button press=save buttonStyle="bordered-prominent" aria-label="Save" testId="add-save"
+                      disabled=(titleHint != "" or pagesError != "" or pending(added))
+                      image "symbol:checkmark"
                   list id="add-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
                     section
                       header
@@ -594,8 +612,7 @@ component Shelf
                           testId="add-title"
                           flex=1
                       footer
-                        text (submitted ? titleError : "") color="-exact-system-red"
-                          testId="error-title"
+                        text titleHint testId="title-hint"
                     section
                       header
                         text "Author"
@@ -623,8 +640,7 @@ component Shelf
                           testId="add-pages"
                           flex=1
                       footer
-                        text (submitted ? pagesError : "") color="-exact-system-red"
-                          testId="error-pages"
+                        text pagesError testId="error-pages"
                     section background-color="transparent"
                       StatusControl(
                         status=draftStatus,
@@ -892,16 +908,22 @@ component Scan
         align-items="center"
         justify-content="space-between"
         padding="8px 16px"
-        button press=cancel testId="scan-cancel"
-          text "Cancel"
+        button id="back" press=cancel aria-label="Back" testId="scan-cancel"
+          image "symbol:back"
         text "Scan Barcode" role="heading" aria-level=2
+      // The viewfinder is a card inside the platform's layout margins, its
+      // corners the platform's large radius on Apple's continuous curve.
       exact-camera srcObject=track
         aria-label="Viewfinder"
         testId="scan-viewfinder"
         object-fit="cover"
         flex=1
         min-height=0
-        width="100%"
+        margin-left="max(space.md, env(-exact-layout-margins-inset-left))"
+        margin-right="max(space.md, env(-exact-layout-margins-inset-right))"
+        border-radius="radius.lg"
+        corner-shape="-exact-continuous"
+        overflow="hidden"
       column gap=8 padding=16 align-items="center" testId="scan-result"
         if isbn == ""
           text "Point the camera at the barcode on the back of the book" text-align="center"
@@ -1079,7 +1101,9 @@ component StatusControl
     choose: action
     prefix: string
   view
-    row role="tablist" aria-label="Status" testId=prefix
+    // In a list's transparent section the tabs span the card, so the control lines up with the fields' cards.
+    // It is the platform's large segmented control.
+    row role="tablist" aria-label="Status" testId=prefix padding-left=0 padding-right=0 -exact-control-size="large"
       button role="tab"
         aria-selected=(status == "want")
         press=choose("want")
@@ -1169,7 +1193,7 @@ component StatsSections
       row padding-top=12 padding-bottom=12 testId="goal-row"
         column flex=1 gap=10
           row align-items="center" gap=8
-            text countText(lib.goal, "book", "books") testId="goal" flex=1
+            text countText(lib.goal, "book", "books") testId="goal" flex=1 font-variant-numeric="tabular-nums"
             button appearance="auto"
               buttonStyle="bordered"
               press=goalBy(-1)
@@ -1189,7 +1213,7 @@ component StatsSections
             tid="goal-progress"
           )
       footer
-        text (finished >= lib.goal ? "Goal reached." : `${lib.goal - finished} to go.`) testId="goal-left"
+        text (finished >= lib.goal ? "Goal reached." : `${lib.goal - finished} to go.`) testId="goal-left" font-variant-numeric="tabular-nums"
 
 // The Home Screen icon, chosen as an app's Settings offer it: Shelf's own and
 // the alternates the build ships, each with its picture, the one shown checked.

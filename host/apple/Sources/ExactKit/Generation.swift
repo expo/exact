@@ -17,7 +17,7 @@ func prepareGeneration<Session, Candidate>(_ sessions: [Session], prepare: (Sess
 package struct SessionLease {
     private weak var owner: ExactSession?
     private let runtime: RuntimeLease
-    var generation: Int { runtime.generation }
+    package var generation: Int { runtime.generation }
     package init(_ session: ExactSession) { owner = session; runtime = session.runtime.completionLease }
     package var session: ExactSession? {
         guard let owner, owner.runtime.accepts(runtime) else { return nil }

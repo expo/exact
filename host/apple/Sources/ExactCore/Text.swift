@@ -851,6 +851,11 @@ package final class TextEngine {
     }
 
     package func clearFonts() { fonts.removeAll(keepingCapacity: true) }
+    /// Invalidate cached fonts, residency, and measured breaks on system text preference changes (LLP 1156.008.001 A1).
+    package func invalidatePreferences() {
+        clearFonts(); residency = TextResidency(softTargetBytes: residency.softTargetBytes)
+        residency.keepsAnswers = !publishes; dropMeasuredBreaks()
+    }
 
     /// A platform generic at a named weight, as UIKit (AppKit) makes it.
     private func namedSystemFace(size: CGFloat, weight w: PlatformFont.Weight, family: Int, italic: Bool) -> PlatformFont {
@@ -1390,7 +1395,7 @@ package final class TextEngine {
                 keepBreaks(p, identity: identity, width: CGFloat(request.width))
                 measureHits += 1
                 measureSeconds += ProcessInfo.processInfo.systemUptime - lookupStarted
-                return ExactMetrics(width: Float(p.width), height: Float(p.height), baseline: Float(p.firstBaseline))
+                return ExactMetrics(width: CSSLineBox.ceilFloatWidth(p.width), height: Float(p.height), baseline: Float(p.firstBaseline))
             }
         }
         // Preserve measureSeconds as cache/layout work, excluding Run/Spec
@@ -1405,7 +1410,7 @@ package final class TextEngine {
             let width = request.width >= 0 ? CGFloat(request.width) : request.width == EXACT_MIN_CONTENT ? minContentWidth(spec) : paragraph(spec, width: .infinity).width
             let p = paragraph(spec, width: width, flow: flow)
             measureSeconds += lookupSeconds + (ProcessInfo.processInfo.systemUptime - started)
-            return ExactMetrics(width: Float(p.width), height: Float(p.height), baseline: Float(p.firstBaseline))
+            return ExactMetrics(width: CSSLineBox.ceilFloatWidth(p.width), height: Float(p.height), baseline: Float(p.firstBaseline))
         }
         let identity = knownIdentity ?? residency.identityAfterBorrowedMiss(spec)
         if knownIdentity == nil, !publishes, let metrics = residency.scalar(identity, kind: kind) {
@@ -1426,7 +1431,7 @@ package final class TextEngine {
             p = layout(shape, width: width)
         } else { p = paragraph(spec, identity: identity, width: width) }
         if !intrinsic { keepBreaks(p, identity: identity, width: width) }
-        let metrics = ExactMetrics(width: Float(p.width), height: Float(p.height), baseline: Float(p.firstBaseline))
+        let metrics = ExactMetrics(width: CSSLineBox.ceilFloatWidth(p.width), height: Float(p.height), baseline: Float(p.firstBaseline))
         if intrinsic {
             if publishes { publish(identity, offer: offer, metrics, lines: nil) } else { residency.put(identity, kind: kind, metrics: metrics) }
         }

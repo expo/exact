@@ -227,49 +227,62 @@ impl<D: DataSource> Presenter<D> {
             dx
         };
         let (ox, oy) = bounds.axes;
-        let max = bounds.max;
+        let (min, max) = (bounds.min, bounds.max);
         let off = self.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
-        let takes = |axis: Overflow, d: f32, off: f32, max: f32| {
+        let takes = |axis: Overflow, d: f32, off: f32, min: f32, max: f32| {
             matches!(axis, Overflow::Scroll | Overflow::Auto)
                 && d != 0.0
-                && max > 0.0
-                && ((d > 0.0 && off < max) || (d < 0.0 && off > 0.0))
+                && max > min
+                && ((d > 0.0 && off < max) || (d < 0.0 && off > min))
         };
-        let take_x = takes(ox, dx, off.0, max.0);
+        let take_x = takes(ox, dx, off.0, min.0, max.0);
         let (input_y, input_max) = self
             .anchor_input_position(id, off.1)
             .unwrap_or((off.1, max.1));
-        let take_y = takes(oy, dy, input_y, input_max);
+        let take_y = takes(oy, dy, input_y, min.1, input_max);
         if !take_x && !take_y {
             return false;
         }
         let nx = if take_x {
-            (off.0 + dx).clamp(0.0, max.0)
+            (off.0 + dx).clamp(min.0, max.0)
         } else {
             off.0
         };
         let ny = if take_y {
-            (off.1 + dy).clamp(0.0, max.1)
+            (off.1 + dy).clamp(min.1, max.1)
         } else {
             off.1
         };
-        let (nx, ny) = if self
+        let ((nx, ny), wheel_pending) = if self
             .host
             .kernel()
             .node(id)
             .is_some_and(|n| n.style.scroll_snap_type != exact_kernel::ScrollSnapType::None)
         {
-            self.wheel_snapped(id, off, (nx, ny), max)
+            self.wheel_snapped(
+                id,
+                off,
+                (nx, ny),
+                (if take_x { dx } else { 0.0 }, if take_y { dy } else { 0.0 }),
+            )
         } else {
-            (nx, ny)
+            ((nx, ny), false)
         };
         // A wheel is a new input: the list's own pending position is retired now (`ack.rs`).
         self.retire_for_wheel(id);
         let moved = self.anchor_input(id, off, if take_y { dy } else { 0. }, (nx, ny));
         self.scroll.insert(id, (nx, ny));
         if (nx, ny) != off || moved.is_some_and(|dy| dy != 0.) {
-            self.scroll_end_input(id, off, Completion::Instant);
+            let completion = if wheel_pending {
+                Completion::Wheel
+            } else {
+                Completion::Instant
+            };
+            self.scroll_end_input(id, off, completion);
         }
+        // Stop any running settle glide after transferring completion ownership so
+        // `scroll_end_moved` does not emit a premature end for the replaced glide.
+        self.stop_glide(id);
         self.dirty = true;
         self.collection_scrolled_or_deferred(id, off);
         if let Some(error) = self.refresh_transform_geometry() {

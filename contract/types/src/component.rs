@@ -31,7 +31,7 @@ fn action_checks_reuse_declarations_and_observe_prior_writes() {
     let c = &file.components[0];
     let mut sink = Sink::default();
     SCOPE_BUILDS.with(|count| count.set(0));
-    let ct = check_component(c, &Types::default(), None, &[], &[], &mut sink);
+    let ct = check_component(c, &Types::default(), None, &[], &[], &[], &mut sink);
     assert!(sink.errors.is_empty(), "{:?}", sink.errors);
     assert_eq!(ct.slots, vec![Ty::Option(Box::new(Ty::Number)); 2]);
     // Call-parameter refinement still has one scope per action; body checks
@@ -79,6 +79,7 @@ pub(crate) fn check_component(
     owners: Option<&[Owner]>,
     resource_owners: &[Owner],
     task_owners: &[Owner],
+    inferred_params: &[Vec<Ty>],
     sink: &mut Sink,
 ) -> ComponentTypes {
     let shapes = &types.shapes;
@@ -191,7 +192,7 @@ pub(crate) fn check_component(
         }
     }
     // Actions: parameters (declared or `?`), then refine slots from writes.
-    for a in &c.actions {
+    for (ai, a) in c.actions.iter().enumerate() {
         let mut params = Vec::new();
         for p in &a.params {
             params.push(match &p.ty {
@@ -201,7 +202,11 @@ pub(crate) fn check_component(
                         &format!("parameter `{}` of action `{}`", p.name, a.name),
                     ))
                 }
-                None => Ty::Unknown,
+                None => inferred_params
+                    .get(ai)
+                    .and_then(|action| action.get(params.len()))
+                    .cloned()
+                    .unwrap_or(Ty::Unknown),
             });
         }
         ct.actions.push(params);
@@ -613,6 +618,7 @@ pub(crate) fn handler_attr(name: &str) -> bool {
             | "atompress"
             | "swiperight"
             | "swipeleft"
+            | "swipe"
             | "refresh"
             | "reachstart"
             | "reachend"
@@ -622,6 +628,8 @@ pub(crate) fn handler_attr(name: &str) -> bool {
             | "scrolldragend"
             | "pan"
             | "panrelease"
+            | "pinch"
+            | "pinchrelease"
             | "heightrelease"
             | "transformgeometry"
             | "transformrelease"
@@ -769,8 +777,9 @@ fn refine_params_from_view(
                                     return err(
                                         "type-argument",
                                         format!(
-                                            "`{name}` expects `{}`, given `{t}`",
-                                            ct.actions[ai][i]
+                                            "`{name}` expects `{}`, given `{t}`{}",
+                                            ct.actions[ai][i],
+                                            super::enums::rejection(&ct.actions[ai][i], arg)
                                         ),
                                         arg.span(),
                                     );
@@ -836,6 +845,7 @@ fn refine_params_from_view(
                             "scroll" | "pan" | "panrelease" | "heightrelease" | "resize" => {
                                 vec![Ty::Number, Ty::Number]
                             }
+                            "pinch" | "pinchrelease" => vec![Ty::Number; 3],
                             "transformgeometry" => vec![Ty::Number; 4],
                             "transformrelease" => vec![Ty::Number; 6],
                             "reorderdrop" => vec![Ty::String, Ty::Option(Box::new(Ty::String))],
@@ -1176,7 +1186,8 @@ pub(crate) fn action_call(
             return err(
                 "type-argument",
                 format!(
-                    "`{name}` expects `{pt}`, given `{t}`{}",
+                    "`{name}` expects `{pt}`, given `{t}`{}{}",
+                    super::enums::rejection(pt, arg),
                     crate::shadows::note(name, Some(scope.component()), shapes)
                 ),
                 arg.span(),

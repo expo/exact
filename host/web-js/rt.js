@@ -1,5 +1,5 @@
-export { px, lt, presenceUse } from './presence-bindings.js';
-// Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan
+export { fixedExit, px, lt, presenceUse } from './presence-bindings.js';
+// Exits and bound layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan
 // binds one (LLP 1047.002 D1)
 export let Probes = null;
 export function usePresenceBindings(b) {
@@ -10,18 +10,24 @@ export const presentRows = (row, ...a) => (Probes ? Probes.rows(row, ...a) : row
 import { resourceInspection, retainedAnswer } from './resource-inspection.js';
 export { canvasColor } from './said.js';
 import { rt as Link } from './rt-link.js';
+export { resolveShortcuts, formatShortcut as x_formatShortcut } from "./navigation.js";
 export { liveTime } from './live-time.js';
 import { liveById, installFits, installSymbolEffects } from './navigation.js';
 // synced animations (LLP 1055.002, emit.rs `clocks`)
 export { animationClocks, launchVisits } from './navigation.js';
 import { launchLocation as browserLocation } from './navigation.js';
 /** The browser's location once it is the page's own (mount.js `checkpoint`). */
-export const launchLocation = () => (checkpoint(), browserLocation());
+function pageLocation() {
+  const { alias } = checkpoint();
+  if (!alias || location.pathname !== alias.from) return browserLocation();
+  return browserLocation({ location: { pathname: alias.to, search: location.search, hash: location.hash }, performance });
+}
+export const launchLocation = pageLocation;
 export { fontFamily } from './font-family.js';
 export { cssNames } from './regions.js';
 import { Head, markDocument, projectRoots, Tabs, unopened, tp } from './document.js';
 export { Head, unopened, tp };
-export { canSetStatus, statusSubject } from './document.js';
+export { canSetStatus, statusSubject, fitViewport } from './document.js';
 import { conforms, eq, equal, Refusal, Failed } from './shape.js';
 import { autofocus } from './focus.js';
 // The compiler installs `Paint` only when a plan can layer boxes.
@@ -430,13 +436,15 @@ export function C(name, args) {
 // under its own commit's origin.
 export const Origin = {
   now: () => Origin.ask ?? 'app',
-  run(origin, f) {
-    const was = this.ask;
+  run(origin, f, input = false) {
+    const was = this.ask, previousInput = this.input;
+    this.input = input;
     this.ask = origin;
     try {
       return f();
     } finally {
       this.ask = was;
+      this.input = previousInput;
     }
   },
 };
@@ -457,13 +465,14 @@ function settle() {
 // recommit, including what its caller does on refusal, under its own origin.
 export function deferForReplacement(f) {
   if (Writes || !DEVELOPMENT_STORE) return false;
-  const origin = Origin.now(), invocation = Invocation.id;
-  return globalThis.__exactDevReplacement?.defer(() => Origin.run(origin, () => Invocation.run(invocation, f))) ?? false;
+  const origin = Origin.now(), invocation = Invocation.id, input = Origin.input;
+  return globalThis.__exactDevReplacement?.defer(() => Origin.run(origin, () => Invocation.run(invocation, f), input)) ?? false;
 }
 /** One commit: `f` runs; its writes, sends and refreshes land; settlement
  * runs; a refusal anywhere up to here puts everything back and leaves the
- * tree untouched; then the tree updates, completion callbacks run, requests go out, commands run. */
-export function commit(f, what = 'commit', finished) {
+ * tree untouched; then the tree updates, completion callbacks run, requests go out, commands run. With `presenceSnap`,
+ * it plays no layout transition and ends those under way (presence-glue.js). */
+export function commit(f, what = 'commit', finished, presenceSnap = false) {
   if (Writes) {
     if (finished) Finishes.push(finished);
     return f();
@@ -556,7 +565,7 @@ export function commit(f, what = 'commit', finished) {
     }
   }
   const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes],
-    changed = Sched?.changed(queued), invocation = Invocation.id, origin = Origin.now();
+    changed = Sched?.changed(queued), invocation = Invocation.id, origin = Origin.now(), input = Origin.input;
   Output?.made(cmds, invocation);
   // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view
   // transition defers too (review C3).
@@ -598,7 +607,11 @@ export function commit(f, what = 'commit', finished) {
     for (const f of Before) f();
     // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063); when the flush
     // will run no effect it writes nothing, and presence measures nothing (`still`)
-    Pres?.before({ ops: Probes?.gains() ?? [], still: !due() }, Views);
+    if (Pres) {
+      const ops = Probes?.gains() ?? [], still = !due();
+      const regions = !still && Queue.some(n => !n.gone && (n.$r || n.$listRows));
+      Pres.before({ ops, still, presenceSnap }, Views, regions ? Probes?.departures?.() : undefined);
+    }
     try {
       flush();
       Tabs.open?.();
@@ -640,6 +653,7 @@ export function commit(f, what = 'commit', finished) {
         m.due = armedAt();
         m.thenInvocation = invocation;
         m.thenOrigin = origin;
+        m.thenInput = input;
         if (!clock.agent) drive();
       }
     Sched?.scan(true, Sched?.changed(queued) ?? changed); // a free queue's waiting send is due (LLP 1092 D3)
@@ -852,7 +866,6 @@ export const DEVELOPMENT_STORE = null;
  * state's kind is "state" (persist.js); the durable store's (LLP 1018, `Store`: name → text, kept after a commit
  * stands) is "secret". */
 export const Kept = kind => `exact.${kind}.${DEVELOPMENT_STORE ? `@${DEVELOPMENT_STORE}/` : ''}`;
-if (DEVELOPMENT_STORE) globalThis.__exactSeedStored?.(Kept('state'), Kept('secret'));
 export const Store = {
   map: new Map(),
   writes: [],

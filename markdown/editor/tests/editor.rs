@@ -531,6 +531,9 @@ fn backspace_after_return_removes_only_the_block_prefix() {
         ("- **`a b`**", 7, "- **`a `**\n**`b`**", "a \nb"),
         ("- **a😀b**", 5, "- **a**\n**😀b**", "a\n😀b"),
         ("> - [x] **bold**", 12, "> - [x] **bo**\n**ld**", "bo\nld"),
+        ("-   item", 8, "-   item\n", "item\n"),
+        ("-\titem", 4, "-\tit\nem", "it\nem"),
+        ("1.  item", 8, "1.  item\n", "item\n"),
     ] {
         let mut p = Page::open(source);
         p.caret(caret);
@@ -548,7 +551,9 @@ fn backspace_after_return_removes_only_the_block_prefix() {
 
 #[test]
 fn backspace_at_formatted_block_starts_keeps_inline_syntax() {
-    for prefix in ["# ", "- ", "1. ", "> ", "> - [x] ", "  - "] {
+    for prefix in [
+        "# ", "- ", "-   ", "-\t", "1. ", "1.  ", "> ", "> - [x] ", "-  [x]\t", "  - ",
+    ] {
         for content in ["**text**", "`code`", "[label](target)", "\\*literal"] {
             let source = format!("{prefix}{content}");
             let mut p = Page::open(&source);
@@ -983,6 +988,10 @@ fn an_app_write_keeps_the_caret_and_resets_history() {
         !p.e.set_value(&u("hi hello world")).source,
         "an echo changes nothing"
     );
+    let mut p = Page::open("abcde");
+    p.caret(2);
+    p.e.rewrite_value(&u("ABCDE"), true);
+    assert_eq!(p.e.selection(), (2, 2));
     let mut p = Page::open("a\nb");
     assert!(
         !p.e.set_value(&u("a\r\nb")).source,
@@ -1255,4 +1264,61 @@ fn undo_steps_keep_the_hosts_words() {
         (p.source(), back(&p)),
         ("A\nB\nC".into(), Some(String::new()))
     );
+}
+
+#[test]
+fn toggling_format_off_at_sticky_caret_after_nested_same_kind_splits_outer_without_panicking() {
+    // All trigger sequences from C144: typing a closer inside an outer
+    // construct of the same kind leaves a sticky caret at inner.outer.end;
+    // toggling the outer format off and typing must not panic.
+    for (initial, caret, typed_closer, command) in [
+        ("**a **b c**", 7, "**", "bold"),
+        ("__a __b c__", 7, "__", "bold"),
+        ("*a *b c*", 5, "*", "italic"),
+        ("_a _b c_", 5, "_", "italic"),
+        ("~~a ~~b c~~", 7, "~~", "strike"),
+    ] {
+        let mut p = Page::open(initial);
+        p.caret(caret);
+        p.type_(typed_closer);
+        assert!(
+            p.e.facts().formats.split(' ').any(|f| f == command),
+            "{initial}: outer {command} should be active at sticky caret"
+        );
+        p.tool(command);
+        assert!(
+            !p.e.facts().formats.split(' ').any(|f| f == command),
+            "{initial}: {command} should be toggled off"
+        );
+        p.type_("x");
+        assert!(p.source().contains('x'), "{initial}: {}", p.source());
+        p.tool("undo");
+        assert_eq!(
+            p.source(),
+            initial,
+            "{initial}: undo restores initial source"
+        );
+    }
+
+    // Where CommonMark permits the split closer (separated from the typed word
+    // by whitespace), the outer construct splits cleanly and leaves the new
+    // text outside the format.
+    for (initial, caret, typed_closer, command, expected_source) in [
+        ("**a **b c**", 7, "**", "bold", "**a **b**** x **c**"),
+        ("__a __b c__", 7, "__", "bold", "__a __b____ x __c__"),
+        ("*a *b c*", 5, "*", "italic", "*a *b** x *c*"),
+        ("_a _b c_", 5, "_", "italic", "_a _b__ x _c_"),
+    ] {
+        let mut p = Page::open(initial);
+        p.caret(caret);
+        p.type_(typed_closer);
+        p.tool(command);
+        p.type_(" x");
+        assert_eq!(p.source(), expected_source, "{initial}");
+        assert_eq!(p.e.visible_text(), "a b x c", "{initial}");
+        assert!(
+            !p.e.facts().formats.split(' ').any(|f| f == command),
+            "{initial}: typed plain text should stay outside {command}"
+        );
+    }
 }

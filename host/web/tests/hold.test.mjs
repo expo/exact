@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // Held states in a real browser (LLP 1122 D8, LLP 1121 stage 8 E): the input
 // glue's `hold`, which the build channel's `hold` and the agent's `holdState`
 // call. `active` holds the press of the node the press resolves to (its paint,
@@ -44,7 +44,9 @@ beforeAll(async () => {
   if (unavailable) return;
   server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/navigation.js' ? 'navigation.js' : 'input-glue.js')));
+    const module = hostFixtureModule(req.url.slice(1));
+    if (module === null) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(module);
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   suite = await cdpBrowser({ args: ['--window-size=600,900'] });

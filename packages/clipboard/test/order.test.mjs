@@ -17,10 +17,10 @@ afterAll(() => {
 });
 
 /** The implementation under the agent, its file read held until the test lets it finish. */
-function reading() {
+function reading(clipboard) {
   let finish;
   const read = new Promise(ok => { finish = () => ok(PNG.buffer.slice(0)); });
-  return { clip: implementation({ agent: true, log: () => {}, files: { read: () => read } }), finish: () => { finish(); return new Promise(ok => setTimeout(ok)); } };
+  return { clip: implementation({ agent: true, clipboard, log: () => {}, files: { read: () => read } }), finish: () => { finish(); return new Promise(ok => setTimeout(ok)); } };
 }
 
 test('a write that completes while an earlier one reads its file stays on the clipboard', async () => {
@@ -29,7 +29,18 @@ test('a write that completes while an earlier one reads its file stays on the cl
   expect(await clip.writeText({ data: 'later' }, { request: 2 })).toBe(null);
   await finish();
   expect((await first)?.error).toBe('AbortError');
+  expect(await clip.readText()).toBe('later');
   expect(clip.state()).toEqual({ writes: 1, lastWrite: { types: ['text/plain'], pasteboard: 'memory', text: 'later' } });
+});
+
+test('a Contract copy made during a pending package write stays on the private board', async () => {
+  const clipboard = { item: null };
+  const { clip, finish } = reading(clipboard);
+  const pending = clip.write({ data: [{ 'image/png': 'app:/data/big.png' }] });
+  clipboard.item = { 'text/plain': 'from Contract' };
+  await finish();
+  expect((await pending).error).toBe('AbortError');
+  expect(await clip.readText()).toBe('from Contract');
 });
 
 for (const end of ['cancel', 'destroy']) {
@@ -88,5 +99,60 @@ test('the browser is given one write at a time, and a write superseded while it 
   } finally {
     if (had.clipboard) Object.defineProperty(navigator, 'clipboard', had.clipboard); else delete navigator.clipboard;
     if (had.item) globalThis.ClipboardItem = had.item; else delete globalThis.ClipboardItem;
+  }
+});
+
+test('private reads keep the complete string and its leading byte order mark', async () => {
+  const { clip } = reading();
+  expect(await clip.read()).toEqual([]);
+  const text = '\uFEFF' + 'a'.repeat((1 << 20) - 3);
+  expect(await clip.writeText({ data: text })).toBeNull();
+  expect(await clip.readText()).toBe(text);
+  expect(await clip.read()).toEqual([{ 'text/plain': text }]);
+});
+
+test('a plain-text representation is bounded after UTF-8 decoding', async () => {
+  const before = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  let blob = new Blob([new Uint8Array(400000).fill(255)]);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    read: async () => [{ types: ['text/plain'], getType: async () => blob }],
+  } });
+  try {
+    const clip = implementation({});
+    expect((await clip.read()).error).toBe('DataError');
+    blob = new Blob(['\uFEFFhello']);
+    expect(await clip.read()).toEqual([{ 'text/plain': '\uFEFFhello' }]);
+  } finally {
+    if (before) Object.defineProperty(navigator, 'clipboard', before); else delete navigator.clipboard;
+  }
+});
+
+test('readText rejects a known oversized string before encoding it', async () => {
+  const clip = implementation({ agent: true, clipboard: { item: { 'text/plain': 'x'.repeat((1 << 20) + 1) } } });
+  const encode = TextEncoder.prototype.encode;
+  TextEncoder.prototype.encode = () => { throw new Error('oversized text reached the encoder'); };
+  try {
+    expect((await clip.readText()).error).toBe('DataError');
+    expect((await clip.read()).error).toBe('DataError');
+  } finally { TextEncoder.prototype.encode = encode; }
+});
+
+test('letting go of a pending image read leaves no temporary file', async () => {
+  const before = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  const payload = Promise.withResolvers(), asked = Promise.withResolvers();
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    read: async () => [{ types: ['image/png'], getType: () => { asked.resolve(); return payload.promise; } }],
+  } });
+  let writes = 0;
+  try {
+    const clip = implementation({ files: { putAll: async () => { writes++; } } });
+    const reading = clip.read({}, { request: 7 });
+    await asked.promise;
+    clip.cancel(7);
+    payload.resolve(new Blob([PNG], { type: 'image/png' }));
+    expect((await reading).error).toBe('AbortError');
+    expect(writes).toBe(0);
+  } finally {
+    if (before) Object.defineProperty(navigator, 'clipboard', before); else delete navigator.clipboard;
   }
 });

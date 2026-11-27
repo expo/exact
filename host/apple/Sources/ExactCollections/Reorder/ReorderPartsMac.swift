@@ -64,12 +64,29 @@ final class ReorderGhost {
 
 /// A grouped list's port in the window, and its scrollTop as its collection
 /// feedback reports it (D5).
+extension NodeView {
+    var mountedReorderRow: (list: NodeView, row: NodeView)? {
+        guard let name = props["reorderFor"], !name.isEmpty else { return nil }
+        guard let presenter else { return nil }
+        var ancestors: [NodeView] = []
+        for node in NodeView.committed(Array(presenter.logicalAncestry(of: self)), reader: self) {
+            if node.props["id"] == name {
+                guard node.props["listStyle"] != nil, node.handlers.contains("reorderdrop"),
+                      let row = ancestors.dropLast(2).last else { return nil }
+                return (node, row)
+            }
+            ancestors.append(node)
+        }
+        return nil
+    }
+}
+
 struct ReorderPort {
     let rect: CGRect
     let scrollTop: Double
     init?(list node: NodeView, presenter: Presenter) {
         guard let scroll = node.scroll, scroll.window != nil,
-              let top = presenter.collections.mainOffset(node.id) else { return nil }
+              let top = presenter.collections.mainOffset(node.id) ?? (node.props["listStyle"] != nil ? Double(scroll.contentView.bounds.minY) : nil) else { return nil }
         rect = scroll.contentView.convert(scroll.contentView.bounds, to: nil)
         scrollTop = top
     }

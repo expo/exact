@@ -340,7 +340,7 @@ catch (error) { console.error(error.message); process.exitCode = 1; }`);
       assert.deepEqual(JSON.parse(good.stdout), { passed: 0, failed: 0, skipped: 0, results: [] });
       const [launched, ...args] = JSON.parse(readFileSync(trace));
       assert.equal(relative(realpathSync(bin), realpathSync(launched)), '');
-      assert.deepEqual(args, ['test', file]);
+      assert.deepEqual(args, ['test', file, '--app', resolve(ROOT, 'apps/caltrain')]);
       writeFileSync(file, 'refuse');
       const cargoRefusal = run({ CARGO_TARGET_DIR: target });
       assert.equal(cargoRefusal.status, 1);

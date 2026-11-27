@@ -13,20 +13,23 @@ const check = (code, lang) => {
   return { refused, warnings };
 };
 
-// The refusals of package JavaScript, each as where and what: the ones the check made before uses of `Function` and
-// `eval` became warnings (#128), less those. Their scopes are the refusals' own model (`declares` without `full`),
-// so a change to the warnings' model moves none of these; a change here is a change to what a build refuses.
+// The refusals of package JavaScript, each as where and what: DOM and unshimmed Node globals
+// (`process` is shimmed per LLP 1195.000 D1.3; `try { ... } catch` guards absent-global probes
+// per D1.1; computed `require(expr)` and `import(expr)` stay refused even inside `try/catch`).
 const REFUSALS = [
-  ["process.cwd();", ["1:1 process"]],
-  ["const Function = globalThis.process; Function.cwd();", ["1:38 process"]],
-  ["var Function = globalThis.process; Function.cwd();", ["1:16 process"]],
+  ["process.cwd();", []],
+  ["const Function = globalThis.Buffer; Function.from('');", ["1:37 Buffer"]],
+  ["var Function = globalThis.Buffer; Function.from('');", ["1:16 Buffer"]],
   ["function f() { const eval = globalThis.document; return eval.body; }", ["1:57 document"]],
-  ["function f(process) { return process.cwd(); }", []],
-  ["function f() { function g() { var process = {}; } return process.cwd(); }", ["1:58 process"]],
-  ["class C { static { var process = {}; process.cwd(); } }", ["1:24 process", "1:38 process"]],
-  ["class C { static { let process = {}; process.cwd(); } }", []],
-  ["class C { static { var process = {}; } m() { return process.cwd(); } }", ["1:24 process", "1:53 process"]],
+  ["function f(Buffer) { return Buffer.from(''); }", []],
+  ["function f() { function g() { var Buffer = {}; } return Buffer.from(''); }", ["1:57 Buffer"]],
+  ["class C { static { var Buffer = {}; Buffer.from(''); } }", ["1:24 Buffer", "1:37 Buffer"]],
+  ["class C { static { let Buffer = {}; Buffer.from(''); } }", []],
+  ["class C { static { var Buffer = {}; } m() { return Buffer.from(''); } }", ["1:24 Buffer", "1:52 Buffer"]],
   ["try { 0; } catch (document) { document.body; }", []],
+  ["try { localStorage.getItem('k'); } catch {}", []],
+  ["try { require(name); } catch {}", ["1:7 require"]],
+  ["try { import(name); } catch {}", ["1:7 import()"]],
   ["for (const window of []) window.x;", []],
   ["for (var window of []) window.x;", []],
   ["out: { var require = () => 0; } require(name);", []],
@@ -35,14 +38,14 @@ const REFUSALS = [
   ["const f = (a = location, location = 1) => a;", []],
   ["class C { read = (document) => document.body; }", []],
   ["class C { read = document.body; }", ["1:18 document"]],
-  ["{ function process() {} process.cwd(); }", []],
+  ["{ function Buffer() {} Buffer.from(''); }", []],
   ["globalThis.document.body;", ["1:1 document"]],
   ["typeof window !== 'undefined' && window.x;", []],
   ["import(name);", ["1:1 import()"]],
   ["import('./x.js');", []],
   ["require(name);", ["1:1 require"]],
   ["require('x');", []],
-  ["process.env.NODE_ENV;", []],
+  ["process.env.NODE_ENV; process.env.DEBUG; process.versions.node; process.release.name;", []],
   ["const g = globalThis.document; g.body;", ["1:32 document"]],
   ["const d = typeof document !== 'undefined' ? document : null;", []],
   ["new Function('return 1');", []],
@@ -51,11 +54,11 @@ const REFUSALS = [
   ["x instanceof Function;", []],
   ["var Function = 1; function f() { return Function; }", []],
   ["function eval2() { var eval = 1; } eval('x');", []],
-  ["const { process } = globalThis; process.cwd();", []],
+  ["const { Buffer } = globalThis; Buffer.from('');", []],
   ["let [document] = []; document.body;", []],
   ["(function document() { return document.body; })();", []],
   ["(class window { m() { return window.x; } });", []],
-  ["export { process } from './x.js'; process.cwd();", ["1:35 process"]],
+  ["export { Buffer } from './x.js'; Buffer.from('');", ["1:34 Buffer"]],
   ["import { Buffer } from 'buffer'; Buffer.from('');", []],
   ["label: for (;;) { const __dirname = 1; __dirname; break label; } __filename;", ["1:66 __filename"]],
 ];
@@ -207,65 +210,65 @@ test('JSX component names refer to values once, while tags and attributes do not
   }
 });
 
-test('ambient calls resolve bindings in their lexical scope', () => {
-  const date = '{ now: () => 1 }';
+test('ambient timer refusals resolve bindings in their lexical scope (LLP 1195.000 D2.8)', () => {
+  const fn = '(_: () => void) => 1';
   const cases = [
-    ['an unshadowed call', 'export const now = () => Date.now();', [1]],
-    ['an unrelated parameter', 'export function f(Date: number) { return Date; }\nexport const now = () => Date.now();', [2]],
-    ['an unrelated namespace var', 'namespace N { var Date = 1 }\nexport const now = () => Date.now();', [2]],
-    ['a local parameter', 'export const now = (Date: { now(): number }) => Date.now();', []],
-    ['a nested function', `export function f() { function g() { var Date = ${date}; } return Date.now(); }`, [1]],
-    ['a block binding', `{ const Date = ${date}; Date.now(); }\nDate.now();`, [2]],
-    ['a function var', `export function f() { if (true) { var Date = ${date}; } return Date.now(); }\nDate.now();`, [2]],
-    ['a sloppy block function, also the function\'s (Annex B)', 'function f() { { function Date() { return 7; } } return Date(); }', []],
-    ['a sloppy if function, also the function\'s', 'function f() { if (true) function Date() { return 7; } return Date(); }', []],
-    ['a module block function', 'export function f() { { function Date() { return 7; } } return Date(); }', [1]],
-    ['a strict script block function', '\'use strict\';\nfunction f() { { function Date() { return 7; } } return Date(); }', [2]],
-    ['a class method block function', 'class C { m() { { function Date() { return 7; } } return Date(); } }', [1]],
-    ['a sloppy block generator', 'function f() { { function* Date() {} } return Date(); }', [1]],
-    ['a sloppy block async function', 'function f() { { async function Date() {} } return Date(); }', [1]],
-    ['a sloppy block function under a block let', 'function f() { { let Date; { function Date() { return 7; } } } return Date(); }', [1]],
-    ['a sloppy block function under a loop const', 'function f() { for (const Date of []) { function Date() { return 7; } } return Date(); }', [1]],
-    ['a sloppy block function in a catch of the name', 'function f() { try {} catch (Date) { { function Date() { return 7; } } } return Date(); }', []],
-    ['a sloppy block function in a destructuring catch', 'function f() { try {} catch ({ Date }) { { function Date() { return 7; } } } return Date(); }', [1]],
-    ['a sloppy block function under a later block let', 'function f() { { { function Date() { return 7; } } let Date; } return Date(); }', [1]],
-    ['a sloppy labelled block function', 'function f() { { l: function Date() { return 7; } } return Date(); }', []],
-    ['a parameter default outside body vars', `export function f(n = Date.now()) { var Date = ${date}; return n; }`, [1]],
-    ['a parameter default outside body lexicals', `export function f(n = Date.now()) { const Date = ${date}; return n; }`, [1]],
-    ['a parameter default outside body functions', 'export function f(n = Date.now()) { function Date() {} return n; }', [1]],
-    ['a parameter default using a parameter', `export function f(Date = ${date}, n = Date.now()) { return n; }`, []],
-    ['a destructured parameter', `export function f({ Date } = { Date: ${date} }, n = Date.now()) { return n; }`, []],
-    ['a parameter property', 'class C { constructor(private Date: { now(): number }, n = Date.now()) {} }', []],
-    ['a destructured binding', `const { Date } = { Date: ${date} }; Date.now();`, []],
-    ['a named function expression', '(function Date(n = Date.now()) { return n; });\nDate.now();', [2]],
-    ['a named class expression', '(class Date { static now() { return 1; } n = Date.now(); });\nDate.now();', [2]],
-    ['a static block var', `class C { static { var Date = ${date}; Date.now(); } }\nDate.now();`, [2]],
-    ['a catch parameter', 'try {} catch (Date) { Date.now(); }\nDate.now();', [2]],
-    ['a loop binding', `for (const Date of [${date}]) Date.now();\nDate.now();`, [2]],
-    ['a switch binding', `switch (0) { case 0: const Date = ${date}; Date.now(); }\nDate.now();`, [2]],
-    ['a switch discriminant outside case bindings', `switch (Date.now()) { case 0: const Date = ${date}; }`, [1]],
+    ['an unshadowed call', 'export const tick = () => setInterval(() => {}, 1);', [1]],
+    ['an unrelated parameter', 'export function f(setInterval: number) { return setInterval; }\nexport const tick = () => setInterval(() => {}, 1);', [2]],
+    ['an unrelated namespace var', 'namespace N { var setInterval = 1 }\nexport const tick = () => setInterval(() => {}, 1);', [2]],
+    ['a local parameter', 'export const tick = (setInterval: (f: () => void) => number) => setInterval(() => {});', []],
+    ['a nested function', `export function f() { function g() { var setInterval = ${fn}; } return setInterval(() => {}); }`, [1]],
+    ['a block binding', `{ const setInterval = ${fn}; setInterval(() => {}); }\nsetInterval(() => {});`, [2]],
+    ['a function var', `export function f() { if (true) { var setInterval = ${fn}; } return setInterval(() => {}); }\nsetInterval(() => {});`, [2]],
+    ['a sloppy block function, also the function\'s (Annex B)', 'function f() { { function setInterval() { return 7; } } return setInterval(); }', []],
+    ['a sloppy if function, also the function\'s', 'function f() { if (true) function setInterval() { return 7; } return setInterval(); }', []],
+    ['a module block function', 'export function f() { { function setInterval() { return 7; } } return setInterval(); }', [1]],
+    ['a strict script block function', '\'use strict\';\nfunction f() { { function setInterval() { return 7; } } return setInterval(); }', [2]],
+    ['a class method block function', 'class C { m() { { function setInterval() { return 7; } } return setInterval(); } }', [1]],
+    ['a sloppy block generator', 'function f() { { function* setInterval() {} } return setInterval(); }', [1]],
+    ['a sloppy block async function', 'function f() { { async function setInterval() {} } return setInterval(); }', [1]],
+    ['a sloppy block function under a block let', 'function f() { { let setInterval; { function setInterval() { return 7; } } } return setInterval(); }', [1]],
+    ['a sloppy block function under a loop const', 'function f() { for (const setInterval of []) { function setInterval() { return 7; } } return setInterval(); }', [1]],
+    ['a sloppy block function in a catch of the name', 'function f() { try {} catch (setInterval) { { function setInterval() { return 7; } } } return setInterval(); }', []],
+    ['a sloppy block function in a destructuring catch', 'function f() { try {} catch ({ setInterval }) { { function setInterval() { return 7; } } } return setInterval(); }', [1]],
+    ['a sloppy block function under a later block let', 'function f() { { { function setInterval() { return 7; } } let setInterval; } return setInterval(); }', [1]],
+    ['a sloppy labelled block function', 'function f() { { l: function setInterval() { return 7; } } return setInterval(); }', []],
+    ['a parameter default outside body vars', `export function f(n = setInterval(() => {})) { var setInterval = ${fn}; return n; }`, [1]],
+    ['a parameter default outside body lexicals', `export function f(n = setInterval(() => {})) { const setInterval = ${fn}; return n; }`, [1]],
+    ['a parameter default outside body functions', 'export function f(n = setInterval(() => {})) { function setInterval() {} return n; }', [1]],
+    ['a parameter default using a parameter', `export function f(setInterval = ${fn}, n = setInterval(() => {})) { return n; }`, []],
+    ['a destructured parameter', `export function f({ setInterval } = { setInterval: ${fn} }, n = setInterval(() => {})) { return n; }`, []],
+    ['a parameter property', 'class C { constructor(private setInterval: (f: () => void) => number, n = setInterval(() => {})) {} }', []],
+    ['a destructured binding', `const { setInterval } = { setInterval: ${fn} }; setInterval(() => {});`, []],
+    ['a named function expression', '(function setInterval(n = setInterval(() => {})) { return n; });\nsetInterval(() => {});', [2]],
+    ['a named class expression', '(class setInterval { n = setInterval(() => {}); });\nsetInterval(() => {});', [2]],
+    ['a static block var', `class C { static { var setInterval = ${fn}; setInterval(() => {}); } }\nsetInterval(() => {});`, [2]],
+    ['a catch parameter', 'try {} catch (setInterval) { setInterval(() => {}); }\nsetInterval(() => {});', [2]],
+    ['a loop binding', `for (const setInterval of [${fn}]) setInterval(() => {});\nsetInterval(() => {});`, [2]],
+    ['a switch binding', `switch (0) { case 0: const setInterval = ${fn}; setInterval(() => {}); }\nsetInterval(() => {});`, [2]],
+    ['a switch discriminant outside case bindings', `switch (setInterval(() => {})) { case 0: const setInterval = ${fn}; }`, [1]],
     ...['var', 'let', 'const'].map(kind => [
-      `a namespace ${kind}`, `namespace N { export ${kind} Date = ${date}; Date.now(); }\nDate.now();`, [2],
+      `a namespace ${kind}`, `namespace N { export ${kind} setInterval = ${fn}; setInterval(() => {}); }\nsetInterval(() => {});`, [2],
     ]),
-    ['a merged namespace export', `namespace N { export const Date = ${date}; }\nnamespace N { Date.now(); }\nDate.now();`, [3]],
-    ['a private namespace binding', `namespace N { const Date = ${date}; }\nnamespace N { Date.now(); }`, [2]],
-    ['a dotted namespace', `namespace N { export const Date = ${date}; }\nnamespace N.M { Date.now(); }\nDate.now();`, [3]],
-    ['a value namespace', 'namespace Date { export function now() { return 1; } }\nDate.now();', []],
-    ['an enum binding', 'enum Date { now }\nDate.now();', []],
-    ['an enum member binding', 'enum E { Date = 1, n = (Date as any).now() }\nDate.now();', [2]],
+    ['a merged namespace export', `namespace N { export const setInterval = ${fn}; }\nnamespace N { setInterval(() => {}); }\nsetInterval(() => {});`, [3]],
+    ['a private namespace binding', `namespace N { const setInterval = ${fn}; }\nnamespace N { setInterval(() => {}); }`, [2]],
+    ['a dotted namespace', `namespace N { export const setInterval = ${fn}; }\nnamespace N.M { setInterval(() => {}); }\nsetInterval(() => {});`, [3]],
+    ['a value namespace', 'namespace setInterval { export function x() { return 1; } }\nsetInterval(() => {});', []],
+    ['an enum binding', 'enum setInterval { a }\nsetInterval(() => {});', []],
+    ['an enum member binding', 'enum E { setInterval = 1, n = (setInterval as any)() }\nsetInterval(() => {});', [2]],
     ...[
-      'declare const Date: { now(): number };',
-      'declare class Date { static now(): number; }',
-      'declare namespace Date { function now(): number; }',
-      'namespace Date { export type T = number; }',
-      'type Date = number;',
-      'interface Date { now(): number; }',
-      'const enum Date { n }',
-      "import type { Date } from './x';",
-      "import { type Date } from './x';",
-    ].map(binding => [binding, `${binding}\nDate.now();`, [2]]),
-    ['a value import', "import { Date } from './x';\nDate.now();", []],
-    ['an import alias', 'namespace N { export const D = 1; }\nimport Date = N.D;\nDate.now();', []],
+      'declare const setInterval: (f: () => void) => number;',
+      'declare class setInterval {}',
+      'declare namespace setInterval { function x(): number; }',
+      'namespace setInterval { export type T = number; }',
+      'type setInterval = number;',
+      'interface setInterval {}',
+      'const enum setInterval { n }',
+      "import type { setInterval } from './x';",
+      "import { type setInterval } from './x';",
+    ].map(binding => [binding, `${binding}\nsetInterval(() => {});`, [2]]),
+    ['a value import', "import { setInterval } from './x';\nsetInterval(() => {});", []],
+    ['an import alias', 'namespace N { export const D = 1; }\nimport setInterval = N.D;\nsetInterval(() => {});', []],
   ];
   const stage = resolve(import.meta.dir);
   const said = cases.map(([scope, code]) => [scope, ambientRefusals(stage, resolve(stage, 'logic.ts'), code,
@@ -276,34 +279,30 @@ test('ambient calls resolve bindings in their lexical scope', () => {
 test('a block function in sloppy CommonJS also binds in its function', () => {
   const stage = resolve(import.meta.dir);
   const refused = (code) => ambientRefusals(stage, resolve(stage, 'logic.cjs'), code, (c, o) => parseSync('logic.cjs', c, o).program);
-  expect(refused('function f() {\n  { function Date() { return 7; } }\n  return Date();\n}\nmodule.exports = f();')).toEqual([]);
-  expect(refused('\'use strict\';\nfunction f() {\n  { function Date() { return 7; } }\n  return Date();\n}')[0]).toStartWith('logic.cjs:4:10: Date()');
+  expect(refused('function f() {\n  { function setInterval() { return 7; } }\n  return setInterval();\n}\nmodule.exports = f();')).toEqual([]);
+  expect(refused('\'use strict\';\nfunction f() {\n  { function setInterval() { return 7; } }\n  return setInterval();\n}')[0]).toStartWith('logic.cjs:4:10: setInterval()');
 });
 
-test('each guarded ambient API respects local bindings and keeps its diagnostic location', () => {
+test('ambientRefusals retains timers only and retires clock/Math.random refusals (LLP 1195.000 D2.8)', () => {
   const stage = resolve(import.meta.dir);
   const cases = [
-    ['Date', 'Date.now()', 'Date.now()'],
-    ['Date', 'Date()', 'Date()'],
-    ['Date', 'new Date()', 'new Date()'],
-    ['Math', 'Math.random()', 'Math.random()'],
-    ['performance', 'performance.now()', 'performance.now()'],
     ...['setInterval', 'requestAnimationFrame', 'requestIdleCallback'].map(name => [name, `${name}(() => {})`, `${name}()`]),
-    ...['globalThis', 'self', 'window', 'global'].map(name => [name, `${name}.Date.now()`, 'Date.now()']),
+    ...['globalThis', 'self', 'window', 'global'].map(name => [name, `${name}.setInterval(() => {})`, 'setInterval()']),
   ];
   for (const extension of ['ts', 'js']) {
     const file = `logic.${extension}`;
     const refused = code => ambientRefusals(stage, resolve(stage, file), code, (c, o) => parseSync(file, c, o).program);
     for (const [name, call, api] of cases) {
-      const code = `export function f(${name}) { return ${call}; }\nexport const now = () => ${call};`;
+      const code = `export function f(${name}) { return ${call}; }\nexport const tick = () => ${call};`;
       const diagnostics = refused(code);
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]).toStartWith(`${file}:2:26: ${api} is unavailable in data sources`);
+      expect(diagnostics[0]).toStartWith(`${file}:2:27: ${api} is unavailable in data sources`);
       expect(refused(`export function f(${name}) { return ${call}; }`)).toEqual([]);
     }
-    expect(refused('const Date = { now: () => 1 }; Date.now();')).toEqual([]);
-    expect(refused('const Date = {}; globalThis.Date.now();')[0]).toStartWith(`${file}:1:18: Date.now()`);
-    expect(refused('new Date(0).getTime(); setTimeout(() => {}, 1);')).toEqual([]);
+    expect(refused('const setInterval = () => 1; setInterval();')).toEqual([]);
+    expect(refused('const setInterval = {}; globalThis.setInterval(() => {});')[0]).toStartWith(`${file}:1:25: setInterval()`);
+    // Clock and Math.random are virtualized (LLP 1195.000 D2) and no longer refused statically.
+    expect(refused('Date.now(); new Date(); Date(); performance.now(); Math.random(); setTimeout(() => {}, 1);')).toEqual([]);
   }
 });
 

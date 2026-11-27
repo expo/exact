@@ -32,20 +32,29 @@ macro_rules! canvas_jni_start {
             std::env::set_var("BENCH_LIVE", if live == JNI_TRUE { "1" } else { "0" });
         }
 
+        /// Immutable boot-time `device.camera` (bit 0) and `device.microphone` (bit 1) grants.
+        static FRAME_MEDIA_GRANTS: std::sync::atomic::AtomicI32 =
+            std::sync::atomic::AtomicI32::new(0);
+
         /// Boot the app, with its update store under `store` (the reader's
         /// no-backup directory) when the library links one.
         fn boot(size: (u32, u32), scale: f32, store: &str) -> Result<Host, String> {
             static LAUNCH: std::sync::Once = std::sync::Once::new();
             LAUNCH.call_once(launch_parts);
             let updates = updates().map(|open| (open, std::path::Path::new(store)));
-            Host::boot(
+            let host = Host::boot(
                 exact_plan(),
                 exact_compat(),
                 size,
                 scale,
                 hatches(),
                 updates,
-            )
+            )?;
+            FRAME_MEDIA_GRANTS.store(
+                host.frame_media_grants(),
+                std::sync::atomic::Ordering::Release,
+            );
+            Ok(host)
         }
 
         #[no_mangle]
@@ -73,6 +82,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::presence::attach(env);
             $crate::canvas::frame_partitions::attach(env);
             $crate::canvas::secrets::attach(env);
+            $crate::presenter::attach_android_module(env);
             environment(env, dir, live);
             let store = string(env, store);
             match boot((width as u32, height as u32), scale, &store) {
@@ -87,6 +97,15 @@ macro_rules! canvas_jni_start {
                     JNI_FALSE
                 }
             }
+        }
+
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_endSession(
+            _env: *mut JNIEnv,
+            _class: jclass,
+        ) {
+            HOST.with(|slot| drop(slot.borrow_mut().take()));
+            RUNNING.store(false, std::sync::atomic::Ordering::Release);
         }
 
         /// What a booting thread hands the thread that runs the host: the
@@ -131,6 +150,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::presence::attach(env);
             $crate::canvas::frame_partitions::attach(env);
             $crate::canvas::secrets::attach(env);
+            $crate::presenter::attach_android_module(env);
             // The environment is set here, before any other thread reads it.
             environment(env, dir, live);
             let store = string(env, store);

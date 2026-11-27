@@ -63,18 +63,26 @@ pub fn panel_sites(plan: &Plan) -> Vec<NodesId> {
 /// its own (a node with a `navigationKey` and no route between it and the
 /// panel) stands inside a `for` below it, as `for e in t.stack` draws one
 /// per entry, or when its template holds more than one route. A route can
-/// show a header when a `header` is its child, shown or not. A panel with
-/// one route outside any `for` and no `header` shows one fixed route with
+/// show a bar when a `header` is its child or, on iOS, it has a bottom toolbar.
+/// A panel with one route outside any `for` and neither bar shows one fixed route with
 /// no bar, which a host shows without a navigation controller (LLP 1075.003
 /// §3.7). It is read from the plan, so it holds for a panel still waiting
 /// for its first selection. One template serves every tab a `for t in
 /// nav.tabs` draws, so a template that needs one for some tabs answers
 /// `true` for all of them: a navigation controller can show one route with
 /// no bar, and a plain one shows no bar and no pushed route.
-pub fn sites_need_navigation(plan: &Plan, sites: &[NodesId]) -> Vec<bool> {
+pub fn sites_need_navigation(
+    plan: &Plan,
+    sites: &[NodesId],
+    platform: crate::page::Platform,
+) -> Vec<bool> {
     let mut headed: Vec<NodesId> = (0..plan.nodes.len() as u32)
         .map(NodesId)
-        .filter(|&n| literal_str(plan, n, PropId::SemanticTag) == Some("header"))
+        .filter(|&n| {
+            literal_str(plan, n, PropId::SemanticTag) == Some("header")
+                || (platform == crate::page::Platform::Ios
+                    && literal_str(plan, n, PropId::ToolbarPlacement) == Some("bottom"))
+        })
         .filter_map(|n| enclosing(plan, n).map(|(parent, _)| parent))
         .filter(|&parent| binds(plan, parent, PropId::NavigationKey))
         .collect();
@@ -101,6 +109,22 @@ pub fn sites_need_navigation(plan: &Plan, sites: &[NodesId]) -> Vec<bool> {
         }
     }
     navigation
+}
+
+/// Panel templates with a keyed child route that can request an iPad split.
+/// An unopened panel's contents will choose the route at first selection.
+pub(crate) fn split_panel_sites(plan: &Plan) -> Vec<NodesId> {
+    let mut sites: Vec<_> = (0..plan.nodes.len() as u32)
+        .map(NodesId)
+        .filter(|&n| {
+            literal_str(plan, n, PropId::NavigationSplit) == Some("split")
+                && binds(plan, n, PropId::NavigationKey)
+        })
+        .filter_map(|route| enclosing(plan, route).map(|(parent, _)| parent))
+        .collect();
+    sites.sort_unstable();
+    sites.dedup();
+    sites
 }
 
 /// Whether node `n` binds `prop`.
@@ -420,17 +444,17 @@ fn open_panel(
     u: &mut Update<'_>,
     n: &NodeInst,
     frames: &[Frame],
-) -> Result<Vec<Child>, InstanceError> {
+) -> Result<Children, InstanceError> {
     let plan = u.env.plan;
     let arm = plan.node(n.node).arm;
     let (region, contents) = match u.sites.children(Some(n.node), arm) {
         &[(_, Site::Region(r))] if plan.region(r).kind == RegionKind::When => {
             match plan.region(r).arms.iter().next() {
                 Some(contents) => (r, contents),
-                None => return realize(u, Some(n.node), arm, frames),
+                None => return Children::realize(u, n.node, arm, frames),
             }
         }
-        _ => return realize(u, Some(n.node), arm, frames),
+        _ => return Children::realize(u, n.node, arm, frames),
     };
     let id = n
         .bound_prop(plan, u.sites, PropId::Id)
@@ -470,7 +494,7 @@ fn open_panel(
         super::region::init_requests(u, contents, &slots);
     }
     let roots = realize(u, None, Some(contents), &with_frame(frames, frame.scope()))?;
-    Ok(vec![Child::Region(RegionInst {
+    Ok(Children::one(Child::Region(RegionInst {
         region,
         subject: None,
         active: Active::Arm {
@@ -478,7 +502,7 @@ fn open_panel(
             frame,
             roots,
         },
-    })])
+    })))
 }
 
 impl Tree {
@@ -552,7 +576,7 @@ fn open_in(
                     n.create_list(u, frames).and_then(|()| match n.list() {
                         Some(_) => Ok(()),
                         None => open_panel(u, n, frames).map(|made| {
-                            n.children = made.into();
+                            n.children = made;
                             n.emit_children(u);
                         }),
                     })

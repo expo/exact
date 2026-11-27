@@ -6,6 +6,20 @@
          background. exact2's first frame (~60 ms after the tap) replaces it, and from then on the window's background
          is the colour the host says is behind the page (ExactActivity.chrome). -->
     <style name="ExactLaunch" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
+    <!-- Package-private host activity (LLP 1133.030 D9): transparent window over the app so a library
+         requiring a ComponentActivity (bottom sheet, payment sheet) presents without a flash. -->
+    <style name="ExactTranslucent" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
     <!-- A scroller's indicator (Scrolling.Indicator): a view with the scrollbars View draws for one that scrolls,
          as android:scrollbars gives a ScrollView its. The thumb, its size and its fade are the theme's. -->
     <style name="ExactScrollbars">

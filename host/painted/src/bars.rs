@@ -16,10 +16,11 @@
 //! - the tablist the navigation bar replaces, likewise: one that holds the
 //!   root's tabpanels keeps them in the page;
 //! - each route is inset by the room its bars take: the top bar's at its
-//!   top edge, the navigation bar's at its bottom;
+//!   top edge, the navigation bar's at its bottom, and the window's unsafe
+//!   bands at either side of a covered page;
 //! - a route the shell shows in a sheet (a `modal` one, or one pushed
 //!   inside it, LLP 1115.001 D10) has no bar: its header stays in the page,
-//!   and it is inset by the sheet's drag handle at its top and the system's
+//!   and it is inset by the sheet's visible drag handle at its top and the system's
 //!   bar under the sheet's foot (`presenter/stage.rs`);
 //! - each route so inset is a content owner whose local insets are that
 //!   room, and the page's side insets, which its content reads as
@@ -27,9 +28,8 @@
 //!
 //! The room is the shell's to say ([`Host::set_bar_room`]: it depends on
 //! the window, the system's insets and the keyboard, which the presenter
-//! holds). With no shell that has bars it is `None`, nothing is projected
-//! and nothing is covered: desktop Linux and a headless run paint the
-//! authored header and tablist as they always did.
+//! holds). A shell without bars leaves the authored header and tablist in
+//! the page.
 use super::Host;
 use crate::navigation::{sheet_of, Presented, RouteBar};
 use exact_kernel::{
@@ -102,10 +102,39 @@ impl<D: DataSource> Host<D> {
     /// is projected again and, where what the bars cover changed, laid out:
     /// whether it was.
     pub fn set_bar_room(&mut self, room: Option<(f32, f32, f32)>) -> Result<bool, String> {
-        if self.navigation.bars.room == room {
+        let above = room.map_or(0.0, |r| r.0);
+        let sheet_above = if self.navigation.bars.sheet_above != (0.0, 0.0) {
+            self.navigation.bars.sheet_above
+        } else {
+            (above, above)
+        };
+        self.set_bar_rooms(room, above, sheet_above)
+    }
+
+    /// Like [`Host::set_bar_room`], with a separate top room for routes whose
+    /// header projects a supporting subtitle (LLP 1115.001 D11) and status-free
+    /// heights for modal sheet route headers (LLP 1156.008.001 B5).
+    pub fn set_bar_rooms(
+        &mut self,
+        room: Option<(f32, f32, f32)>,
+        subtitled_above: f32,
+        sheet_above: (f32, f32),
+    ) -> Result<bool, String> {
+        let subtitled_above = if room.is_some() { subtitled_above } else { 0.0 };
+        let sheet_above = if room.is_some() {
+            sheet_above
+        } else {
+            (0.0, 0.0)
+        };
+        if self.navigation.bars.room == room
+            && self.navigation.bars.subtitled_above == subtitled_above
+            && self.navigation.bars.sheet_above == sheet_above
+        {
             return Ok(false);
         }
         self.navigation.bars.room = room;
+        self.navigation.bars.subtitled_above = subtitled_above;
+        self.navigation.bars.sheet_above = sheet_above;
         match self.project_bars() {
             true => self.layout().map(|_| true),
             false => Ok(false),
@@ -133,7 +162,7 @@ impl<D: DataSource> Host<D> {
     /// Read the navigation root's bars from the tree as it now stands and
     /// tell the kernel what they cover; whether that changed (a layout is
     /// then owed, which a commit's own follows with).
-    pub(super) fn project_bars(&mut self) -> bool {
+    pub(crate) fn project_bars(&mut self) -> bool {
         let kernel = self.runner.kernel();
         let room = self.navigation.bars.room;
         let root = room
@@ -167,7 +196,7 @@ impl<D: DataSource> Host<D> {
             wanted.extend(placed.into_iter().map(|id| (id, HostCover::Whole)));
         }
         let (mut routes, mut tabs, mut stacks) = (Vec::new(), None, Vec::new());
-        let (mut all_routes, mut sheeted): (Vec<ViewId>, Vec<ViewId>) = (Vec::new(), Vec::new());
+        let (mut locals, mut bands) = (BTreeMap::new(), BTreeMap::new());
         if let (Some(root), Some((above, below, foot))) = (root, room) {
             let back = kernel
                 .node(root)
@@ -201,6 +230,25 @@ impl<D: DataSource> Host<D> {
                     wanted.insert(id, HostCover::Whole);
                 }
             }
+            let env = kernel.arena().env();
+            let width = self.viewport().0;
+            let (sheet_margin, _) = crate::presenter::sheet_span(width);
+            let split = self.navigation.split.active.as_ref();
+            let sides = |x: f32, end: f32| {
+                (
+                    (env.left - x.max(0.)).max(0.),
+                    (env.right - (width - end).max(0.)).max(0.),
+                )
+            };
+            if let Some((s, id)) = split.and_then(|s| Some((s, s.placeholder?))) {
+                if let Some(n) = kernel.node(id) {
+                    let x = s.pane().0 + n.frame.x;
+                    let (left, right) = sides(x, x + n.frame.width);
+                    if left > 0. || right > 0. {
+                        wanted.insert(id, HostCover::Edges([0., right, 0., left]));
+                    }
+                }
+            }
             for stack in &all {
                 let kinds: Vec<Presented> = (stack.iter())
                     .map(|r| {
@@ -213,19 +261,47 @@ impl<D: DataSource> Host<D> {
                     let Some(node) = kernel.node(*route) else {
                         continue;
                     };
-                    if sheet_of(&kinds, index).is_some() {
-                        let cover = [crate::presenter::SHEET_HANDLE, 0.0, foot, 0.0];
-                        sheeted.push(*route);
+                    if let Some(sheet) = sheet_of(&kinds, index) {
+                        let modal = kernel.node(stack[sheet]).expect("a live sheet route");
+                        let pushed = index > sheet;
+                        let shape = kernel.header_shape(*route, back, pushed, &pressed);
+                        let asked_none = node.props.str(PropId::NavigationBar) == Some("none");
+                        let shows =
+                            Bar::of(asked_none, shape.is_some(), pushed, false) == Bar::Header;
+                        let mut bar_top = 0.0;
+                        if let Some(shape) = shape.filter(|_| shows) {
+                            let subtitle = kernel.header_subtitle(&shape);
+                            bar_top = if subtitle.is_some() {
+                                self.navigation.bars.sheet_above.1
+                            } else {
+                                self.navigation.bars.sheet_above.0
+                            };
+                            for id in lifted(kernel, &shape) {
+                                wanted.insert(id, HostCover::Whole);
+                            }
+                            routes.push(RouteBar {
+                                route: *route,
+                                pushed,
+                                shape,
+                                subtitle,
+                                sheet: true,
+                            });
+                        }
+                        let cover = [
+                            crate::presenter::sheet_handle(&modal) + bar_top,
+                            (env.right - sheet_margin).max(0.0),
+                            foot,
+                            (env.left - sheet_margin).max(0.0),
+                        ];
+                        locals.insert(*route, cover);
+                        bands.insert(*route, cover);
                         wanted.insert(*route, HostCover::Edges(cover));
                         continue;
                     }
                     // A presented route starts a stack of its own (LLP
                     // 1035.001 D4): it is not pushed, and its Back control
                     // is an item of its bar.
-                    let presented = matches!(
-                        node.props.str(PropId::NavigationPresentation),
-                        Some("modal" | "fullscreen")
-                    );
+                    let presented = node.props.presentation().is_some();
                     let pushed = index > 0 && !presented;
                     let shape = kernel.header_shape(*route, back, pushed, &pressed);
                     let asked_none = node.props.str(PropId::NavigationBar) == Some("none");
@@ -234,7 +310,12 @@ impl<D: DataSource> Host<D> {
                     let shows = Bar::of(asked_none, shape.is_some(), pushed, false) == Bar::Header;
                     let mut top = 0.0;
                     if let Some(shape) = shape.filter(|_| shows) {
-                        top = above;
+                        let subtitle = kernel.header_subtitle(&shape);
+                        top = if subtitle.is_some() {
+                            self.navigation.bars.subtitled_above
+                        } else {
+                            above
+                        };
                         for id in lifted(kernel, &shape) {
                             wanted.insert(id, HostCover::Whole);
                         }
@@ -242,41 +323,49 @@ impl<D: DataSource> Host<D> {
                             route: *route,
                             pushed,
                             shape,
+                            subtitle,
+                            sheet: false,
                         });
                     }
+                    let frame = node.frame;
+                    // A detail's frame is local to its pane. Other route frames are in the page.
+                    let x = frame.x + split.filter(|s| s.block(*route)).map_or(0., |s| s.pane().0);
+                    let (left, right) = sides(x, x + frame.width);
+                    let cover = [top, right, below, left];
+                    if cover != [0.0; 4] {
+                        wanted.insert(*route, HostCover::Edges(cover));
+                    }
+                    // The page supplies the local sides used to position a route.
+                    // Feeding its resulting overlap back into those lengths can
+                    // move the route straight back under the cutout.
+                    let band = [top.max(env.top), env.right, below.max(env.bottom), env.left];
+                    bands.insert(*route, band);
                     if top > 0.0 || below > 0.0 {
-                        wanted.insert(*route, HostCover::Edges([top, 0.0, below, 0.0]));
+                        locals.insert(*route, band);
                     }
                 }
             }
-            all_routes = all.iter().flatten().copied().collect();
             stacks = all;
             tabs = found;
         }
-        // A route the bars or a sheet inset owns that room (LLP 1123 D9): a
-        // route in the page with the page's insets past it, and one in a sheet
-        // the sheet's own, below the status area at its handle and above the
-        // system's bar at its foot.
-        let env = kernel.env();
-        let locals: BTreeMap<ViewId, [f32; 4]> = (wanted.iter())
-            .filter_map(|(id, cover)| match cover {
-                HostCover::Edges([top, _, bottom, _]) if sheeted.contains(id) => {
-                    Some((*id, [*top, env.right, *bottom, env.left]))
+        // A split reserves the detail column on the list route's right. Apply both
+        // claims together so changing a cutout cannot replace the column's cover.
+        for (key, (id, split)) in &self.navigation.split.covers {
+            if kernel.node_by_key(*key).is_none() {
+                continue;
+            }
+            let cover = match (wanted.get(id), split) {
+                (Some(HostCover::Edges(a)), HostCover::Edges(b)) => {
+                    HostCover::Edges(std::array::from_fn(|i| a[i].max(b[i])))
                 }
-                HostCover::Edges([top, _, bottom, _]) if all_routes.contains(id) => Some((
-                    *id,
-                    [
-                        top.max(env.top),
-                        env.right,
-                        bottom.max(env.bottom),
-                        env.left,
-                    ],
-                )),
-                _ => None,
-            })
-            .collect();
+                (Some(HostCover::Whole), _) => HostCover::Whole,
+                _ => *split,
+            };
+            wanted.insert(*id, cover);
+        }
         let bars = &mut self.navigation.bars;
         (bars.root, bars.routes, bars.tabs, bars.stacks) = (root, routes, tabs, stacks);
+        bars.bands = bands;
         let held_locals = std::mem::replace(&mut bars.locals, locals);
         let before = std::mem::replace(&mut bars.covers, wanted);
         self.navigation.lifted = (self.navigation.bars.covers.iter())

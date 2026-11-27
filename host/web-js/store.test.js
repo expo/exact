@@ -737,7 +737,8 @@ test('build-time data takes the manifest origin and a missing origin names the f
     return new Response('published');
   }});
   try {
-    for (const configured of [false, true]) {
+    for (const [configured, grant] of [[false, site.url.origin], [true, site.url.origin], [true, 'self']]) {
+      hits.length = 0;
       await renderedPages(`routes nav
   home "/" render=request
   guide "/guides/one" render=build
@@ -748,11 +749,67 @@ component App
 `, async (_, html) => {
         expect(html('guides/one')).toContain(configured ? 'published' : 'relative fetch has no page origin: set app.origin');
         expect(hits).toEqual(configured ? [site.url.origin + '/guides/data.json'] : []);
-      }, { 'app.ts': `export const grants = 'net.fetch ${site.url.origin}';
+      }, { 'app.ts': `export const grants = 'net.fetch ${grant}';
 export const answer = async () => {
   try { return await (await fetch('data.json', {credentials: 'omit'})).text(); }
   catch (e) { return String(e); }
 };` }, { app: {id: 'test.build', name: 'Build', ...(configured ? { origin: site.url.origin } : {})} });
     }
   } finally { site.stop(true); }
+}, 60000);
+
+test('one build with net.fetch self resolves data against each trusted render URL', async () => {
+  const { renderer } = await import('./render.mjs');
+  const { renderedPages } = await import('./rendered-pages.mjs');
+  const hits = [];
+  const sites = Array.from({ length: 3 }, () => Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    hits.push(request.url);
+    if (new URL(request.url).pathname === '/guides/redirect') return Response.redirect(sites[2].url.origin + '/api');
+    return new Response(request.url);
+  }}));
+  const [named, tenant, api] = sites.map(site => site.url.origin);
+  try {
+    for (const grants of ['net.fetch self', ['net.fetch self', 'net.fetch http:', 'net.fetch ' + named, 'net.fetch ' + api].join('\n')]) {
+      hits.length = 0;
+      await renderedPages(`routes nav
+  home "/" render=request
+  page "/guides/:id" render=request
+component App
+  derive id = match stack(nav).at(-1) { case some(e) => e.params.id, case none => "" }
+  resource label = read(id) as shape string
+  view
+    text label
+`, async (_, __, dist) => {
+        const render = renderer(dist);
+        for (const origin of [named, tenant]) {
+          const page = await render(origin + '/guides/one');
+          expect(page.html).toContain(origin + '/guides/data.json');
+        }
+        if (grants === 'net.fetch self') {
+          expect((await render(tenant + '/guides/redirect')).html).toContain("outside the app's grants");
+          expect((await render('/guides/one')).html).toContain('needs a trusted HTTP(S) page URL');
+          expect(hits).toEqual([named + '/guides/data.json', tenant + '/guides/data.json', tenant + '/guides/redirect']);
+          return;
+        }
+        expect((await render(named + '/guides/redirect')).html).toContain(api + '/api');
+        expect((await render(named + '/guides/same')).html).toContain('same-origin fetch redirected');
+        const deferred = await render(tenant + '/guides/redirect');
+        expect(deferred.refused).toEqual([['label', "fetch() redirected outside the render server's grants"]]);
+        expect((await render(tenant + '/guides/same')).html).toContain('same-origin fetch redirected');
+        expect((await render(tenant + '/guides/authority')).html).toContain('host predicate is private');
+        const withoutPage = await render('/guides/one');
+        expect(withoutPage.refused).toEqual([['label', "fetch() outside the render server's grants"]]);
+        expect(hits).toEqual([named + '/guides/data.json', tenant + '/guides/data.json', named + '/guides/redirect', api + '/api', named + '/guides/redirect', tenant + '/guides/redirect', tenant + '/guides/redirect']);
+      }, { 'app.ts': `export const grants = ${JSON.stringify(grants)};
+export const answer = async (_: string, [id]: string[]) => {
+  try {
+    if (id === 'authority') return [globalThis, fetch, import.meta].every(object =>
+      !('__exactPageAdmits' in object || 'admitsPageOrigin' in object || 'exactPageAdmits' in object)) ? 'host predicate is private' : 'exposed';
+    if (id === 'same') return await (await fetch('redirect', {credentials: 'omit', mode: 'same-origin'})).text();
+    return await (await fetch(id === 'redirect' ? id : 'data.json', {credentials: 'omit'})).text();
+  }
+  catch (e) { return String(e); }
+};` }, { app: { id: 'test.self', name: 'Self', origin: tenant } });
+    }
+  } finally { for (const site of sites) site.stop(true); }
 }, 60000);

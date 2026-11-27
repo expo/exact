@@ -10,30 +10,31 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-/// The role a keyword names, in any ASCII case: CSS's system colours by
-/// their names, Exact's roles as `-exact-<role>` (LLP 1081 D2), WebKit's
-/// `-apple-system-*` names for those it has, and the web form a role is
-/// written as (`var(--exact-<role>, …)`), so canonical CSS reads back. An
-/// Exact role's bare name is not a colour.
-pub fn role(text: &str) -> Option<u8> {
+fn strip_prefix_ascii_ci<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = text.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then_some(&text[prefix.len()..])
+}
+
+fn eq_ascii_no_ws(text: &str, target: &str) -> bool {
+    let mut chars = text.chars().filter(|c| !c.is_whitespace());
+    for want in target.bytes() {
+        let Some(c) = chars.next() else {
+            return false;
+        };
+        if !c.is_ascii() || !(c as u8).eq_ignore_ascii_case(&want) {
+            return false;
+        }
+    }
+    chars.next().is_none()
+}
+
+fn role_flat(text: &str) -> Option<u8> {
     let text = text.trim();
-    let lower = text.to_ascii_lowercase();
-    // The tint as the web writes it, `var(--exact-accent, <name>)`, reads
-    // back as the named role (`reference_css`).
-    if let Some(name) = lower
-        .strip_prefix("var(--exact-accent,")
-        .and_then(|rest| rest.strip_suffix(')'))
-    {
-        return role(name).filter(|&id| role_of(id).is_some_and(web_accent));
-    }
-    // The ink on the accent as the web writes it (`reference_css`).
-    if lower.split_whitespace().collect::<String>() == "var(--exact-accent-text,accentcolortext)" {
-        return role("AccentColorText");
-    }
-    let var = lower.strip_prefix("var(--exact-");
+    let var = strip_prefix_ascii_ci(text, "var(--exact-");
     let exact = match var {
         Some(rest) => Some(&rest[..rest.find([',', ')'])?]),
-        None => lower.strip_prefix("-exact-"),
+        None => strip_prefix_ascii_ci(text, "-exact-"),
     };
     COLOR_ROLES
         .iter()
@@ -50,6 +51,27 @@ pub fn role(text: &str) -> Option<u8> {
             }
         })
         .and_then(|i| u8::try_from(i).ok())
+}
+
+/// The role a keyword names, in any ASCII case: CSS's system colours by
+/// their names, Exact's roles as `-exact-<role>` (LLP 1081 D2), WebKit's
+/// `-apple-system-*` names for those it has, and the web form a role is
+/// written as (`var(--exact-<role>, …)`), so canonical CSS reads back. An
+/// Exact role's bare name is not a colour.
+pub fn role(text: &str) -> Option<u8> {
+    let text = text.trim();
+    // The tint as the web writes it, `var(--exact-accent, <name>)`, reads
+    // back as the named role (`reference_css`).
+    if let Some(name) =
+        strip_prefix_ascii_ci(text, "var(--exact-accent,").and_then(|rest| rest.strip_suffix(')'))
+    {
+        return role_flat(name).filter(|&id| role_of(id).is_some_and(web_accent));
+    }
+    // The ink on the accent as the web writes it (`reference_css`).
+    if eq_ascii_no_ws(text, "var(--exact-accent-text,accentcolortext)") {
+        return role_flat("AccentColorText");
+    }
+    role_flat(text)
 }
 
 /// A role by id; `None` past the table. Every id [`role`], the wire decoder
@@ -1414,6 +1436,29 @@ mod tests {
         assert_eq!(
             platform(id).unwrap().ios.as_deref(),
             Some("systemOrangeColor")
+        );
+    }
+
+    #[test]
+    fn deeply_nested_accent_var_is_refused_without_recursing() {
+        let nested = format!(
+            "{}{}",
+            "var(--exact-accent,".repeat(50_000),
+            ")".repeat(50_000)
+        );
+        assert_eq!(role(&nested), None);
+        assert_eq!(ColorValue::parse_light_dark(&nested), None);
+        assert_eq!(
+            role("var(--exact-accent, var(--exact-accent, AccentColor))"),
+            None
+        );
+        assert_eq!(
+            role("var(--exact-accent, var(--exact-linktext))"),
+            role("LinkText")
+        );
+        assert_eq!(
+            role("var(--exact-accent, AccentColor)"),
+            role("AccentColor")
         );
     }
 }

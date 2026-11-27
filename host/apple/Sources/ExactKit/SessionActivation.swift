@@ -135,7 +135,7 @@ extension ExactSession {
             runtime.prepareData()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                dataPreparing = false
+                if preparedGeneration == drawnGeneration { dataPreparing = false }
                 guard state != .destroyed, generation == drawnGeneration else { return }
                 activateData(drawnGeneration, token: token)
             }

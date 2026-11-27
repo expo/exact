@@ -5,6 +5,9 @@ import Security
 
 #if canImport(ExactPackage)
 import ExactPackage
+#if os(iOS) || os(tvOS)
+import UIKit
+#endif
 
 private let packageLibraryAnchor: @convention(c) () -> Void = {}
 
@@ -128,6 +131,16 @@ private final class PackageView: ExactNativeInstance {
     let made: any ExactPackageView
     init(_ made: any ExactPackageView, events: ExactNativeEvents) { self.made = made; super.init(events: events) }
     override var view: ExactNativeView { made.view }
+    #if os(iOS) || os(tvOS)
+    override var controller: UIViewController? { made.controller }
+    override var safeArea: ExactNativeSafeArea? {
+        made.safeArea.map { s in
+            ExactNativeSafeArea(adjustsAdditionalSafeAreaInsets: s.adjustsAdditionalSafeAreaInsets,
+                                scrollViews: s.scrollViews.map { .init($0.view, anchor: $0.anchor, layout: $0.layout) },
+                                safeAreaRegions: s.safeAreaRegions, release: s.release)
+        }
+    }
+    #endif
     override func setProps(_ props: [String: String]) throws { try made.setProps(props) }
     override func destroy() { made.destroy() }
 }

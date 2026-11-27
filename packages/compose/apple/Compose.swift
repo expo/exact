@@ -141,7 +141,7 @@ public final class ComposeModule: NSObject, ExactPackage {
             return refuse("this host's composer keeps no cc or bcc beside attachments; check composeStatus().emailCopiesWithAttachments", reply)
         }
         if context.agent {
-            let action = tap ?? "sent"
+            let action = tap == "cancel" ? "cancelled" : (tap ?? "sent")
             say(f.line("email", action))
             return reply(["action": action])
         }
@@ -195,7 +195,7 @@ public final class ComposeModule: NSObject, ExactPackage {
         if !f.subject.isEmpty && now["messageSubject"] as? Bool != true { return refuse("this host's message composer takes no subject; check composeStatus().messageSubject", reply) }
         if !f.attachments.isEmpty && now["messageAttachments"] as? Bool != true { return refuse("this host's message composer takes no attachment; check composeStatus().messageAttachments", reply) }
         if context.agent {
-            let action = tap ?? "sent"
+            let action = tap == "cancel" ? "cancelled" : (tap ?? "sent")
             say(f.line("message", action))
             return reply(["action": action])
         }

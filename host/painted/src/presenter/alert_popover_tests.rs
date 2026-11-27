@@ -1044,3 +1044,32 @@ fn a_dialogs_backdrop_colour_replaces_the_scrim() {
     let (r, g, b) = page("        ::backdrop\n          background-color=\"transparent\"\n");
     assert_eq!((r, g, b), (255, 255, 255));
 }
+
+#[test]
+fn a_removed_popover_cannot_take_back_between_commit_and_layout() {
+    let mut p = boot(
+        r#"component App
+  state shown = true
+  action remove
+    shown = false
+  view
+    column
+      button "Remove" testId="remove" press=remove
+      button "Open" testId="open" popovertarget="menu"
+      if shown
+        column id="menu" popover="auto" role="dialog"
+          button "Save"
+"#,
+    );
+    tap(&mut p, "open");
+    let serial = p.back_layers().popover;
+    assert_ne!(serial, 0);
+    assert!(p
+        .host
+        .dispatch_at(id(&p, "remove"), Event::Press, 5.)
+        .is_none());
+    assert!(p.alert_root().is_none());
+    assert!(!p.system_back(6.), "the shell takes Back");
+    assert_eq!(p.dispatched_back(3, serial, 6.), -1);
+    assert_eq!(p.back_layers().popover, 0);
+}

@@ -150,7 +150,7 @@ fn inline_run_inheritance_matches_leaf_styles_after_override_clear_and_reparent(
         for ((run, &id), &size) in runs.iter().zip(leaves).zip(sizes) {
             assert_eq!(run.style, k.node(id).unwrap().text_style(), "leaf {id}");
             assert_eq!(run.style.font_size, size);
-            assert_eq!(run.style.line_height, Some(size * 1.5));
+            assert_eq!(run.style.used_line_height(), Some(size * 1.5));
         }
         assert_eq!(
             runs.iter().map(|r| r.text.as_ref()).collect::<Vec<_>>(),

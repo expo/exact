@@ -33,6 +33,11 @@ class ExactCheckbox: UIControl {
         get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
         set { super.accessibilityDragSourceDescriptors = newValue }
     }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { super.accessibilityDropPointDescriptors = newValue }
+    }
     #endif
     /// The node the checkbox is the control of.
     weak var owner: NodeView?
@@ -254,11 +259,15 @@ extension ControlHost {
     @objc func changed(_ sender: UIControl) {
         let id = UInt32(sender.tag)
         guard let node = presenter.views[id] else { return }
-        // Read first: the press's batch syncs a bound control back to `checked`.
+        // Read first: clearing selection or the press's batch can sync a bound control back to `checked`.
         #if os(tvOS)
         let on = (sender as? ExactCheckbox)?.isOn ?? false
         #else
         let on = (sender as? UISwitch)?.isOn ?? (sender as? ExactCheckbox)?.isOn ?? false
+        #endif
+        #if os(iOS)
+        if presenter.textSelection.hasActiveSelection { presenter.textSelection.clear() }
+        guard presenter.views[id] === node else { return }
         #endif
         // A click on a checkbox is heard before its `input` and `change` (HTML
         // dispatches `click`, then fires those as its activation behaviour).

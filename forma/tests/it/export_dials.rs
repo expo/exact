@@ -514,3 +514,37 @@ fn a_token_settled_beside_a_dropped_change_is_asked_again() {
         }]
     );
 }
+
+#[test]
+fn marks_of_tracks_pins_for_role_override_aliases() {
+    use exact_forma::import::marks_of;
+
+    // Bare Exact role declaration addressed by its canonical `-exact-` name.
+    let bare = "forma t\n\ndials\n  accent: color = #1083fe\n\ntheme\n  background = accent\n";
+    let ops = [Op::SetToken {
+        name: "-exact-background".into(),
+        when: Vec::new(),
+        value: "#ff0000".into(),
+        at: None,
+        comment: None,
+    }];
+    let (_, pins) = marks_of(bare, &ops, &vocab()).unwrap();
+    assert_eq!(pins.len(), 1, "{pins:?}");
+    assert_eq!(pins[0].token, "-exact-background");
+    assert_eq!(pins[0].follows, ["accent"]);
+
+    // Canonical `-exact-` declaration addressed by its bare role name.
+    let canonical =
+        "forma t\n\ndials\n  accent: color = #1083fe\n\ntheme\n  -exact-background = accent\n";
+    let ops = [Op::SetToken {
+        name: "background".into(),
+        when: Vec::new(),
+        value: "#ff0000".into(),
+        at: None,
+        comment: None,
+    }];
+    let (_, pins) = marks_of(canonical, &ops, &vocab()).unwrap();
+    assert_eq!(pins.len(), 1, "{pins:?}");
+    assert_eq!(pins[0].token, "background");
+    assert_eq!(pins[0].follows, ["accent"]);
+}

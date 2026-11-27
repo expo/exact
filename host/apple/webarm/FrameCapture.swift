@@ -78,15 +78,108 @@ extension WebArm {
     /// `takeSnapshot` after the screen updates, three tries 120 ms apart, as
     /// the oracle and the clone try.
     func snap(_ web: WKWebView, _ rect: CGRect, attempt: Int, _ done: @escaping (CGImage?, String) -> Void) {
-        let configuration = WKSnapshotConfiguration()
-        configuration.rect = rect
-        configuration.afterScreenUpdates = true
-        web.takeSnapshot(with: configuration) { [weak self, weak web] image, error in
-            if let image = image.flatMap(FrameCaptures.cgImage) { return done(image, "") }
-            guard attempt < 2, let self, let web, !self.invalidated else { return done(nil, error?.localizedDescription ?? "WebKit returned no snapshot") }
+        FrameCaptures.rawSnapshot(web, rect: rect) { [weak self, weak web] image, error in
+            if let image { return done(image, "") }
+            guard attempt < 2, let self, let web, !self.invalidated, self.built === web else {
+                return done(nil, error ?? "WebKit returned no snapshot")
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.snap(web, rect, attempt: attempt + 1, done) }
         }
     }
+
+    /// Snapshot `web` for host compositing (`Agent.sample` and screenshots).
+    /// On macOS, `WKWebView.takeSnapshot` fills pixels outside a scaled-down
+    /// (`magnification < 1`) document with opaque white even when `drawsBackground`
+    /// is false and `underPageBackgroundColor` is clear. For a transparent frame,
+    /// verify the guest document's scrolling-area bounds before and after a single
+    /// full-bounds capture and clear only the verified outside margin on the
+    /// returned bitmap's pixel grid.
+    func snapshotForHost(_ web: WKWebView, _ done: @escaping (CGImage?, String?) -> Void) {
+        #if os(macOS)
+        guard transparent, web.magnification < 1 else {
+            return FrameCaptures.rawSnapshot(web, rect: web.bounds, done)
+        }
+        snapshotWithoutMargin(web, attempt: 0, done)
+        #else
+        FrameCaptures.rawSnapshot(web, rect: web.bounds, done)
+        #endif
+    }
+
+    #if os(macOS)
+    private func snapshotWithoutMargin(_ web: WKWebView, attempt: Int, _ done: @escaping (CGImage?, String?) -> Void) {
+        guard !invalidated, built === web else {
+            return done(nil, "the frame went away before its picture was taken")
+        }
+        measureDocument(web) { [weak self, weak web] before, measureError in
+            guard let self, let web, !self.invalidated, self.built === web else {
+                return done(nil, "the frame went away before its picture was taken")
+            }
+            guard let before else {
+                return done(nil, measureError ?? "could not measure iframe document bounds")
+            }
+            FrameCaptures.rawSnapshot(web, rect: before.bounds) { [weak self, weak web] cg, snapError in
+                guard let self, let web, !self.invalidated, self.built === web else {
+                    return done(nil, "the frame went away before its picture was taken")
+                }
+                guard let cg else {
+                    return done(nil, snapError ?? "WebKit returned no snapshot")
+                }
+                self.measureDocument(web) { [weak self, weak web] after, recheckError in
+                    guard let self, let web, !self.invalidated, self.built === web else {
+                        return done(nil, "the frame went away before its picture was taken")
+                    }
+                    guard let after else {
+                        return done(nil, recheckError ?? "could not verify iframe document bounds after snapshot")
+                    }
+                    if after != before {
+                        if attempt < 2 {
+                            return self.snapshotWithoutMargin(web, attempt: attempt + 1, done)
+                        }
+                        return done(nil, "the iframe viewport moved during snapshot")
+                    }
+                    guard let cleared = FrameCaptures.clearOutsideMargin(cg, geometry: before) else {
+                        return done(nil, "could not clear transparent iframe margin")
+                    }
+                    done(cleared, nil)
+                }
+            }
+        }
+    }
+
+    private func measureDocument(_ web: WKWebView, _ done: @escaping (FrameCaptures.DocumentGeometry?, String?) -> Void) {
+        web.evaluateJavaScript(FrameCaptures.geometryScript, in: nil, in: world) { [weak self, weak web] result in
+            guard let self, let web, !self.invalidated, self.built === web else {
+                return done(nil, "the frame went away before its picture was taken")
+            }
+            let raw: Any
+            switch result {
+            case .success(let value): raw = value
+            case .failure(let error): return done(nil, "could not measure iframe document bounds: \(error.localizedDescription)")
+            }
+            guard let dict = raw as? [String: Any],
+                  let docLeft = (dict["docLeft"] as? NSNumber)?.doubleValue,
+                  let docTop = (dict["docTop"] as? NSNumber)?.doubleValue,
+                  let docRight = (dict["docRight"] as? NSNumber)?.doubleValue,
+                  let docBottom = (dict["docBottom"] as? NSNumber)?.doubleValue,
+                  let pageLeft = (dict["pageLeft"] as? NSNumber)?.doubleValue,
+                  let pageTop = (dict["pageTop"] as? NSNumber)?.doubleValue,
+                  let href = dict["href"] as? String else {
+                return done(nil, "iframe document bounds are unavailable")
+            }
+            let scale = Double(web.magnification * web.pageZoom)
+            let bounds = web.bounds
+            let finite = [docLeft, docTop, docRight, docBottom, pageLeft, pageTop, scale].allSatisfy(\.isFinite)
+            guard finite, scale > 0, bounds.width > 0, bounds.height > 0,
+                  docRight > docLeft, docBottom > docTop else {
+                return done(nil, "iframe document bounds are empty or non-finite")
+            }
+            done(FrameCaptures.DocumentGeometry(
+                docLeft: docLeft, docTop: docTop, docRight: docRight, docBottom: docBottom,
+                pageLeft: pageLeft, pageTop: pageTop, scale: scale, bounds: bounds, href: href
+            ), nil)
+        }
+    }
+    #endif
 }
 
 enum FrameCaptures {
@@ -95,6 +188,15 @@ enum FrameCaptures {
 
     /// A rect a picture can be made of: at least a point each way.
     static func drawable(_ rect: CGRect) -> Bool { !rect.isNull && rect.width >= 1 && rect.height >= 1 }
+
+    static func rawSnapshot(_ web: WKWebView, rect: CGRect, _ done: @escaping (CGImage?, String?) -> Void) {
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = rect
+        configuration.afterScreenUpdates = true
+        web.takeSnapshot(with: configuration) { image, error in
+            done(image.flatMap(cgImage), error?.localizedDescription)
+        }
+    }
 
     static func cgImage(_ image: PlatformImage) -> CGImage? {
         #if os(macOS)
@@ -110,6 +212,86 @@ enum FrameCaptures {
         CGImageDestinationAddImage(destination, image, nil)
         return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
+
+    #if os(macOS)
+    struct DocumentGeometry: Equatable {
+        let docLeft: Double
+        let docTop: Double
+        let docRight: Double
+        let docBottom: Double
+        let pageLeft: Double
+        let pageTop: Double
+        let scale: Double
+        let bounds: CGRect
+        let href: String
+    }
+
+    /// Reads the CSSOM View scrolling-area edges (`docLeft..docRight`, `docTop..docBottom`)
+    /// in layout CSS pixels, accounting for quirks-mode `scrollingElement` and leftward or
+    /// upward overflow in RTL and vertical writing modes.
+    static let geometryScript = """
+        (() => {
+            const se = document.scrollingElement || document.documentElement || document.body;
+            if (!se) return null;
+            const styleSource = document.body || document.documentElement || se;
+            const cs = getComputedStyle(styleSource);
+            const wm = cs.writingMode || "";
+            const vertical = wm.startsWith("vertical-") || wm.startsWith("sideways-");
+            const isRTL = cs.direction === "rtl";
+            const rtlX = (!vertical && isRTL) || wm === "vertical-rl" || wm === "sideways-rl";
+            const rtlY = vertical && isRTL;
+            const docLeft = rtlX ? Math.min(0, se.clientWidth - se.scrollWidth) : 0;
+            const docTop = rtlY ? Math.min(0, se.clientHeight - se.scrollHeight) : 0;
+            const vv = window.visualViewport;
+            return {
+                docLeft,
+                docTop,
+                docRight: docLeft + se.scrollWidth,
+                docBottom: docTop + se.scrollHeight,
+                pageLeft: vv ? vv.pageLeft : window.scrollX,
+                pageTop: vv ? vv.pageTop : window.scrollY,
+                href: String(location.href || "")
+            };
+        })()
+        """
+
+    /// Clears only the pixels strictly outside the document's painted region on
+    /// `image`'s own backing-pixel grid, preserving pixel dimensions and color space.
+    static func clearOutsideMargin(_ image: CGImage, geometry g: DocumentGeometry) -> CGImage? {
+        let width = image.width, height = image.height
+        guard width > 0, height > 0, g.bounds.width > 0, g.bounds.height > 0 else { return nil }
+        let scaleX = Double(width) / Double(g.bounds.width)
+        let scaleY = Double(height) / Double(g.bounds.height)
+        // WebKit aligns the scaled document layer to integer view points (verified on macOS 27.2
+        // at 1× and 2× Retina), filling opaque white only outside [floor(leftPt), ceil(rightPt))
+        // × [floor(topPt), ceil(bottomPt)).
+        let eps = 1e-6
+        let minXPt = floor((g.docLeft - g.pageLeft) * g.scale + eps)
+        let minYPt = floor((g.docTop - g.pageTop) * g.scale + eps)
+        let maxXPt = ceil((g.docRight - g.pageLeft) * g.scale - eps)
+        let maxYPt = ceil((g.docBottom - g.pageTop) * g.scale - eps)
+        let pxLeft = max(0, min(width, Int(floor(minXPt * scaleX + eps))))
+        let pxTop = max(0, min(height, Int(floor(minYPt * scaleY + eps))))
+        let pxRight = max(0, min(width, Int(ceil(maxXPt * scaleX - eps))))
+        let pxBottom = max(0, min(height, Int(ceil(maxYPt * scaleY - eps))))
+        if pxLeft == 0, pxTop == 0, pxRight == width, pxBottom == height {
+            return image
+        }
+        let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let space = image.colorSpace ?? srgb
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: space, bitmapInfo: info)
+            ?? (space === srgb ? nil : CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: srgb, bitmapInfo: info))
+        guard let context else { return nil }
+        if pxRight > pxLeft, pxBottom > pxTop {
+            // `pxTop`/`pxBottom` are y-down in the snapshot's pixel grid; `CGContext` is y-up.
+            let clip = CGRect(x: pxLeft, y: height - pxBottom, width: pxRight - pxLeft, height: pxBottom - pxTop)
+            context.clip(to: clip)
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return context.makeImage()
+    }
+    #endif
 
     /// The PNG at `file`, its folder made first; nil, or why it failed.
     static func write(_ image: CGImage, to file: URL) -> String? {

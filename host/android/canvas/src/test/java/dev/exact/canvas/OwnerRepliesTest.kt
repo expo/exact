@@ -10,6 +10,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
@@ -106,6 +107,21 @@ class OwnerRepliesTest {
      * unanswered call would hold every later `clock settle` for its whole bound. */
     @Test fun aDetachedReaderAnswersByTheOwnersQueueAfterWhatWasHandedBeforeIt() {
         Host.posted.clear()
+        exact.app.ExactExtensions.process(mapOf("probe" to { ctx -> object : ExactExtension(ctx) {
+            override fun later(name: String, args: org.json.JSONObject, reply: (org.json.JSONObject) -> Unit) {
+                if (name == "readText") return reply(org.json.JSONObject().put("exact:answer", "Paste \"this\"\n🍋"))
+                if (name == "broken") error("reader failed")
+                if (name == "status") {
+                    android.os.Handler(Looper.getMainLooper()).post { reply(org.json.JSONObject().put("state", "granted")) }
+                    return
+                }
+                reply(org.json.JSONObject().put("error", "a value"))
+            }
+            override fun picture(source: String, width: Int, height: Int, fit: String, owned: Boolean, reply: (android.graphics.Bitmap?, String?) -> Unit) {
+                error("failed to decode ${width}x$height")
+            }
+        } }))
+        Extensions.bind(RuntimeEnvironment.getApplication())
         val owner = Owner(false, false, 0) { "0" }
         val thread = Owner::class.java.getDeclaredField("thread").apply { isAccessible = true }
             .get(owner) as android.os.HandlerThread
@@ -120,6 +136,23 @@ class OwnerRepliesTest {
                     assertEquals("[]", owner.agentTurn(
                         request(Requests.MODULE, 5, """{"extension":"photos","preferred":{}}""") +
                             request(Requests.MODULE, 6, """{"extension":"photos","source":"photoAssets","args":{}}""") +
+                            request(Requests.MODULE, 8, """{"op":"ping"}""") +
+                            request(Requests.MODULE, 9, """{"extension":"probe","op":"ping"}""") +
+                            request(Requests.MODULE, 10, """{"extension":"probe","send":"ping"}""") +
+                            request(Requests.MODULE, 11, """{"extension":"probe","send":"ask","admit":{"status":"permission","field":"state"}}""") +
+                            request(Requests.MODULE, 12, """{"extension":"probe","dispose":false}""") +
+                            request(Requests.MODULE, 13, """{"extension":"probe","dispose":[42]}""") +
+                            request(Requests.MODULE, 14, """{"extension":"probe","dispose":[]}""") +
+                            request(Requests.MODULE, 15, """{"extension":"probe","source":false}""") +
+                            request(Requests.MODULE, 16, """{"extension":"probe","view":"unused"}""") +
+                            request(Requests.MODULE, 17, """{"extension":"probe","send":"broken"}""") +
+                            request(Requests.MODULE, 18, """{"extension":"probe","source":"","send":"ping"}""") +
+                            request(Requests.MODULE, 19, """{"extension":"probe","source":false,"preferred":{}}""") +
+                            request(Requests.MODULE, 20, """{"extension":"probe","cancel":4294967297}""") +
+                            request(Requests.MODULE, 21, """{"extension":"probe","source":null,"send":"ping"}""") +
+                            request(Requests.MODULE, 22, """{"extension":"probe","picture":"p","width":"1080","height":1920.0}""") +
+                            request(Requests.MODULE, 23, """{"extension":"probe","send":"broken","admit":{"status":"status","field":"state"}}""") +
+                            request(Requests.MODULE, 24, """{"extension":"probe","send":"readText"}""") +
                             request(Requests.PRESENCE, 7, """{"call":1,"origin":"app"}""")))
                     requested.countDown()
                     assertTrue(handed.await(10, TimeUnit.SECONDS))
@@ -131,13 +164,21 @@ class OwnerRepliesTest {
             Exact.journal("photos: revoked photos:agent-1")
             shadowOf(Looper.getMainLooper()).idle()
             handed.countDown()
-            val unsupported = org.json.JSONObject().put("error", "NotSupportedError").toString()
+            fun unsupported(id: Int) = org.json.JSONObject().put("id", id).put("error", "NotSupportedError")
+            fun failed(id: Int, message: String) = org.json.JSONObject().put("id", id).put("error", "Error").put("message", message)
             assertEquals(
                 org.json.JSONArray()
                     .put(org.json.JSONObject().put("picture", "photos:agent-1").put("revoked", true))
                     .put(org.json.JSONObject().put("journal", "photos: revoked photos:agent-1"))
-                    .put(org.json.JSONArray().put(5).put(unsupported))
-                    .put(org.json.JSONArray().put(6).put(unsupported))
+                    .put(unsupported(5)).put(unsupported(6)).put(unsupported(8)).put(unsupported(9))
+                    .put(org.json.JSONArray().put(10).put("""{"error":"a value"}"""))
+                    .put(org.json.JSONArray().put(11).put("""{"error":"NotAllowedError","message":"person-required"}"""))
+                    .put(unsupported(12)).put(unsupported(13)).put(org.json.JSONArray().put(14).put("{}")).put(unsupported(15))
+                    .put(org.json.JSONArray().put(16).put("{}")).put(failed(17, "reader failed"))
+                    .put(org.json.JSONArray().put(18).put("""{"error":"a value"}""")).put(unsupported(19)).put(unsupported(20))
+                    .put(org.json.JSONArray().put(21).put("""{"error":"a value"}""")).put(failed(22, "failed to decode 1080x1920"))
+                    .put(org.json.JSONArray().put(24).put(org.json.JSONObject.quote("Paste \"this\"\n🍋")))
+                    .put(failed(23, "reader failed"))
                     .toString(),
                 turn.get(10, TimeUnit.SECONDS),
             )

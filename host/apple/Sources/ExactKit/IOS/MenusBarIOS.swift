@@ -44,14 +44,13 @@ extension MenuHost {
     }
     /// `dismissing`: the app closed it (`hidePopover`, another popover
     /// shown, its button gone), so UIKit's menu is dismissed here, through
-    /// the interactions of the bar it is in:
-    /// `UIContextMenuInteraction.dismissMenu()` dismisses only a menu its
-    /// interaction presents. False when no pull-down was open.
+    /// the interactions of the views its item may be in (`dismissMenus`).
+    /// False when no pull-down was open.
     @discardableResult func barMenuClosed(dismissing: Bool = false) -> Bool {
         guard let menu = barMenu else { return false }
         barMenu = nil
         if recordsGiven { presentedMenu = [:] }
-        if dismissing, let bar = menu.bar() { Self.dismissMenus(in: bar) }
+        if dismissing, let bar = menu.bar() { Self.dismissMenus(of: bar) }
         if let pop = menu.popover, live(pop), pop.incarnation == menu.incarnation { presenter?.popoverEvents.changed(pop, open: false) }
         return true
     }
@@ -63,9 +62,21 @@ extension MenuHost {
               presenter.navigation.shownBarItem(invoker.id)?.menu != nil, let pop = menu.popover,
               let invocation = presenter.invocation(of: invoker), invocation.opens, invocation.target === pop else { barMenuClosed(dismissing: true); return }
     }
-    private static func dismissMenus(in view: UIView) {
-        for case let interaction as UIContextMenuInteraction in view.interactions { interaction.dismissMenu() }
-        for sub in view.subviews { dismissMenus(in: sub) }
+    /// UIKit can draw a bar's items beside it, in the view of its controller
+    /// or of the tab bar controller that holds it, as on a closed iPhone Duo
+    /// (iOS 27.1): any view there that does not hold the page.
+    /// `UIContextMenuInteraction.dismissMenu()` dismisses only a menu its
+    /// interaction presents.
+    private static func dismissMenus(of bar: UIView) {
+        for interaction in menuInteractions(of: bar) { interaction.dismissMenu() }
+    }
+    /// The interactions that may show the menu of an item in `bar`: its own
+    /// views' and those beside it (`dismissMenus`).
+    static func menuInteractions(of bar: UIView) -> [UIContextMenuInteraction] {
+        let controller = (bar as? UINavigationBar)?.delegate as? UINavigationController, page = controller?.topViewController?.viewIfLoaded
+        let beside = [controller, controller?.tabBarController].compactMap { $0?.viewIfLoaded }.flatMap(\.subviews)
+        func found(in view: UIView) -> [UIContextMenuInteraction] { view.interactions.compactMap { $0 as? UIContextMenuInteraction } + view.subviews.flatMap(found) }
+        return ([bar] + beside).filter { page?.isDescendant(of: $0) != true }.flatMap(found)
     }
     /// A bar item's popover that is no menu, opened (or closed, a second
     /// tap) from the item as a native button in the page opens one: lifted,

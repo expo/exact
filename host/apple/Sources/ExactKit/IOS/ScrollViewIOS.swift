@@ -36,6 +36,56 @@ extension UIEdgeInsets {
     func adding(_ other: UIEdgeInsets) -> UIEdgeInsets {
         UIEdgeInsets(top: top + other.top, left: left + other.left, bottom: bottom + other.bottom, right: right + other.right)
     }
+    /// Each side less `other`'s.
+    func less(_ other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(top: top - other.top, left: left - other.left, bottom: bottom - other.bottom, right: right - other.right)
+    }
+}
+
+/// A scroll view whose indicators take its own safe area where UIKit's adjustment gives them none
+/// (`SafeIndicatorTerm`): Exact's `ScrollView` and a grouped list's collection.
+package protocol SafeIndicators: UIScrollView {
+    /// D14's writer writes the indicator insets whole (`ScrollInsetsIOS.write`), the side bands among its terms, and
+    /// the term is none of them.
+    var writtenWhole: Bool { get set }
+    /// The safe area its indicators keep within: UIKit's, and a grouped list's sides it reaches over too.
+    var indicatorSafeArea: UIEdgeInsets { get }
+}
+
+extension SafeIndicators {
+    package var indicatorSafeArea: UIEdgeInsets { safeAreaInsets }
+}
+
+/// What a scroll view's own safe area adds to its indicators' insets while UIKit's adjustment, which adds its top and
+/// bottom itself, is off: its top and bottom, and the horizontal indicator its sides, so that one's track keeps within
+/// the area. A page band turns the adjustment off while it bands the scroll view, so the band and the safe area are
+/// each counted once (`NodeView.bandScroll`). The vertical indicator takes no side. UIKit's adjustment adds the side
+/// safe area again to a side inset written; with none, the vertical indicator lies where UIKit's own scroll view's
+/// does, outside the layout margins and so never over content that keeps to them: on the iPhone Duo's cover screen
+/// under the strip, at the screen's edge (460 of 466), the adjustment on or off; under a controller's additional side
+/// inset, at the inset's inner edge while the adjustment is on and at the scroll view's side while it is off. The
+/// term moves as a difference, as the padding edge's (`ScrollView.paddingInset`), the keyboard's and a page band's
+/// do, so each leaves the others' in place; its scroll view syncs it as its safe area, its adjustment or
+/// `writtenWhole` changes.
+package struct SafeIndicatorTerm {
+    private var applied = (vertical: UIEdgeInsets.zero, horizontal: UIEdgeInsets.zero)
+
+    package init() {}
+
+    package mutating func sync(_ scroll: some SafeIndicators) {
+        let safe = scroll.indicatorSafeArea
+        let off = !scroll.writtenWhole && !scroll.automaticallyAdjustsScrollIndicatorInsets
+        let vertical = off ? UIEdgeInsets(top: safe.top, left: 0, bottom: safe.bottom, right: 0) : .zero
+        let horizontal = off ? safe : .zero
+        if vertical != applied.vertical {
+            scroll.verticalScrollIndicatorInsets = scroll.verticalScrollIndicatorInsets.adding(vertical.less(applied.vertical))
+            applied.vertical = vertical
+        }
+        if horizontal != applied.horizontal {
+            scroll.horizontalScrollIndicatorInsets = scroll.horizontalScrollIndicatorInsets.adding(horizontal.less(applied.horizontal))
+            applied.horizontal = horizontal
+        }
+    }
 }
 
 /// A scroll container — the viewport over the document, and a node whose
@@ -44,12 +94,12 @@ extension UIEdgeInsets {
 /// its edge). Which axes it scrolls comes from the node's rows; a tap's
 /// wheel (the agent's) applies the web's chaining rule itself
 /// (`AgentIOS.swift`).
-package class ScrollView: UIScrollView {
+package class ScrollView: UIScrollView, SafeIndicators {
     var scrollingNode: NodeView? { (superview as? NodeView) ?? (self as? Viewport)?.documentNode }
     /// Where it last came to rest along x and y, and on which snap area (`ScrollSnapIOS.swift`).
     var snapRested = [ScrollSnap.Rested(), ScrollSnap.Rested()]
     /// UIKit's paging is on because its snap is a pager's (`ScrollSnapIOS.swift`).
-    var snapPages = false
+    package internal(set) var snapPages = false
     package override func layoutSubviews() {
         super.layoutSubviews()
         syncIndicators()
@@ -84,9 +134,14 @@ package class ScrollView: UIScrollView {
         paddingInset = inset
     }
     private func holdPaddingClip() {
-        guard let clip = paddingClip, layer.mask === clip else { return }
         let origin = CGPoint(x: bounds.minX - frame.minX, y: bounds.minY - frame.minY)
-        if clip.position != origin { clip.position = origin }
+        if let clip = paddingClip, layer.mask === clip {
+            if clip.position != origin { clip.position = origin }
+        } else if let surface = scrollingNode?.surface?.clip, layer.mask === surface, surface.frame.origin != origin {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            surface.frame.origin = origin
+            CATransaction.commit()
+        }
     }
     /// What the padding edge's mask adds to both indicators' insets on each side: the border's widths while it
     /// masks, else none. It moves as a difference, as the keyboard's and a page band's terms do
@@ -100,6 +155,13 @@ package class ScrollView: UIScrollView {
             verticalScrollIndicatorInsets = verticalScrollIndicatorInsets.adding(moved)
             horizontalScrollIndicatorInsets = horizontalScrollIndicatorInsets.adding(moved)
         }
+    }
+    private var safeIndicators = SafeIndicatorTerm()
+    package var writtenWhole = false { didSet { safeIndicators.sync(self) } }
+    package override var automaticallyAdjustsScrollIndicatorInsets: Bool { didSet { safeIndicators.sync(self) } }
+    package override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        safeIndicators.sync(self)
     }
     /// UIKit exposes an indicator and its thumb to accessibility even when
     /// the axis has no range. Keep the requested visibility across resizes
@@ -135,7 +197,7 @@ package class ScrollView: UIScrollView {
     package override var bounds: CGRect {
         get { super.bounds }
         set {
-            guard UIView.inheritedAnimationDuration > 0, let node = scrollingNode, let presenter = node.presenter else { return super.bounds = newValue }
+            guard Presenter.animationMayBeOpen, let node = scrollingNode, let presenter = node.presenter else { return super.bounds = newValue }
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
     }
@@ -161,9 +223,19 @@ package class ScrollView: UIScrollView {
         keptInset = adjustedContentInset
         // the port is a `scroll` event's (`clientHeight`): one that changes without moving
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
-        (superview as? NodeView)?.queueScrollEvent()
-        guard atEnd, !isTracking, !isDecelerating, was.bottom != keptInset.bottom else { return }
-        contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(under: keptInset)), in: self)
+        let owner = superview as? NodeView
+        owner?.queueScrollEvent()
+        guard !isTracking, !isDecelerating else { return }
+        if atEnd {
+            guard was.bottom != keptInset.bottom else { return }
+            contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(under: keptInset)), in: self)
+        } else if #available(iOS 17.4, tvOS 17.4, *), was.top > 0, was.top != keptInset.top, contentOffset.y <= 0.5 - was.top, !scrollsItself,
+                  owner?.scrollUnderWay(self) != true {
+            // At rest at its start it stays there as the bar above it grows or shrinks (a fold, a filter moved into
+            // the bar), as UIKit's table and collection views keep theirs; left alone, its content ended that far
+            // under the bar. Before iOS 17.4 nothing tells UIKit's scroll animation from rest (`scrollsItself`).
+            contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: -keptInset.top), in: self)
+        }
     }
     /// Whether it keeps its end as its insets change (`adjustedContentInsetDidChange`, and D14's writer, which moves
     /// the offset itself): a list that opens at its end or follows it, with content, not a horizontal collection, and
@@ -200,7 +272,10 @@ package class ScrollView: UIScrollView {
         // below visits each of them, and walking twice at every nested
         // scroller made a touch on a list walk its rows four times.
         guard !isHidden, isUserInteractionEnabled, alpha >= 0.01, self.point(inside: point, with: event) else { return nil }
-        if let child = NodeView.hitChildren(in: self, at: point, with: event) { return child }
+        let inEdge = (layer.mask as? CAShapeLayer).flatMap { mask in
+            mask.path.map { $0.contains(CGPoint(x: point.x - mask.frame.minX, y: point.y - mask.frame.minY)) }
+        } ?? true
+        if inEdge, let child = NodeView.hitChildren(in: self, at: point, with: event) { return child }
         // A paragraph's scroller with nothing to scroll is its node, as on the
         // web, where a click on it bubbles to the button around it: a
         // `UIScrollView` keeps a touch from the responder chain. CSS makes one
@@ -257,7 +332,7 @@ package class ScrollView: UIScrollView {
     /// The direction is the velocity, or the movement that crossed the slop
     /// while UIKit has none yet, as a photo's yield reads it (LLP 1057.001
     /// rule 2), so the drag it steps aside from is taken here.
-    func admitsPan(velocity: CGPoint, translation: CGPoint, start: CGPoint) -> Bool {
+    package func admitsPan(velocity: CGPoint, translation: CGPoint, start: CGPoint, chain: Bool = true) -> Bool {
         let direction = velocity == .zero ? translation : velocity
         var view = hitTest(start, with: nil)
         if CanvasInputs.owns(view) { return false }
@@ -269,7 +344,7 @@ package class ScrollView: UIScrollView {
             view = current.superview
         }
         if let owner = scrollingNode, !owner.allowsTouchPan(direction) { return false }
-        return !handsOff(direction)
+        return !chain || !handsOff(direction)
     }
     #if os(iOS)
     /// A zoomable scroller's pinch (LLP 1057.001.000 §3): rule 2, where
@@ -302,6 +377,9 @@ package class ScrollView: UIScrollView {
         // axis this view scrolls under `none`.
         let still = { (axis: String) in owner.style["overscroll_behavior_\(axis)"]?.string == "none" }
         bounces = !(behavior == "none" || (scrollsX && still("x")) || (scrollsY && still("y")))
+        #if os(iOS)
+        if (owner.heightRecognizer as? SheetScrollGesture)?.takesEdge(in: self, direction: velocity) == true { return false }
+        #endif
         return chains(velocity)
     }
     /// `handsOff`'s answer without its side effect: whether a drag in
@@ -359,11 +437,19 @@ package class ScrollView: UIScrollView {
         // never the window's — found through the nearest node above a nested
         // scroller; the viewport itself has none above it and is its own.
         if let t = touches.first, bounds.contains(t.location(in: self)) {
+            var presenter = scrollingNode?.presenter ?? (self as? Viewport)?.documentNode?.presenter
             var above = superview
-            while let current = above {
-                if let node = current as? NodeView, let presenter = node.presenter { presenter.endEditing(); return }
+            while presenter == nil, let current = above {
+                if let node = current as? NodeView { presenter = node.presenter; break }
                 above = current.superview
             }
+            #if os(iOS)
+            if let presenter, presenter.textSelection.hasActiveSelection,
+               t.view.map({ !presenter.textSelection.owns($0) }) ?? true {
+                presenter.textSelection.clear()
+            }
+            #endif
+            if let presenter { presenter.endEditing(); return }
             endEditing(true)
         }
     }
@@ -461,6 +547,7 @@ extension NodeView {
         }
         guard extras?.nativeScrollView !== view else { return }
         if pageBand != .zero { setPageBand(.zero) } // the scroll view leaving gives its band back (LLP 1130 D3)
+        setSideReach(.zero)
         if reach != .zero || reachGiven { more.reach = .zero; more.reachGiven = false } // and its reach, which its successor waits for anew (LLP 1123 D13)
         more.nativeScrollView = view
         more.nativeScrollDelegate = view?.delegate
@@ -726,7 +813,7 @@ extension NodeView {
         }
         if let saved = hiddenScroll {
             hiddenScroll = nil
-            writeScrollPosition(in: sv, left: Double(saved.x), top: Double(saved.y), animated: false, titleSlack: false)
+            writeScrollPosition(in: sv, left: Double(saved.x), top: Double(saved.y), animated: false)
             // Keep the restored position over one carried from another scroll view (a replaced backend, the title's
             // new scroller), which is that view's, not the reader's
             if extras?.pendingScrollTransfer == true { return }
@@ -736,35 +823,72 @@ extension NodeView {
         // reader's own scroll. Under the agent's frozen clock it lands at once
         // (as a modal presents, LLP 1035.003 D5), so `layout` reads the target.
         let smooth = !instant && extras?.pendingScrollTransfer != true && style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes
-        writeScrollPosition(in: sv, left: pendingScrollLeft, top: pendingScrollTop, animated: smooth, titleSlack: true)
+        writeScrollPosition(in: sv, left: pendingScrollLeft, top: pendingScrollTop, animated: smooth)
     }
 
-    /// Convert a logical write only after native layout. UIKit can
-    /// invalidate its offset when that write collapses the navigation title;
-    /// settle that one inset transition and apply the same intent once more.
-    private func writeScrollPosition(in sv: UIScrollView, left: Double?, top: Double?, animated: Bool, titleSlack: Bool) {
-        func target() -> CGPoint {
-            let i = sv.adjustedContentInset, inset = scrollTopInset(sv)
-            // CSS ends where a large title rests collapsed.
-            let slack = titleSlack && scrollOrigin > 0 ? max(0, i.top - scrollCollapsed) : 0
-            let y = top.map { CGFloat($0) - inset == sv.contentOffset.y ? sv.contentOffset.y : min(max(CGFloat($0) - inset, -i.top), max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height - slack)) } ?? sv.contentOffset.y
-            let leftInset = scrollLeftInset(sv)
-            let x = left.map { CGFloat($0) - leftInset == sv.contentOffset.x ? sv.contentOffset.x : min(max(CGFloat($0) - leftInset, -i.left), max(-i.left, sv.contentSize.width + i.right - sv.bounds.width)) } ?? sv.contentOffset.x
-            // On the pixel grid inside the range, so the content it scrolls
-            // stays on it and UIKit does not clamp it off (`PixelGridIOS.swift`).
-            let s = presenter?.gridScale ?? 1
-            return CGPoint(x: PixelGrid.clamp(x, -i.left, max(-i.left, sv.contentSize.width + i.right - sv.bounds.width), scale: s),
-                           y: PixelGrid.clamp(y, -i.top, max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height - slack), scale: s))
-        }
-        let initial = target()
+    /// Convert a logical write only after native layout, clamped to the
+    /// range UIKit has. The write can change that range: it can collapse a
+    /// large title or hide a search field, which narrows the inset and moves
+    /// the content's end. Once the bar is laid out for the new offset the
+    /// same intent is applied again, at once for an instant write and when
+    /// UIKit's animation lands for a smooth one, so a write to the end ends
+    /// where the content does under the bar as it is then.
+    private func writeScrollPosition(in sv: UIScrollView, left: Double?, top: Double?, animated: Bool) {
+        let initial = scrollTarget(in: sv, left: left, top: top)
         guard sv.contentOffset != initial else { return }
         let inset = sv.adjustedContentInset.top
         authoredScrollAnimating = animated
+        afterScrollAnimation = nil
         sv.setContentOffset(initial, animated: animated)
-        if !animated, sv.adjustedContentInset.top != inset {
+        if animated {
+            // Where it landed, if that is where it was aimed (on y, by its offset or by CSS's: UIKit moves the offset
+            // by what a collapsing title gives up), it goes on to the range as the bar has it then; a touch that
+            // stopped it elsewhere ends it there
+            afterScrollAnimation = { [weak self, weak sv] in
+                guard let self, let sv, abs(sv.contentOffset.x - initial.x) < 0.5,
+                      abs(sv.contentOffset.y - initial.y) < 0.5 || abs(sv.contentOffset.y + sv.adjustedContentInset.top - initial.y - inset) < 0.5 else { return nil }
+                let next = self.scrollTarget(in: sv, left: left, top: top)
+                return next == sv.contentOffset ? nil : next
+            }
+            return
+        }
+        Self.layOutBar(over: sv)
+        if sv.adjustedContentInset.top != inset {
             sv.layoutIfNeeded()
-            let settled = target()
+            let settled = scrollTarget(in: sv, left: left, top: top)
             if sv.contentOffset != settled { sv.setContentOffset(settled, animated: false) }
+        }
+    }
+
+    /// The offset a logical write of `left` and `top` asks of `sv` (nil: the axis stays), clamped to its range.
+    private func scrollTarget(in sv: UIScrollView, left: Double?, top: Double?) -> CGPoint {
+        let i = sv.adjustedContentInset, inset = scrollTopInset(sv)
+        let y = top.map { CGFloat($0) - inset == sv.contentOffset.y ? sv.contentOffset.y : min(max(CGFloat($0) - inset, -i.top), max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height)) } ?? sv.contentOffset.y
+        let leftInset = scrollLeftInset(sv)
+        let x = left.map { CGFloat($0) - leftInset == sv.contentOffset.x ? sv.contentOffset.x : min(max(CGFloat($0) - leftInset, -i.left), max(-i.left, sv.contentSize.width + i.right - sv.bounds.width)) } ?? sv.contentOffset.x
+        // On the pixel grid inside the range, so the content it scrolls
+        // stays on it and UIKit does not clamp it off (`PixelGridIOS.swift`).
+        let s = presenter?.gridScale ?? 1
+        return CGPoint(x: PixelGrid.clamp(x, -i.left, max(-i.left, sv.contentSize.width + i.right - sv.bounds.width), scale: s),
+                       y: PixelGrid.clamp(y, -i.top, max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height), scale: s))
+    }
+
+    /// Lays out the bar whose scroll edge `sv` is, which UIKit otherwise
+    /// does at the next layout pass, where the offset can change it: a write
+    /// can collapse a large title or hide a search field, which changes the
+    /// scroller's inset. Only the shown bar, at rest: a covered route's waits.
+    static func layOutBar(over sv: UIScrollView) {
+        var at: UIResponder? = sv
+        while let cur = at {
+            if let c = cur as? UIViewController, c.contentScrollView(for: .top) === sv {
+                guard c.navigationItem.barOpensAtTop, c.viewIfLoaded?.window != nil, let nav = c.navigationController, nav.topViewController === c,
+                      nav.transitionCoordinator == nil, !nav.isNavigationBarHidden else { return }
+                nav.navigationBar.setNeedsLayout()
+                nav.view.setNeedsLayout()
+                nav.view.layoutIfNeeded()
+                return
+            }
+            at = cur.next
         }
     }
     /// A `refresh` handler on a scroll container is UIKit's pull-to-refresh:
@@ -819,6 +943,18 @@ extension UIScrollView {
         if isTracking || isDragging || isDecelerating { return true }
         if #available(iOS 17.4, tvOS 17.4, *) { return isScrollAnimating }
         return false
+    }
+}
+
+extension UINavigationItem {
+    /// Whether the bar has more to show at its scroller's top than it may elsewhere, which the offset opens and
+    /// closes: a large title, or a search field the scroll hides. tvOS's bar never changes with the offset.
+    package var barOpensAtTop: Bool {
+        #if os(iOS)
+        largeTitleDisplayMode == .always || (searchController != nil && hidesSearchBarWhenScrolling)
+        #else
+        false
+        #endif
     }
 }
 #endif

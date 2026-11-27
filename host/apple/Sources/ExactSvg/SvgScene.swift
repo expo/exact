@@ -625,4 +625,11 @@ final class SvgHost: SvgScenes {
         if let scene = scenes.removeValue(forKey: id) { scene.reset(); scene.root.removeFromSuperlayer() }
         payloads.removeValue(forKey: id)
     }
+
+    func reset() {
+        for scene in scenes.values { scene.reset(); scene.root.removeFromSuperlayer() }
+        scenes.removeAll()
+        payloads.removeAll()
+        seeked = nil
+    }
 }

@@ -323,21 +323,16 @@ fn what_a_mapper_may_not_do() {
         r.take_requests().is_empty(),
         "the mapper's fetch never goes out"
     );
-    // The continuation runs in the next turn, `feed`'s ask for "b", and
-    // sends as that answer on the old socket, which this commit releases:
-    // a host refuses the batch at publication.
+    // The continuation remembers its already-replied mapper and cannot hijack
+    // the next turn (`feed`'s ask for "b"): both its send and fetch refuse.
     r.act("switch", vec![]).unwrap();
     let newer = r.take_requests()[0].ticket;
-    let batches = r.take_socket_sends();
-    assert_eq!(batches.len(), 1);
-    assert_eq!(batches[0].origin, SocketOrigin::Answer("feed".into()));
-    let never = (ticket, "feed".to_string(), SocketOp::Text("never".into()));
-    assert_eq!(batches[0].ops, [never]);
+    assert!(r.take_socket_sends().is_empty());
     assert!(!r.holds(ticket));
     open(&mut r, newer);
     let report = frame(&mut r, newer, "report");
     let fetch = "fetch() is unavailable in a socket's mapper: it answers each frame now";
-    assert_eq!(report, format!("message report 1 {fetch}"));
+    assert_eq!(report, format!("message report 1 {fetch}; {ONLY}"));
     assert!(sends(&mut r).is_empty());
 }
 
@@ -639,11 +634,10 @@ fn a_waiting_mutation_sends_as_an_answer() {
     );
 }
 
-/// The async helper restores the waiting answer's context (LLP 1133.002
-/// D14); a plain `.then` uses the draining turn's context. Native batches
-/// name that turn's answer in either case. Letting go refuses an async
-/// step's sends even when another answer's turn drains it, but does not
-/// bind a plain callback to its former answer.
+/// Both the async helper (LLP 1133.002 D14) and `Promise.prototype.then`
+/// restore the waiting answer's context. Native batches name the draining
+/// turn's answer while the answer is live; letting it go refuses both async
+/// and plain `.then` sends even when another answer's turn drains them.
 #[test]
 fn where_an_answer_s_continuation_runs() {
     for (shape, queued, sender) in [
@@ -679,16 +673,12 @@ fn where_an_answer_s_continuation_runs() {
                 "direct 6 late"
             },
         );
-        if shape == "chain" {
-            assert!(
-                sends(&mut r).is_empty(),
-                "a let-go async answer cannot send"
-            );
-            let report = frame(&mut r, ticket, "report");
-            assert!(report.ends_with(ONLY), "{report}");
-        } else {
-            assert_eq!(sends(&mut r), [answer("deliver", &["thanks 6"])]);
-        }
+        assert!(
+            sends(&mut r).is_empty(),
+            "a let-go answer ({shape}) cannot send"
+        );
+        let report = frame(&mut r, ticket, "report");
+        assert!(report.ends_with(ONLY), "{report}");
     }
 }
 

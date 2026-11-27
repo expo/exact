@@ -6,13 +6,13 @@ use super::*;
 use crate::presenter::top::SurfacePainter;
 use exact_kernel::HostCover;
 use exact_runner::{DataError, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Shelf's data, as much as its screens read: a library of two books, no
 /// works for a subject, no book for an ISBN, and the clock. The fixture below asks for none.
 #[derive(Default)]
-struct Nothing;
+pub(in crate::presenter) struct Nothing;
 impl DataSource for Nothing {
     fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
         let book = |id: &str, title: &str| {
@@ -62,7 +62,7 @@ impl DataSource for Nothing {
 /// list taller than the screen. Detail, pushed: the Back control, a
 /// heading, a text button. Bare, pushed: no header. Quiet, pushed: a header
 /// its route says is no bar's. Other: a heading alone.
-const APP: &str = r#"routes nav
+pub(in crate::presenter) const APP: &str = r#"routes nav
   tab home "/"
     detail "/detail"
     bare "/bare"
@@ -182,7 +182,7 @@ fn boot(source: &str) -> Presenter<Nothing> {
 
 /// A presenter whose shell shows bars, in a phone's window, and the
 /// pictures it recorded.
-fn barred(source: &str) -> (Presenter<Nothing>, Rc<RefCell<Vec<Pixmap>>>) {
+pub(in crate::presenter) fn barred(source: &str) -> (Presenter<Nothing>, Rc<RefCell<Vec<Pixmap>>>) {
     let mut p = boot(source);
     let pictures = Rc::new(RefCell::new(Vec::new()));
     p.serve_requests();
@@ -204,7 +204,7 @@ fn text(p: &Presenter<Nothing>, name: &str) -> String {
     node.text_runs().iter().map(|r| &*r.text).collect()
 }
 
-fn tap(p: &mut Presenter<Nothing>, name: &str) -> Result<String, String> {
+pub(in crate::presenter) fn tap(p: &mut Presenter<Nothing>, name: &str) -> Result<String, String> {
     let view = id(p, name);
     let result = p.tap(view);
     p.run_commands(|| Nothing);
@@ -296,8 +296,8 @@ fn shelfs_library_is_a_top_app_bar_and_a_navigation_bar() {
 #[test]
 fn shelfs_add_form_and_its_other_tabs() {
     let (mut p, _) = barred(SHELF);
-    // The add form, presented, is a sheet (`stage.rs`): its header stays in
-    // it as written, and the library's bar is drawn under the scrim.
+    // The add form, presented, is a sheet (`stage.rs`): its header projects
+    // inside the sheet (LLP 1156.008.001 B5), and the library's bar stays under the scrim.
     assert!(tap(&mut p, "add-book").unwrap().contains("\"bar\":\"top\""));
     let open = p.host().now() + 1000.;
     p.tick(open);
@@ -352,132 +352,6 @@ fn an_absolute_footer_over_the_routes_scroller_rests_on_the_navigation_bar() {
     );
 }
 
-const LINKED: &str = r#"routes nav
-  home "/"
-    history "/history"
-component App
-  action follow(url: string)
-    nav = go(nav, url)
-  view
-    main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
-      for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` position="absolute" inset=0
-          header display="flex"
-            text (e.name == "home" ? "Inbox" : "History") role="heading" flex=1
-            if e.name == "home"
-              link href="/history" aria-label="History" testId="history"
-                image "symbol:history"
-"#;
-
-/// A link with nothing pressing it is a top app bar item that follows its
-/// `href` (LLP 1141.004 D1), as a tap on it in the page does.
-#[test]
-fn a_link_item_follows_its_href() {
-    let (mut p, _) = barred(LINKED);
-    assert_eq!(top(&mut p).title, "Inbox");
-    assert_eq!(top(&mut p).trailing.len(), 1, "the link, an item");
-    touch(&mut p, TOP, Some("history"));
-    assert_eq!(top(&mut p).title, "History");
-}
-
-#[test]
-fn a_button_with_a_link_opens_its_dialog_in_the_page_and_the_bar() {
-    let source = LINKED.replace(
-        "link href=\"/history\"",
-        "button href=\"/history\" commandfor=\"details\" command=\"show-modal\" width=100 height=48",
-    ) + r#"          dialog id="details" role="alertdialog" aria-label="Details" testId="details"
-            text "Details about this item."
-            button commandfor="details" command="close"
-              text "OK"
-"#;
-    let page = source.replace("header display=", "header appearance=\"none\" display=");
-    let (mut p, _) = barred(&page);
-    p.frame();
-    let button = id(&p, "history");
-    let (x, y, w, h) = p.rect_of(button).expect("the page's button");
-    assert_eq!(p.press_at(x + w / 2., y + h / 2., 0.), Some(button));
-    p.run_commands(|| Nothing);
-    assert_eq!(p.surface().unwrap().node, id(&p, "details"));
-
-    let (mut p, _) = barred(&source);
-    let dialog = id(&p, "details");
-    touch(&mut p, TOP, Some("history"));
-    assert_eq!(
-        (p.surface().map(|s| s.node), top(&mut p).title.as_str()),
-        (Some(dialog), "Inbox")
-    );
-}
-
-#[test]
-fn a_bar_item_inside_an_invoking_title_presses_its_own_handler() {
-    let source = r#"routes nav
-  home "/"
-component App
-  state saved = 0
-  state opened = 0
-  action save
-    saved = saved + 1
-  action open
-    opened = opened + 1
-  view
-    main navigationKey=`${top(nav).id}` width="100%" height="100%"
-      for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` position="absolute" inset=0
-          header
-            button press=open commandfor="details" command="show-modal" testId="title"
-              text "Inbox" role="heading"
-              row press=save testId="save"
-                text "Save"
-          text `${saved}` testId="saved"
-          text `${opened}` testId="opened"
-          dialog id="details" role="alertdialog" aria-label="Details" testId="details"
-            text "Details about this item."
-            button commandfor="details" command="close"
-              text "OK"
-"#;
-    let (mut bar, _) = barred(source);
-    touch(&mut bar, TOP, Some("save"));
-    assert_eq!(text(&bar, "saved"), "1");
-    assert_eq!(text(&bar, "opened"), "0");
-    assert!(bar.surface().is_none());
-
-    let (mut page, _) = barred(&source.replace("header\n", "header appearance=\"none\"\n"));
-    tap(&mut page, "title").unwrap();
-    assert_eq!(text(&page, "saved"), "0");
-    assert_eq!(text(&page, "opened"), "1");
-    assert_eq!(page.surface().unwrap().node, id(&page, "details"));
-}
-
-/// A press on the link goes where the page sends it, a listener above it,
-/// before the link is followed.
-#[test]
-fn a_link_items_press_reaches_a_listener_above_it_before_it_follows() {
-    let source = LINKED
-        .replace(
-            "component App\n",
-            "component App\n  state noted = 0\n  action note\n    noted = noted + 1\n",
-        )
-        .replace(
-            "header display=\"flex\"",
-            "header display=\"flex\" press=note",
-        )
-        + "          text `${noted}` testId=\"noted\"\n";
-    let (mut p, _) = barred(&source);
-    touch(&mut p, TOP, Some("history"));
-    assert_eq!(top(&mut p).title, "History");
-    assert_eq!(text(&p, "noted"), "1", "the header heard the press");
-}
-
-/// An inert link is no enabled item and follows nothing.
-#[test]
-fn an_inert_link_item_is_dimmed_and_follows_nothing() {
-    let source = LINKED.replace("testId=\"history\"", "testId=\"history\" inert=true");
-    let (mut p, _) = barred(&source);
-    assert!(!top(&mut p).trailing[0].enabled, "inert: no enabled item");
-    touch(&mut p, TOP, Some("history"));
-    assert_eq!(top(&mut p).title, "Inbox");
-}
-
 #[test]
 fn a_pushed_route_has_the_up_arrow_which_goes_back() {
     let (mut p, _) = barred(APP);
@@ -508,10 +382,16 @@ fn a_pushed_route_has_the_up_arrow_which_goes_back() {
 
 #[test]
 fn a_modal_route_blocks_the_shell_tab_bar_until_dismissed() {
-    for presentation in ["modal", "fullscreen", "push"] {
+    // A popover is a sheet here (LLP 1123 D7)
+    for presentation in ["modal", "fullscreen", "push", "popover"] {
+        let anchor = if presentation == "popover" {
+            " navigationPopoverAnchor=\"open\""
+        } else {
+            ""
+        };
         let source = APP.replace(
             "testId=\"route-detail\"",
-            &format!("testId=\"route-detail\" navigationPresentation=\"{presentation}\""),
+            &format!("testId=\"route-detail\" navigationPresentation=\"{presentation}\"{anchor}"),
         );
         let (mut p, _) = barred(&source);
         tap(&mut p, "open").unwrap();
@@ -519,7 +399,7 @@ fn a_modal_route_blocks_the_shell_tab_bar_until_dismissed() {
         let modal = presentation != "push";
         // Under a sheet the bar is the page's, under its scrim.
         let title = match presentation {
-            "modal" => "Home",
+            "modal" | "popover" => "Home",
             "fullscreen" => "Detail",
             _ => "Other",
         };
@@ -707,10 +587,16 @@ fn bar_colour(pictures: &Rc<RefCell<Vec<Pixmap>>>) -> [u8; 4] {
     [c.red(), c.green(), c.blue(), c.alpha()]
 }
 
+#[path = "bars_tests/insets.rs"]
+mod insets;
+#[path = "bars_tests/links.rs"]
+mod links;
 #[path = "bars_tests/scheme.rs"]
 mod scheme;
 #[path = "bars_tests/scroll.rs"]
 mod scroll;
+#[path = "bars_tests/subtitle.rs"]
+mod subtitle;
 
 #[test]
 fn the_top_bar_takes_its_on_scroll_colour_and_a_retapped_tab_scrolls_to_the_top() {
@@ -743,6 +629,35 @@ fn the_top_bar_takes_its_on_scroll_colour_and_a_retapped_tab_scrolls_to_the_top(
     assert_eq!(p.scroll_of(list), (0.0, 300.0));
 }
 
+/// Material's destination tapped again returns its list to the top as a
+/// scroll the person sees, as Compose's `animateScrollToItem(0)` does: a
+/// glide on the display's clock, not a cut.
+#[test]
+fn a_retapped_tab_glides_its_list_to_the_top_on_the_displays_clock() {
+    let (mut p, _) = barred(APP);
+    let wall = Rc::new(Cell::new(0.0));
+    let read = wall.clone();
+    p.set_live_clock(Some(Rc::new(move || read.get())));
+    let list = id(&p, "list");
+    p.scroll_to(list, (0.0, 300.0));
+    touch(&mut p, BOTTOM, Some("tab-home"));
+    assert_eq!(
+        p.scroll_of(list),
+        (0.0, 300.0),
+        "it starts from where the list was"
+    );
+    assert!(p.needs_animation_frame());
+    for at in [100.0, 150.0] {
+        wall.set(at);
+        p.tick(at);
+        let y = p.scroll_of(list).1;
+        assert!(y > 0.0 && y < 300.0, "{at}: {y}");
+    }
+    wall.set(320.0);
+    p.tick(320.0);
+    assert_eq!(p.scroll_of(list), (0.0, 0.0));
+}
+
 #[test]
 fn a_keyboard_covers_the_navigation_bar_and_the_page_ends_at_the_keyboard() {
     let (mut p, _) = barred(APP);
@@ -768,6 +683,7 @@ fn the_largest_font_scale_clips_neither_bar() {
     let device = Device {
         night: false,
         font_scale: 2.0,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,
@@ -874,6 +790,7 @@ fn tv() -> Device {
     Device {
         night: false,
         font_scale: 1.0,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,
@@ -1096,6 +1013,8 @@ component App
       scrollIntoView("feed", target, block="start")
   action aim(n: number)
     target = n
+  action far
+    scrollIntoView("feed", 45, block="start", behavior="smooth")
   action unload
     loaded = false
   action aside
@@ -1119,6 +1038,8 @@ component App
                         box height=100
                   button press=aim(-1) testId="aim-nothing" height=1
                     text "aim"
+                  button press=far testId="far" height=1
+                    text "far"
                   button press=aim(30) testId="aim-row" height=1
                     text "aim row"
                   button press=unload testId="unload" height=1
@@ -1194,6 +1115,40 @@ fn a_reselected_tabs_scroll_to_the_top_gives_way_to_a_request_its_press_made() {
         p.scroll_of(feed).1,
         0.0,
         "a list the press made the screen's, which asked for nothing there"
+    );
+}
+
+/// A destination tapped again glides its list to the top as the reader's
+/// move of it: a smooth request still under way from before the tap gives
+/// way, and its corrections do not take the list back.
+#[test]
+fn a_retapped_tabs_glide_ends_a_request_still_under_way() {
+    let (mut p, _) = barred(REQUESTING_TABS);
+    settle(&mut p);
+    tap(&mut p, "aim-nothing").unwrap();
+    let wall = Rc::new(Cell::new(0.0));
+    let read = wall.clone();
+    p.set_live_clock(Some(Rc::new(move || read.get())));
+    let feed = id(&p, "feed");
+    tap(&mut p, "far").unwrap();
+    for at in [16.0, 32.0, 48.0] {
+        wall.set(at);
+        p.tick(at);
+    }
+    let under_way = p.scroll_of(feed).1;
+    assert!(under_way > 0.0, "the request is under way: {under_way}");
+    touch(&mut p, BOTTOM, Some("tab-home"));
+    let mut at = 48.0;
+    while at < 2000.0 {
+        at += 16.0;
+        wall.set(at);
+        p.tick(at);
+        let _ = p.advance(at);
+    }
+    assert_eq!(
+        p.scroll_of(feed),
+        (0.0, 0.0),
+        "at the top, the request given way"
     );
 }
 
@@ -1393,8 +1348,8 @@ fn a_route_opts_out_of_or_credits_its_bars_room() {
     assert_eq!(list_top(&plain).0, top + 10.0, "a plain padding adds");
 }
 
-/// @ref LLP 1123 D9 — a route in a sheet reads the sheet's own clearance,
-/// its handle, whatever the page's top inset is: the sheet starts below it.
+/// @ref LLP 1123 D9, LLP 1156.008.001 B5 — a route in a sheet reads the sheet's own
+/// clearance (its handle plus any projected sheet bar), unaffected by the page's top inset.
 #[test]
 fn a_sheets_route_reads_the_sheets_own_inset() {
     let (mut p, _) = barred(SHELF);
@@ -1414,7 +1369,7 @@ fn a_sheets_route_reads_the_sheets_own_inset() {
     let form = kernel.find_by_id("add-form")[0];
     let form = kernel.node_by_key(form).unwrap().id;
     let local = kernel.local_insets(form).unwrap();
-    assert_eq!(local[0], SHEET_HANDLE, "{local:?}");
+    assert_eq!(local[0], SHEET_HANDLE + top_height(), "{local:?}");
 }
 
 #[test]
@@ -1487,4 +1442,48 @@ fn bars_remeasure_when_direction_changes_without_replacing_the_route() {
     assert!(up(&mut p) < 10.);
     touch(&mut p, TOP, None);
     assert_eq!(top(&mut p).title, "Home");
+}
+
+#[test]
+fn modal_sheet_header_projects_inside_sheet_and_leaves_page_bar_untouched() {
+    let (mut p, _) = barred(SHELF);
+    assert!(tap(&mut p, "add-book").unwrap().contains("\"bar\":\"top\""));
+    let open = p.host().now() + 1000.;
+    p.tick(open);
+    let _ = p.frame();
+    assert!(p.top_sheet().is_some());
+    // Underlying page's bar stays untouched behind the scrim.
+    assert_eq!(top(&mut p).title, "Library");
+    // Sheet's own header was projected into RouteBar with `sheet == true` and lifted from page boxes.
+    let sheet_bar = p
+        .host()
+        .bars()
+        .routes
+        .iter()
+        .find(|r| r.sheet)
+        .expect("sheet bar");
+    assert!(!sheet_bar.pushed);
+    assert!(p.bar_node(id(&p, "add-cancel")));
+    let cancel_box = p
+        .bar_box(id(&p, "add-cancel"))
+        .expect("sheet bar button box");
+    let (_, sheet_frame) = p.top_sheet().unwrap();
+    let page = p.chrome().frame;
+    assert!(cancel_box.1 >= page[1] + sheet_frame.1 + SHEET_HANDLE - 0.5);
+    // Accessibility exposes the sheet's projected header heading & Cancel button.
+    let ax = p.reader_access(1.0, true).unwrap();
+    assert!(!ax.is_empty());
+    // Pointer touch inside the sheet bar's Cancel button closes the sheet without hitting the page bar.
+    let (px, py) = (
+        cancel_box.0 + cancel_box.2 / 2.0 - page[0],
+        cancel_box.1 + cancel_box.3 / 2.0 - page[1],
+    );
+    let t = p.host().now();
+    assert!(p.pointer_down(px, py, t).unwrap());
+    assert!(p.pointer_up(px, py, t + 20.).unwrap());
+    p.run_commands(|| Nothing);
+    assert!(
+        p.top_sheet().is_none(),
+        "sheet header Cancel closed the sheet"
+    );
 }

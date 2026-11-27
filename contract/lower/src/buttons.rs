@@ -7,14 +7,16 @@ use exact_kernel::StyleId;
 
 use crate::tags::rows;
 
-/// Rows that place, size or show a native button without changing its face.
-/// `display` is here because admission (`check_native_button`) takes only the
-/// button's own `flex` or `none`.
+/// Rows that place, size or show a native button without changing its face,
+/// and the layout transition that moves it between its places (LLP 1069.011
+/// D6). `display` is here because admission (`check_native_button`) takes only
+/// the button's own `flex` or `none`.
 fn layout(id: StyleId) -> bool {
     use StyleId::*;
     matches!(
         id,
         Display
+            | LayoutTransition
             | Width
             | Height
             | MinWidth

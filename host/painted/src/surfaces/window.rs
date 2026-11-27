@@ -45,7 +45,7 @@ impl Surfaces {
         self.window_owner = None;
     }
 
-    fn window_canvas(&self) -> Option<u32> {
+    pub(super) fn window_canvas(&self) -> Option<u32> {
         if self.canvases.len() != 1 {
             return None;
         }

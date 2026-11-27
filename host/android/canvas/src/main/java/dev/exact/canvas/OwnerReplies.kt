@@ -8,6 +8,8 @@ internal class OwnerReplies(private val post: (() -> Unit) -> Unit, val deliver:
     sealed interface Handed {
         /** The answer to request [id], or its cancellation (null): [Native.answer]. */
         data class Answer(val id: Int, val value: String?) : Handed
+        data class After(val timer: Int, val due: Double) : Handed
+        data class Refused(val id: Int, val error: String, val message: String?) : Handed
         /** A topic an extension announced: [Native.changed]. */
         data class Changed(val topic: String) : Handed
         /** A picture an extension changed or revoked: [Native.pictureChanged]. */
@@ -27,5 +29,18 @@ internal class OwnerReplies(private val post: (() -> Unit) -> Unit, val deliver:
 
     fun take(): List<Handed> = synchronized(pending) {
         pending.toList().also { pending.clear() }
+    }
+
+    companion object {
+        fun deliver(h: Handed) {
+            when (h) {
+                is Handed.After -> Native.moduleAfter(h.timer, h.due)
+                is Handed.Answer -> Native.answer(h.id, h.value)
+                is Handed.Refused -> Native.refuseModule(h.id, h.error, h.message)
+                is Handed.Changed -> Native.changed(h.topic)
+                is Handed.Picture -> Native.pictureChanged(h.source, h.revoked)
+                is Handed.Journal -> Native.journal(h.line)
+            }
+        }
     }
 }

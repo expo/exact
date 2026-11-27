@@ -88,10 +88,11 @@ impl Module {
             target.configure(&gpu.device, config);
             inst.surface
                 .device_ready(gpu.device.features(), gpu.device.limits());
+            let destination = crate::ColorTarget::of(config);
+            inst.surface.color_space_granted(destination.space);
+            inst.set_color_target(destination).map_err(|e| e.0)?;
             inst.surface
-                .color_space_granted(crate::target::granted(Some(config)));
-            inst.surface
-                .prepare_assets(&gpu.device, &gpu.queue, crate::view_format(config));
+                .prepare_assets(&gpu.device, &gpu.queue, destination.format);
             inst.presentation = Some(std::sync::Arc::new(target));
         }
         Ok(())

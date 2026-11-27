@@ -42,6 +42,8 @@ impl<D: DataSource> Presenter<D> {
             Entry::Item(Row {
                 node: choice.view,
                 title: choice.label,
+                menu_label: None,
+                subtitle: None,
                 direction: self.host.kernel().node(choice.view).map_or_else(
                     || shape::direction(&node),
                     |option| shape::direction(&option),
@@ -51,11 +53,15 @@ impl<D: DataSource> Presenter<D> {
                 enabled: !choice.disabled,
                 cancel: false,
                 checked: chosen == Some(at),
+                checkable: true,
                 opens: None,
             })
         });
         let rows: Vec<Entry> = rows.collect();
-        (!rows.is_empty()).then_some(Plan::Menu(rows))
+        (!rows.is_empty()).then_some(Plan::Menu {
+            entries: rows,
+            surface: None,
+        })
     }
 
     /// How wide select `id` is painted: its menu is no narrower.
@@ -75,7 +81,7 @@ impl<D: DataSource> Presenter<D> {
         };
         let key = node.key;
         let now = self.host.now();
-        self.open_surface((id, key), plan, false, (Some(id), None), now);
+        self.open_surface((id, key), plan, false, (Some(id), None), None, now);
         let keys = keyboard || self.remote();
         let Some(open) = self.top.open.as_mut() else {
             return;

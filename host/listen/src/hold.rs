@@ -42,13 +42,22 @@ impl Signal {
 }
 
 type Holders = Vec<(u64, Arc<Signal>)>;
-static HOLDS: Mutex<Vec<(PathBuf, Holders)>> = Mutex::new(Vec::new());
+
+struct Entry {
+    holders: Holders,
+    /// Serializes same-process publish/unpublish/rebind operations on one path.
+    /// Lock order: `Entry::publish` before `HOLDS`.
+    publish: Arc<Mutex<()>>,
+}
+
+static HOLDS: Mutex<Vec<(PathBuf, Entry)>> = Mutex::new(Vec::new());
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// A listener's place on its address.
 pub struct Hold {
     path: PathBuf,
     id: u64,
+    publish: Arc<Mutex<()>>,
 }
 
 /// What a newcomer does first.
@@ -69,11 +78,19 @@ pub fn enter(path: &Path, takeover: bool, signal: Arc<Signal>) -> (Hold, Start) 
     let at = match holds.iter().position(|(p, _)| p == path) {
         Some(at) => at,
         None => {
-            holds.push((path.to_path_buf(), Vec::new()));
+            holds.push((
+                path.to_path_buf(),
+                Entry {
+                    holders: Vec::new(),
+                    publish: Arc::new(Mutex::new(())),
+                },
+            ));
             holds.len() - 1
         }
     };
-    let holders = &mut holds[at].1;
+    let entry = &mut holds[at].1;
+    let publish = entry.publish.clone();
+    let holders = &mut entry.holders;
     let start = match holders.last() {
         None => {
             holders.push((id, signal));
@@ -92,6 +109,7 @@ pub fn enter(path: &Path, takeover: bool, signal: Arc<Signal>) -> (Hold, Start) 
     let hold = Hold {
         path: path.to_path_buf(),
         id,
+        publish,
     };
     (hold, start)
 }
@@ -101,8 +119,27 @@ impl Hold {
     pub fn holding(&self) -> bool {
         let holds = HOLDS.lock().unwrap();
         (holds.iter().find(|(p, _)| *p == self.path))
-            .and_then(|(_, h)| h.last())
+            .and_then(|(_, e)| e.holders.last())
             .is_some_and(|(id, _)| *id == self.id)
+    }
+
+    /// Run `f` under this path's in-process publication lock.
+    pub fn with_publish<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _publish = self.publish.lock().unwrap();
+        f()
+    }
+
+    /// Run `f` under this path's publication lock only if this listener still
+    /// holds the address. Clears stale transition flags before checking
+    /// [`Self::holding`] so a displacement after the check is never lost.
+    pub fn publish_if_holding<R>(&self, signal: &Signal, f: impl FnOnce() -> R) -> Option<R> {
+        let _publish = self.publish.lock().unwrap();
+        signal.displaced.store(false, Ordering::SeqCst);
+        signal.acquire.store(false, Ordering::SeqCst);
+        if !self.holding() {
+            return None;
+        }
+        Some(f())
     }
 
     /// Let go: when this listener held the address, the one now last takes it.
@@ -111,7 +148,7 @@ impl Hold {
         let Some(at) = holds.iter().position(|(p, _)| *p == self.path) else {
             return;
         };
-        let holders = &mut holds[at].1;
+        let holders = &mut holds[at].1.holders;
         let held = holders.last().is_some_and(|(id, _)| *id == self.id);
         holders.retain(|(id, _)| *id != self.id);
         match holders.last() {

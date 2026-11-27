@@ -8,11 +8,26 @@ use exact_svg_filter::{Convolve, Light, Lighting};
 /// over premultiplied colour (or unpremultiplied colour with alpha kept).
 pub(crate) fn convolve(img: &Img, c: &Convolve) -> Img {
     let (w, h) = (img.w as isize, img.h as isize);
-    let (ox, oy) = (c.order.0 as isize, c.order.1 as isize);
     let mut out = Img::clear(img.w, img.h, img.linear);
-    if c.kernel.len() != (ox * oy) as usize || c.divisor == 0.0 {
+    let Some(count) = c
+        .order
+        .0
+        .checked_mul(c.order.1)
+        .and_then(|n| usize::try_from(n).ok())
+    else {
+        return out;
+    };
+    if c.order.0 == 0
+        || c.order.1 == 0
+        || c.target.0 >= c.order.0
+        || c.target.1 >= c.order.1
+        || c.kernel.len() != count
+        || !c.divisor.is_finite()
+        || c.divisor == 0.0
+    {
         return out;
     }
+    let (ox, oy) = (c.order.0 as isize, c.order.1 as isize);
     let sample = |x: isize, y: isize| -> Option<[f32; 4]> {
         let (x, y) = match c.edge {
             0 => (x.clamp(0, w - 1), y.clamp(0, h - 1)),

@@ -18,15 +18,54 @@ use crate::convert::script_to_harfrust;
 use crate::inline_box::InlineBox;
 use crate::lru_cache::LruCache;
 use crate::util::nearly_eq;
-use crate::{FontData, convert};
+use crate::{convert, FontData};
 use fontique::Language;
-use icu_properties::props::Script;
+use icu_properties::props::{
+    Emoji, EmojiModifier, EmojiModifierBase, EmojiPresentation, ExtendedPictographic, Script,
+};
+use icu_properties::CodePointSetData;
+use skrifa::{
+    instance::Size, raw::tables::cmap::MapVariant, raw::TableProvider, GlyphId, MetadataProvider,
+};
 
 use fontique::{self, Query, QueryFamily, QueryFont};
 
+mod attachment;
 mod cache;
 
+/// One resolved font segment in visual glyph order. Cluster indices count Unicode scalars.
+pub struct AdvanceRequest<'a> {
+    pub font: &'a QueryFont,
+    pub size: f32,
+    pub rtl: bool,
+    pub text: &'a str,
+    pub variations: &'a [FontVariation],
+    pub features: &'a [FontFeature],
+    pub locale: Option<&'a str>,
+    pub infos: &'a [harfrust::GlyphInfo],
+    pub positions: &'a [harfrust::GlyphPosition],
+    pub units_per_em: f32,
+}
+
+/// Horizontal metrics in layout units. Offsets are relative to the glyph's pen.
+pub struct GlyphAdvance {
+    pub advance: f32,
+    pub x_offset: f32,
+}
+
+/// Advances in layout units, before CSS spacing. A tab stop uses a space;
+/// a soft hyphen uses the visible hyphen only when a line ends there.
+pub struct RunAdvances {
+    pub glyphs: Vec<GlyphAdvance>,
+    /// Clusters to check for attachments after adjusting their widths.
+    pub reattach: Vec<core::ops::Range<usize>>,
+    pub space: Option<f32>,
+    pub hyphen: Option<f32>,
+}
+pub type AdvanceMeasure = dyn Fn(&AdvanceRequest<'_>) -> Option<RunAdvances> + Send + Sync;
+
 pub(crate) struct ShapeContext {
+    pub(crate) measure: Option<alloc::sync::Arc<AdvanceMeasure>>,
     shape_data_cache: LruCache<cache::ShapeDataKey, harfrust::ShaperData>,
     shape_instance_cache: LruCache<cache::ShapeInstanceId, harfrust::ShaperInstance>,
     shape_plan_cache: LruCache<cache::ShapePlanId, harfrust::ShapePlan>,
@@ -39,6 +78,7 @@ impl Default for ShapeContext {
     fn default() -> Self {
         const MAX_ENTRIES: usize = 16;
         Self {
+            measure: None,
             shape_data_cache: LruCache::new(MAX_ENTRIES),
             shape_instance_cache: LruCache::new(MAX_ENTRIES),
             shape_plan_cache: LruCache::new(MAX_ENTRIES),
@@ -279,29 +319,13 @@ fn fill_cluster_in_place(
     for ((_, ch), (info, style_index)) in segment_text.char_indices().zip(item_infos_iter.by_ref())
     {
         force_normalize |= info.force_normalize();
-        // TODO - make emoji detection more complete, as per (except using composite Trie tables as
-        //  much as possible:
-        //  https://github.com/conor-93/parley/blob/4637d826732a1a82bbb3c904c7f47a16a21cceec/parley/src/shape/mod.rs#L221-L269
         is_emoji_or_pictograph |= info.is_emoji_or_pictograph();
         *code_unit_offset_in_string += ch.len_utf8();
 
-        // TODO: Explore ignoring other modifiers in determining `contributes_to_shaping`:
-        //  regional indicators, subdivision flag tag sequences, skin tone modifiers
-        //  See also: https://github.com/google/emoji-segmenter
-
-        // If the color emoji has a non-printing variation selector, ignore the variation selector.
-        // Its presentation depends on the platform and font.
-        //
-        // e.g.
-        //  - `U+270C + U+FE0F`: `✌`, force basic presentation
-        //  - `U+270C + U+FE0F`: `✌️`, force emoji presentation
-        //
-        // <https://www.unicode.org/reports/tr37/>
-        let is_emoji_with_non_printing_variation_selector =
-            is_emoji_or_pictograph && info.is_variation_selector();
-
-        let contributes_to_shaping =
-            info.contributes_to_shaping() && !is_emoji_with_non_printing_variation_selector;
+        // A selector chooses a variant of its base glyph. It needs no nominal glyph
+        // of its own. The original segment, including the selector, goes to HarfRust.
+        let contributes_to_shaping = info.contributes_to_shaping()
+            && !(is_emoji_or_pictograph && info.is_variation_selector());
         if contributes_to_shaping {
             map_len += 1;
         }
@@ -316,11 +340,44 @@ fn fill_cluster_in_place(
 
     // Finalize cluster metadata
     let end = *code_unit_offset_in_string as u32;
-    char_cluster.is_emoji = is_emoji_or_pictograph;
+    char_cluster.emoji_presentation = if is_emoji_or_pictograph {
+        emoji_presentation(segment_text)
+    } else {
+        None
+    };
     char_cluster.map_len = map_len;
     char_cluster.start = start;
     char_cluster.end = end;
     char_cluster.force_normalize = force_normalize;
+}
+
+/// UTS #51, sections 1.4 and 4. Keycaps, modifier sequences and joined
+/// pictographs can have an emoji presentation even when the base defaults to text.
+fn emoji_presentation(grapheme: &str) -> Option<bool> {
+    let mut chars = grapheme.chars();
+    let base = chars.next()?;
+    if !CodePointSetData::new::<Emoji>().contains(base) {
+        return None;
+    }
+    Some(match chars.next() {
+        Some('\u{fe0e}') => false,
+        Some('\u{fe0f}') => true,
+        Some('\u{20e3}') if matches!(base, '0'..='9' | '#' | '*') => true,
+        Some(modifier)
+            if CodePointSetData::new::<EmojiModifierBase>().contains(base)
+                && CodePointSetData::new::<EmojiModifier>().contains(modifier) =>
+        {
+            true
+        }
+        Some('\u{200d}')
+            if chars
+                .next()
+                .is_some_and(|ch| CodePointSetData::new::<ExtendedPictographic>().contains(ch)) =>
+        {
+            true
+        }
+        _ => CodePointSetData::new::<EmojiPresentation>().contains(base),
+    })
 }
 
 fn shape_item<'a, B: Brush>(
@@ -473,37 +530,28 @@ fn shape_item<'a, B: Brush>(
         );
 
         // Prepare harfrust buffer
-        let mut buffer = mem::take(&mut scx.unicode_buffer).unwrap();
-        buffer.clear();
-
-        // Use the entire segment text including newlines
-        buffer.reserve(segment_text.len());
-        for (i, ch) in segment_text.chars().enumerate() {
-            // Ensure that each cluster's index matches the index into `infos`. This is required
-            // for efficient cluster lookup within `data.rs`.
-            //
-            // In other words, instead of using `buffer.push_str`, which iterates `segment_text`
-            // with `char_indices`, push each char individually via `.chars` with a cluster index
-            // that matches its `infos` counterpart. This allows us to lookup `infos` via cluster
-            // index in `data.rs`.
-            buffer.add(ch, i as u32);
-        }
-
-        buffer.set_direction(direction);
-
-        buffer.set_script(hb_script);
-
-        if let Some(lang) = language {
-            buffer.set_language(lang);
-        }
-
-        let glyph_buffer = harf_shaper.shape(
-            buffer,
+        let prepare = |mut buffer: harfrust::UnicodeBuffer| {
+            buffer.clear();
+            buffer.reserve(segment_text.len());
+            // The cluster ID indexes a scalar's CharInfo, including newlines.
+            for (i, ch) in segment_text.chars().enumerate() {
+                buffer.add(ch, i as u32);
+            }
+            buffer.set_direction(direction);
+            buffer.set_script(hb_script);
+            if let Some(lang) = &language {
+                buffer.set_language(lang.clone());
+            }
+            buffer
+        };
+        let options = || {
             ShapeOptions::new()
-                .plan(Some(shaper_plan))
+                .plan(Some(&*shaper_plan))
                 .features(&scx.features)
-                .point_size(Some(item.size)),
-        );
+                .point_size(Some(item.size))
+        };
+        let buffer = mem::take(&mut scx.unicode_buffer).unwrap();
+        let glyph_buffer = harf_shaper.shape(prepare(buffer), options());
 
         // Extract relevant CharInfo slice for this segment
         let char_start = char_range.start + item_text[..segment_start_offset].chars().count();
@@ -512,6 +560,32 @@ fn shape_item<'a, B: Brush>(
         let segment_infos =
             &item_infos[segment_char_start..(segment_char_start + segment_char_count)];
 
+        let mut advances = scx
+            .measure
+            .as_ref()
+            .and_then(|measure| {
+                measure(&AdvanceRequest {
+                    font: &font.font,
+                    size: item.size,
+                    rtl: item.level & 1 != 0,
+                    text: segment_text,
+                    variations: rcx.variations(item.variations).unwrap_or_default(),
+                    features: rcx.features(item.features).unwrap_or_default(),
+                    locale: item.locale.as_ref().map(|l| l.language()),
+                    infos: glyph_buffer.glyph_infos(),
+                    positions: glyph_buffer.glyph_positions(),
+                    units_per_em: harf_shaper.units_per_em() as f32,
+                })
+            })
+            .filter(|a| a.glyphs.len() == glyph_buffer.len());
+        if let Some(measured) = advances.as_mut().filter(|a| !a.reattach.is_empty()) {
+            let scale = item.size / harf_shaper.units_per_em() as f32;
+            let widened = harf_shaper.shape(
+                prepare(harfrust::UnicodeBuffer::new()),
+                options().font_funcs(Some(&mut attachment::FindBases)),
+            );
+            attachment::place_marks(&glyph_buffer, &widened, measured, scale);
+        }
         // Push harfrust-shaped run for the entire segment
         layout.data.push_run(
             FontData::new(font.font.blob.clone(), font.font.index),
@@ -519,6 +593,7 @@ fn shape_item<'a, B: Brush>(
             font.attrs,
             font.font.synthesis,
             &glyph_buffer,
+            advances.as_ref(),
             item.level,
             item.style_index,
             item.word_spacing,
@@ -589,7 +664,7 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
         };
         let variations = rcx.variations(style.font_variations).unwrap_or(&[]);
         let features = rcx.features(style.font_features).unwrap_or(&[]);
-        query.set_families(fonts.iter().copied());
+        query.set_families(fonts.iter().map(|f| f.id));
 
         query.set_fallbacks(fontique::FallbackKey::new(fb_script, locale.as_ref()));
         query.set_attributes(attrs);
@@ -612,14 +687,14 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
         analysis_data_sources: &AnalysisDataSources,
     ) -> Option<SelectedFont> {
         let style_index = cluster.style_index();
-        let is_emoji = cluster.is_emoji;
+        let is_emoji = cluster.emoji_presentation == Some(true);
         if style_index != self.style_index || is_emoji || self.fonts_id.is_none() {
             self.style_index = style_index;
             let style = &self.styles[style_index as usize];
 
             let fonts_id = style.font_family.id();
             let fonts = self.rcx.stack(style.font_family).unwrap_or(&[]);
-            let fonts = fonts.iter().copied().map(QueryFamily::Id);
+            let fonts = fonts.iter().map(|f| QueryFamily::Id(f.id));
             if is_emoji {
                 use core::iter::once;
                 let emoji_family = QueryFamily::Generic(fontique::GenericFamily::Emoji);
@@ -642,8 +717,23 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
             self.variations = self.rcx.variations(style.font_variations).unwrap_or(&[]);
             self.features = self.rcx.features(style.font_features).unwrap_or(&[]);
         }
+        let stack = self
+            .rcx
+            .stack(self.styles[style_index as usize].font_family)
+            .unwrap_or(&[]);
         let mut selected_font = None;
-        self.query.matches_with(|font| {
+        let mut other_presentation = None;
+        let symbol =
+            (cluster.emoji_presentation == Some(false) && cluster.chars.len() == 1).then(|| {
+                (
+                    cluster.chars[0].ch,
+                    stack
+                        .iter()
+                        .find_map(|f| f.generic)
+                        .unwrap_or(fontique::GenericFamily::SansSerif),
+                )
+            });
+        self.query.matches_for_symbol(symbol, |font, platform| {
             let Some(charmap) = font.charmap() else {
                 return fontique::QueryStatus::Continue;
             };
@@ -655,10 +745,26 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
 
             match map_status {
                 Status::Complete => {
+                    // A named face chooses its own glyph for an unqualified character.
+                    // A selector on that character still asks for its explicit presentation.
+                    if !platform
+                        && !presentation_matches(font, cluster)
+                        && !(cluster.chars.len() == 1
+                            && stack
+                                .iter()
+                                .any(|f| f.generic.is_none() && f.id == font.family.0))
+                    {
+                        other_presentation.get_or_insert_with(|| SelectedFont {
+                            font: font.clone(),
+                            attrs: self.attrs,
+                        });
+                        return fontique::QueryStatus::Continue;
+                    }
                     selected_font = Some(SelectedFont {
                         font: font.clone(),
                         attrs: self.attrs,
                     });
+                    other_presentation = None;
                     fontique::QueryStatus::Stop
                 }
                 Status::Keep => {
@@ -679,8 +785,49 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
                 }
             }
         });
-        selected_font
+        other_presentation.or(selected_font)
     }
+}
+
+fn presentation_matches(font: &QueryFont, cluster: &CharCluster) -> bool {
+    let Some(emoji) = cluster.emoji_presentation else {
+        return true;
+    };
+    let selector = cluster
+        .chars
+        .get(1)
+        .map(|c| c.ch)
+        .filter(|ch| matches!(ch, '\u{fe0e}' | '\u{fe0f}'));
+    if !font.has_color && selector.is_none() {
+        return !emoji;
+    }
+    let Ok(face) = skrifa::FontRef::from_index(font.blob.as_ref(), font.index) else {
+        return false;
+    };
+    let base = cluster.chars[0].ch;
+    let cmap = face.charmap();
+    if selector.is_some_and(|vs| cmap.map_variant(base, vs).is_some()) {
+        return true;
+    }
+    // A colour table can cover just one glyph in an otherwise ordinary text face.
+    // Some emoji components (e.g. keycap digits) have no ink until shaping.
+    let color_glyph = font.has_color
+        && (matches!(
+            cmap.map_variant(base, '\u{fe0f}'),
+            Some(MapVariant::UseDefault)
+        ) || cmap.map(base).is_some_and(|glyph: GlyphId| {
+            face.color_glyphs().get(glyph).is_some()
+                || face
+                    .bitmap_strikes()
+                    .glyph_for_size(Size::unscaled(), glyph)
+                    .is_some()
+                || face
+                    .svg()
+                    .ok()
+                    .and_then(|svg| svg.glyph_data(glyph).ok().flatten())
+                    .is_some()
+        }));
+    emoji == color_glyph
 }
 
 struct SelectedFont {

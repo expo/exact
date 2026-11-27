@@ -3,8 +3,36 @@
 use super::{with_pending, Recorder, Shape, ANIMATED, CLIP_RRECT, IMAGE, IMAGE_DEF, RESTORE};
 use crate::image::Bitmap;
 use crate::paint::Rect4;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 use tiny_skia::{Pixmap, Transform};
+
+/// Disjoint positive signed-32-bit image id range for auxiliary surface and bar
+/// streams so `IMAGE_DEF` entries in `PENDING` never collide with the page's
+/// `Recorder` (`1..`) or with a preceding bar/surface frame.
+pub(crate) const SURFACE_IMAGE_BASE: u32 = 1 << 30;
+const SURFACE_IMAGE_LIMIT: u32 = 0x7fff_0000;
+static SURFACE_IMAGE_NEXT: AtomicU32 = AtomicU32::new(SURFACE_IMAGE_BASE);
+
+fn next_surface_image_id() -> u32 {
+    let mut cur = SURFACE_IMAGE_NEXT.load(Ordering::Relaxed);
+    loop {
+        let id = if cur >= SURFACE_IMAGE_LIMIT {
+            SURFACE_IMAGE_BASE
+        } else {
+            cur
+        };
+        match SURFACE_IMAGE_NEXT.compare_exchange_weak(
+            cur,
+            id + 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return id,
+            Err(observed) => cur = observed,
+        }
+    }
+}
 
 /// A picture the reader fetches by id ([`super::CanvasHost::image`]).
 #[derive(Clone)]
@@ -155,8 +183,13 @@ impl Recorder {
                 return *id;
             }
         }
-        let id = self.next_image;
-        self.next_image += 1;
+        let id = if self.surface {
+            next_surface_image_id()
+        } else {
+            let id = self.next_image;
+            self.next_image += 1;
+            id
+        };
         self.images.insert(key, (id, image.downgrade(), now));
         self.ops
             .extend([IMAGE_DEF, id, image.width(), image.height()]);

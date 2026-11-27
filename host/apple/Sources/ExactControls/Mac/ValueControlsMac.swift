@@ -17,9 +17,9 @@ extension ControlHost {
         return popup
     }
 
-    func configureValue(_ control: NSControl, _ owner: NodeView, accent: NSColor?) {
+    func configureValue(_ control: NSControl, _ owner: NodeView) {
         if let slider = control as? NSSlider { configureRange(slider, owner); return }
-        if let picker = control as? NSDatePicker { configureDate(picker, owner, accent: accent); return }
+        if let picker = control as? NSDatePicker { configureDate(picker, owner); return }
         guard let popup = control as? NSPopUpButton else { return }
         (popup as? SelectField)?.owner = owner
         popup.bezelStyle = owner.inGroupedForm ? .inline : .push
@@ -79,7 +79,7 @@ extension ControlHost {
         guard selectMenu(id) != before else { return }
         menus.removeValue(forKey: id)
         if let owner = presenter.views[id], let control = controls[id] {
-            configureValue(control, owner, accent: nil)
+            configureValue(control, owner)
         }
     }
 

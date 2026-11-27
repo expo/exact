@@ -84,12 +84,12 @@ impl<D: DataSource> Runner<D> {
         result
     }
 
-    pub(super) fn record_ran(
+    pub(super) fn record_ran<T>(
         &mut self,
         kind: &'static str,
         name: exact_plan::StrId,
         was_poisoned: bool,
-        result: &Result<CommitReceipt, RunnerError>,
+        result: &Result<T, RunnerError>,
     ) {
         if was_poisoned {
             return;

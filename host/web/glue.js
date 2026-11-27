@@ -1,9 +1,11 @@
-import { listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, stampOpenings, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
+import { onVisualViewport, listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, orientationCode, onPreferences, inertAncestor, modalLayers, stampOpenings, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
 import { send, applyBatch } from "./wasm/commit.js";
 import { positionContexts, contextPanel } from "./wasm/context.js";
-import { syncViewportFit } from "./wasm/views.js";
+import { refreshSymbols, syncViewportFit } from "./wasm/views.js";
 import { boot, loadRust, main, reportColors, replacements } from "./wasm/boot.js";
 import { agentInputReady, agent, agentSettled } from "./wasm/agent.js";
+import { loadOnce } from './load-once.js';
+
 placePopovers();
 stampOpenings();
 // @ref LLP 1007 §3: the wasm DOM host and its live session state.
@@ -30,9 +32,9 @@ host.pickerModule = undefined;
 host.documentsModule = undefined;
 host.frameModule = undefined;
 host.frameNavigation = undefined;
-export const frameNav = () => host.frameNavigation ??= loadAfterPaint("./frame-navigation.js", "frameNavigation");
+export const frameNav = () => loadOnce(host, "frameNavigation", () => loadAfterPaint("./frame-navigation.js", "frameNavigation"));
 // frameNavigation: an iframe's navigation records and commands (LLP 1020.002); the file picker (LLP 1069.002) and documents (LLP 1069.010), loaded on first use
-export const picker = (at = host.incarnation) => (host.pickerModule ??= loadAfterPaint("./picker-glue.js", "picker").then((install) => install({
+export const picker = (at = host.incarnation) => (loadOnce(host, "pickerModule", () => loadAfterPaint("./picker-glue.js", "picker").then((install) => install({
   appId: globalThis.exact.compat?.inputs?.app,
   generation: () => host.incarnation,
   dispatch: (id, kind, payload) => {
@@ -45,11 +47,11 @@ export const picker = (at = host.incarnation) => (host.pickerModule ??= loadAfte
     name
   }).path),
   log
-}))).then((m) => m.at(at));
+})))).then((m) => m.at(at));
 // its operations answer generation `at`, the one that asked
 // An `app:/` source (D7): the app's own file, as the picker glue's object URL once it resolves; the old picture stays meanwhile, as for any `src`, and an element with none gets none (an empty media `src` is a failed load). A media element plays it (podcast F19): the glue hears the URL as its source, and a path with no file is handed to it as written, which it refuses (`src-not-supported`) as HTML refuses a source it cannot fetch. `then` runs once it lands (a `load` command's). A `data:` source past its bound shows nothing, as on every host (LLP 1011 §2; exact_raster::MAX_DATA_URL_BYTES).
 export const DATA_LIMIT = 1024 * 1024;
-export const documentsGlue = (at = host.incarnation) => (host.documentsModule ??= loadAfterPaint("./documents-glue.js", "documents").then((d) => (d.keeping(globalThis.exact.compat?.inputs?.app, host.grantSet), d).install({
+export const documentsGlue = (at = host.incarnation) => (loadOnce(host, "documentsModule", () => loadAfterPaint("./documents-glue.js", "documents").then((d) => (d.keeping(globalThis.exact.compat?.inputs?.app, host.grantSet), d).install({
   generation: () => host.incarnation,
   dispatch: (id, kind, payload) => {
     if (views.has(id)) {
@@ -65,9 +67,9 @@ export const documentsGlue = (at = host.incarnation) => (host.documentsModule ??
     send(host.wasm.exact_dispatch(id, 1, writeIn(value), now()));
     return true;
   }
-}))).then((m) => m.at(at));
+})))).then((m) => m.at(at));
 export function httpHelpers() {
-  return host.httpModule ??= moduleReady.then(() => loadAfterPaint("./http-body.js", "httpHelpers"));
+  return loadOnce(host, "httpModule", () => moduleReady.then(() => loadAfterPaint("./http-body.js", "httpHelpers")));
 }
 export const root = document.getElementById("exact-root");
 export const views = new Map();
@@ -121,9 +123,9 @@ host.resizes = null;
 host.intersects = null;
 // the voice table's output (sound-glue.js, LLP 1096 D7); animated images held to the agent's clock (image-glue.js, LLP 1011.000); geometry reads (geometry-glue.js, LLP 1051.000 D4); the element resize event (resize-glue.js)
 host.wakeLock = null;
-export const holdWake = () => (host.wakeLock ??= loadAfterPaint("./wakelock-glue.js", "wakeLockGlue")).then((w) => w.hold(w.holders(root).length > 0, log));
+export const holdWake = () => (loadOnce(host, "wakeLock", () => loadAfterPaint("./wakelock-glue.js", "wakeLockGlue"))).then((w) => w.hold(w.holders(root).length > 0, log));
 host.orientationLock = null;
-export const holdOrientation = () => (host.orientationLock ??= loadAfterPaint("./orientationlock-glue.js", "orientationLockGlue")).then((o) => o.hold(o.session(root), log, (e) => {
+export const holdOrientation = () => (loadOnce(host, "orientationLock", () => loadAfterPaint("./orientationlock-glue.js", "orientationLockGlue"))).then((o) => o.hold(o.session(root), log, (e) => {
   for (const [i, v] of views) {
     if (v === e) {
       return i;
@@ -179,7 +181,7 @@ host.activeModule = null;
 host.moduleResponse = new Uint8Array();
 export const pageNative = Boolean(document.querySelector("meta[name=\"exact-native\"]"));
 host.pageNativeModule = null;
-export const loadPageNative = () => host.pageNativeModule ??= afterNativePaint().then(() => loadAfterPaint("./native-glue.js", "pageNative")).then((load) => load(pageNative, {
+export const loadPageNative = () => loadOnce(host, "pageNativeModule", () => afterNativePaint().then(() => loadAfterPaint("./native-glue.js", "pageNative")).then((load) => load(pageNative, {
   ready: () => host.inputReady,
   generation: () => host.incarnation,
   agent: agentMode,
@@ -189,10 +191,7 @@ export const loadPageNative = () => host.pageNativeModule ??= afterNativePaint()
       applyBatch(JSON.parse(readOut(host.wasm.exact_changed(writeIn(topic)))));
     }
   }
-})).catch((error) => {
-  host.pageNativeModule = null;
-  throw error;
-});
+})));
 host.rustLoader = null;
 host.rustLoading = null;
 export const rustImports = Object.fromEntries([
@@ -230,7 +229,7 @@ export function loadAfterPaint(file, exported) {
     const script = Object.assign(document.createElement("script"), { type: "module" });
     script.src = new URL(file, import.meta.url).href;
     script.onload = () => resolve(globalThis.exact[exported]);
-    script.onerror = () => reject(new Error("host module loader failed: " + file));
+    script.onerror = () => { script.remove(); reject(new Error("host module loader failed: " + file)); };
     document.head.append(script);
   }) : Promise.resolve(globalThis.exact[exported]);
 }
@@ -315,10 +314,10 @@ export const clocks = animationClocks(root), { register, seek: seekAnimations, s
   presence.live?.sync();
 });
 export const seek = (to) => {
-  (host.imageHold ??= loadAfterPaint("./image-glue.js", "holdImages").then((f) => f({
+  (loadOnce(host, "imageHold", () => loadAfterPaint("./image-glue.js", "holdImages").then((f) => f({
     root,
     now: () => host.agentClock
-  }))).then((h) => h.seek());
+  })))).then((h) => h.seek());
   seekAnimations(to);
 };
 const POST_BOUND = 64;
@@ -494,6 +493,7 @@ const resizeRunner = () => {
   if (host.wasm && host.incarnation && innerWidth > 0 && innerHeight > 0) {
     const told = host.wasm.exact_set_viewport_geometry && document.body ? writeIn(pageGeometry()) : 0;
     host.wasm.exact_set_update?.(updateCode());
+    host.wasm.exact_set_orientation?.(orientationCode());
     host.wasm.exact_set_screen_reader(pageFacts.screenReaderCode());
     const batch = JSON.parse(readOut(host.wasm.exact_resize(innerWidth, innerHeight, now(), preferences() | foldBits(), told)));
     // Only a size the runner took is told: a refused one is asked again, never followed by geometry alone.
@@ -519,8 +519,14 @@ visualViewport?.addEventListener("resize", () => { pageChanged(); requestAnimati
 onKeyboard(pageChanged); // LLP 1039 D9: the VirtualKeyboard API moves the keys without a resize
 const symbolStyle = document.createElement("style");
 document.head.append(symbolStyle);
+matchMedia("(forced-colors: active)").addEventListener("change", (event) => {
+  if (!event.matches) refreshSymbols();
+});
 // @ref LLP 1081 stage 2 — a symbol draws in its `color`: a zero-specificity default, so a native face's or a bar's own ink wins.
-symbolStyle.textContent = "@property --exact-tint{syntax:\"<color>\";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:var(--exact-symbol-position,center);mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}";
+// In forced colours preserve-parent-color takes the parent's used foreground when color inherits.
+// https://www.w3.org/TR/css-color-adjust-1/#forced-color-adjust-prop
+symbolStyle.textContent = "@property --exact-tint{syntax:\"<color>\";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:var(--exact-symbol-position,center);mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}" +
+  "@media (forced-colors:active){img[data-symbol-path]{color:inherit!important;forced-color-adjust:preserve-parent-color;background-color:currentColor!important}}";
 // An image's `load` and `error` (LLP 1011 §2) as HTML `<img>` fires them, once per source, the error with its message (rt.js `imageEvent`); a symbol fires neither. A tinted raster paints
 // through its CSS mask (element.rs `host_css`), a CORS fetch: from an origin that sends no CORS headers it paints nothing, so a CORS probe of the source decides. An adopted page's image may have settled before this attached.
 export const IMAGE_ERROR = "the image did not load", CORS_ERROR = "a tinted image from another origin needs CORS (Access-Control-Allow-Origin)", imageProbes = new Map();
@@ -536,12 +542,12 @@ host.markupModule = undefined;
 host.decorationsModule = undefined;
 export const markupPending = new WeakSet();
 host.liveTimeModule = undefined;
-export const loadLiveTime = (el) => (host.liveTimeModule ??= moduleReady.then(() => loadAfterPaint("./live-time-glue.js", "installLiveTime"))).then((install) => {
+export const loadLiveTime = (el) => (loadOnce(host, "liveTimeModule", () => moduleReady.then(() => loadAfterPaint("./live-time-glue.js", "installLiveTime")))).then((install) => {
   if (el.isConnected && !retiredViews.has(el)) {
     install(el);
   }
 }).catch((error) => console.error("exact: live time:", error));
-export const loadDecorations = (el) => (host.decorationsModule ??= moduleReady.then(() => loadAfterPaint("./decorations.js", "installDecorations"))).then((install) => {
+export const loadDecorations = (el) => (loadOnce(host, "decorationsModule", () => moduleReady.then(() => loadAfterPaint("./decorations.js", "installDecorations")))).then((install) => {
   if (el.isConnected && !retiredViews.has(el) && el.hasAttribute("data-decorations")) {
     install(el, log);
   }
@@ -567,7 +573,7 @@ export const scrollDocs = new Set(), markScrollDocument = () => {
   }
   host.pagePath = path;
 };
-visualViewport?.addEventListener("resize", syncViewportFit);
+onVisualViewport(syncViewportFit);
 host.sending = 0;
 // batches being applied: a dispatch run while another's applies (a focus it moved) is one deeper
 // LLP 1016: grants come from one whole-set parse; `unparsed` names why an
@@ -913,7 +919,7 @@ export function loadGpuIfNeeded() {
   if (host.gpuLoading || !(globalThis.exact.pendingSurfaces ?? []).length) {
     return;
   }
-  host.gpuLoading = loadAfterPaint(globalThis.exact.compat?.inputs?.gpuModules ? "./gpu-modules.js" : "./gpu-glue.js", "gpu").catch((error) => console.error("exact gpu:", error));
+  loadOnce(host, "gpuLoading", () => loadAfterPaint(globalThis.exact.compat?.inputs?.gpuModules ? "./gpu-modules.js" : "./gpu-glue.js", "gpu"), (error) => console.error("exact gpu:", error));
   // @ref LLP 1009 D6
 }
 host.ready = main();

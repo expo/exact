@@ -50,7 +50,7 @@ pub(super) fn after_turn(latest: Option<Vec<u32>>) -> Option<Vec<u32>> {
 }
 
 /// Where the op at `i` ends, or `None` for a malformed stream.
-pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
+pub(crate) fn end(b: &[u32], i: usize) -> Option<usize> {
     let at = |k: usize| b.get(i + k).map(|v| *v as usize);
     // A path's tagged segments from its count at `p`.
     let path = |p: usize| -> Option<usize> {
@@ -729,6 +729,7 @@ mod tests {
             scaled_presented: &Default::default(),
             paths: &|_| None,
             filters: &|_| None,
+            clips: &|_| None,
             scroll: &Default::default(),
             page: (0., 0.),
             images: &Default::default(),

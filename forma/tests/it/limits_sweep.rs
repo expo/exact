@@ -361,6 +361,8 @@ fn mixed_runs_and_long_axes_apply_in_moments() {
     let axis = Op::AddAxis {
         name: "wide".into(),
         values,
+        before: None,
+        comment: None,
         under_dark: false,
     };
     let _ = within(10, "add-axis", || {

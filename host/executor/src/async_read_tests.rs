@@ -98,7 +98,7 @@ fn a_full_http_cap_leaves_the_ordered_send_and_read_fallback_free() {
 }
 
 #[test]
-fn reads_wait_for_shared_places_start_in_ask_order_and_deliver_in_ask_order() {
+fn reads_wait_for_shared_places_start_in_ask_order_and_deliver_on_arrival() {
     let script = Arc::new(Script::default());
     let (core, _) = core(&script, GRANTS);
     let shared = super::super::INDEPENDENT - 1;
@@ -145,14 +145,12 @@ fn reads_wait_for_shared_places_start_in_ask_order_and_deliver_in_ask_order() {
             );
             next += 1;
         }
-        assert!(core.drain().is_empty());
+        assert_eq!(drain(&core, 1), [ticket]);
     }
     script.answer(&url(fallback), b"fallback");
+    assert_eq!(drain(&core, 1), [fallback]);
     script.answer(&url(first), b"first");
-    assert_eq!(
-        drain(&core, (last - first + 1) as usize),
-        (first..=last).collect::<Vec<_>>()
-    );
+    assert_eq!(drain(&core, 1), [first]);
     core.forget(|_| false);
     for ticket in 1..=held as u64 {
         script.answer(&url(ticket), b"released");
@@ -230,7 +228,9 @@ fn reads_share_the_independent_origins_limit_and_fall_back_one_at_a_time() {
     for ticket in [1002, 1001, 1000] {
         script.answer(&same_origin(ticket), b"read");
     }
-    assert_eq!(drain(&core, 3), [1000, 1001, 1002]);
+    let mut got = drain(&core, 3);
+    got.sort_unstable();
+    assert_eq!(got, [1000, 1001, 1002]);
     for ticket in 2..PER_ORIGIN as u64 {
         script.answer(&same_origin(ticket), b"released");
     }

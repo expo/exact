@@ -43,6 +43,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("declared-source"),
     recipe!("device"),
     recipe!("displays"),
+    recipe!("drag-in"),
     recipe!("drag-out"),
     recipe!("eas-android"),
     recipe!("eas-ios"),
@@ -52,6 +53,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("fetch-loading-error"),
     recipe!("files-and-grants"),
     recipe!("first-launch"),
+    recipe!("floating-window"),
     recipe!("foldables"),
     recipe!("functions"),
     recipe!("gpu-module"),
@@ -87,6 +89,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("phone-manifest"),
     recipe!("porting-and-release"),
     recipe!("ports-and-browsers"),
+    recipe!("progressive-tabs"),
     recipe!("purchases"),
     recipe!("push"),
     recipe!("random-and-shuffle"),
@@ -128,6 +131,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("website"),
     recipe!("website-hosting"),
     recipe!("white-label"),
+    recipe!("window-bounds"),
 ];
 
 pub const PATTERNS: &[(&str, &str)] = &[
@@ -143,6 +147,7 @@ pub const PATTERNS: &[(&str, &str)] = &[
 /// Grammar words a recipe is the answer to, which builders looked up by the
 /// word (`sequence` for the sequencer, `keyframes` for motion; euxy port 19).
 const ALIASES: &[(&str, &str)] = &[
+    ("windowKind", "second-window"),
     ("every", "timers"),
     ("after", "timers"),
     ("tolerance", "timers"),
@@ -150,6 +155,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("keyframes", "motion"),
     ("@keyframes", "motion"),
     ("tool", "tools"),
+    ("rotate", "ios-driving"),
     ("exactDelivery", "over-the-air-updates"),
 ];
 

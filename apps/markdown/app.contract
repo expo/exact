@@ -98,6 +98,7 @@ component Markdown
   // Which Listen is reading (each starts over), and which one each mutation's
   // speak was sent for: an answer for an earlier one is not kept.
   state run = 0
+  state clearedRun = 0
   state evenRun = 0
   state oddRun = 0
   resource voice = speechSynthesisState() as shape SpeechSynthesisState else empty()
@@ -121,13 +122,16 @@ component Markdown
     stopListening()
   // A second Listen starts over: its cancel ends the first queue.
   action listen
+    let next = run + 1
     listening = true
-    run = run + 1
+    run = next
+    clearedRun = next
     spokenIds = []
     spokenBlocks = []
     send cleared = cancelSpeech()
   action queueFirst
-    queueEven(0)
+    if listening and clearedRun == run
+      queueEven(0)
   action queueEven(at: number)
     match readable.at(at)
       case some(b)
@@ -170,6 +174,8 @@ component Markdown
       send held = pauseSpeech()
   action stopListening
     listening = false
+    run = run + 1
+    cleared = none
     send held = cancelSpeech()
   action toggleFolder
     folder = not folder

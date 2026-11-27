@@ -475,6 +475,17 @@ fn keysym(sym: u32) -> Option<(u16, Option<bool>)> {
             0xff09 => 15,
             0xff0d => 28,
             0xff8d => 96,
+            // XK_KP_Multiply to XK_KP_9, then XK_F1 to XK_F12.
+            0xffaa => 55,
+            0xffab => 78,
+            0xffad => 74,
+            0xffae => 83,
+            0xffaf => 98,
+            0xffb0 => 82,
+            0xffb1..=0xffb9 => [79, 80, 81, 75, 76, 77, 71, 72, 73][(sym - 0xffb1) as usize],
+            0xffbe..=0xffc7 => 59 + (sym - 0xffbe) as u16,
+            0xffc8 => 87,
+            0xffc9 => 88,
             0xff1b => 1,
             0xff50 => 102,
             0xff51 => 105,
@@ -542,6 +553,28 @@ mod tests {
             }
         }
         assert_eq!(keysym(0xffffffff), None);
+    }
+    #[test]
+    fn keypad_and_function_keysyms_reach_their_physical_keys() {
+        for (sym, code) in [
+            (0xffaa, 55),
+            (0xffab, 78),
+            (0xffad, 74),
+            (0xffae, 83),
+            (0xffaf, 98),
+            (0xffb0, 82),
+            (0xffb1, 79),
+            (0xffb5, 76),
+            (0xffb9, 73),
+            (0xffbe, 59),
+            (0xffc7, 68),
+            (0xffc8, 87),
+            (0xffc9, 88),
+        ] {
+            assert_eq!(keysym(sym), Some((code, None)), "{sym:#x}");
+        }
+        // A typed '*' is still Shift+8 on the main row, not the keypad's.
+        assert_eq!(keysym(u32::from(b'*')), Some((9, Some(true))));
     }
     #[test]
     fn wire_keys_repeat_release_and_disconnect_release_held_key() {

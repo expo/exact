@@ -21,6 +21,7 @@ import {
   clockSlices,
   padOp,
   postInto,
+  swipeDrag,
 } from './agent-keys.mjs';
 import { appShareTarget, driverShare, webShareLocation } from './share-target.mjs';
 
@@ -28,6 +29,9 @@ import { appShareTarget, driverShare, webShareLocation } from './share-target.mj
 const FRAME_MS = 16;
 /** The longest timed move the driver steps; past it the carrier's own bound answers, as a drag's `over` is bounded. */
 const MOVE_MS = 2000;
+/** A host's refusal of a plain press whose target, scrolled in by the reveal before it, is no longer hit at its middle
+ * (`addressed_tap.rs`). */
+const MOVED_SINCE_REVEAL = /is covered or not hit at its projected center/;
 
 /** The input methods of session `s` over `carrier`, which `open` adds to `s`. */
 export function sessionInput(s, { carrier, host, timing, touch, app }) {
@@ -69,9 +73,8 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
               contact: true,
               hold: true,
               delivery: kind =>
-                ['down', 'move', 'hold', 'up', 'cancel', 'contextmenu', 'mouse'].includes(kind)
-                  ? 'presenter'
-                  : 'platform',
+                host === 'android' && kind === 'press' ? 'activation'
+                : ['down', 'move', 'hold', 'up', 'cancel', 'contextmenu', 'mouse'].includes(kind) ? 'presenter' : 'platform',
             }
           : { contact: true, hold: true, delivery: () => 'platform' },
     /** The contact this session holds, `{x, y}` in the viewport's space, or null. */
@@ -85,6 +88,17 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
     // {contextmenu:true,at:[x,y]} is secondary. Points are target-relative; plain
     // canvas taps and held down/move/up contacts remain fingers (LLP 1015.000).
     async tap(target, opts = {}) {
+      // @ref LLP 1057.001 §8.3 — a swipe is a real flick, a fast straight drag the platform's recognizer reads (the drag
+      // refuses one it would make the scroll view's own). Only a real touch reaches UIKit's recognizer, so another carrier
+      // refuses it, having sent nothing, as it does one aimed at a held request.
+      if (opts.swipe !== undefined) {
+        tapArguments(opts);
+        if (opts.at?.some(v => v < 0)) throw new Error('swipe: at is an offset into the target\'s box from its top-left corner, never negative');
+        if (holdOf(target)) throw new Error(`swipe: ${target} is a held request, which takes a choice, not a swipe; a swipe is on a view`);
+        // `--touch drag`, a test file's, makes a drag a real touch too, and a swipe is one
+        if (!['ios', 'host-ios'].includes(host) || !['platform', 'drag'].includes(touch)) throw new Error(`swipe: a swipe is the platform's recognizer's, which only a real touch on a view reaches; drive iOS with --touch platform, or the effect through the control the app gives it; a node that follows the finger (\`swipe-follow\`) is driven with \`drag\` on every host`);
+        return s.tap(target, { drag: { ...swipeDrag(opts), flick: true } });
+      }
       if (holdOf(target)) {
         if (s.held) throw new Error(`a drag's finger is down (${s.held}): only reads and the clock until it lifts`);
         return s.answer('tap', target, opts.choice);
@@ -352,11 +366,22 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           carrier: host,
           mode: timing,
         });
-      let r;
+      let r, again = null;
+      const press = () => carrier.input(node.id, kind, { ...opts, ...at });
       try {
-        r = await carrier.input(node.id, kind, { ...opts, ...at });
+        r = await press();
       } catch (error) {
-        throw await tapRefusal(s, target, await s.named(error));
+        // The window can change between the reveal and the press: on Android a keyboard that leaves gives the page
+        // its height back and the navigation bar its room, which can park the revealed target under the bar. A plain
+        // press refused as covered is revealed again and pressed once more when that reveal moved it; one that
+        // stays covered (nothing scrolls it clear) is refused as before.
+        again = kind === 'press' && !explicit && MOVED_SINCE_REVEAL.test(error?.message ?? '') ? await s.reveal(node.id).catch(() => null) : null;
+        if (!again) throw await tapRefusal(s, target, await s.named(error));
+        try {
+          r = await press();
+        } catch (retried) {
+          throw await tapRefusal(s, target, await s.named(retried));
+        }
       }
       if (r.error) r.error = (await tapRefusal(s, target, await s.named(new Error(r.error)))).message;
       if (kind === 'down' && r.delivery !== 'unsupported') {
@@ -368,6 +393,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
         tapped: node.id,
         target,
         ...(scrolled ? { scrolled } : {}),
+        ...(again ? { revealedAgain: again } : {}),
         delivery: r.delivery ?? s.input.delivery(kind),
         carrier: host,
         mode: r.mode ?? timing,

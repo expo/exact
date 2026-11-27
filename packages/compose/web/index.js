@@ -28,7 +28,8 @@ export function implementation({ agent, log }) {
     async composeEmail(o = {}, call) {
       if (list(o.attachments).length) return { error: 'NotSupportedError', message: 'the web carries no attachment in a mail; check composeStatus().emailAttachments' };
       if (agent) {
-        const action = call?.preferred?.tap ?? 'opened';
+        const tap = call?.preferred?.tap;
+        const action = !tap ? 'opened' : tap === 'cancel' ? 'cancelled' : tap;
         say(`email ${action}, ${counted(o)}`);
         return { action };
       }

@@ -12,10 +12,39 @@ const px = (name, value) => name === 'root-font-size' ? String(value).replace(/p
 export const LAUNCH_MEDIA = { 'prefers-reduced-motion': 'no-preference', 'prefers-reduced-transparency': 'no-preference', 'prefers-color-scheme': 'light', 'prefers-contrast': 'no-preference', 'color-gamut': 'srgb', 'dynamic-range': 'standard' };
 // `visibility-state hidden` and `frozen` substitute page facts and their defined transitions; neither suspends the drive (LLP 1012 §1).
 export const PREFERENCES = { 'display-mode': ['standalone', 'browser', 'fullscreen', 'minimal-ui', 'window-controls-overlay', 'picture-in-picture', 'tabbed'], 'prefers-reduced-motion': ['reduce', 'no-preference'], 'prefers-reduced-transparency': ['reduce', 'no-preference'], 'prefers-contrast': ['more', 'less', 'custom', 'no-preference'], 'prefers-color-scheme': ['dark', 'light'], 'color-gamut': ['srgb', 'p3', 'rec2020'], 'dynamic-range': ['standard', 'high'], pointer: ['coarse', 'fine', 'none'], hover: ['none', 'hover'] }; // `prefer`'s CSS media features and values (the display's two: LLP 1100 D9; the primary input's two, `exactViewport().pointer` and `.hover`: LLP 1132 D10)
-export const PAGE_FACTS = { 'screen-reader': ['on', 'off', 'unknown'], frozen: ['true', 'false'], 'visibility-state': ['visible', 'hidden'], online: ['true', 'false'], 'can-share': ['true', 'false'], 'can-share-files': ['true', 'false'], 'can-share-pictures': ['true', 'false'], 'can-open-files': ['true', 'false'], 'iframe-partition': ['true', 'false'], 'has-focus': ['true', 'false'], 'keyboard-navigation': ['true', 'false'], 'bold-text': ['true', 'false'], 'safe-area': ['<top right bottom left in CSS px>'], 'root-font-size': ['<px>'], 'display-scale': ['<device pixels a px>'], 'gpu-tier': ['low', 'mid', 'high'], presented: ['true', 'false'] }; // `prefer`'s page group (LLP 1069.000 D2, D3, D6; LLP 1069.007 D2; `has-focus`: #114; `keyboard-navigation`: the Mac's setting, whether Tab reaches every control, LLP 1115.000 D7.2, refused by name on the other hosts; `bold-text`: Apple's Bold Text, which the kernel weights the system font by, LLP 1115.000 D12.3, refused by name elsewhere; `display-scale`: what a hairline is one device pixel of, LLP 1115.000 D10.3; `gpu-tier`: `exactViewport().gpuTier`, `high` from launch, and the rung a world's renderer is made at, LLP 1139.003 D2; `iframe-partition`: `exactPage().iframePartition`, LLP 1020.002 D1; `presented`: `exactPage().presented`, held at the value named, which moves no animation, LLP 1069.000 D6)
+export const PAGE_FACTS = { 'screen-reader': ['on', 'off', 'unknown'], frozen: ['true', 'false'], 'visibility-state': ['visible', 'hidden'], online: ['true', 'false'], 'can-share': ['true', 'false'], 'can-share-files': ['true', 'false'], 'can-share-pictures': ['true', 'false'], 'can-open-files': ['true', 'false'], 'iframe-partition': ['true', 'false'], 'has-focus': ['true', 'false'], 'keyboard-navigation': ['true', 'false'], 'bold-text': ['true', 'false'], 'safe-area': ['<top right bottom left in CSS px>'], 'root-font-size': ['<px>'], 'display-scale': ['<device pixels a px>'], 'gpu-tier': ['low', 'mid', 'high'], presented: ['true', 'false'], 'ask-siri': ['available', 'unavailable'] }; // `prefer`'s page group (LLP 1069.000 D2, D3, D6; LLP 1069.007 D2; `has-focus`: #114; `keyboard-navigation`: the Mac's setting, whether Tab reaches every control, LLP 1115.000 D7.2, refused by name on the other hosts; `bold-text`: Apple's Bold Text, which the kernel weights the system font by, LLP 1115.000 D12.3, refused by name elsewhere; `display-scale`: what a hairline is one device pixel of, LLP 1115.000 D10.3; `gpu-tier`: `exactViewport().gpuTier`, `high` from launch, and the rung a world's renderer is made at, LLP 1139.003 D2; `iframe-partition`: `exactPage().iframePartition`, LLP 1020.002 D1; `presented`: `exactPage().presented`, held at the value named, which moves no animation, LLP 1069.000 D6; `ask-siri`: whether UIKit adds Ask Siri to a context menu, set only on the iOS simulator, which never offers it, LLP 1094.000 D10, refused by name elsewhere)
 export const FOLD_FACTS = { posture: ['folded', 'continuous'], segments: ['<cols>x<rows>'], gap: ['<points>'] }; // `prefer`'s fold group (LLP 1078 D7): a host without a fold splits its viewport evenly; one with a fold refuses
 export const MIDI_FACTS = { 'midi.state': ['prompt', 'granted', 'denied', 'unavailable'], 'midi.inputs': ['<name,…>'], 'midi.outputs': ['<name,…>'] }; // `prefer`'s midi group (LLP 1125 §4): what a request finds under the agent — its state (granted unless named) and the ports, by name; a port named no longer is disconnected
 export const MODE_FACT = { mode: ['<axis>=<value>'] }; // `prefer`'s mode group (LLP 1121 D5, D13): the app's own modes, `setMode` for each pin; `prefers-color-scheme` stays as it is
+
+/** Parse a CLI `prefer` line into `{ [name]: value }`, honoring quoted strings such as `prefer safe-area "47 0 34 0"` (LLP 1156.008.000 D9.1). */
+export function parsePreferArgs(line) {
+  const tail = String(line).trim().replace(/^prefer(?:\s+|$)/, '');
+  if (!tail) return {};
+  if (/^extension\s+/.test(tail)) return { extension: tail.replace(/^extension\s+/, '') };
+  const tokens = [];
+  for (let i = 0; i < tail.length;) {
+    while (i < tail.length && /\s/.test(tail[i])) i++;
+    if (i >= tail.length) break;
+    const ch = tail[i];
+    if (ch === '"' || ch === "'") {
+      let word = '';
+      i++;
+      while (i < tail.length && tail[i] !== ch) {
+        if (tail[i] === '\\' && i + 1 < tail.length) word += tail[++i];
+        else word += tail[i];
+        i++;
+      }
+      if (tail[i] === ch) i++;
+      tokens.push(word);
+    } else {
+      let start = i;
+      while (i < tail.length && !/\s/.test(tail[i])) i++;
+      tokens.push(tail.slice(start, i));
+    }
+  }
+  return Object.fromEntries(tokens.flatMap((a, i) => (i % 2 ? [] : [[a, tokens[i + 1]]])));
+}
 
 /** The CLI's facts (`prefer <name> <value> …`) as the wire's three groups; an unknown fact or value is refused naming what is expected.
  * A fact answers to its near spellings (`color-scheme`, `colorScheme`, `reduced-motion` for the `prefers-` names): round 9, three builds. */
@@ -36,6 +65,7 @@ export function preferGroups(facts) {
       const m = /^([\w-]+\.\w+(?:#@?[\w.-]+(?:\/[\w.-]+)*)?)=(.+)$/s.exec(String(value));
       if (!m) throw new MalformedOperation(`prefer extension ${value}: expected <extension>.<source>[#<import path>]=<JSON>|clear`);
       try { (extension.extension ??= {})[m[1]] = m[2] === 'clear' ? 'clear' : JSON.parse(m[2]); } catch (e) { throw new MalformedOperation(`prefer extension ${m[1]}: ${e.message}`); }
+      if (m[2] !== 'clear' && extension.extension[m[1]] === 'clear') extension.literal = true;
       continue;
     }
     if (name === 'midi.state' && MIDI_FACTS['midi.state'].includes(value)) { midi.state = value; continue; }
@@ -64,6 +94,60 @@ export function preferGroups(facts) {
   }
   if (fold.gap != null && fold.cols == null) throw new MalformedOperation('prefer: gap needs segments <cols>x<rows>');
   return { media, page, fold, mode, midi, extension };
+}
+
+/** Apply the preference once. If the package opened a document during its callback,
+ * that document receives the driver's launch table before the next step. */
+export async function preferExtension(session, request) {
+  const web = session.carrier;
+  if (!web.installSubstitutes) return session.op(request);
+  const before = await web.evaluate(() => {
+    // The navigate event fires during location.reload(), before the old document can reply.
+    if (!Object.hasOwn(globalThis, '__exactPackageNavigation')) {
+      globalThis.__exactPackageNavigation = null;
+      globalThis.navigation?.addEventListener('navigate', event => {
+        globalThis.__exactPackageNavigation = event.destination.sameDocument ? null : event;
+      });
+    }
+    return performance.timeOrigin;
+  });
+  let interrupted;
+  try { await session.op(request); }
+  catch (error) {
+    if (error.reply) throw error;
+    interrupted = error;
+  }
+  session.preferenceDocument = await preferenceDocument(web, before, interrupted);
+}
+
+/** A package can navigate after its preference reply, while the driver settles the old document. */
+export async function packageClock(session, spec) {
+  try { return await session.clock(spec); }
+  catch (error) {
+    if (!session.preferenceDocument || !['settle', 'data'].includes(spec) || error.reply) throw error;
+    session.preferenceDocument = await preferenceDocument(session.carrier, session.preferenceDocument, error);
+    return session.clock(spec);
+  }
+}
+
+async function preferenceDocument(web, before, interrupted) {
+  const deadline = Date.now() + 10000;
+  do {
+    const page = await web.evaluate(() => {
+      const event = globalThis.__exactPackageNavigation;
+      return [performance.timeOrigin, !!globalThis.exact?.agentSettled, !!event && !event.defaultPrevented && !event.signal.aborted];
+    }).catch(() => null);
+    if (page) {
+      const [origin, ready, leaving] = page;
+      if (origin === before && !leaving) {
+        if (interrupted) throw interrupted;
+        return origin;
+      }
+      if (origin !== before && ready && !leaving) return origin;
+    }
+    await new Promise(done => setTimeout(done, 20));
+  } while (Date.now() < deadline);
+  throw interrupted ?? new Error('the document opened by the package did not boot');
 }
 
 /** The request a native host answers: `media` rides along when nothing else does (an empty request is refused there by name). */

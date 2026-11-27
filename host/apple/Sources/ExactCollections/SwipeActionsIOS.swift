@@ -211,7 +211,7 @@ final class SwipeActionsHost: SwipeActionsHosting {
         let renamed = presenter.takeChangedNames()
         // The views whose name is read from an element renamed now, found once, not once a row.
         let relabelled = renamed.isEmpty ? [] : Set(presenter.carrying("accessibilityLabelledBy").filter {
-            $0.props["accessibilityLabelledBy"]?.split(separator: " ").contains { renamed.contains(String($0)) } == true
+            NodeView.idRefs($0.props["accessibilityLabelledBy"] ?? "").contains(where: renamed.contains)
         }.map(\.id))
         var wanted = Set<UInt32>(), paintedOwners = Set<UInt32>()
         var claimed = Set<UInt32>()
@@ -387,6 +387,10 @@ final class SwipeActionsHost: SwipeActionsHosting {
     private final class Cell: UITableViewCell, InspectionOwned {
         weak var control: NodeView?
         var inspectionViewId: UInt32? { isAccessibilityElement ? control?.id : nil } // LLP 1080.002 D5
+        override var accessibilityCustomActions: [UIAccessibilityCustomAction]? {
+            get { control?.appendingActions(to: super.accessibilityCustomActions, offeredBy: self) ?? super.accessibilityCustomActions }
+            set { super.accessibilityCustomActions = newValue }
+        }
         override func accessibilityActivate() -> Bool {
             control?.accessibilityActivate() ?? super.accessibilityActivate()
         }

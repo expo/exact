@@ -75,7 +75,8 @@ impl<D: DataSource> Runner<D> {
     /// The nodes with a `resize` handler whose content box, as last laid
     /// out, is not the one last delivered (none yet counts: a node is
     /// observed from its first layout), at `depth` or deeper in the tree
-    /// (Resize Observer 1 §3.4.1): `(view, rect, depth)`, shallowest first.
+    /// (Resize Observer 1 §3.4.1): `(view, rect, depth)`, shallowest first
+    /// and a depth's in mount order.
     /// A node not laid out, or under `display: none`, has an empty box, as
     /// the browser reports one.
     pub fn resize_due(&self, depth: usize) -> Vec<(ViewId, ResizeRect, usize)> {
@@ -136,7 +137,8 @@ impl<D: DataSource> Runner<D> {
                 (d >= depth && last != Some(rect)).then_some((view, rect, d))
             })
             .collect();
-        due.sort_by_key(|(_, _, d)| *d);
+        // Order a depth's nodes by view, as `intersect_due` breaks its ties: mount order
+        due.sort_by_key(|(view, _, d)| (*d, *view));
         due
     }
 

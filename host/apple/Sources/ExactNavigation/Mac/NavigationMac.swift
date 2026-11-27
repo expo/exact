@@ -11,6 +11,8 @@ final class NavigationHost {
     /// Each root's stack as last shown, its keys through its selected route.
     private var shown: [UInt32: [String]] = [:]
     init(presenter: Presenter) { self.presenter = presenter }
+    /// Whether navigation holds per-node bookkeeping for `id`.
+    func tracks(_ id: UInt32) -> Bool { refused[id] != nil || shown[id] != nil || keptSheets[id] != nil }
     /// LLP 1080.001 D3: a route or tabpanel this host hid (the web's
     /// hide-and-inert rule), which it inerts with it.
     func hides(_ node: NodeView) -> Bool { node.routeInert && (panels.contains(node.id) || node.props["navigationKey"] != nil) }
@@ -44,6 +46,10 @@ final class NavigationHost {
     /// last batch, bottom to top, with what each sheet shows of its header
     /// (RouteSheetMac.swift), and why a route that is not one stays painted.
     private(set) var sheets: [(base: NodeView, route: NodeView, header: SheetHeader?)] = []
+    /// @ref LLP 1123 D7 — the popover route shown as an `NSPopover`, and its popover while AppKit shows it
+    /// (RoutePopoverMac.swift).
+    var poppedRoute: (base: NodeView, route: NodeView)?
+    var routePopover: RoutePopover?
     var keptSheets: [UInt32: String] = [:]
     /// A batch that can have changed a header came since the sheets last showed theirs.
     var sheetsRead = false
@@ -55,7 +61,7 @@ final class NavigationHost {
     /// The modal route the root shows painted in the window, on its ground.
     var paintedModal: NodeView? {
         guard let selection, selection.at > 0, selection.stack.indices.contains(selection.at), let route = presenter.views[selection.stack[selection.at]],
-              route.props["navigationPresentation"] == "modal", !sheets.contains(where: { $0.route === route }) else { return nil }
+              NavigationRules.sheetLike(route.props["navigationPresentation"]), !sheets.contains(where: { $0.route === route }) else { return nil }
         return route
     }
     /// What is shown, read again with no batch: a sheet left, a window came.
@@ -73,7 +79,9 @@ final class NavigationHost {
     func groundChanged() { for ground in grounds.values { ground.needsDisplay = true }; split.groundChanged() }
     func reset() {
         refused.removeAll(); panels.removeAll(); shown.removeAll(); selection = nil; barRoute = false; root = nil; routeless = false
-        oneLocationAsked = nil; sheets = []; keptSheets.removeAll(); split.reset()
+        oneLocationAsked = nil; sheets = []; keptSheets.removeAll(); split.reset(); transitions.reset()
+        poppedRoute = nil
+        if let shown = routePopover { routePopover = nil; shown.closing = true; shown.popover.close(); shown.finish() }
         for ground in grounds.values { ground.removeFromSuperview() }
         grounds.removeAll()
     }
@@ -83,8 +91,10 @@ final class NavigationHost {
     /// route paints no background of its own, the page's ground is its
     /// surface. What the author wrote on the route (a colour, a gradient)
     /// is the surface. One in its sheet stands on the sheet's.
-    private func ground(_ routes: [NodeView], grounded: inout Set<UInt32>) {
-        for route in routes where route.props["navigationPresentation"] == "modal" {
+    private func ground(_ routes: [NodeView], inPanel: Bool, grounded: inout Set<UInt32>) {
+        for route in routes {
+            route.panelRouteRoot = inPanel && route === routes.first
+            guard !route.panelRouteRoot, NavigationRules.sheetLike(route.props["navigationPresentation"]) else { continue }
             let painted = (route.cgColor("background_color")?.alpha ?? 0) > 0 || route.style["background_image"] != nil
             // In its sheet the route stands on the sheet's own ground (D7.4).
             guard !painted, !sheets.contains(where: { $0.route === route }), !presenter.dialogs.owns(route) else { continue }
@@ -99,17 +109,19 @@ final class NavigationHost {
     }
 
     private func project(_ batch: Batch, reparented: Set<UInt32>, concerned: Bool?) {
+        split.hearSplit(batch)
         let gating = presenter.inputGates.touched(by: batch, reparented: reparented)
         var subtrees = gating.subtrees
         // Whether a header can have changed: what the window's bar reads again for.
         let concerned = concerned ?? presenter.toolbar.mayChangeAHeader(batch)
         if concerned { sheetsRead = true }
         var sheeted: [(base: NodeView, route: NodeView, header: SheetHeader?)] = []
+        let hasTracked = !refused.isEmpty || !shown.isEmpty || !keptSheets.isEmpty
         for op in batch.ops {
             // A row, or a symbol in one, came or changed: the split's painted list is read again (SplitMac.swift `veil`).
             if op.op == .create || op.op == .children || op.op == .props { split.rowsChanged = true }
             if op.op == .style || op.op == .frame, let id = op.nodeID { split.restyled(id) }
-            if op.op == .destroy, let id = op.nodeID { refused.removeValue(forKey: id); shown.removeValue(forKey: id); keptSheets.removeValue(forKey: id) }
+            if hasTracked, op.op == .destroy, let id = op.nodeID { refused.removeValue(forKey: id); shown.removeValue(forKey: id); keptSheets.removeValue(forKey: id) }
         }
         func gate(_ node: NodeView, hidden: Bool, inert: Bool) {
             if node.isHidden != hidden || node.routeInert != inert { subtrees.insert(node.id) }
@@ -152,11 +164,17 @@ final class NavigationHost {
                     sheeted = sheetRoutes(routes, selected: selected, root: nav, concerned: concerned)
                     split.read(root: nav, routes: routes, selected: selected)
                 } else { split.readNone() }
-                sheets = sheeted
+                // The stack's root route says whether the window's content is full size (LLP 1123 D16)
+                let stackRoot = found.flatMap { stacks.indices.contains($0) ? stacks[$0].first : nil }
+                presenter.rootFullSizeContent = stackRoot?.props["navigationFullSizeContent"].map { $0 == "true" }
+                // The top presentation, a popover route with its anchor in the window, is an `NSPopover`, not a sheet
+                poppedRoute = popoverRoute(of: sheeted)
+                sheets = poppedRoute == nil ? sheeted : Array(sheeted.dropLast())
             }
-            for routes in stacks { ground(routes, grounded: &grounded) }
+            for routes in stacks { ground(routes, inPanel: nav === roots.first && presenter.root.window is RoutePanel, grounded: &grounded) }
             if nav === roots.first { root = (nav, tabs, tabs == nil ? nil : found); routeless = stacks.allSatisfy(\.isEmpty) }
             guard let at = found else {
+                if nav === roots.first { transitions.reset() }
                 managed.formUnion((tabs?.panels ?? []).map(\.id))
                 continue
             }
@@ -181,13 +199,13 @@ final class NavigationHost {
                 // nothing covers it.
                 let overPage = routes.indices.contains(selected) && {
                     let route = routes[selected], presentation = route.props["navigationPresentation"]
-                    return presentation == "modal" || presentation == "fullscreen" && (route.wrote("background_color") || route.wrote("background_image"))
+                    return NavigationRules.sheetLike(presentation) || presentation == "fullscreen" && (route.wrote("background_color") || route.wrote("background_image"))
                 }()
                 // The lowest route in a sheet: it and the sheets on it are shown, and the route they stand over.
                 let lowest = stack == at && nav === roots.first ? sheeted.first.flatMap { low in routes.firstIndex { $0 === low.base } } : nil
                 // A stack that splits (D4) shows its list and the route its pane shows, and the list stays live beside its detail.
                 let splits = stack == at && nav === roots.first && split.active, beside = splits ? split.shown?.detail : nil
-                let covered = routes.indices.contains(selected) && ["modal", "fullscreen"].contains(routes[selected].props["navigationPresentation"] ?? "")
+                let covered = routes.indices.contains(selected) && NavigationRules.presents(routes[selected].props["navigationPresentation"])
                 for (index, route) in routes.enumerated() {
                     let under = lowest.map { index == $0 - 1 || sheeted.contains { $0.route === route } } ?? false
                     // A route still in its sheet is shown until the sheet has gone (`DialogHost.syncRoutes`).
@@ -204,9 +222,10 @@ final class NavigationHost {
                 }
             }
         }
-        if roots.isEmpty { sheets = []; split.readNone() }
+        if roots.isEmpty { sheets = []; poppedRoute = nil; split.readNone(); transitions.reset() }
         // A sheet arrives and leaves after the batch: AppKit turns the main queue while it does.
         if !sheets.isEmpty || presenter.dialogs.entries.contains(where: \.route) { presenter.afterBatch { [weak presenter] in presenter?.dialogs.syncRoutes() } }
+        if poppedRoute != nil || routePopover != nil { presenter.afterBatch { [weak self] in self?.syncPopover() } }
         for id in panels.subtracting(managed) {
             if let panel = presenter.views[id] { gate(panel, hidden: false, inert: false) }
         }

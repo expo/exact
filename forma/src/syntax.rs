@@ -48,6 +48,8 @@ pub struct Axis {
     pub values: Vec<String>,
     /// `under scheme=dark`: it matters only where the host shows dark.
     pub under_dark: bool,
+    /// The declaration's trailing comment, including `//`.
+    pub comment: Option<String>,
 }
 
 /// A dial's type.
@@ -365,6 +367,7 @@ fn axis(l: &Line, errors: &mut Vec<Diagnostic>) -> Option<Axis> {
         },
         values,
         under_dark,
+        comment: l.comment.clone(),
     })
 }
 

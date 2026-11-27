@@ -24,6 +24,9 @@ final class ScrollZoomMac: NSObject {
     var reported: [Double] = []
     var lastEvent: [Double] = []
     var magnifying = false
+    /// The zoomed child's placement as content insets (`NodeView.placeZoom`), which D14's writer adds to its
+    /// held terms on a scroller it holds (`ScrollInsetsMac.Claim`).
+    var placement = NSEdgeInsetsZero
 
     init(owner: NodeView, scroll: ChainingScrollView) {
         self.owner = owner
@@ -157,8 +160,13 @@ extension NodeView {
         let place = zoomPlace(sv.magnification, child: child, frame: lead, port: port), trail = zoomTrail(child)
         let insets = NSEdgeInsets(top: lead.minY + place.shift.y, left: lead.minX + place.shift.x,
                                   bottom: trail.height + place.shift.y, right: trail.width + place.shift.x)
-        let now = sv.contentInsets
-        if now.top != insets.top || now.left != insets.left || now.bottom != insets.bottom || now.right != insets.right { sv.contentInsets = insets }
+        zoom.placement = insets
+        // A scroller D14's writer holds takes the placement as one of its terms
+        if ScrollInsetsMac.claim(of: sv) != nil {
+            ScrollInsetsMac.rewrite(sv)
+        } else if !NSEdgeInsetsEqual(sv.contentInsets, insets) {
+            sv.contentInsets = insets
+        }
         fitScroll()
     }
 
@@ -169,7 +177,7 @@ extension NodeView {
         sv.zoom = nil
         sv.magnification = 1
         sv.allowsMagnification = false
-        sv.contentInsets = NSEdgeInsetsZero
+        if ScrollInsetsMac.claim(of: sv) != nil { ScrollInsetsMac.rewrite(sv) } else { sv.contentInsets = NSEdgeInsetsZero }
         if let child = zoom.child, let layout = child.grid?.layout { presenter?.applyFrame(child, layout) }
         fitScroll()
     }

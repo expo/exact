@@ -253,6 +253,15 @@ impl Surface for ModelViewer {
         if let Some(model) = self.model_mut() {
             model.renderer = None;
         }
+        if let Some(name) = match &self.source {
+            Source::Pending(load) => Some(&load.name),
+            Source::Parsing { load, job } if load.sequence != *job => Some(&load.name),
+            _ => None,
+        } {
+            if !self.assets.requests.iter().any(|r| r == name) {
+                self.assets.requests.push(name.clone());
+            }
+        }
     }
     fn lifecycle(&mut self, event: Lifecycle) {
         if matches!(event, Lifecycle::Hidden | Lifecycle::Interrupted) {

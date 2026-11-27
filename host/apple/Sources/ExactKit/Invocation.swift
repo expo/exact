@@ -231,17 +231,67 @@ extension ExactSession {
         apply(batch)
         return batch
     }
+
+    /// The row of a split's list the press being sent is, which its batch carries (`Batch.splitPress`,
+    /// SplitMac.swift); iOS's split leaves its selection to UIKit.
+    var pressSplitRow: (row: UInt32, list: UInt32)? {
+        #if os(macOS)
+        presenter.pressSplitRow
+        #else
+        nil
+        #endif
+    }
 }
 
 #if os(iOS) || os(tvOS)
 import UIKit
 
+/// Deferred presses from native navigation bar controls (`BarPress`,
+/// `SegmentPress`, `HeaderTitleView`): queued onto the next main-queue turn so
+/// UIKit finishes its control dispatch before Exact applies a batch, without
+/// depending on `ExactNativeViews` (which release apps without native modules
+/// do not link).
+final class DeferredPresses {
+    private var queue: [() -> Void] = []
+    private var scheduled = false
+    var inFlight: Int { queue.count }
+
+    func enqueue(_ work: @escaping () -> Void) {
+        queue.append(work)
+        guard !scheduled else { return }
+        scheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.scheduled = false
+            self?.drain()
+        }
+    }
+
+    func drain() {
+        guard !queue.isEmpty else { return }
+        let batch = queue
+        queue.removeAll(keepingCapacity: true)
+        for work in batch { work() }
+    }
+
+    func reset() { queue.removeAll() }
+}
+
 extension Presenter {
+    /// Press `id` on the next main-queue turn as a native bar control's tap:
+    /// carries the person's input origin across the turn (LLP 1132 D1) and works
+    /// whether or not `ExactNativeViews` is linked.
+    package func pressFromBar(_ id: UInt32, origin: NavigationMarks.Origin = NavigationMarks.shared.personNow()) {
+        guard let node = views[id], node.handlers.contains("press"), !node.disabled, !node.inert else { return }
+        deferredPresses.enqueue { [weak self, weak node] in
+            guard let self, let node, self.views[id] === node,
+                  node.handlers.contains("press"), !node.disabled, !node.inert else { return }
+            NavigationMarks.shared.acting(origin) { self.press(id) }
+        }
+    }
+
     /// A hatch's act on an authored element, as the DOM's: `click()` presses
     /// it as a tap does, `focus()` and `blur()` follow the focus rules. Each
-    /// is queued (`ElementHatches.later`) and runs on a later turn. A click
-    /// is the program's unless a native control passes the person's input
-    /// (`NavigationMarks.personNow`). False when refused.
+    /// is queued (`ElementHatches.later`) and runs on a later turn. False when refused.
     package func hatchAct(_ id: UInt32, _ action: UInt32, _ origin: NavigationMarks.Origin = .program) -> Bool {
         guard let node = views[id] else { return false }
         switch action {
@@ -263,7 +313,6 @@ extension Presenter {
             }
         default: return false
         }
-        return true
     }
 }
 #endif

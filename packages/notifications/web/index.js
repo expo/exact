@@ -16,7 +16,7 @@
 
 const STATES = { default: 'prompt', granted: 'granted', denied: 'denied' };
 
-export function implementation({ changed, activation, log = () => {} }) {
+export function implementation({ changed, activation, emit, foreground, log = () => {} }) {
   const shown = new Map(), waiting = new Map();
   const has = typeof Notification === 'function';
   const status = () => ({
@@ -29,7 +29,9 @@ export function implementation({ changed, activation, log = () => {} }) {
   const again = () => { if (has && Notification.permission !== said) { said = Notification.permission; changed('notifications.notificationStatus'); } };
   if (typeof addEventListener === 'function') addEventListener('visibilitychange', again);
   navigator.permissions?.query({ name: 'notifications' }).then(p => { p.onchange = again; }, () => {});
+  // An empty tag is no tag, as in the Notifications API and on Apple and Android.
   const close = tag => {
+    if (!tag) return;
     clearTimeout(waiting.get(tag)); waiting.delete(tag);
     shown.get(tag)?.close(); shown.delete(tag);
   };
@@ -37,9 +39,11 @@ export function implementation({ changed, activation, log = () => {} }) {
     let n;
     try { n = new Notification(title, { ...(body != null && { body }), ...(tag != null && { tag }), ...(silent != null && { silent }), ...(data != null && { data }) }); }
     catch (e) { return { error: e?.name ?? 'NotSupportedError', message: String(e?.message ?? e) }; }
-    activation(n, 'click', 'notificationclick', [tag ?? '', { tag: tag ?? '', data, title, body }], { navigate });
+    const args = [tag ?? '', { tag: tag ?? '', data, title, body }];
+    n.addEventListener('show', e => { if (e.isTrusted && foreground()) emit('notificationshow', args); });
+    activation(n, 'click', 'notificationclick', args, { navigate });
     n.addEventListener('click', e => { if (e.isTrusted) { e.preventDefault(); n.close(); } });
-    if (tag != null) { shown.set(tag, n); n.onclose = () => { if (shown.get(tag) === n) shown.delete(tag); }; }
+    if (tag) { shown.set(tag, n); n.onclose = () => { if (shown.get(tag) === n) shown.delete(tag); }; }
     log('showNotification: shown');
     return null;
   };
@@ -55,15 +59,15 @@ export function implementation({ changed, activation, log = () => {} }) {
       const permission = Notification.permission === 'default' ? await Notification.requestPermission().catch(() => 'default') : Notification.permission;
       again();
       if (permission !== 'granted') return { error: 'NotAllowedError' };
-      if (options.tag != null) close(options.tag);
+      close(options.tag);
       const at = options.showTrigger;
       if (at == null || at <= Date.now()) return post(options);
       // Re-armed past setTimeout's 2^31 ms ceiling.
       const wait = () => {
         const left = at - Date.now();
-        if (left <= 0) { if (options.tag != null) waiting.delete(options.tag); return post(options); }
+        if (left <= 0) { if (options.tag) waiting.delete(options.tag); return post(options); }
         const timer = setTimeout(wait, Math.min(left, 2 ** 31 - 1));
-        if (options.tag != null) waiting.set(options.tag, timer);
+        if (options.tag) waiting.set(options.tag, timer);
       };
       wait();
       log('showNotification: scheduled while this page is open');

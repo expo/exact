@@ -68,11 +68,22 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.take_requests()
     }
 
+    /// A Kotlin module callback, registered between host turns.
+    pub fn module_after(&mut self, timer: i32, due: f64) {
+        self.p.module_after(timer, due);
+    }
+
     /// What the reader's hatches ask (`hatches::reader::act`), run at once,
     /// between turns: its answer, -1 when refused. A view hosted or let go
     /// paints again.
     pub fn hatch_act(&mut self, node: u32, kind: i32, text: Option<&str>) -> i64 {
-        self.p.reader_hatch_act(node, kind, text)
+        let now = self.now();
+        self.p.reader_hatch_act(node, kind, text, now)
+    }
+
+    /// Preferred content sizes the reader collected during a display frame (LLP 1024).
+    pub fn module_sizes(&mut self, reports: &str) {
+        self.force |= self.p.reader_module_sizes(reports);
     }
 
     /// An app module's event, only for the session and allocation whose view the reader still holds.
@@ -104,6 +115,20 @@ impl<D: DataSource + Default> CanvasHost<D> {
         focused: bool,
     ) {
         self.p.reader_frame_focused(id, key, session, focused);
+    }
+
+    /// An unpartitioned iframe's `window.postMessage` string (LLP 1156.008.001 B1).
+    pub fn frame_message(&mut self, id: u32, key: exact_kernel::NodeKey, session: u64, text: &str) {
+        self.force |= self.p.reader_frame_message(id, key, session, text);
+    }
+
+    /// Immutable boot-time media grants (`device.camera` bit 0, `device.microphone` bit 1)
+    /// for Android-only grant-gated `WebChromeClient.onPermissionRequest` (LLP 1156.008.001 B1b).
+    pub fn frame_media_grants(&self) -> i32 {
+        let grants = self.p.host.runner().data().grants();
+        let cam = i32::from(exact_runner::device::granted(grants, "camera"));
+        let mic = i32::from(exact_runner::device::granted(grants, "microphone"));
+        cam | (mic << 1)
     }
 
     /// The reader's iframe's `FrameNavigation` record (LLP 1020.002 D2).
@@ -152,6 +177,11 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The reader's answer to request `id`, or its cancellation (`None`).
     pub fn answer(&mut self, id: u32, answer: Option<&str>) {
         self.p.answer_request(id, answer);
+    }
+
+    /// The reader refused a module call.
+    pub fn refuse_module(&mut self, id: u32, error: &str, message: Option<&str>) {
+        self.p.refuse_module(id, error, message);
     }
 
     /// How a presence check the reader made ended (LLP 1133.010 D13).

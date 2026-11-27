@@ -201,3 +201,42 @@ fn an_unpainted_border_does_not_clip_descendant_hits() {
         assert_eq!(hit, Value::some(Value::str("child")));
     }
 }
+
+/// A box a native bar keeps the room of (a root tablist with a row above it, LLP 1083.000 D4)
+/// shows the bar, which the host hit-tests: `elementFromPoint` there finds the box's parent, not
+/// the box or what it holds.
+#[test]
+fn a_point_in_a_room_finds_no_box_of_it() {
+    let source = r#"component App
+  state point = "unset"
+  action read(x: number, y: number)
+    point = match elementFromPoint(x, y) { case some(id) => id, case none => "none" }
+  view
+    column id="page" width=400 height=800
+      column id="list" width=400 height=80
+        column id="tab" height=40
+"#;
+    let mut r = Runner::boot(
+        contract::compile(source).unwrap(),
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let root = r.kernel().roots()[0];
+    let read = |r: &mut Runner<NoData>| {
+        r.kernel_mut()
+            .compute_layout(root, Offer::definite(400.0, 800.0))
+            .unwrap();
+        r.act("read", vec![Value::Number(20.0), Value::Number(20.0)])
+            .unwrap();
+        r.slot("point").cloned()
+    };
+    assert_eq!(read(&mut r), Some(Value::str("tab")));
+    let list = view_of(r.kernel(), "list").unwrap();
+    r.kernel_mut()
+        .set_host_cover(list, Some(exact_kernel::HostCover::Room(83.0)))
+        .unwrap();
+    assert_eq!(read(&mut r), Some(Value::str("page")));
+}

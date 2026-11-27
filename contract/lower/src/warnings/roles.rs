@@ -397,21 +397,38 @@ pub(super) fn level_without_heading(tag: &str, attrs: &[Attr], span: Span) -> Op
     })
 }
 
-pub(super) fn alert_font(tag: &str, attrs: &[Attr], styles: &[StyleDecl]) -> Option<LowerError> {
-    if literal(attrs, "role") != Some("alertdialog") || !(tag == "dialog" || has(attrs, "popover"))
-    {
+pub(super) fn alert_font<'a>(
+    tag: &str,
+    attrs: &'a [Attr],
+    styles: &[StyleDecl],
+    root: &'a contract_syntax::Component,
+    view_bindings: &[(&'a str, Option<&'a Expr>)],
+    fns: &'a [contract_syntax::FnDecl],
+    role_cache: &mut crate::alert_role::RoleCache<'a>,
+) -> Option<LowerError> {
+    if !(tag == "dialog" || has(attrs, "popover")) {
         return None;
     }
-    let class = crate::class::rows(
+    let role = crate::alert_role::alertdialog_role(
         attrs,
+        root,
+        view_bindings,
         &|name| {
-            styles
-                .iter()
-                .find(|s| s.name == name)
-                .map(|s| s.attrs.as_slice())
+            fns.iter()
+                .find(|f| f.name == name)
+                .map(|f| (f.params.as_slice(), &f.body))
         },
-        &[],
-    )
+        role_cache,
+    );
+    if role == crate::alert_role::AlertRole::Never {
+        return None;
+    }
+    let class = crate::class::rows(attrs, &|name| {
+        styles
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.attrs.as_slice())
+    })
     .ok()
     .flatten()
     .map_or_else(Vec::new, |(_, rows)| rows);

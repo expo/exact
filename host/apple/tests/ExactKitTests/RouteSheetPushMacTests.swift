@@ -165,5 +165,228 @@ final class RouteSheetPushMacTests: XCTestCase {
             XCTAssertNil(f.presenter.navigationHost.pushedRoute)
         }
     }
+
+    func testPoppingExitingChildRouteInsideModalSheetThawsAndShowsModalBase() throws {
+        let f = try SheetFixture(page: """
+        keyframes fade-out
+          to opacity=0
+
+        routes nav
+          home "/"
+            modal "/modal"
+            detail "/detail"
+
+        component Proof
+          action open
+            nav = push(nav, "/modal")
+          action pushDetail
+            nav = push(nav, "/detail")
+          action popDetail
+            nav = go(nav, "/modal")
+          action cancel
+            nav = go(nav, "/")
+          view
+            column testId="root" navigationKey=`${top(nav).id}` navigationBack="back" width="100%" height="100%"
+              for e in stack(nav) key=e.id
+                if e.name == "home"
+                  column navigationKey=`${e.id}` testId="home" width=400
+                    button testId="open" press=open
+                      text "Open"
+                if e.name == "modal"
+                  column navigationKey=`${e.id}` navigationPresentation="modal" testId="modal" width=400
+                    header
+                      text "Modal" role="heading"
+                      button id="back" press=cancel
+                        text "Cancel"
+                    button testId="push" press=pushDetail
+                      text "Push"
+                if e.name == "detail"
+                  column navigationKey=`${e.id}` navigationPresentation="push" testId="detail" width=400
+                    ::view-transition-old
+                      animation="fade-out 60ms linear both"
+                    header
+                      text "Detail" role="heading"
+                    button id="back" testId="pop" press=popDetail
+                      text "Back"
+        """)
+        defer { f.close() }
+        try f.press("open")
+        try f.press("push")
+        let detail = try f.node("detail"), modal = try f.node("modal")
+        XCTAssertTrue(f.presenter.dialogs.active === detail)
+        try f.press("pop")
+        // Wait for the 60ms exit CA animation to finish and resync the sheet.
+        waitFor("exiting child route finishes and sheet shows modal base", cap: 5) {
+            f.presenter.leaving.isEmpty && f.presenter.dialogs.active === modal
+        }
+        XCTAssertNotNil(f.window.attachedSheet, "modal sheet remains open")
+        XCTAssertTrue(modal.window === f.window.attachedSheet, "modal base is mounted in the sheet")
+        XCTAssertFalse(modal.isHidden)
+    }
+
+    func testUnmountingNavigationRootClearsRouteTransitionsAndClosesModalSheet() throws {
+        // Subcase 1: removing all routes under the root (`found == nil`) clears leaving and closes the sheet.
+        let f = try SheetFixture(page: """
+        keyframes fade-out
+          to opacity=0
+
+        routes nav
+          home "/"
+            modal "/modal"
+            detail "/detail"
+
+        component Proof
+          state signedIn = true
+          action open
+            nav = push(nav, "/modal")
+          action pushDetail
+            nav = push(nav, "/detail")
+          action signOut
+            signedIn = false
+          action cancel
+            nav = go(nav, "/")
+          view
+            column testId="root" navigationKey=`${top(nav).id}` navigationBack="back" width="100%" height="100%"
+              if signedIn
+                for e in stack(nav) key=e.id
+                  if e.name == "home"
+                    column navigationKey=`${e.id}` testId="home" width=400
+                      button testId="open" press=open
+                        text "Open"
+                  if e.name == "modal"
+                    column navigationKey=`${e.id}` navigationPresentation="modal" testId="modal" width=400
+                      header
+                        text "Modal" role="heading"
+                        button id="back" press=cancel
+                          text "Cancel"
+                      button testId="push" press=pushDetail
+                        text "Push"
+                  if e.name == "detail"
+                    column navigationKey=`${e.id}` navigationPresentation="push" testId="detail" width=400
+                      ::view-transition-old
+                        animation="fade-out 60ms linear both"
+                      header
+                        text "Detail" role="heading"
+                      button testId="signout" press=signOut
+                        text "Sign Out"
+              if !signedIn
+                text "Signed out" testId="signed-out"
+        """)
+        defer { f.close() }
+        try f.press("open")
+        try f.press("push")
+        XCTAssertNotNil(f.window.attachedSheet)
+        try f.press("signout")
+        f.settle()
+        XCTAssertTrue(f.presenter.leaving.isEmpty, "removing all routes releases presenter.leaving")
+        XCTAssertNil(f.presenter.navigationHost.transitions.exiting)
+        XCTAssertNil(f.window.attachedSheet, "modal sheet closes rather than wedging open")
+
+        // Subcase 2: destroying the navigation root (`roots.isEmpty`) clears leaving and closes the sheet.
+        let g = try SheetFixture(page: """
+        keyframes fade-out
+          to opacity=0
+
+        routes nav
+          home "/"
+            modal "/modal"
+            detail "/detail"
+
+        component Proof
+          action open
+            nav = push(nav, "/modal")
+          action pushDetail
+            nav = push(nav, "/detail")
+          action cancel
+            nav = go(nav, "/")
+          view
+            column testId="root" navigationKey=`${top(nav).id}` navigationBack="back" width="100%" height="100%"
+              for e in stack(nav) key=e.id
+                if e.name == "home"
+                  column navigationKey=`${e.id}` testId="home" width=400
+                    button testId="open" press=open
+                      text "Open"
+                if e.name == "modal"
+                  column navigationKey=`${e.id}` navigationPresentation="modal" testId="modal" width=400
+                    header
+                      text "Modal" role="heading"
+                      button id="back" press=cancel
+                        text "Cancel"
+                    button testId="push" press=pushDetail
+                      text "Push"
+                if e.name == "detail"
+                  column navigationKey=`${e.id}` navigationPresentation="push" testId="detail" width=400
+                    ::view-transition-old
+                      animation="fade-out 60ms linear both"
+                    header
+                      text "Detail" role="heading"
+        """)
+        defer { g.close() }
+        try g.press("open")
+        try g.press("push")
+        let root = try g.node("root"), detail = try g.node("detail")
+        XCTAssertNotNil(g.window.attachedSheet)
+        g.presenter.apply(wireBatch([
+            ["op": "destroy", "id": Int(detail.id)],
+            ["op": "destroy", "id": Int(root.id)],
+            ["op": "roots", "ids": []],
+        ]))
+        g.settle()
+        XCTAssertTrue(g.presenter.leaving.isEmpty, "unmounting the navigation root releases presenter.leaving")
+        XCTAssertNil(g.presenter.navigationHost.transitions.exiting)
+        XCTAssertNil(g.window.attachedSheet, "modal sheet closes when the navigation root unmounts")
+    }
+
+    func testNavigationResetClearsRouteTransitionsState() throws {
+        let f = try SheetFixture(page: """
+        keyframes fade-in
+          from opacity=0
+        keyframes fade-out
+          to opacity=0
+
+        routes nav
+          home "/"
+            detail "/detail"
+
+        component Proof
+          action pushDetail
+            nav = push(nav, "/detail")
+          action popDetail
+            nav = go(nav, "/")
+          view
+            column testId="root" navigationKey=`${top(nav).id}` navigationBack="back" width="100%" height="100%"
+              for e in stack(nav) key=e.id
+                if e.name == "home"
+                  column navigationKey=`${e.id}` testId="home" width=400
+                    button testId="push" press=pushDetail
+                      text "Push"
+                if e.name == "detail"
+                  column navigationKey=`${e.id}` navigationPresentation="push" testId="detail" width=400
+                    ::view-transition-new
+                      animation="fade-in 300ms linear both"
+                    ::view-transition-old
+                      animation="fade-out 300ms linear both"
+                    button id="back" press=popDetail
+                      text "Back"
+        """)
+        defer { f.close() }
+        try f.press("push")
+        let transitions = f.presenter.navigationHost.transitions
+        XCTAssertNotNil(transitions.held, "push entrance transition is active")
+        f.presenter.reset()
+        XCTAssertNil(transitions.held, "reset clears held route transition state")
+        XCTAssertNil(transitions.exiting, "reset clears exiting route transition state")
+        XCTAssertTrue(f.presenter.leaving.isEmpty)
+        // Fresh views with low IDs must not be treated as held/exiting from before reset.
+        f.presenter.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["navigationKey": "fresh", "navigationBack": "back"]],
+            ["op": "create", "id": 2, "kind": "view", "props": ["navigationKey": "fresh"]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+        ]))
+        let fresh = try XCTUnwrap(f.presenter.views[2])
+        XCTAssertFalse(fresh.isHidden)
+        XCTAssertFalse(fresh.routeInert)
+        XCTAssertFalse(f.presenter.navigationHost.keepsForExit(fresh.id))
+    }
 }
 #endif

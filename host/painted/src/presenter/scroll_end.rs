@@ -3,7 +3,7 @@
 use super::*;
 use exact_kernel::NodeKey;
 use exact_runner::ReorderToken;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Completion {
@@ -13,6 +13,8 @@ pub(super) enum Completion {
     Collection,
     /// An element's smooth reveal (`glide.rs`): over when it lands.
     Glide,
+    /// Fine wheel ticks on a snapping scroller waiting to settle (`snap.rs`).
+    Wheel,
 }
 
 #[derive(Clone, Copy)]
@@ -32,7 +34,7 @@ pub(super) struct State {
     reader_previous: BTreeMap<ViewId, Pending>,
     /// The scrollers a reader's finger is dragging, or its fling is moving
     /// (`scroll_drag.rs`): their samples owe no completion until it is over.
-    held: BTreeSet<ViewId>,
+    held: BTreeMap<ViewId, Option<NodeKey>>,
     command_work: bool,
 }
 
@@ -54,6 +56,7 @@ impl<D: DataSource> Presenter<D> {
             || self.control_contact.is_some()
             || !self.scroll_end.pending.is_empty()
             || !self.scroll_end.model.is_empty()
+            || self.has_active_wheel_snap()
             || self
                 .timer_observations
                 .is_some_and(|(scrolling, _, _)| scrolling)
@@ -98,6 +101,9 @@ impl<D: DataSource> Presenter<D> {
         before: (f32, f32),
         completion: Completion,
     ) {
+        if completion == Completion::Instant {
+            self.snap_requested(view, before, self.scroll_of(view));
+        }
         // Input can move only the pending model, including back to the
         // acknowledged offset. Its completion still belongs to this input.
         if self.scroll_of(view) != before || self.pending_model_scroll(view).is_some() {
@@ -128,13 +134,17 @@ impl<D: DataSource> Presenter<D> {
             }
             // Deferred wheel input has one scroll event at the final offset,
             // and a reader's drag or fling goes on with the same scroll.
-            let held = completion == Completion::Reader && self.scroll_end.held.contains(&view);
+            let held = completion == Completion::Reader && self.scroll_end.held.contains_key(&view);
             let continuing = self.scroll_end_frame_blocked(view)
+                || (previous.kind == Completion::Wheel && self.wheel_snap.contains_key(&view))
                 || (completion == previous.kind
                     && (held
                         || matches!(
                             completion,
-                            Completion::Edge(_) | Completion::Collection | Completion::Glide
+                            Completion::Edge(_)
+                                | Completion::Collection
+                                | Completion::Glide
+                                | Completion::Wheel
                         )));
             if !continuing && self.scroll_end_finished(view, &previous) {
                 self.scroll_end.completed.push_back((
@@ -152,7 +162,10 @@ impl<D: DataSource> Presenter<D> {
         let due = match completion {
             Completion::Instant => self.host.now(),
             Completion::Reader => self.host.now() + 100.,
-            Completion::Edge(_) | Completion::Collection | Completion::Glide => f64::INFINITY,
+            Completion::Edge(_)
+            | Completion::Collection
+            | Completion::Glide
+            | Completion::Wheel => f64::INFINITY,
         };
         self.scroll_end.pending.insert(
             view,
@@ -172,6 +185,11 @@ impl<D: DataSource> Presenter<D> {
         before: (f32, f32),
         completion: Completion,
     ) {
+        let to = self.pending_model_scroll(view).map_or_else(
+            || self.scroll_of(view),
+            |m| (m.left.unwrap_or(before.0), m.top),
+        );
+        self.snap_requested(view, before, to);
         if self.booting || !self.tracks_scroll_end(view) {
             return;
         }
@@ -275,6 +293,11 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(super) fn retire_scroll_ends(&mut self) {
+        // A held scroller may disappear from a release handler even when it has no scrollend listener.
+        let kernel = self.host.kernel();
+        self.scroll_end.held.retain(|view, key| {
+            *view == PAGE || kernel.node(*view).is_some_and(|n| Some(n.key) == *key)
+        });
         let gone: Vec<_> = self
             .scroll_end
             .pending
@@ -306,6 +329,7 @@ impl<D: DataSource> Presenter<D> {
             .timer_due_ms()
             .into_iter()
             .chain(self.scroll_end_due())
+            .chain(self.wheel_snap_due())
             .chain(self.held_tap_due())
             .reduce(f64::min)
     }
@@ -316,7 +340,7 @@ impl<D: DataSource> Presenter<D> {
             .iter()
             .filter(|(id, _)| !self.scroll_end_blocked(**id))
             .filter_map(|(id, p)| {
-                if p.kind == Completion::Reader && self.scroll_end.held.contains(id) {
+                if p.kind == Completion::Reader && self.scroll_end.held.contains_key(id) {
                     None
                 } else if matches!(p.kind, Completion::Instant | Completion::Reader) {
                     Some(p.due)
@@ -340,10 +364,21 @@ impl<D: DataSource> Presenter<D> {
         match pending.kind {
             Completion::Edge(token) => !self.scroll_edge_active(view, token),
             Completion::Collection => false,
-            Completion::Reader if self.scroll_end.held.contains(&view) => false,
-            Completion::Glide => !self.gliding(view) && !self.zoom_animating(view),
+            Completion::Reader if self.scroll_end.held.contains_key(&view) => false,
+            Completion::Glide => {
+                !self.gliding(view) && !self.zoom_animating(view) && !self.snap_resnap_pending(view)
+            }
+            Completion::Wheel => !self.wheel_snap_pending(view),
             _ => pending.due <= self.host.now(),
         }
+    }
+
+    pub(super) fn snap_input_active(&self, view: ViewId) -> bool {
+        self.scroll_end_blocked(view) || self.scroll_held(view)
+    }
+
+    pub(super) fn reader_dragging(&self) -> bool {
+        !self.scroll_end.held.is_empty()
     }
 
     /// The reader holds scroller `view`'s scroll: its finger began dragging
@@ -351,24 +386,27 @@ impl<D: DataSource> Presenter<D> {
     /// completion, however long they rest.
     /// Whether the reader holds scroller `view`'s scroll.
     pub(super) fn scroll_held(&self, view: ViewId) -> bool {
-        self.scroll_end.held.contains(&view)
+        self.scroll_end.held.contains_key(&view)
     }
 
     pub(super) fn scroll_end_hold(&mut self, view: ViewId) {
-        self.scroll_end.held.insert(view);
+        let key = self.host.kernel().node(view).map(|n| n.key);
+        self.scroll_end.held.insert(view, key);
     }
 
     /// The reader's scroll of `view` is over (a lift with nothing thrown,
     /// the fling stopped): its completion is due now, as UIKit ends a drag
     /// that does not decelerate and a deceleration when it stops.
     pub(super) fn scroll_end_release(&mut self, view: ViewId) {
-        if !self.scroll_end.held.contains(&view) {
+        if !self.scroll_end.held.contains_key(&view) {
             return;
         }
         // A zoom written while the reader held it moves, as part of the
         // reader's scroll, before the end.
         self.zoom_rests(view);
         self.scroll_end.held.remove(&view);
+        self.snap_motion_landed(view);
+        self.dirty |= self.snap_probe_needed();
         let now = self.host.now();
         if let Some(p) = self
             .scroll_end
@@ -384,7 +422,7 @@ impl<D: DataSource> Presenter<D> {
     /// before it but what the touch stopped, so a scroll it did not say the
     /// end of (its view went) is over.
     pub(super) fn scroll_end_release_all(&mut self) {
-        for view in self.scroll_end.held.clone() {
+        for view in self.scroll_end.held.clone().into_keys() {
             self.scroll_end_release(view);
         }
     }
@@ -517,7 +555,10 @@ impl<D: DataSource + Default> Presenter<D> {
             if !field_bool(&reply, "settled") {
                 return reply;
             }
-            if self.scroll_end_due().is_none() && !self.scroll_end.command_work {
+            if self.scroll_end_due().is_none()
+                && self.wheel_snap_due().is_none()
+                && !self.scroll_end.command_work
+            {
                 break;
             }
             let command_work = std::mem::take(&mut self.scroll_end.command_work);

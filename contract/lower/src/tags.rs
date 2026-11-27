@@ -21,6 +21,7 @@ pub(crate) fn id_refusals(checked: &contract_types::Checked<'_>) -> Vec<crate::L
     out.extend(portal::check(checked));
     out
 }
+use crate::handlers::swipe;
 use exact_kernel::{NodeType, PropId, StyleId};
 use exact_plan::BindingsRow;
 /// What an attribute lowers to.
@@ -58,7 +59,7 @@ pub struct Tag {
     /// The prop the first positional argument fills, if any.
     pub positional: Option<PropId>,
 }
-fn p(name: &str) -> PropId {
+pub(crate) fn p(name: &str) -> PropId {
     PropId::from_name(name).unwrap_or_else(|| panic!("kernel schema has no prop `{name}`"))
 }
 /// Look up a tag.
@@ -85,6 +86,7 @@ pub fn tag(name: &str) -> Option<Tag> {
             ],
             &[],
         ),
+        "spacer" => view(crate::routes::bottom_toolbar::SPACE, &[]),
         "row" => view(
             &[(StyleId::Display, "flex"), (StyleId::FlexDirection, "row")],
             &[],
@@ -93,8 +95,7 @@ pub fn tag(name: &str) -> Option<Tag> {
             &[(StyleId::PositionType, "absolute")],
             &[(PropId::SemanticTag, "dialog")],
         ),
-        // @ref LLP 1021 D1 — HTML's separator, one hairline (LLP 1115.000
-        // D10.3); void.
+        // @ref LLP 1021 D1 — HTML's separator, one hairline (LLP 1115.000 D10.3); void.
         "hr" => view(crate::menus::HR, &[(PropId::SemanticTag, "hr")]),
         "main" => view(&[], &[(PropId::SemanticTag, "main")]),
         "header" => view(&[], &[(PropId::SemanticTag, "header")]),
@@ -247,8 +248,7 @@ pub fn tag(name: &str) -> Option<Tag> {
             fixed_props: &[],
             positional: None,
         },
-        // @ref LLP 1055.000 D14 — a filter and its primitives; a primitive's
-        // tag is its `fe` prop.
+        // @ref LLP 1055.000 D14 — a filter and its primitives; a primitive's tag is its `fe` prop.
         "filter" => Tag {
             node_type: NodeType::SvgFilter,
             fixed_styles: &[],
@@ -546,14 +546,15 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "intersect" => AttrTarget::Handler("intersect"),
         "intersect-margin" => AttrTarget::Prop(p("intersectMargin")),
         "reachend" => AttrTarget::Handler("reachend"),
-        "swiperight" => AttrTarget::Handler("swiperight"),
-        "swipeleft" => AttrTarget::Handler("swipeleft"),
+        "swiperight" | "swipeleft" | "swipe" | "swipe-direction" => swipe::attr(name)?,
         "refresh" => AttrTarget::Handler("refresh"),
         "scroll" => AttrTarget::Handler("scroll"),
         "scrollend" => AttrTarget::Handler("scrollend"),
         "scrolldragstart" => AttrTarget::Handler("scrolldragstart"),
         "scrolldragend" => AttrTarget::Handler("scrolldragend"),
         "pan" => AttrTarget::Handler("pan"),
+        "pinch" => AttrTarget::Handler("pinch"),
+        "pinchrelease" => AttrTarget::Handler("pinchrelease"),
         "panrelease" => AttrTarget::Handler("panrelease"),
         "navigate" => AttrTarget::Handler("navigate"),
         // @ref LLP 1115.000 D5.5 — the history swipe the host tracks.
@@ -599,12 +600,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "playbackVisibilityThreshold" => AttrTarget::Prop(p("playbackVisibilityThreshold")),
         "preservesPitch" => AttrTarget::Prop(p("preservesPitch")),
         "allowsPictureInPicturePlayback" => AttrTarget::Prop(p("allowsPictureInPicturePlayback")),
-        "canStartPictureInPictureAutomaticallyFromInline" => {
-            AttrTarget::Prop(p("canStartPictureInPictureAutomaticallyFromInline"))
-        }
-        "entersFullScreenWhenPlaybackBegins" => {
-            AttrTarget::Prop(p("entersFullScreenWhenPlaybackBegins"))
-        }
+        "canStartPictureInPictureAutomaticallyFromInline" => AttrTarget::Prop(p(name)),
+        "entersFullScreenWhenPlaybackBegins" => AttrTarget::Prop(p(name)),
         "exitsFullScreenWhenPlaybackEnds" => AttrTarget::Prop(p("exitsFullScreenWhenPlaybackEnds")),
         "showsTimecodes" => AttrTarget::Prop(p("showsTimecodes")),
         "allowsVideoFrameAnalysis" => AttrTarget::Prop(p("allowsVideoFrameAnalysis")),
@@ -614,11 +611,9 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // @ref LLP 1042.000 D2, D3 — which rendition an HLS stream plays.
         "preferredMaximumResolution" => AttrTarget::Prop(p("preferredMaximumResolution")),
         "startsOnFirstEligibleVariant" => AttrTarget::Prop(p("startsOnFirstEligibleVariant")),
-        "automaticallyWaitsToMinimizeStalling" => {
-            AttrTarget::Prop(p("automaticallyWaitsToMinimizeStalling"))
-        }
-        "preventsDisplaySleepDuringVideoPlayback" => {
-            AttrTarget::Prop(p("preventsDisplaySleepDuringVideoPlayback"))
+        "automaticallyWaitsToMinimizeStalling" => AttrTarget::Prop(p(name)),
+        "audiovisualBackgroundPlaybackPolicy" | "preventsDisplaySleepDuringVideoPlayback" => {
+            AttrTarget::Prop(p(name))
         }
         // `head`'s fields (LLP 1048.003 D1); they belong to `head` alone.
         "title" => AttrTarget::Prop(p("headTitle")),
@@ -632,21 +627,30 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "document" => AttrTarget::Prop(p("scrollDocument")),
         "virtualized" => AttrTarget::Prop(p("virtualized")),
         "testId" => AttrTarget::Prop(p("testId")),
-        "navigationKey" => AttrTarget::Prop(p("navigationKey")),
-        "navigationBack" => AttrTarget::Prop(p("navigationBack")),
-        "navigationHistory" => AttrTarget::Prop(p("navigationHistory")),
-        "navigationPresentation" => AttrTarget::Prop(p("navigationPresentation")),
-        "navigationDetent" => AttrTarget::Prop(p("navigationDetent")),
-        "navigationInitialDetent" => AttrTarget::Prop(p("navigationInitialDetent")),
-        "navigationGrabber" => AttrTarget::Prop(p("navigationGrabber")),
+        // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar (`none`: full bleed).
+        "navigationWidthFollowsPreferredContentSize" | "navigationKey" => AttrTarget::Prop(p(name)),
+        "navigationEdgeAttachedInCompactHeight" | "navigationGrabber" => AttrTarget::Prop(p(name)),
+        "navigationExtendsUnderOpaqueBars" | "navigationInitialDetent" => AttrTarget::Prop(p(name)),
+        "navigationVerticalBarCompression" | "navigationScrollExpands" => AttrTarget::Prop(p(name)),
+        "navigationPopoverOverlapsSource" | "navigationSelectedDetent" => AttrTarget::Prop(p(name)),
+        "navigationPopoverAdaptation" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
+        "navigationPopoverMargins" | "navigationExtendedLayout" => AttrTarget::Prop(p(name)),
+        "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
+        "navigationFullSizeContent" | "navigationSplitItemFullHeight" => AttrTarget::Prop(p(name)),
+        // @ref LLP 1123 D15 — a Mac split item's controls, and its accessories' own.
+        "navigationSplitItemAdjustsForOverlays" => AttrTarget::Prop(p(name)),
+        "navigationSplitItemTopAccessory" => AttrTarget::Prop(p(name)),
+        "navigationSplitItemBottomAccessory" => AttrTarget::Prop(p(name)),
+        "navigationAccessoryContentInsets" => AttrTarget::Prop(p(name)),
+        "navigationAccessoryScrollEdgeEffect" => AttrTarget::Prop(p(name)),
+        "navigationPresentation" | "navigationVerticalBar" => AttrTarget::Prop(p(name)),
+        "navigationHistory" | "navigationDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
+        "navigationBack" | "navigationBar" => AttrTarget::Prop(p(name)),
         // @ref LLP 1125 D11 — the Screen Wake Lock API's one type, on any element.
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.
         "orientationlock" => AttrTarget::Prop(p("orientationlock")),
-        // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
-        // `none` for a full-bleed screen.
-        "navigationBar" => AttrTarget::Prop(p("navigationBar")),
-        "navigationSource" | "sharedElement" => AttrTarget::Prop(p(name)),
+        "navigationSource" | "sharedElement" | "arrangement" => AttrTarget::Prop(p(name)),
         // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
         "portal" => AttrTarget::Prop(p("portal")),
         // @ref LLP 1075.003 §3.5 — the route's content scroll view, by HTML id.
@@ -668,8 +672,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "backgroundMaterial" => AttrTarget::Prop(p("backgroundMaterial")),
         "glassGroup" => AttrTarget::Prop(p("glassGroup")),
         "glassInteractive" => AttrTarget::Prop(p("glassInteractive")),
-        // The order a trigger's menu shows its rows in (LLP 1115 §2).
-        "menuOrder" => AttrTarget::Prop(p("menuOrder")),
+        "menuOrder" | "keepsMenuPresented" => AttrTarget::Prop(p(name)),
         "buttonStyle" => AttrTarget::Prop(p("buttonStyle")),
         "listStyle" => AttrTarget::Prop(p("listStyle")),
         "toolbarPlacement" => AttrTarget::Prop(p("toolbarPlacement")),
@@ -765,13 +768,13 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "lang" => AttrTarget::Prop(p("lang")),
         "src" => AttrTarget::Prop(p("src")),
         "sandbox" => AttrTarget::Prop(p("sandbox")),
-        // @ref LLP 1020.002 D1, §9 — a top-level guest's own storage, and
-        // `WKWebView`'s words under the platform's key (`frames.rs`).
+        // A top-level guest’s storage and WebKit options (@ref LLP 1020.002 D1, §9).
         "partition" => AttrTarget::Prop(p("partition")),
         "apple.allowsBackForwardNavigationGestures" => {
             AttrTarget::Prop(p("appleAllowsBackForwardNavigationGestures"))
         }
         "apple.allowsMagnification" => AttrTarget::Prop(p("appleAllowsMagnification")),
+        "apple.magnification" => AttrTarget::Prop(p("appleMagnification")),
         "apple.inactiveSchedulingPolicy" => AttrTarget::Prop(p("appleInactiveSchedulingPolicy")),
         // The Popover API, by its own names (LLP 1021 D1): a container with `popover` is
         // hidden until its invoker — a `button` whose `popovertarget` names the container's
@@ -799,8 +802,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "aria-hidden" => AttrTarget::Prop(p("accessibilityElementsHidden")),
         "aria-invalid" => AttrTarget::Prop(p("accessibilityInvalid")), // onboarding F22, spreadsheet F20
         "aria-describedby" => AttrTarget::Prop(p("accessibilityDescribedBy")),
-        // ARIA's name by reference (ledger2 Rough 3): the ids, space-separated,
-        // of the elements whose text names this one, before `aria-label`.
+        "aria-actions" => AttrTarget::Prop(p("accessibilityActions")),
+        // Referenced text takes precedence over aria-label (accname step 2B).
         "aria-labelledby" => AttrTarget::Prop(p("accessibilityLabelledBy")),
         // HTML's `tabindex`, no alias (LLP 1088 D7.3): present makes a box
         // focusable, `>= 0` a Tab stop; absent is never `0`.
@@ -988,8 +991,9 @@ pub fn renamed(old: &str) -> Option<&'static str> {
         "autoComplete" | "textContentType" | "autoCompleteType" => "autocomplete",
         "viewportFit" | "safeArea" | "safeAreaView" => "viewport-fit",
         "statusBarStyle" | "barStyle" | "StatusBar" => "status-bar-style",
-        // UIKit's and SwiftUI's names for a menu's order.
+        // UIKit's and SwiftUI's names for a menu's order and for keeping it open.
         "preferredMenuElementOrder" | "menu-order" | "menuElementOrder" => "menuOrder",
+        "keeps-menu-presented" | "menuActionDismissBehavior" => "keepsMenuPresented",
         // UIKit's `UIGlassEffect` properties and SwiftUI's `.tint`/`.interactive()`.
         "background-material-tint" | "backgroundMaterialTint" | "glassTint" | "glass-tint" => {
             "-exact-glass-tint"
@@ -1049,9 +1053,7 @@ pub fn renamed(old: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-// A list's row-size estimate is the virtualized list's host policy (LLP 1010
-// §6.5); the fixed-height windowed list it once also named is deleted (LLP
-// 1070 stage 1), so a hint without `virtualized=true` says how to migrate.
+// A row estimate on the former fixed-height list needs a migration to `virtualized=true` (LLP 1010 §6.5, LLP 1070 stage 1).
 pub(crate) fn validate_list(
     tag: &str,
     expanded: &[contract_syntax::Attr],
@@ -1157,8 +1159,7 @@ pub(crate) fn html_tag(name: &str) -> Option<&'static str> {
             "a label is `text` beside its field, and the field is named by `aria-label` (or `aria-labelledby` with the text's `id`)"
         }
         "heading" => "a heading is `h1` (to `h6` for the level)",
-        // The app farm's guesses (round 1): each names the Contract form
-        // that does the job.
+        // The app farm's guesses (round 1): each names the Contract form that does the job.
         "small" | "code" | "pre" | "paragraph" | "subtitle" => {
             "text is `text`, styled by its attributes (`font-size`, `font-family`, `white-space`)"
         }
@@ -1171,7 +1172,6 @@ pub(crate) fn html_tag(name: &str) -> Option<&'static str> {
         }
         "hstack" | "vstack" | "stack" | "flex" => "a horizontal stack is `row`, a vertical one `column`",
         "container" | "card" => "a box is `view` (or `column`, `row`), styled by a `style` declared in this file",
-        "spacer" => "a spacer is `view flex=1` in a `row` or `column`",
         "divider" => "a divider is `hr`",
         "br" => "a line break is a new `text`, or `\\n` in a string with `white-space=\"pre-line\"`",
         "icon" => "an icon is `image \"symbol:<role>\"`, or an `svg`",

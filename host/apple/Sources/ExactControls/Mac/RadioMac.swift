@@ -14,7 +14,7 @@ final class RadioCell: AriaButtonCellMac {
 
 /// A radio button that takes no focus of its own: its node holds it, so
 /// the node's `key` handlers and arrows hear the keys (`NodeView.keyDown`).
-final class RadioButtonMac: NSButton {
+final class RadioButtonMac: AccentToggleMac {
     override class var cellClass: AnyClass? { get { RadioCell.self } set {} }
     override var acceptsFirstResponder: Bool { false }
     override func mouseDown(with event: NSEvent) { if !contextClicked(event) { super.mouseDown(with: event) } }

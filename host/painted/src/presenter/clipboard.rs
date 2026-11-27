@@ -130,7 +130,7 @@ impl<D: DataSource> Presenter<D> {
             if let Some(error) = self.edit_field(
                 id,
                 next,
-                after,
+                field::EditSelection::Presenter(after),
                 now,
                 InputDetails {
                     input_type: "deleteByCut".into(),
@@ -290,7 +290,7 @@ pub(super) mod tests {
             let seeded = p.apply_field_edit(
                 id,
                 value.into(),
-                FieldSelection::at_end(value),
+                field::EditSelection::Presenter(FieldSelection::at_end(value)),
                 "seed".into(),
                 0.,
                 Default::default(),

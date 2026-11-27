@@ -55,11 +55,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
         crate::surfaces::prepare_gpu(compat);
         // The device's colours, before anything is resolved by a role (D4).
         let palette = colors::palette();
-        if let Some(palette) = &palette {
-            palette.tell();
+        if let Some(colors) = &palette {
+            colors.roles.tell();
         }
         let mut config = crate::app::Config::from_env_static(plan, compat);
         config.preferences = device::configured().map(|d| exact_runner::Preferences {
+            orientation: d.orientation,
             screen_reader: if config.agent {
                 exact_runner::ScreenReader::Unknown
             } else {
@@ -111,8 +112,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
         p.serve_requests();
         p.serve_frame_partitions(super::frame_partitions::kept);
         surface::serve(&mut p);
-        if let Some(palette) = &palette {
-            p.set_palette(palette);
+        if let Some(colors) = &palette {
+            p.set_reader_palette(colors);
         }
         eprintln!(
             "exact: canvas {}x{} px, scale {scale}, boot {:.1} ms",
@@ -178,6 +179,7 @@ fn reader_page(plan: &exact_plan::Plan) -> exact_runner::Page {
     let page = exact_runner::Page {
         can_share: true,
         can_share_files: true,
+        picture_in_picture_enabled: std::env::var("EXACT_ANDROID_VIDEO_PIP").as_deref() == Ok("1"),
         ..Default::default()
     };
     crate::presenter::with_partitions(page, plan, super::frame_partitions::kept)

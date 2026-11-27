@@ -82,7 +82,12 @@ pub(crate) fn parse_ops(ops: &Value, design: &str) -> Result<Vec<(String, Op)>, 
                 value: s(v, "value")?,
                 before: opt(v, "before")?,
             },
+            Some("remove-axis") => Op::RemoveAxis {
+                name: s(v, "name")?,
+            },
             Some("add-axis") => Op::AddAxis {
+                before: opt(v, "before")?,
+                comment: opt(v, "comment")?,
                 name: s(v, "name")?,
                 values: list(v, "values")?
                     .iter()

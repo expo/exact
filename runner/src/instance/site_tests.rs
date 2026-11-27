@@ -1,16 +1,12 @@
 use super::*;
-use exact_plan::builder::PlanBuilder;
+use exact_plan::{builder::PlanBuilder, Plan};
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 
-#[test]
-fn reused_frames_preserve_nested_scopes_and_release_rows_on_error() {
-    let plan = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1)
-        .finish()
-        .unwrap();
-    let sites = SiteIndex::new(&plan);
-    let mut ids = Ids::default();
-    let env = Env {
-        plan: &plan,
-        strings: &crate::vm::Strings::of([]),
+fn empty_env<'a>(plan: &'a Plan, strings: &'a crate::vm::Strings) -> Env<'a> {
+    Env {
+        plan,
+        strings,
         router: None,
         lists: None,
         format: None,
@@ -29,7 +25,71 @@ fn reused_frames_preserve_nested_scopes_and_release_rows_on_error() {
         failed_mutations: &[],
         store_dependent_derives: &[],
         store_dependent_resources: (&[]).into(),
-    };
+    }
+}
+
+struct Counting;
+thread_local! {
+    static CHILD_ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+fn count_allocation() {
+    let _ = CHILD_ALLOCATIONS.try_with(|count| {
+        if let Some(n) = count.get() {
+            count.set(Some(n + 1));
+        }
+    });
+}
+
+#[allow(unsafe_code)]
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        count_allocation();
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        count_allocation();
+        unsafe { System.realloc(ptr, layout, size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+#[test]
+fn child_array_construction_reuses_the_update_buffer() {
+    let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let leaf = builder.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let plan = builder.finish().unwrap();
+    let sites = SiteIndex::new(&plan);
+    let mut ids = Ids::default();
+    let strings = crate::vm::Strings::of([]);
+    let mut update = Update::new(empty_env(&plan, &strings), &sites, &mut ids);
+    let child = Child::Node(NodeInst::create(&mut update, leaf, &[]).unwrap());
+
+    let calls = [0, 1, 2, 3, 3].map(|width| {
+        CHILD_ALLOCATIONS.set(Some(0));
+        let children = Children::realize_n(&mut update, width, |_| Ok(child.clone()));
+        let calls = CHILD_ALLOCATIONS.replace(None).unwrap();
+        assert_eq!(std::hint::black_box(children.unwrap()).len(), width);
+        calls
+    });
+    // The first wide array also grows the scratch buffer.
+    assert_eq!(calls, [0, 1, 1, 2, 1]);
+}
+
+#[test]
+fn reused_frames_preserve_nested_scopes_and_release_rows_on_error() {
+    let plan = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1)
+        .finish()
+        .unwrap();
+    let sites = SiteIndex::new(&plan);
+    let mut ids = Ids::default();
+    let strings = crate::vm::Strings::of([]);
+    let env = empty_env(&plan, &strings);
     let mut update = Update::new(env, &sites, &mut ids);
     let owned = |v: f64| crate::vm::Owned {
         slots: BTreeMap::from([(0, Value::Number(v))]),

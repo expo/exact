@@ -77,7 +77,7 @@
 #[macro_use]
 extern crate std;
 
-#[cfg(all(not(feature = "std"), feature = "alloc"))]
+#[cfg(not(feature = "std"))]
 extern crate alloc;
 
 #[cfg_attr(feature = "serde", macro_use)]
@@ -97,9 +97,6 @@ mod readme_doctest {
     #![doc = include_str!("../README.md")]
 }
 
-#[cfg(feature = "block_layout")]
-#[doc(inline)]
-pub use crate::compute::compute_block_layout;
 #[cfg(feature = "flexbox")]
 #[doc(inline)]
 pub use crate::compute::compute_flexbox_layout;
@@ -112,13 +109,16 @@ pub use crate::compute::detailed_info::*;
 pub use crate::compute::{
     compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
 };
+#[cfg(feature = "block_layout")]
+#[doc(inline)]
+pub use crate::compute::{compute_block_align_content_offset, compute_block_layout};
 #[doc(inline)]
 pub use crate::style::Style;
-#[doc(inline)]
-pub use crate::tree::traits::*;
 #[cfg(feature = "taffy_tree")]
 #[doc(inline)]
 pub use crate::tree::TaffyTree;
+#[doc(inline)]
+pub use crate::tree::traits::*;
 #[cfg(feature = "std")]
 #[doc(inline)]
 pub use crate::util::print_tree;

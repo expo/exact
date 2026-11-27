@@ -1,20 +1,6 @@
 use super::*;
 use exact_runner::CacheMode;
 
-fn wait(core: &Core, ticket: u64) {
-    let end = Instant::now() + HANG;
-    let mut state = core.shared.state.lock().unwrap();
-    while !state.completed[0].iter().any(|r| r.ticket == ticket) {
-        assert!(Instant::now() < end, "ticket {ticket} did not complete");
-        state = core
-            .shared
-            .ready
-            .wait_timeout(state, Duration::from_millis(50))
-            .unwrap()
-            .0;
-    }
-}
-
 #[test]
 fn independent_requests_neither_refresh_complete_holds_nor_prevent_prefetch_holds() {
     for asynchronous in [false, true] {
@@ -126,13 +112,13 @@ fn a_queued_or_running_refresh_leaves_a_prefetch_as_a_plain_read() {
                     assert_eq!(collect(&core, &woke).0, 90);
                 }
                 server.seen(if queued { 3 } else { 2 });
-                wait(&core, 10);
+                let (got, outcome, _) = collect(&core, &woke);
+                assert_eq!(got, 10);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"old"));
                 finish.send(()).unwrap();
-                for (ticket, body) in [(20, b"new".as_slice()), (10, b"old")] {
-                    let (got, outcome, _) = collect(&core, &woke);
-                    assert_eq!(got, ticket);
-                    assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
-                }
+                let (got, outcome, _) = collect(&core, &woke);
+                assert_eq!(got, 20);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
                 let (reply, cached) = read(&core, &woke, &server, 30, "/feed");
                 if !no_hold || !cached || reply.body != b"new" {
                     failures.push((asynchronous, queued, mode));
@@ -338,7 +324,9 @@ fn a_write_head_wakes_readers_of_pending_and_complete_holds_without_another_pump
                     class: RequestClass::Read,
                     cache_store_withheld: false,
                 });
-                state.ordered.push_back(2);
+                state
+                    .ordered
+                    .push_back(reads::OrderedEntry::new(2, reads::OrderedKind::Read));
                 state.counts[0] += 1;
                 state.bytes[0] += charge;
                 assert!(waiting(&state, &state.jobs[0][0]));

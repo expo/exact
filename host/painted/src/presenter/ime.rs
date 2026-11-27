@@ -254,7 +254,13 @@ impl<D: DataSource> Presenter<D> {
             cancelable: false,
             is_composing: composing,
         };
-        if let Some(error) = self.edit_field(id, next, selection, self.host.now(), details) {
+        if let Some(error) = self.edit_field(
+            id,
+            next,
+            field::EditSelection::Presenter(selection),
+            self.host.now(),
+            details,
+        ) {
             self.host.log(error);
         }
     }
@@ -268,11 +274,9 @@ impl<D: DataSource> Presenter<D> {
         self.dirty = true;
         let Some(id) = id else { return };
         let value = self.field_text(id);
-        let selection = if value == composition.paint.value {
-            kept.unwrap_or(composition.selection)
-        } else {
-            FieldSelection::at_end(&value)
-        };
+        let selection = kept
+            .unwrap_or(composition.selection)
+            .through_rewrite(&composition.paint.value, &value);
         self.mark_field(id, &value, selection, false);
         if composition.changed {
             self.field_history.record(

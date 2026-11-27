@@ -39,6 +39,38 @@ final class AccessibilityTreeMacTests: XCTestCase {
         XCTAssertNil((button["states"] as? [String: Any])?["pressed"])
     }
 
+    /// A native view's accessibility element with a non-finite frame is reported
+    /// without a frame instead of crashing JSONSerialization on AppKit.
+    func testNonFiniteAccessibilityFramesAreOmittedInsteadOfCrashingJson() throws {
+        final class UnboundedHostView: NSView {
+            var fakeChildren: [NSAccessibilityElement] = []
+            override func isAccessibilityElement() -> Bool { false }
+            override func accessibilityChildren() -> [Any]? { fakeChildren }
+        }
+        let p = try fixture()
+        let host = UnboundedHostView(frame: NSRect(x: 200, y: 0, width: 60, height: 60))
+        let cases: [(String, NSRect)] = [
+            ("Infinite", NSRect(x: -1e38, y: -1e38, width: CGFloat.infinity, height: .infinity)),
+            ("NaN", NSRect(x: CGFloat.nan, y: 0, width: 60, height: 60)),
+            ("Overflow", NSRect(x: -1e308, y: 0, width: 60, height: 60)),
+        ]
+        host.fakeChildren = cases.map { name, rect in
+            let el = NSAccessibilityElement()
+            el.setAccessibilityParent(host)
+            el.setAccessibilityRole(.image)
+            el.setAccessibilityLabel(name)
+            el.setAccessibilityFrame(rect)
+            return el
+        }
+        try XCTUnwrap(p.views[1]).addSubview(host)
+        let ax = p.axElements(roots: [p.viewport])
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: ax))
+        for (name, _) in cases {
+            let found = try XCTUnwrap(elements(ax).first { $0["name"] as? String == name }, name)
+            XCTAssertNil(found["frame"], name)
+        }
+    }
+
     /// `painted`: a dialog and a popover in the page's top layer, the
     /// driver's own chrome, which is what the page's own projection of a
     /// modal is about; the last case here holds a dialog in AppKit's sheet.

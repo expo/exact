@@ -84,7 +84,7 @@ pub(crate) fn place(
             .iter()
             .any(|t| target.contains(t));
     // An Android library bakes as the Linux host it runs under the reader.
-    let android = target.contains("android");
+    let android = platform == "android" || target.contains("android");
     let packages = |kind: &str| extensions.is_none_or(|kinds| kinds.split(',').any(|k| k == kind));
     let packaged = packages("controls");
     let declared: Vec<String> = manifest

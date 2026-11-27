@@ -2,6 +2,10 @@
 #[path = "../build_support.rs"]
 mod build_support;
 
+#[cfg(target_os = "linux")]
+#[path = "build_support/simulator_cargo.rs"]
+mod simulator_cargo;
+
 use build_support::{
     acquire_bundle, apple_lipo_for, apple_simulator_arch, digest_file, download_options_from_env,
     installer_command, parse_pin_sha256, pin_for_target,
@@ -748,20 +752,22 @@ fn simulator_lipo_failures_name_the_executable() {
         source,
     }];
     let install = test_install(temporary.path(), &archives, true);
-    for (flag, successful_probe) in [
-        ("-archs", ""),
+    let failure = "printf 'bad archive\\n' >&2\nexit 1";
+    for (message, script) in [
+        ("-archs failed", failure),
+        ("-archs reported no architectures", "exit 0"),
         (
-            "-thin arm64",
-            "if [ \"$1\" = -archs ]; then printf 'arm64 x86_64\\n'; exit 0; fi\n",
+            "-thin arm64 failed",
+            "if [ \"$1\" = -archs ]; then printf 'arm64 x86_64\\n'; exit 0; fi\nprintf 'bad archive\\n' >&2\nexit 1",
+        ),
+        (
+            "-thin arm64 produced",
+            "if [ \"$1\" = -thin ]; then printf 'wrong slice' > \"$5\"; exit 0; fi\nif [ \"$(cat \"$2\")\" = archive ]; then printf 'arm64 x86_64\\n'; else printf 'x86_64\\n'; fi",
         ),
     ] {
-        let lipo = temporary.path().join(flag).join("llvm-lipo");
+        let lipo = temporary.path().join(message).join("llvm-lipo");
         fs::create_dir(lipo.parent().unwrap()).expect("LLVM bin directory");
-        fs::write(
-            &lipo,
-            format!("#!/bin/sh\n{successful_probe}printf 'bad archive\\n' >&2\nexit 1\n"),
-        )
-        .expect("fake llvm-lipo");
+        fs::write(&lipo, format!("#!/bin/sh\n{script}\n")).expect("fake llvm-lipo");
         fs::set_permissions(&lipo, fs::Permissions::from_mode(0o755))
             .expect("executable llvm-lipo");
         let error = prepare_apple_simulator_link_archives_with_lipo(
@@ -773,10 +779,12 @@ fn simulator_lipo_failures_name_the_executable() {
         )
         .expect_err("llvm-lipo rejects the archive");
         assert!(
-            error.starts_with(&format!("{} {flag} failed", lipo.display())),
+            error.starts_with(&format!("{} {message}", lipo.display())),
             "{error}"
         );
-        assert!(error.ends_with("bad archive"), "{error}");
+        if message.ends_with("failed") {
+            assert!(error.ends_with("bad archive"), "{error}");
+        }
     }
 }
 

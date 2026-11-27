@@ -50,6 +50,13 @@ thread_local! {
     /// The icons the design declares that were refused (their own error
     /// said why), so a use of one is not refused again as no role.
     static REFUSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Non-blocking warnings collected while reading declared icons (e.g. `forma-icon-not-template`).
+    static WARNINGS: RefCell<Vec<LowerError>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Warnings recorded by [`declare`] for the active build.
+pub(crate) fn warnings() -> Vec<LowerError> {
+    WARNINGS.with(|w| w.borrow().clone())
 }
 
 /// Mark icons refused: a use of one says nothing more.
@@ -248,6 +255,7 @@ pub fn shipped_targets(root: &Path) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Target {
     pub name: String,
+    pub includes_iphone: bool,
     /// "the `linux/` crate", "app.json `deploy.store.linux`".
     pub from: Vec<String>,
 }
@@ -276,6 +284,10 @@ fn targets(root: Option<&Path>) -> Vec<Target> {
         Some(t) => t.from.push(from),
         None => out.push(Target {
             name: name.to_string(),
+            includes_iphone: name == "ios"
+                && app["host"]["ios"]["deviceFamily"]
+                    .as_array()
+                    .is_none_or(|family| family.iter().any(|f| f == "iphone")),
             from: vec![from],
         }),
     };
@@ -309,7 +321,7 @@ pub(crate) fn declare<'a>(
     exported: &dyn Fn(&str) -> bool,
 ) -> Vec<LowerError> {
     let targets = ICONS.with(|i| i.borrow().1.clone());
-    let (mut out, mut errors) = (Vec::new(), Vec::new());
+    let (mut out, mut errors, mut icon_warnings) = (Vec::new(), Vec::new(), Vec::new());
     let mut sources = std::collections::HashMap::new();
     for icon in icons {
         let at = span(icon.line, icon.col);
@@ -352,9 +364,13 @@ pub(crate) fn declare<'a>(
                 ));
             }
         }
+        let mut refused_svg = false;
         for target in targets.iter().map(|t| t.name.as_str()) {
             if drawn(target, icon, svg.as_ref()).is_some() {
                 continue;
+            }
+            if matches!((&svg, &icon.svg), (Some(_), Some(_))) && target != "watchos" {
+                refused_svg = true;
             }
             errors.push(match (&svg, &icon.svg) {
                 // A watch draws neither template paths nor raster icon assets.
@@ -408,6 +424,22 @@ pub(crate) fn declare<'a>(
                 ),
             });
         }
+        if !refused_svg {
+            if let (Some(s), Some(file)) = (&svg, &icon.svg) {
+                if let Some(why) = s.not_template.as_deref().filter(|_| s.has_outline_issue) {
+                    icon_warnings.push(LowerError {
+                        id: "forma-icon-not-template",
+                        message: format!(
+                            "`{}`: {} is drawn as an outline/stroke SVG ({why}), so hosts render it as a raw image without tinting (and Apple rasterizes it). To make it a tinted template icon, {}",
+                            icon.name,
+                            home.shown(file),
+                            s.fix
+                        ),
+                        span: at,
+                    });
+                }
+            }
+        }
         out.push(resolved);
     }
     // One whose SVG was refused is out of the table; its uses say no more.
@@ -424,6 +456,7 @@ pub(crate) fn declare<'a>(
         .collect();
     ICONS.with(|i| *i.borrow_mut() = (out, targets));
     USED.with(|u| *u.borrow_mut() = (kept, false));
+    WARNINGS.with(|w| *w.borrow_mut() = icon_warnings);
     errors
 }
 
@@ -433,6 +466,7 @@ pub(crate) fn clear(root: Option<&Path>) {
     ICONS.with(|i| *i.borrow_mut() = (Vec::new(), targets(root)));
     REFUSED.with(|r| r.borrow_mut().clear());
     USED.with(|u| *u.borrow_mut() = (Vec::new(), false));
+    WARNINGS.with(|w| w.borrow_mut().clear());
 }
 
 /// The icon a name after `symbol:` means: `icon.reply` by its name, or
@@ -511,4 +545,69 @@ pub(crate) fn kept() -> Vec<Resolved> {
             .cloned()
             .collect()
     })
+}
+
+#[cfg(test)]
+mod icon_warning_tests {
+    use super::*;
+
+    #[test]
+    fn outline_svg_warns_forma_icon_not_template_while_multicolor_brand_does_not() {
+        let dir = std::env::temp_dir().join(format!("exact-icon-warn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets/icons")).unwrap();
+        std::fs::write(dir.join("app.json"), r#"{"name":"T","host":{"web":{}}}"#).unwrap();
+        std::fs::write(
+            dir.join("assets/icons/outline.svg"),
+            r#"<svg viewBox="0 0 24 24"><path d="M4 12h16" fill="none" stroke="currentColor"/></svg>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("assets/icons/brand.svg"),
+            r##"<svg viewBox="0 0 24 24"><path d="M0 0h12v24H0Z" fill="#e11d48"/><path d="M12 0h12v24H12Z" fill="#2563eb"/></svg>"##,
+        )
+        .unwrap();
+        clear(Some(&dir));
+        let icons = [
+            forma::Icon {
+                name: "icon.outline".into(),
+                sf: None,
+                material: None,
+                svg: Some("icons/outline.svg".into()),
+                line: 2,
+                written: 2,
+                col: 1,
+            },
+            forma::Icon {
+                name: "icon.brand".into(),
+                sf: None,
+                material: None,
+                svg: Some("icons/brand.svg".into()),
+                line: 3,
+                written: 3,
+                col: 1,
+            },
+        ];
+        let home = |_: &forma::Icon| Home {
+            root: Some(dir.as_path()),
+            package: None,
+        };
+        let refused = declare(
+            &icons,
+            &home,
+            &|line, col| Span {
+                source_id: 0,
+                line,
+                col,
+                end_col: col,
+            },
+            &|_| true,
+        );
+        assert!(refused.is_empty(), "{refused:?}");
+        let warned = warnings();
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert_eq!(warned[0].id, "forma-icon-not-template");
+        assert!(warned[0].message.contains("icon.outline"), "{warned:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -595,16 +595,21 @@ fn held_replies_keep_read_order_without_starting_a_worker() {
             assert_eq!(state.running.len(), 6);
             assert!(state.completed[0].iter().any(|c| c.ticket == 7 && c.cached));
         }
-        assert!(core.drain().is_empty());
         assert_eq!(server.count(), 7, "the held reply starts no exchange");
+        let (got, _, timing) = collect(&core, &woke);
+        assert_eq!(got, 7);
+        assert!(timing.cached);
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=7 {
+        let mut seen = Vec::new();
+        for _ in 1..=6 {
             let (got, _, timing) = collect(&core, &woke);
-            assert_eq!(got, ticket);
-            assert_eq!(timing.cached, ticket == 7);
+            assert!(!timing.cached);
+            seen.push(got);
         }
+        seen.sort_unstable();
+        assert_eq!(seen, (1..=6).collect::<Vec<_>>());
         assert_eq!(server.count(), 7);
     }
 }
@@ -941,15 +946,21 @@ fn refresh_admission_drops_equal_ready_and_pending_preloads_and_releases_waiters
                     assert!(dropped);
                     if pending {
                         release.send(()).unwrap();
+                        let mut got = Vec::new();
+                        for _ in 0..2 {
+                            let (ticket, outcome, timing) = collect(&core, &woke);
+                            assert!(!timing.cached);
+                            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
+                            got.push(ticket);
+                        }
+                        got.sort_unstable();
+                        assert_eq!(got, [1, 2]);
+                    } else {
                         let (ticket, outcome, timing) = collect(&core, &woke);
-                        assert_eq!(ticket, 1);
+                        assert_eq!(ticket, 2);
                         assert!(!timing.cached);
                         assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
                     }
-                    let (ticket, outcome, timing) = collect(&core, &woke);
-                    assert_eq!(ticket, 2);
-                    assert!(!timing.cached);
-                    assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
                     server.plan("/refresh", Plan::new(200, &[], b"new"));
                     assert_eq!(ask(&core, &woke, job(3, request)).0.body, b"new");
                     let journal = core.take_preload_journal();
@@ -1008,9 +1019,12 @@ fn a_post_preload_waiter_keeps_its_effect_place_until_the_held_reply_is_drained(
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 2..=17 {
-            assert_eq!(collect(&core, &woke).0, ticket);
+        let mut got = Vec::new();
+        for _ in 2..=17 {
+            got.push(collect(&core, &woke).0);
         }
+        got.sort_unstable();
+        assert_eq!(got, (2..=17).collect::<Vec<_>>());
     }
 }
 
@@ -1089,18 +1103,21 @@ fn a_seventeenth_post_waits_for_an_effect_place_on_either_preload_outcome_or_no_
             {
                 let state = core.shared.state.lock().unwrap();
                 assert!(state.fenced.is_empty());
-                assert!(state.ordered.contains(&17));
+                assert!(state.ordered.iter().any(|entry| entry.ticket == 17));
             }
             for release in releases {
                 release.send(()).unwrap();
             }
-            for ticket in 2..=17 {
-                let (got, _, timing) = collect(&core, &woke);
-                assert_eq!(got, ticket);
-                if got == 17 {
+            let mut got = Vec::new();
+            for _ in 2..=17 {
+                let (ticket, _, timing) = collect(&core, &woke);
+                if ticket == 17 {
                     assert_eq!(timing.cached, outcome == 0);
                 }
+                got.push(ticket);
             }
+            got.sort_unstable();
+            assert_eq!(got, (2..=17).collect::<Vec<_>>());
             assert_eq!(
                 server.count(),
                 if outcome == 0 || outcome == 2 { 17 } else { 18 }

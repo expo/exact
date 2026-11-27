@@ -334,7 +334,7 @@ fn desktop_alerts_focus_cancel_or_ok_on_open_and_replacement() {
 }
 
 /// A presenter whose shell makes windows, and the pictures it recorded.
-fn windowed() -> (Presenter<()>, Rc<RefCell<Vec<Pixmap>>>) {
+pub(super) fn windowed() -> (Presenter<()>, Rc<RefCell<Vec<Pixmap>>>) {
     let mut p = boot();
     let pictures = Rc::new(RefCell::new(Vec::new()));
     p.serve_requests();
@@ -512,7 +512,7 @@ fn the_shape_rule_is_the_one_the_apple_hosts_follow() {
     );
     // A menu: its items, the separator the author wrote, the symbol, the
     // destructive row and the disabled one.
-    let Some(Plan::Menu(entries)) = plan("menu") else {
+    let Some(Plan::Menu { entries, .. }) = plan("menu") else {
         panic!("menu is a menu");
     };
     let rows: Vec<_> = entries

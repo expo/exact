@@ -23,6 +23,8 @@ mod emit;
 #[cfg(test)]
 mod emit_tests;
 mod events;
+#[cfg(test)]
+mod events_tests;
 mod faces;
 mod facts;
 mod hoist;
@@ -54,6 +56,7 @@ mod presence_tests;
 #[cfg(test)]
 mod reader_tests;
 mod reads;
+mod safe_area;
 mod sized;
 mod style;
 mod svg_lengths;
@@ -145,6 +148,45 @@ fn scrub_design(input: &std::path::Path, text: &str) -> ExitCode {
     }
 }
 
+/// Read each frame against its own entry and plan. A folded scrub reuses the published
+/// plan and starts from the last committed values, including edits applied in place.
+fn frame_designs(input: &std::path::Path, request: &serde_json::Value) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let read = |frame: &Value| -> Option<Value> {
+        let text = request["text"].as_str();
+        if let Some(text) = text {
+            let path = contract::design_path(input)?;
+            let entry = std::path::Path::new(frame["entry"].as_str()?);
+            let (result, _) = contract::with_design_text(&path, text.into(), || {
+                contract::compile_frame_with_warnings(input, entry, false)
+            });
+            return result.ok().map(|(plan, _)| {
+                let _ = exact_runner::bridge::role_overrides(&plan);
+                modes::design(&plan)
+            });
+        }
+        let bytes = std::fs::read(frame["plan"].as_str()?).ok()?;
+        let plan = exact_plan::Plan::decode(&bytes).ok()?;
+        let mut values: Vec<(String, Vec<String>)> =
+            serde_json::from_value(frame["base"].clone()).ok()?;
+        values.extend(
+            serde_json::from_value::<Vec<(String, Vec<String>)>>(request["patch"].clone()).ok()?,
+        );
+        let next = patched(&plan, &values)?;
+        let _ = exact_runner::bridge::role_overrides(&next);
+        let mut design = modes::design(&next);
+        design["structure"] = json!(modes::structure_of(&plan, &next));
+        Some(design)
+    };
+    let designs: Vec<_> = request["frames"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(read)
+        .collect();
+    json!({"id": request["id"], "designs": designs})
+}
+
 /// `design-serve <app.contract>` (LLP 1121 D13): a scrub's frames, resident.
 /// One JSON request a line on stdin, `{id, key, patch: [[name, [css…]]…]}`:
 /// the app compiled once with its design file as it is on disk (again when
@@ -170,6 +212,12 @@ fn design_serve(input: &std::path::Path) -> ExitCode {
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
         let request: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
         let id = request["id"].clone();
+        if request["frames"].is_array() {
+            let _ = writeln!(out, "{}", frame_designs(input, &request));
+            let _ = out.flush();
+            holder.publish(exact_kernel::style::wide::WideMark::default());
+            continue;
+        }
         let key = request["key"].as_str().unwrap_or_default().to_string();
         if held.as_ref().is_none_or(|(k, ..)| *k != key) {
             held = None;
@@ -337,6 +385,16 @@ fn main() -> ExitCode {
     // a Contract compiled here leaves its source map beside the plan.
     let all: Vec<String> = std::env::args().skip(1).collect();
     if let [cmd, file] = all.as_slice() {
+        if cmd == "frame-designs" {
+            exact_web::link(exact_web_capabilities::ALL);
+            exact_kernel::style::roles::set_column(exact_kernel::style::roles::Column::Neutral);
+            let _every = modes::every(true);
+            let Ok(request) = serde_json::from_reader(std::io::stdin().lock()) else {
+                return ExitCode::from(2);
+            };
+            println!("{}", frame_designs(std::path::Path::new(file), &request));
+            return ExitCode::SUCCESS;
+        }
         if cmd == "design-serve" {
             return design_serve(std::path::Path::new(file));
         }

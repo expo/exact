@@ -80,4 +80,46 @@ final class WideColorTests: XCTestCase {
         XCTAssertEqual(colors[0].colorSpace?.name, CGColorSpace.extendedLinearSRGB)
         XCTAssertEqual(colors[0].components?[0], 1.2, "outside sRGB, unclipped")
     }
+
+    #if os(iOS) || os(tvOS)
+    func testIOSPaintCanvasDistinguishesWideGamutAndHDRRootBackgrounds() throws {
+        let p = Presenter()
+        var reported: [CGColor] = []
+        p.onCanvasColor = { reported.append($0.cgColor) }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 300.0],
+        ]))
+        XCTAssertEqual(reported.count, 1)
+        XCTAssertEqual(p.viewport.backgroundColor?.cgColor.colorSpace?.name, CGColorSpace.sRGB)
+
+        // Switching to Display P3 red clips to the same sRGB [255, 0, 0, 255] but must update the canvas.
+        p.apply(wireBatch([
+            ["op": "style", "id": 1, "style": ["background_color": ["cs": [["s": "display-p3", "v": [1, 0, 0, 1]]], "c": [255, 0, 0, 255]]]],
+        ]))
+        XCTAssertEqual(reported.count, 2)
+        XCTAssertEqual(p.viewport.backgroundColor?.cgColor.colorSpace?.name, CGColorSpace.extendedDisplayP3)
+        XCTAssertEqual(p.viewport.backgroundColor?.cgColor.components, [1, 0, 0, 1])
+
+        // Switching between two distinct out-of-sRGB-gamut P3 reds must also update the canvas.
+        p.apply(wireBatch([
+            ["op": "style", "id": 1, "style": ["background_color": ["cs": [["s": "display-p3", "v": [0.95, 0, 0, 1]]], "c": [255, 0, 0, 255]]]],
+        ]))
+        XCTAssertEqual(reported.count, 3)
+        XCTAssertEqual(p.viewport.backgroundColor?.cgColor.components?[0] ?? 0, 0.95, accuracy: 1e-6)
+
+        // Switching from SDR white to HDR white (> 1.0) clips to [255, 255, 255, 255] and must update.
+        p.apply(wireBatch([
+            ["op": "style", "id": 1, "style": ["background_color": [255, 255, 255, 255]]],
+        ]))
+        XCTAssertEqual(reported.count, 4)
+        p.apply(wireBatch([
+            ["op": "style", "id": 1, "style": ["background_color": ["cs": [["s": "srgb", "v": [2, 2, 2, 1]]], "c": [255, 255, 255, 255]]]],
+        ]))
+        XCTAssertEqual(reported.count, 5)
+        XCTAssertEqual(p.viewport.backgroundColor?.cgColor.colorSpace?.name, CGColorSpace.extendedSRGB)
+        XCTAssertEqual(p.viewport.backgroundColor?.cgColor.components, [2, 2, 2, 1])
+    }
+    #endif
 }

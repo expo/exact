@@ -1,5 +1,6 @@
 package dev.exact.canvas
 
+import android.graphics.Bitmap
 import android.graphics.fonts.Font
 import android.view.Gravity
 import android.view.View
@@ -30,7 +31,11 @@ import java.nio.IntBuffer
  * the layer, which the frame's drawing reaches after the page's view, records its bars again in that same pass,
  * where a view shown straight in the reader's root would wait for the root to be recorded again.
  */
-internal class Bars(activity: ExactActivity, root: FrameLayout) {
+internal class Bars(
+    activity: ExactActivity,
+    root: FrameLayout,
+    private val picture: (Int, Int, Int) -> Bitmap = { id, w, h -> makePicture(id, w, h, false) },
+) {
     /** The faces the bars have drawn with, by what announces each: a bar painted again makes none anew. */
     private val faces = HashMap<List<Int>, Font>()
     private val layer = FrameLayout(activity).also {
@@ -41,7 +46,7 @@ internal class Bars(activity: ExactActivity, root: FrameLayout) {
     private val panes = arrayOf(pane(activity, TOP), pane(activity, BOTTOM))
 
     private fun pane(activity: ExactActivity, which: Int): Pane {
-        val pane = Pane(activity, faces, { action, x, y -> Exact.bar(which, action, x, y) }, null)
+        val pane = Pane(activity, faces, { action, x, y -> Exact.bar(which, action, x, y) }, null, picture)
         pane.visibility = View.INVISIBLE
         layer.addView(pane, FrameLayout.LayoutParams(0, 0).apply { gravity = Gravity.TOP or Gravity.LEFT })
         return pane
@@ -62,7 +67,10 @@ internal class Bars(activity: ExactActivity, root: FrameLayout) {
             }
             at += 6 + n
         }
-        for ((i, pane) in panes.withIndex()) if (!shown[i] && pane.visibility == View.VISIBLE) pane.visibility = View.INVISIBLE
+        for ((i, pane) in panes.withIndex()) if (!shown[i] && pane.visibility == View.VISIBLE) {
+            pane.visibility = View.INVISIBLE
+            pane.clearBitmaps()
+        }
     }
 
     /** Put [pane] at its frame now, and leave its layout parameters saying the same for the parent's next pass. */

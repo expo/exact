@@ -1269,7 +1269,7 @@ test.each([posix.sep, win32.sep])('the JS watcher skips build outputs and keeps 
     };
     runInNewContext(rules + source.slice(begin, end) + '\nwatch(app.dir, { recursive: true }, changed(app.dir));', context);
     for (const name of ['target/web-js-dev-stage/hash/manifest.json', 'app.contract.d.ts', 'macos.out', 'macos.err',
-      'other.OUT', '.exact/evidence.err', 'node_modules/unused/source.contract', 'nested/.cache/file.js', 'frames/preview.contract']) {
+      'other.OUT', '.exact/evidence.err', 'node_modules/unused/source.contract', 'nested/.cache/file.js', 'frames/nested/preview.fixture.mts', 'frames/preview.contract', 'frames/photo.png']) {
       notify('change', name.replaceAll('/', sep));
       expect(context.edited.has(join(dir, name)), name).toBe(false);
       expect(pending, name).toBeNull();
@@ -1277,7 +1277,7 @@ test.each([posix.sep, win32.sep])('the JS watcher skips build outputs and keeps 
     expect(rebuilds).toBe(0);
     const inputs = ['app.contract', 'app.forma', 'app.ts', 'unused.ts', 'helper.js', 'local-crate/src/messages.err',
       'local-crate/src/captured.out', 'assets/logo.png', 'shader-gen/captured.out', 'declared.out', 'tools/declared.err',
-      '.env.local', '.exact/backend-origin', 'node_modules/used/source.contract', 'frames/shared.contract'];
+      '.env.local', '.exact/backend-origin', 'node_modules/used/source.contract', 'frames/shared.contract', 'frames-near/preview.contract', 'frames/helper.ts'];
     if (sep === '/') inputs.push('nested\\target\\literal.ts');
     for (const [index, name] of inputs.entries()) {
       notify('change', name.replaceAll('/', sep));

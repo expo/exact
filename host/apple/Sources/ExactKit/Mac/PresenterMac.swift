@@ -36,7 +36,7 @@ package final class Presenter {
     var personScrolls = 0, fragmentArm: (activation: Int, scrolls: Int)?, fragmentSeen = 0 // the person's wheels and live scrolls; the activation a router change asked a fragment's scroll for and their count then, which one since cancels; the last armed (Fragment.swift)
     lazy var focusEvents = FocusEvents(self)
     var inlineOwners: [UInt32: (owner: UInt32, index: Int)] = [:]
-    private(set) package var chrome = ChromeIndex()
+    internal(set) package var chrome = ChromeIndex()
     /// Views leaving with their exit, by id (LLP 1063, `PresenceMac.swift`).
     package var leaving: [UInt32: Leaving] = [:]
     /// The shared elements in flight (LLP 1013.000, `FlightLink`).
@@ -59,7 +59,7 @@ package final class Presenter {
     func settleTip(_ view: NodeView) {
         guard !view.held else { return }
         if view.isButton && !view.isNativeButton && view.props["title"] == nil && view.authoredLabel != nil { pendingTips.insert(view.id) }
-        else if view.toolTip != view.props["title"] { view.toolTip = view.props["title"] }
+        else { view.setToolTip(view.props["title"]) }
     }
     /// Custom buttons with a label and no `title`, whose help tag waits for
     /// the batch to mount their content.
@@ -68,7 +68,7 @@ package final class Presenter {
         for id in pendingTips {
             guard let view = views[id] else { continue }
             let tip = view.props["title"] ?? (view.accessibleText.isEmpty ? view.authoredLabel : nil)
-            if view.toolTip != tip { view.toolTip = tip }
+            view.setToolTip(tip)
         }
         pendingTips.removeAll()
     }
@@ -86,6 +86,8 @@ package final class Presenter {
     }
     /// Scroll containers: the only views with a position to keep across a batch.
     var scrollers: Set<UInt32> = []
+    /// Nodes carrying drag, sticky, flight, animation, table, block, SVG or canvas state.
+    var subsystemTracked: Set<UInt32> = []
     let glassGroups = GlassGroups()
     /// Views with an authored offset waiting for their frames.
     var pendingScrolls: Set<UInt32> = []
@@ -399,11 +401,11 @@ package final class Presenter {
         min(0.004, max(0.001, interval * 0.24))
     }
     var sliceBudget: TimeInterval { Self.listSliceBudget(refreshInterval) }
-    private var listFillCosts: [UInt32: ListFillCost] = [:]
-    private struct ListTravel {
+    var listFillCosts: [UInt32: ListFillCost] = [:]
+    struct ListTravel {
         var top: CGFloat, time: TimeInterval, velocity: Double = 0, step: Double = 0
     }
-    private var listTravel: [UInt32: ListTravel] = [:]
+    var listTravel: [UInt32: ListTravel] = [:]
     package func listVelocity(_ id: UInt32) -> Double {
         guard !ExactEnv.agentMode, let travel = listTravel[id],
               CACurrentMediaTime() - travel.time < 0.15 else { return 0 }
@@ -621,7 +623,7 @@ package final class Presenter {
     /// The page's canvas: the first root's background, else the theme's, else
     /// the platform's (LLP 1115 D2).
     func canvasColor() -> NSColor {
-        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: .windowBackgroundColor)
+        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: root.window is RoutePanel ? .clear : .windowBackgroundColor)
         return (root.subviews.first as? NodeView)?.color("background_color", ground) ?? ground
     }
 
@@ -695,13 +697,14 @@ package final class Presenter {
         for id in Array(leaving.keys) { _ = endExit(id) }
         views.values.forEach { $0.forget() }
         root.subviews.forEach { $0.removeFromSuperview() }
-        views.removeAll()
-        inlineOwners.removeAll()
+        views.removeAll(); inlineOwners.removeAll()
+        stickies.reset(); tableGrid.reset(); svg?.reset(); boxAnimations.reset(); canvas2d.reset()
         hoveredInline = nil
         hoveredNodes = []; hovered = nil
         chrome = ChromeIndex()
         AriaCarriers.forget(presenter: self)
         scrollers.removeAll()
+        subsystemTracked.removeAll()
         pendingScrolls.removeAll()
         drags.reset()
         videoVisibility?.reset()
@@ -848,6 +851,7 @@ package final class Presenter {
         listViews.removeValue(forKey: id)
         listTravel.removeValue(forKey: id)
         listFillCosts.removeValue(forKey: id)
+        subsystemTracked.remove(id)
         return gone
     }
     var onSubmit: ((UInt32) -> Void)?
@@ -882,19 +886,26 @@ package final class Presenter {
         guard let click = pressClick ?? nativeClick, [.leftMouseDown, .leftMouseUp].contains(click.type) else { return nil }
         return client(NodeView.point(click, in: viewport.window))
     }
-    package func press(_ id: UInt32, fromNativeMenu: Bool = false, held: String = "", bubbled: Bool = false, outsideModal: Bool = false, click: NSEvent? = nil) {
+    /// The row of the split's list the press being sent is (`press`), which its batch carries (`Batch.splitPress`).
+    var pressSplitRow: (row: UInt32, list: UInt32)?
+    /// `splitList`: the split's table whose row this press is (`TableFeed.pressRow`).
+    package func press(_ id: UInt32, fromNativeMenu: Bool = false, held: String = "", bubbled: Bool = false, outsideModal: Bool = false, click: NSEvent? = nil, splitList: UInt32? = nil) {
         pressHeld = held; defer { pressHeld = "" } // `outsideModal`: an app-wide menu item's (ShortcutsMac `enabled`)
         guard let node = textHost(id), !(bubbled || outsideModal ? node.authoredInert : node.inert), !node.disabled,
               fromNativeMenu || (segments.shown(node) ?? sidebar.shows(node) ?? dataTables.shows(node) ?? !node.isHiddenOrHasHiddenAncestor) || toolbar.contains(node) else { return }
         commitPendingEdit() // the press no longer ends a field's editing (FocusMac.swift)
         guard views[node.id] === node else { return }
-        // A route this press brings is the row's detail (SplitMac.swift).
-        let split = navigation.stackSplit, row = split.pressing == nil && split.pressesPaintedRow(node)
-        if row { split.pressing = node.id }
-        defer { if row { split.pressing = nil } }
+        // A route this press brings is the row's detail (SplitMac.swift): its batch says which row it was.
+        let outer = pressSplitRow
+        pressSplitRow = outer ?? (splitList ?? navigation.stackSplit.paintedRowList(node)).map { (row: node.id, list: $0) }
+        defer { pressSplitRow = outer }
         let command = dialogs.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
         let popover = menus.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
-        if command == nil && popover == nil, node.id == id, let url = node.defaultLink, node.activateLink(url, bubbled: bubbled) { return }
+        // A link follows its link, and one that also hides its popover (a menu's link row) hides it then
+        if command == nil, popover == nil || menus.onlyHides(node), node.id == id, let url = node.defaultLink, node.activateLink(url, bubbled: bubbled) {
+            popover?()
+            return
+        }
         if node.isButton, !node.handlers.contains("press") { dispatchButtonAncestor(node, click: click ?? pressClick) }
         else if (command == nil && popover == nil) || node.handlers.contains("press") { pressClick = click ?? pressClick; onPress?(id); pressClick = nil }
         guard views[node.id] === node else { return }
@@ -912,7 +923,7 @@ package final class Presenter {
     var onChecked: ((UInt32, Bool) -> Void)?
     func typed(_ id: UInt32, _ value: String, input: Bool) {
         edited = id
-        if input { onInput?(id, value) }
+        if input { fieldSelections.input(id, value) }
     }
     package func commitEdit(_ id: UInt32, _ value: String, change: Bool) {
         guard edited == id else { return }
@@ -1096,9 +1107,11 @@ package final class Presenter {
         let keepFit = preservesDocumentFit(batch) && viewport.hasCurrentDocumentFit
         if !keepFit { viewport.invalidateDocumentFit() }
         collections.beginBatch(batch)
+        let stage = revealing?.revealCount == batch.ops.count ? revealing : nil
+        let bulkRetired = stage?.retiredPlainSet
         // The window's bar is read again only by a batch that touches what it read (`WindowToolbarHost.concerns`),
         // or one whose navigation pass moved what it reads (`inputsChanged`, below).
-        let bar = toolbar.concerns(batch)
+        let bar = toolbar.concerns(batch) || (bulkRetired.map { toolbar.concernsRetired($0) } ?? false)
         if bar { toolbar.prepare() }
         anchorChanges.reset()
         // Read focus only if an ordinary scroller needs an anchor.
@@ -1122,7 +1135,7 @@ package final class Presenter {
         // Create, frame or content ops: rows may have come or moved (`HeavyLeaves.batchApplied`).
         let moved = revealing != nil || batch.ops.contains { [.create, .frame, .content].contains($0.op) }
         // What may now lie under a resting pointer: boxes made, moved, gone or transformed.
-        let relaid = batch.ops.contains { [.create, .renew, .frame, .children, .roots, .destroy, .present, .style, .props, .rank, .sticky, .fragments, .exit].contains($0.op) }
+        let relaid = (bulkRetired?.isEmpty == false) || batch.ops.contains { [.create, .renew, .frame, .children, .roots, .destroy, .present, .style, .props, .rank, .sticky, .fragments, .exit].contains($0.op) }
         defer {
             collections.endBatch()
             collections.observeKnobDrags()
@@ -1149,14 +1162,13 @@ package final class Presenter {
             if relaid { followPointer() }
         }
         // No view changed: no pass over the views. A correction may have scrolled a context preview's source.
-        if Self.onlySnapshots(batch) { tables.sync(batch); positionContexts(); return }
+        if bulkRetired?.isEmpty != false, Self.onlySnapshots(batch) { tables.sync(batch); positionContexts(); return }
         var reparented = Set<UInt32>()
-        let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .renew, .style].contains($0.op) }
+        let structureChanged = (bulkRetired?.isEmpty == false) || batch.ops.contains { [.children, .roots, .destroy, .create, .renew, .style].contains($0.op) }
         if structureChanged { selection.structureChanged() }
         // A batch carries the control state it changes (`Batch.controlReads`); one without it has its faces read again.
         if let reads = batch.controlReads { controls.took(reads) } else if batch.controls { controls.facesChanged() }
         // The staged batch's reveal holds the ops preparation left; what it made joins the table and its hosts now.
-        let stage = revealing?.revealCount == batch.ops.count ? revealing : nil
         if let stage { revealing = nil; views.merge(stage.made) { _, made in made }; publish(stage) }
         revealedStage = stage != nil
         var retired = Set<UInt32>()
@@ -1169,7 +1181,7 @@ package final class Presenter {
             if kind == .destroy, let stage, let up = views[id]?.nodeSuperview, stage.destroyed.contains(up.id) {} else
             if kind == .children { touched(id, children: true) } else if kind != .roots && kind != .create { touched(id, textChanged: kind == .props || kind == .style || kind == .destroy || kind == .fieldContent) }
             switch kind {
-            case .transformDrag, .heightDrag: _ = drags.bind(kind, op.payload)
+            case .transformDrag, .heightDrag: subsystemTracked.formUnion(drags.bind(kind, op.payload))
             case .retireMotion:
                 if let rawRuntime = op.payload["runtime"] as? String, let runtime = UInt64(rawRuntime),
                    let rawToken = op.payload["token"] as? String, let token = UInt64(rawToken) {
@@ -1198,10 +1210,11 @@ package final class Presenter {
                 if v.style["text_color"] != color { session?.noteAppearance(v) }
             case .children: placeChildren(op, reparented: &reparented, leaving: stage?.destroyed)
             case .surface:
-                if let v = views[id] { session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] as? Data ?? Data("[]".utf8)) }
-            case .canvas2d: if let v = views[id] { canvas2d.apply(id, op.payload, layer: v.layer) }
-            case .svg: if let v = views[id] { svg?.scene(id, op.payload, layer: v.layer, dark: v.drawsDark, clock: session?.clock, limit: v.style["dynamic_range_limit"]?.string, tint: v.viewTint) }
+                if let v = views[id] { subsystemTracked.insert(id); session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] as? Data ?? Data("[]".utf8)) }
+            case .canvas2d: if let v = views[id] { subsystemTracked.insert(id); canvas2d.apply(id, op.payload, layer: v.layer) }
+            case .svg: if let v = views[id] { subsystemTracked.insert(id); svg?.scene(id, op.payload, layer: v.layer, dark: v.drawsDark, clock: session?.clock, limit: v.style["dynamic_range_limit"]?.string, tint: v.viewTint) }
             case .animations:
+                subsystemTracked.insert(id)
                 boxAnimations.animations(id, op.payload, layer: views[id]?.layer, clock: session?.clock)
                 views[id]?.applyTransform()
             case .command:
@@ -1210,32 +1223,17 @@ package final class Presenter {
                 if name == "stopPropagation" { propagationStopped = true; break }
                 onCommand?(name, op.payload["args"] as? [Any] ?? [], (op.payload["source"] as? NSNumber)?.uint32Value)
             case .exit: beginExit(id)
-            case .flight: flightHost.begin(op)
+            case .flight: subsystemTracked.insert(id); flightHost.begin(op)
             case .land: flightHost.land(id)
             case .rank:
                 if let rank = op.rank { views[id]?.setRank(rank) }
             case .layoutHits, .layoutHitsWithdrawn: break
-            case .sticky: stickies.apply(id, op.payload)
+            case .sticky: subsystemTracked.insert(id); stickies.apply(id, op.payload)
             case .fragments: views[id]?.applyColumns(op.payload)
-            case .table: tableGrid.apply(id, op.payload)
-            case .unknown: blocks.applied(op)
+            case .table: subsystemTracked.insert(id); tableGrid.apply(id, op.payload)
+            case .unknown: subsystemTracked.insert(id); blocks.applied(op)
             case .renew: renew(id)
-            case .destroy:
-                elements.destroyed(id)
-                blocks.destroyed(id)
-                stickies.forget(id)
-                tableGrid.forget(id)
-                flightHost.forget(id)
-                views[id]?.holdGone()
-                if endExit(id) { continue }
-                // A route that left with its exit to play stays for it (RouteTransitionMac.swift).
-                if navigation.keepsForExit(id) { beginExit(id); continue }
-                // A plain box under one the reveal takes down lets its caches go as it leaves (`Teardown`).
-                let underRetired = stage.map { stage in views[id].map { StagePlan.plainKinds.contains($0.kind) && $0.nodeSuperview.map { stage.destroyed.contains($0.id) } == true } == true } == true
-                if let gone = release(id, forget: !underRetired, retiring: &retired) {
-                    if underRetired { teardown.forgetAsRemoved(gone) }
-                    if !(stage.map { retire(gone, $0) } ?? false) { gone.removeFromSuperview() }
-                }
+            case .destroy: destroyOne(id, stage: stage, retired: &retired)
             case .roots:
                 let children = op.ids.compactMap { views[$0] }
                 dialogs.children(root, children)
@@ -1267,8 +1265,9 @@ package final class Presenter {
             default: break
             }
         }
+        if let stage { retirePlainDescendants(stage, retiring: &retired) }
         // Ids a later op made again keep their index entries.
-        if !retired.isEmpty { chrome.forget(all: retired.filter { views[$0] == nil }) }
+        if !retired.isEmpty { let gone = retired.filter { views[$0] == nil }; chrome.forget(all: gone); inputGates.forget(all: gone) }
         regridMoved(); if !renewing.isEmpty { renewsApplied() }
         for top in stage.map({ Array($0.tops.keys) }) ?? [] { if let v = views[top] { v.releaseOffstage(); reparented.insert(top) } }
         NodeView.inkPlaced(reparented.compactMap { views[$0] })
@@ -1372,7 +1371,7 @@ package final class Presenter {
     func placeChildren(_ op: BatchOp, reparented: inout Set<UInt32>, leaving: Set<UInt32>? = nil) {
         let id = op.id
         guard let parent = views[id] else { return }
-        let want = regionPopoverChildren(op.ids, of: parent).compactMap { views[$0] }
+        let want = ScrollportBars.place(parent, regionPopoverChildren(op.ids, of: parent), in: self).compactMap { views[$0] } // D12's bars aside
         let container = parent.container
         dialogs.children(container, want)
         menus.children(container, want)
@@ -1396,7 +1395,7 @@ package final class Presenter {
             container.addSubview(child)
             regrid(child)
         }
-        orderChildren(want, in: container)
+        orderChildren(want, in: container, leaving: leaving)
     }
 
     private static let accessibilityOps: Set<BatchOp.Kind> = [.create, .props, .style, .children, .paragraph, .flow, .frame, .fieldContent]

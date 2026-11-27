@@ -94,11 +94,16 @@ mod http;
 pub struct Request {
     /// The producing module generation. Kept in process; never part of the wire request.
     pub module: Option<crate::ModuleInstance>,
+    /// Runner ticket for a native call from a mutation. The runner assigns it when the
+    /// request leaves the source so admission can consult the originating action.
+    pub mutation_ticket: Option<u64>,
     /// Native HTTP scheduling; storage and continuations must remain ordered.
     pub http: HttpScheduling,
     /// Executor-local continuation token, not an HTTP request. The browser
     /// drains its module's microtasks; native hosts take source-owned worker work.
     pub continuation: Option<u64>,
+    /// Whether a continuation is local module/storage work eligible for `RequestClass::Local`.
+    pub local: bool,
     /// Portable storage operation; independent of HTTP and native closures.
     pub storage: Option<Vec<u8>>,
     /// A named surface capture or restore, executed by its owning presenter.
@@ -299,6 +304,7 @@ impl Request {
                 max_response_bytes: 1 << 20,
             },
             continuation: None,
+            local: false,
             storage: None,
             surface: None,
             grants: None,
@@ -322,6 +328,7 @@ impl Request {
             prefetch: false,
             held: false,
             reach: Default::default(),
+            mutation_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -396,12 +403,31 @@ impl Request {
             && self.body_from.is_none()
             && self.body_to.is_none()
     }
+    /// Local storage or JS module-turn continuation that does not touch the
+    /// network and may overlap plain HTTP `Read`s on `Target::Resource`
+    /// (LLP 1162 §8 Q2).
+    pub fn is_local_work(&self) -> bool {
+        self.http == HttpScheduling::Ordered
+            && (self.storage.is_some() || (self.continuation.is_some() && self.local))
+            && self.surface.is_none()
+            && !self.stream
+            && !self.socket
+            && self.listen.is_none()
+            && !self.is_process()
+            && self.long_poll.is_none()
+            && !self.upload_progress
+            && !self.is_native()
+            && !self.is_auth()
+            && self.body_from.is_none()
+            && self.body_to.is_none()
+    }
     /// A `GET`.
     pub fn get(url: &str) -> Request {
         Request {
             module: None,
             http: HttpScheduling::Ordered,
             continuation: None,
+            local: false,
             storage: None,
             surface: None,
             grants: None,
@@ -425,6 +451,7 @@ impl Request {
             prefetch: false,
             held: false,
             reach: Default::default(),
+            mutation_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -449,6 +476,7 @@ impl Request {
             module: None,
             http: HttpScheduling::Ordered,
             continuation: None,
+            local: false,
             storage: None,
             surface: None,
             grants: None,
@@ -472,6 +500,7 @@ impl Request {
             prefetch: false,
             held: false,
             reach: Default::default(),
+            mutation_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -482,6 +511,7 @@ impl Request {
     pub fn storage(payload: Vec<u8>) -> Self {
         Self {
             storage: Some(payload),
+            local: true,
             ..Self::get("")
         }
     }
@@ -649,25 +679,25 @@ impl Request {
         self
     }
 
-    /// Held: the server may keep the reply until something changes, and no
-    /// clock waits on it (see [`Request::held`]). On anything but a plain
-    /// HTTP request it changes nothing.
+    /// Held: the server or data source may keep the reply until something
+    /// changes, and no clock waits on it (see [`Request::held`]; LLP 1016.000
+    /// D9, amended by LLP 1156.008.000 D4). Applies to plain HTTP requests and
+    /// explicit continuations; on anything else it changes nothing.
     pub fn held(mut self) -> Self {
         self.held = true;
         self
     }
 
     /// Whether no clock waits on this request: [`Request::held`] on a plain
-    /// HTTP request (not a stream, storage, a continuation, a surface, a
-    /// native call or an auth request, nor an upload, whose file is read
-    /// before it is sent).
+    /// HTTP request or an explicit continuation (not a stream, storage, a
+    /// surface, a native call or an auth request, nor an upload, whose file is
+    /// read before it is sent).
     pub fn is_held(&self) -> bool {
         self.held
             && !self.stream
             && self.body_from.is_none()
             && self.body_to.is_none()
             && self.storage.is_none()
-            && self.continuation.is_none()
             && self.surface.is_none()
             && !self.is_native()
             && !self.is_auth()
@@ -859,6 +889,7 @@ impl Request {
     pub fn continuation<S: crate::HostWork + ?Sized>(token: u64) -> Self {
         Self {
             continuation: Some(token),
+            local: S::LOCAL,
             ..Self::get("")
         }
     }
@@ -1095,6 +1126,20 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// A native call the host cannot route. Package bindings read its error record
+    /// and a direct `native.later` rejects on its status.
+    pub fn module_refusal(error: &str, message: Option<&str>) -> Self {
+        let mut body = serde_json::json!({ "error": error });
+        if let Some(message) = message {
+            body["message"] = message.into();
+        }
+        Self::Response(Response {
+            status: 500,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: body.to_string().into_bytes(),
+        })
+    }
+
     /// The stream messages it carries, in arrival order: none unless it is
     /// a [`Outcome::Message`] or [`Outcome::Messages`].
     pub fn messages(&self) -> &[Message] {
@@ -1320,6 +1365,10 @@ pub enum RequestClass {
     Ordered,
     /// A plain HTTP request a resource's answer made: it does not wait for the reads before it.
     Read,
+    /// Local storage or module-turn work for a resource or background cleanup:
+    /// runs and drains beside plain HTTP `Read`s while staying FIFO with other
+    /// local work and behind earlier sends (LLP 1162 §8 Q2).
+    Local,
     /// A send of `plan.mutations[m]`, a `parallel` mutation: it does not wait for that mutation's other sends.
     Parallel(u32),
 }
@@ -1433,30 +1482,6 @@ mod summary_tests {
 #[cfg(test)]
 #[path = "request_reply_tests.rs"]
 mod reply_tests;
-
-#[cfg(test)]
-mod scheduling_tests {
-    use super::*;
-
-    #[test]
-    fn http_is_ordered_until_the_source_explicitly_opts_in() {
-        for request in [
-            Request::get("https://example.test"),
-            Request::post_json("https://example.test", "{}"),
-            Request::continuation::<crate::host_work::TestWork>(1),
-            Request::storage(vec![]),
-        ] {
-            assert_eq!(request.http, HttpScheduling::Ordered);
-        }
-        let request = Request::get("https://example.test").independent_http(4096);
-        assert_eq!(
-            request.http,
-            HttpScheduling::Independent {
-                max_response_bytes: 4096
-            }
-        );
-    }
-}
 
 #[cfg(test)]
 #[path = "request_tests.rs"]

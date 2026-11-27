@@ -12,4 +12,6 @@ pub(crate) struct TextStyle {
     pub(crate) layout: Vec<Attr>,
     /// The lowered parent includes list cards and swipe scrollers absent from the source.
     pub(crate) parent_horizontal_flex: Option<bool>,
+    /// The text `navigationSplit` is once lowering folds it, where it is a constant (LLP 1127 D1).
+    pub(crate) split: Option<String>,
 }

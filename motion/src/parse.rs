@@ -108,10 +108,13 @@ static LINKED: std::sync::OnceLock<&'static TransitionGrammar> = std::sync::Once
 
 /// Link the `transition` shorthand's grammar and check (LLP 1047 D2, linked
 /// by use). An artifact links them when its plan binds a `transition` or
-/// `-exact-layout-transition` row, and a plan that does so unlinked is
-/// refused at boot (D6), so an unlinked artifact never parses one. The
-/// kernel's all-linking constructor, the compiler and the JS target's
-/// emitter link them always.
+/// `-exact-layout-transition` row, uses a `sharedElement`, or uses list
+/// reorder (whose runtime writes `transition` on rows in
+/// `runner/src/instance/collection/reorder.rs` and
+/// `runner/src/runner/mounted_reorder.rs`, selected by `runner/src/uses.rs`),
+/// and a plan that does so unlinked is refused at boot (D6), so an unlinked
+/// artifact never parses one. The kernel's all-linking constructor, the
+/// compiler and the JS target's emitter link them always.
 pub fn link_transitions() {
     #[cfg(not(test))]
     let _ = LINKED.set(&TRANSITIONS);
@@ -410,7 +413,9 @@ fn numbers(args: &[String]) -> Option<Vec<f64>> {
     args.iter().map(|a| word::number(a)).collect()
 }
 
-/// Split on `sep` outside parentheses.
+/// Split on `sep` outside parentheses. A space stands for any CSS white
+/// space (CSS Syntax 3 §4.2): a tab, a line feed, a carriage return or a form
+/// feed separates words as a space does.
 pub(crate) fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0;
@@ -419,7 +424,9 @@ pub(crate) fn split_top_level(s: &str, sep: char) -> Vec<&str> {
         match c {
             '(' => depth += 1,
             ')' => depth -= 1,
-            c if c == sep && depth == 0 => {
+            c if depth == 0
+                && (c == sep || (sep == ' ' && matches!(c, '\t' | '\n' | '\r' | '\u{c}'))) =>
+            {
                 out.push(&s[start..i]);
                 start = i + c.len_utf8();
             }
@@ -680,5 +687,32 @@ mod tests {
             .unwrap_err()
             .to_string()
             .starts_with("`STEPS(4, Sideways)`: `steps()` takes"));
+    }
+
+    /// CSS white space (CSS Syntax 3 §4.2) separates a shorthand's words: a
+    /// tab, a line feed, a carriage return or a form feed reads as a space.
+    #[test]
+    fn any_css_white_space_separates_a_shorthands_words() {
+        let spaced = Transitions::parse("opacity 1s cubic-bezier(0.4, 0, 0.2, 1) 2s").unwrap();
+        for text in [
+            "opacity\t1s cubic-bezier(0.4, 0, 0.2, 1) 2s",
+            "opacity 1s\ncubic-bezier(0.4, 0, 0.2, 1)\r\n2s",
+            "opacity\u{c}1s cubic-bezier(\n  0.4,\n  0,\n  0.2,\n  1\n) 2s",
+        ] {
+            assert_eq!(Transitions::parse(text), Ok(spaced.clone()), "{text:?}");
+        }
+        let spaced =
+            crate::Animations::parse("spin 1s cubic-bezier(0.4, 0, 0.2, 1) infinite, fade 2s")
+                .unwrap();
+        for text in [
+            "spin\t1s cubic-bezier(0.4, 0, 0.2, 1)\tinfinite,\nfade 2s",
+            "spin\n1s\ncubic-bezier(\n0.4,\n0,\n0.2,\n1\n)\ninfinite,\r\nfade\u{c}2s",
+        ] {
+            assert_eq!(
+                crate::Animations::parse(text),
+                Ok(spaced.clone()),
+                "{text:?}"
+            );
+        }
     }
 }

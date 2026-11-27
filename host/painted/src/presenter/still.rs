@@ -17,10 +17,13 @@ pub(crate) struct Still {
     menu: Option<(ViewId, Option<usize>, u32)>,
     page: (u32, u32),
     viewport: (u32, u32),
+    safe: [f32; 4],
     dark: bool,
     controls: BTreeMap<ViewId, bool>,
     feedback: (Option<ViewId>, Option<ViewId>),
     held_press: Option<ViewId>,
+    /// The executors' safe-area state, which no epoch moves (LLP 1123 D13).
+    safe_area: u64,
 }
 
 impl Still {
@@ -56,6 +59,7 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let bits = |(a, b): (f32, f32)| (a.to_bits(), b.to_bits());
+        let env = self.host.kernel().arena().env();
         Some(Still {
             epoch: self.host.kernel().epoch(),
             images: self
@@ -69,10 +73,12 @@ impl<D: DataSource> Presenter<D> {
             menu: (self.menu).map(|id| (id, self.menu_row, self.menu_scroll.to_bits())),
             page: bits(self.page),
             viewport: bits(self.viewport),
+            safe: [env.top, env.right, env.bottom, env.left],
             dark: self.brush.dark,
             controls: self.controls.clone(),
             feedback: self.brush.feedback,
             held_press: self.brush.held_press,
+            safe_area: self.host.safe_area.generation(),
         })
     }
 

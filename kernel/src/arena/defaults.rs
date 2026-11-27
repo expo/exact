@@ -223,12 +223,7 @@ impl NodeArena {
         if self.children(route).first() != Some(&header) {
             return false;
         }
-        let presented = |r| {
-            matches!(
-                self.props(r).str(PropId::NavigationPresentation),
-                Some("modal" | "fullscreen")
-            )
-        };
+        let presented = |r| self.props(r).presentation().is_some();
         !presented(route)
             && !self.parent(route).is_some_and(|stack| {
                 self.children(stack)

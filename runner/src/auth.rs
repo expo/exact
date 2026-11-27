@@ -330,6 +330,19 @@ fn loopback(url: &Url<'_>) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
+/// Whether `grant` has the origin-only HTTP(S) URL shape an `auth.session`
+/// target requires: no control/whitespace characters, no userinfo or backslash
+/// in the authority, and no path beyond `/`, query or fragment.
+pub(crate) fn is_session_grant_origin(grant: &str) -> bool {
+    Url::parse(grant).is_some_and(|u| {
+        matches!(u.scheme.as_str(), "http" | "https")
+            && u.authority.is_some_and(|a| !a.contains(['@', '\\']))
+            && matches!(u.path, "" | "/")
+            && u.query.is_none()
+            && u.fragment.is_none()
+    })
+}
+
 /// `net.fetch`'s grammar for one `auth.session` target: an origin, or
 /// `scheme://*.domain` (a subdomain of a domain of two or more labels).
 /// The refusal of the first `auth.session` line that is not an origin, for
@@ -346,13 +359,13 @@ pub fn session_grant_refusal(grants: &str) -> Option<String> {
         if grant.is_empty() {
             return Some("grants: `auth.session` names no origin. An auth.session grant names a scheme, host and port, and admits every sign-in page there; write `auth.session https://login.example`, the sign-in page's".into());
         }
+        if is_session_grant_origin(grant) {
+            return None;
+        }
         let url = Url::parse(grant);
         let origin = url.as_ref().filter(|u| {
             matches!(u.scheme.as_str(), "http" | "https") && u.authority.is_some()
         });
-        if origin.is_some_and(|u| matches!(u.path, "" | "/") && u.query.is_none() && u.fragment.is_none()) {
-            return None;
-        }
         let write = origin
             .and_then(Url::origin)
             .map_or(String::new(), |o| format!("; write `auth.session {o}`"));
@@ -818,13 +831,16 @@ pub fn arm_with_fixture<D: DataSource>(
     fixture: Option<&str>,
 ) -> Arm {
     let ticket = out.ticket;
-    if out.request.reach.origin == crate::CallOrigin::Action {
-        settle(
-            runner,
-            ticket,
-            403,
-            "auth sessions are refused during a background action",
-        );
+    if out.request.reach.origin != crate::CallOrigin::App {
+        let origin = out.request.reach.origin;
+        runner.ticket_person_required(ticket);
+        let message = match origin {
+            crate::CallOrigin::Action => {
+                "auth sessions are refused during a background action".to_owned()
+            }
+            _ => format!("person-required ({} origin)", origin.word()),
+        };
+        settle(runner, ticket, 403, &message);
         return Arm::Settled;
     }
     let body = String::from_utf8_lossy(&out.request.body).into_owned();

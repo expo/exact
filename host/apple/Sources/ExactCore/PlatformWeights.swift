@@ -64,7 +64,23 @@ extension TextEngine {
     private static let wghtTag = 0x77676874 as NSNumber // 'wght'
 
     /// San Francisco's `wght` at each named weight.
+    #if canImport(UIKit)
+    private static let stopsLock = NSLock()
+    private static var cachedStops: [Bool: [CGFloat]] = [:]
+    private static var systemStops: [CGFloat] {
+        let bold = UIAccessibility.isBoldTextEnabled
+        stopsLock.lock()
+        if let kept = cachedStops[bold] { stopsLock.unlock(); return kept }
+        stopsLock.unlock()
+        let computed = namedWeights.map { wght(PlatformFont.systemFont(ofSize: 17, weight: $0))?.value ?? 400 }
+        stopsLock.lock()
+        cachedStops[bold] = computed
+        stopsLock.unlock()
+        return computed
+    }
+    #else
     private static let systemStops: [CGFloat] = namedWeights.map { wght(PlatformFont.systemFont(ofSize: 17, weight: $0))?.value ?? 400 }
+    #endif
 
     /// One variation axis of a face: its tag, range and default.
     package struct Axis: Equatable {

@@ -1,10 +1,8 @@
 # Recipe: a second window
 
-A `link` whose `target` names a window opens that window at the link's route,
-as HTML's does (LLP 1030.004). On the Mac it is its own session, rooted at the
-route (that screen alone, no sidebar), sharing the app's store. The next press
-brings it forward, at the link's route. On the web it is the browser window or
-tab of that name. Other hosts navigate in place.
+A `link` with a named `target` opens that route in its own Mac window or
+browser tab. Other hosts navigate in place. On macOS it opens the route alone,
+without a sidebar. A second press brings the same window to the link's route (LLP 1030.004).
 
 ```contract
 routes nav
@@ -39,8 +37,7 @@ component App
             text `This window is ${page.name}` testId="window-name"
 ```
 
-Drive it on the Mac: `bun exact.mjs agent macos "tap new-message" state` opens
-it and lists each window's `name`, `location` and whether it is rooted.
+`bun exact.mjs agent macos "tap new-message" state` lists each window’s `name`, `location` and whether it is rooted.
 
 What to know:
 
@@ -49,16 +46,17 @@ What to know:
   that starts with `_` and is no keyword, or is `window-<n>` (the agent's label
   for a window with no name), is refused; a bound one that starts with `_` acts
   as `_blank`.
+- **HUD.** Add `windowKind="panel"` to the opening link to float above
+  full-screen Mac apps without activating. Other hosts report `panel`
+  unsupported. Escape closes the HUD when it receives the key.
 - **Which window.** `exactPage().name` is `main` in the app's first window on
   every host, the `target` in a window a link opened, and empty in a `_blank`
   one. Every window runs the root's `task`s, so gate work the app does once:
   `task sync when page.name == "main"`.
-- **One store.** A `persist` state or a store write in one window reaches the
-  others' readers. So does an `app:/` file write, and a SQLite statement that
-  changed a row or the schema (a `CREATE TABLE IF NOT EXISTS` that finds the
-  table, or a `DELETE` that matches nothing, does not): a resource that read
-  that file or database is asked again. On the
-  web, two tabs cannot open one SQLite database at once.
+- **One store.** Persisted state, store and `app:/` writes reach each window’s readers.
+  A SQLite statement refreshes readers only if rows or schema change. A no-op
+  `DELETE` or `CREATE TABLE IF NOT EXISTS` leaves readers alone.
+  On the web, two tabs cannot open the same SQLite database at once.
 - **Closing.** Closing a window ends its session. `main` holds the app: under
   `keepRunning` or with a status item placed, closing it hides it, and a Dock
   click shows it again.

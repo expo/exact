@@ -38,6 +38,7 @@ public final class ExactView: NSView {
     }
     @objc public func stopSpeaking(_ sender: Any?) { Self.speech.stopSpeaking(at: .immediate) }
     private static let speech = AVSpeechSynthesizer()
+    private weak var hud: NSVisualEffectView?
     private var lastSize = CGSize.zero
     private var lastScreen: CGSize?
     private var fitPending = false
@@ -234,6 +235,8 @@ public final class ExactView: NSView {
 
     /// The first root's `viewport-fit` prop (`"cover"` or nothing).
     public var viewportFit: String? { session.presenter.viewportFit }
+    /// What the window's root route says of full-size content (LLP 1123 D16), `nil` where it says nothing.
+    public var fullSizeContent: Bool? { session.presenter.rootFullSizeContent }
 
     public override func layout() {
         super.layout()
@@ -326,6 +329,21 @@ public final class ExactView: NSView {
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window is RoutePanel {
+            if hud == nil {
+                let effect = NSVisualEffectView(frame: bounds)
+                effect.material = .hudWindow
+                effect.blendingMode = .behindWindow
+                effect.state = .active
+                effect.autoresizingMask = [.width, .height]
+                addSubview(effect, positioned: .below, relativeTo: session.presenter.viewport)
+                hud = effect
+                session.presenter.navigation.resync()
+            }
+        } else {
+            if let hud { hud.removeFromSuperview(); session.presenter.navigation.resync() }
+        }
+        session.presenter.paintCanvas(session.presenter.canvasColor())
         ExactApp.shared.refreshDevPills() // in the window it joined, or another's (DevPill.swift)
         observeEnvironment()
         toolbarVisibilityObservation = nil

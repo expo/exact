@@ -10,20 +10,33 @@
 // compiles the recognizer, a minute or more, so the suite gives it two.
 // `EXACT_VISION_FIXTURE=<dir>` keeps the fixture app there between runs.
 //
-// usage: bun packages/barcode-detection/test/agent.mjs [web] [macos] [ios] [--sim <udid>]
+// usage: bun packages/barcode-detection/test/agent.mjs [web] [macos] [ios] [android] [--sim <udid>]
+import { checkPortraits, portraitSteps } from '../../face-detection/test/portraits.mjs';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { BOX, NEAR, STILLS, boxOf, checker, discard, images, makeFixture, near, run, shown } from './fixture.mjs';
+import { BOX, NEAR, STILLS, boxOf, checker, discard, images, makeFixture, near, root, run, shown } from './fixture.mjs';
 
 const argv = process.argv.slice(2), sim = argv.includes('--sim') ? argv[argv.indexOf('--sim') + 1] : process.env.EXACT_SIM;
-const hosts = argv.filter((a, i) => ['web', 'macos', 'ios'].includes(a) && argv[i - 1] !== '--sim');
+const hosts = argv.filter((a, i) => ['web', 'macos', 'ios', 'android'].includes(a) && argv[i - 1] !== '--sim');
 const { check, failed } = checker();
-const { app } = makeFixture();
+const { app } = makeFixture({ android: hosts.includes('android') });
 const env = { ...process.env, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' };
 
 /** The quote's four lines, as `make-fixtures.swift` drew them. */
 const QUOTE = ['It is a truth universally acknowledged,', 'that a single man in possession', 'of a good fortune, must be', 'in want of a wife.'];
 
 for (const host of hosts.length ? hosts : ['web']) {
+  if (host === 'android') {
+    const serial = env.ANDROID_SERIAL;
+    if (!serial) throw new Error('Set ANDROID_SERIAL to the emulator to drive');
+    const abi = run('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.cpu.abi'], app, env).trim();
+    run('bun', [join(root, 'scripts/agent-android.mjs'), 'build', app, '--apk', '--release', '--abis', abi], root, env);
+    const apk = join(app, 'target/android/app/outputs/apk/release/app-release.apk');
+    const out = run('bun', [join(root, 'scripts/agent.mjs'), 'android', '--reader', '--app', app,
+      '--storage', `faces-${process.pid}`, 'clock data', ...portraitSteps()], root, { ...env, EXACT_ANDROID_BIN: apk });
+    checkPortraits(host, out, check);
+    continue;
+  }
   const reads = host !== 'web';
   if (host === 'macos') run('bun', ['exact.mjs', 'mac'], app, env);
   if (host === 'ios') run('bun', ['exact.mjs', 'ios', ...(sim ? ['--sim', sim] : [])], app, env);
@@ -36,6 +49,7 @@ for (const host of hosts.length ? hosts : ['web']) {
     for (const image of ['quote', 'rotatedQuote']) {
       ops.push('tap choose', `pick @image ${images[image]}`, 'clock data', 'tap read-text', ...Array(6).fill('clock data'), 'tree read', 'tree lines');
     }
+    ops.push(...portraitSteps());
     ops.push('tap read-missing', 'clock data', 'tree read-error');
   } else {
     ops.push('tap read-missing', 'clock data', 'tree read-error');
@@ -56,6 +70,7 @@ for (const host of hosts.length ? hosts : ['web']) {
   check(host, 'none.png answers an empty list', found[7] === '400x300 0', found[7]);
   check(host, 'an unknown format, a path outside the grants, a missing file', JSON.stringify(shown(out, 'found-error').slice(-3)) === '["TypeError","NotAllowedError","NotFoundError"]', JSON.stringify(shown(out, 'found-error')));
   if (reads) {
+    checkPortraits(host === 'ios' ? 'ios-simulator' : host, out, check, !argv.includes('--allow-missing-pose'));
     const read = shown(out, 'read'), lines = shown(out, 'lines');
     check(host, 'text is available, en-US and fr matched to the recognizer\'s tags', /^available - \d+$/.test(shown(out, 'reader')[0] ?? '') && shown(out, 'reader-en')[0] === 'available - en-US,fr-FR', `${shown(out, 'reader')} ${shown(out, 'reader-en')}`);
     check(host, 'the quote reads its four lines', read[0] === '1200x360 4' && lines[0] === QUOTE.join('|'), `${read[0]} ${lines[0]}`);

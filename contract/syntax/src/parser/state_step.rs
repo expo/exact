@@ -86,4 +86,66 @@ impl Parser {
             span,
         })
     }
+
+    /// A JSON value from its tokens, as JSON text. Its brackets may span lines.
+    pub(super) fn json_value(&mut self) -> R<String> {
+        let mut out = String::new();
+        self.json_value_into(&mut out, 0)?;
+        Ok(out)
+    }
+
+    fn json_value_into(&mut self, out: &mut String, depth: usize) -> R<()> {
+        const MAX_JSON_DEPTH: usize = 128;
+        use std::fmt::Write;
+        let token = self.next();
+        match token.kind {
+            TokenKind::Json(raw) => out.push_str(&raw),
+            TokenKind::Punct(open @ ("{" | "[")) => {
+                if depth >= MAX_JSON_DEPTH {
+                    return Err(SyntaxError {
+                        id: "syntax-json-depth",
+                        message: format!("JSON values nest more than {MAX_JSON_DEPTH} levels deep"),
+                        span: token.span,
+                    });
+                }
+                let close = if open == "{" { "}" } else { "]" };
+                out.push_str(open);
+                let mut first = true;
+                while !self.eat_punct(close) {
+                    if !first {
+                        self.expect_punct(",")?;
+                        out.push(',');
+                    }
+                    first = false;
+                    if open == "{" {
+                        out.push_str(&steps::json_string(&self.str_lit("a key")?));
+                        self.expect_punct(":")?;
+                        out.push(':');
+                    }
+                    self.json_value_into(out, depth + 1)?;
+                }
+                out.push_str(close);
+            }
+            TokenKind::Str(s) => out.push_str(&steps::json_string(&s)),
+            TokenKind::Number(n) => {
+                let _ = write!(out, "{n}");
+            }
+            TokenKind::Punct("-") if matches!(self.peek_kind(), TokenKind::Number(_)) => {
+                let n = self.step_number("a number")?;
+                let _ = write!(out, "-{n}");
+            }
+            TokenKind::Ident(w) if w == "true" || w == "false" || w == "null" => out.push_str(&w),
+            other => {
+                return Err(SyntaxError {
+                    id: "syntax-expected-step",
+                    message: format!(
+                        "expected a JSON object, list, string, number, true, false or null, found {}",
+                        describe(&other)
+                    ),
+                    span: token.span,
+                });
+            }
+        }
+        Ok(())
+    }
 }

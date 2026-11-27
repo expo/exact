@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { cdpBrowser, chromium } from '../../../scripts/agent-launch.mjs';
 import { need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
+import { localImports } from '../../web-js/glue.mjs';
 
 const { unavailable } = chromium(), check = need('chrome', unavailable);
 const file = path => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -39,7 +40,7 @@ export function connect({ changed }) { changed('meter'); }
 let server;
 beforeAll(() => {
   if (unavailable) return;
-  const scripts = { '/boot.js': BOOT, '/native.js': file('../../web-js/native.js'), '/native-glue.js': file('../native-glue.js'), '/modules/index.js': ARTIFACT };
+  const scripts = { '/boot.js': BOOT, '/native.js': localImports(file('../../web-js/native.js')), '/native-glue.js': file('../native-glue.js'), '/load-once.js': file('../load-once.js'), '/modules/index.js': ARTIFACT };
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const url = new URL(request.url), policy = POLICIES[Number(url.searchParams.get('policy') ?? 0)] ?? POLICIES[0];
     if (url.pathname === '/') return new Response(PAGE, { headers: { 'content-type': 'text/html', 'content-security-policy': policy } });

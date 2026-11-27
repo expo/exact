@@ -61,7 +61,7 @@ export async function fixture(options = {}) {
     const navigation = { holdLink() { return null; }, withLink(_link, update) { return update(); } };
     const register = () => {}, seek = () => {}, root = {}, log = () => {};
     const loadAfterPaint = () => { throw new Error('surface fixture: unexpected lazy module load'); };
-    const agentMode = false, frameSampler = null, textflow = null, page = null, clocks = {sync() {}}, presence = {hold: () => false}, letGo = () => {}, motion = {commit() {}, followTimelines() {}}, arrange = {commit() {}}, flowBatch = () => {}, refitTexts = () => {}, playSymbolEffects = () => {};
+    const agentMode = false, frameSampler = null, textflow = null, page = null, clocks = {sync() {}}, presence = {hold: () => false}, letGo = () => {}, motion = {commit() {}, followTimelines() {}}, arrange = {commit() {}}, flowBatch = () => {}, refitTexts = () => {}, playSymbolEffects = () => {}, settleGeometry = () => {};
     const host = { timelinesMoved, agentClock, followOnSeek, frameSampler, textflow, page };
     ${applySource}
     return (${checkedGlueCall})(applyBatch);

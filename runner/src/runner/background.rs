@@ -20,7 +20,7 @@ pub(super) struct Background {
     /// The host refused the round at admission: its ticket, the reason and
     /// whether it was ordered. Settled through the round's own completion
     /// (`background_landed`), like any refusal, in its turn.
-    pub(super) refusal: Option<(u64, &'static str, bool)>,
+    pub(super) refusal: Option<(u64, String, bool)>,
 }
 
 /// What the journal and `state.pending` call the background ticket.
@@ -75,9 +75,9 @@ impl<D: DataSource> Runner<D> {
 
     /// The host's admission refusal of the round out, if any, that
     /// `allow_ordered` lets settle now.
-    pub(super) fn background_refusal(&self, allow_ordered: bool) -> Option<(u64, &'static str)> {
-        let (ticket, reason, ordered) = self.background.refusal?;
-        (self.is_background(ticket) && (!ordered || allow_ordered)).then_some((ticket, reason))
+    pub(super) fn background_refusal(&self, allow_ordered: bool) -> Option<u64> {
+        let (ticket, _, ordered) = self.background.refusal.as_ref()?;
+        (self.is_background(*ticket) && (!ordered || allow_ordered)).then_some(*ticket)
     }
 
     /// Whether `ticket` is the background round's.

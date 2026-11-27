@@ -4,9 +4,10 @@ import { implementation } from '../web/index.js';
 // The web implementation's browser path over a stand-in `speechSynthesis`
 // that behaves as Chrome's does: an utterance spoken in the turn of a
 // `cancel()` or of an utterance's `error` event is dropped, and fires
-// neither `end` nor `error`.
+// neither `end` nor `error`. Its `paused` follows the specification:
+// `pause()` sets it, `resume()` clears it, and `cancel()` leaves it.
 function browser() {
-  const synth = { given: [], dropped: [], unsettled: false };
+  const synth = { given: [], dropped: [], unsettled: false, paused: false, resumed: 0 };
   const unsettle = () => {
     synth.unsettled = true;
     setTimeout(() => { synth.unsettled = false; });
@@ -14,7 +15,8 @@ function browser() {
   synth.speak = s => (synth.unsettled ? synth.dropped : synth.given).push(s);
   synth.cancel = unsettle;
   synth.fail = s => { unsettle(); s.onerror({ error: 'synthesis-failed' }); };
-  synth.pause = synth.resume = () => {};
+  synth.pause = () => { synth.paused = true; };
+  synth.resume = () => { synth.paused = false; synth.resumed++; };
   synth.getVoices = () => [];
   globalThis.speechSynthesis = synth;
   globalThis.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
@@ -86,3 +88,19 @@ for (const [order, paused] of [['speaking first', false], ['queued first', false
     expect(await impl.speechSynthesisState()).toMatchObject({ utterance: c.id, queue: [] });
   });
 }
+
+test("canceling a paused queue lifts the browser's pause, so the next utterance speaks", async () => {
+  const { synth, impl, spoken } = browser();
+  await impl.speak({ text: 'one' });
+  await impl.pauseSpeech();
+  expect(synth.paused).toBe(true);
+  expect(await impl.cancelSpeech()).toMatchObject({ paused: false, speaking: false });
+  expect(synth.resumed).toBe(1);
+  expect(synth.paused).toBe(false);
+  await turn();
+  const b = await impl.speak({ text: 'two' });
+  expect(spoken()).toEqual(['one', 'two']);
+  expect(synth.paused).toBe(false);
+  expect(await impl.speechSynthesisState()).toMatchObject({ utterance: b.id, speaking: true, paused: false });
+  expect(await impl.speechUtterance({ utterance: b.id })).toMatchObject({ state: 'speaking' });
+});

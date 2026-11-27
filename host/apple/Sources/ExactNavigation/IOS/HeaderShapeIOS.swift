@@ -102,10 +102,15 @@ struct HeaderShape: Equatable {
             if let presenter = button.presenter {
                 for case let node as NodeView in presenter.logicalAncestry(of: button).dropFirst() {
                     if node.props["semanticTag"] == "header" { header = node; break }
+                    #if os(iOS)
+                    if node.props["toolbarPlacement"] == "bottom" { header = node; break }
+                    #endif
                     if grouped == nil, node.props["accessibilityRole"] == "group" { grouped = node.id }
                 }
             }
-            accent = hosted ? nil : header.flatMap { button.accent(below: $0) }
+            accent = hosted ? nil : header.flatMap { owner in
+                owner.props["toolbarPlacement"] == "bottom" ? button.ownAccent : button.accent(below: owner)
+            }
             toolbarGroup = grouped
             id = button.id
             testId = button.props["testId"]

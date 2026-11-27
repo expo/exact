@@ -1,11 +1,9 @@
 package dev.exact.canvas
 
 import android.app.PendingIntent
-import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipDescription
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -92,7 +90,7 @@ internal class Requests(private val activity: ExactActivity) {
 
     /** The requests in [words]: for each its kind, its id, the count of words that follow, and those words. A kind
      * this reader does not know is skipped by its count. */
-    fun perform(words: IntArray) {
+    fun perform(words: IntArray, module: ModuleSession? = ModuleSession.current) {
         var i = 0
         while (i + 3 <= words.size) {
             val kind = words[i]; val id = words[i + 1]; val body = i + 3
@@ -101,7 +99,10 @@ internal class Requests(private val activity: ExactActivity) {
             if (log) Log.i(TAG, "request $id kind $kind")
             try {
                 when (kind) {
-                    OPEN -> open(string(words, body).first)
+                    OPEN -> {
+                        open(string(words, body).first)
+                        Exact.answer(id, "opened")
+                    }
                     AUTH -> {
                         val (url, next) = string(words, body)
                         val (callback, after) = string(words, next)
@@ -121,8 +122,9 @@ internal class Requests(private val activity: ExactActivity) {
                     KEEP_SCREEN_ON -> view?.keepScreenOn = words[body] != 0
                     PICK -> pick(id, words, body)
                     HATCH -> activity.hatches()?.told(words, body, i)
-                    MODULE -> Extensions.call(id, string(words, body).first)
+                    MODULE -> Extensions.call(id, string(words, body).first, module)
                     PRESENCE -> Presence.check(string(words, body).first)
+                    VIDEO_PICTURE -> activity.picture.request(if (i == body) null else pictureTarget(words, body))
                     ACTIVITY -> Activities.request(string(words, body).first)
                     ORIENTATION -> orientation.told(words, body)
                     // The surface, then its message's JSON.
@@ -135,6 +137,12 @@ internal class Requests(private val activity: ExactActivity) {
                 }
             } catch (e: RuntimeException) {
                 // The platform refused (no activity to start from, a full clipboard transaction): the app goes on.
+                if (kind == OPEN) {
+                    // ActivityNotFoundException can include the full URL in its message.
+                    Log.w(TAG, "openURL: ${e.javaClass.simpleName}")
+                    Exact.answer(id, "failed")
+                    continue
+                }
                 Log.w(TAG, "request $id kind $kind: $e")
                 // A share answers whether or not its sheet was up: one refused before it opened is waited for too.
                 if (kind == FILES || kind == SHARE) { sharing.remove(id); Exact.answer(id, e.message ?: e.javaClass.simpleName) }
@@ -194,19 +202,19 @@ internal class Requests(private val activity: ExactActivity) {
         FilePicker.show(activity, accept, words[body + 1] != 0) { Exact.answer(id, it) }
     }
 
-    /** A link that leaves the app: an `http` or `https` URL in the browser (or the app that claims it), `mailto:` in
-     * a mail app's composer, `tel:` in the dialer with the number entered and not called. exact2 lets no other
-     * scheme through. No Custom Tab: that is a library's. */
+    /** Web links open in a browser or the app that claims them. Mail and messages open a composer,
+     * telephone numbers open the dialer, and other declared schemes go to their registered activity. */
     private fun open(url: String) {
-        val uri = Uri.parse(url)
+        val uri = Uri.parse(url).normalizeScheme()
         val intent = when (uri.scheme?.lowercase()) {
-            "mailto" -> Intent(Intent.ACTION_SENDTO, uri)
+            "mailto", "sms" -> Intent(Intent.ACTION_SENDTO, uri)
             "tel" -> Intent(Intent.ACTION_DIAL, uri)
             // The app's page in Settings (LLP 1133.002 D11), where its permissions are.
             "app-settings" -> Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", activity.packageName, null))
-            else -> Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
+            "http", "https" -> Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
+            else -> Intent(Intent.ACTION_VIEW, uri)
         }
-        try { activity.startActivity(intent) } catch (e: ActivityNotFoundException) { Log.w(TAG, "no app opens ${url.replaceFirst(USERINFO, "$1//")}") }
+        activity.startActivity(intent)
     }
 
     /**
@@ -238,7 +246,7 @@ internal class Requests(private val activity: ExactActivity) {
 
     /** The clipboard. From Android 13 the system shows what was copied itself. */
     private fun copy(text: String) {
-        activity.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(appTitle, text))
+        AgentClipboard.copy(activity, appTitle, text)
         if (log) Log.i(TAG, "copied ${text.length} characters")
     }
 
@@ -275,7 +283,8 @@ internal class Requests(private val activity: ExactActivity) {
     }
 
     /** A node's drag out of the app ([DragOut]): the node, its box and the finger in the view's pixels, 1 when an
-     * assistive service started it, its text and URL, then its files' count and each file as the node names it. */
+     * assistive service started it, its text and URL, then its files' count and each file as the node names it and
+     * the name it is offered under. */
     private fun drag(w: IntArray, at: Int) {
         val view = view ?: return
         val ask = DragOut.read(w, at)
@@ -318,18 +327,20 @@ internal class Requests(private val activity: ExactActivity) {
     companion object {
         /** No activity can open UI, but process-owned waits still receive their cleanup, and the extensions, which
          * outlive the activity, still answer their calls: one that needs an activity says so in its answer. */
-        fun detached(words: IntArray) {
+        fun detached(words: IntArray, module: ModuleSession? = ModuleSession.current) {
             var i = 0
             while (i + 3 <= words.size) {
                 val kind = words[i]; val id = words[i + 1]; val body = i + 3
                 i = body + words[i + 2]
                 if (i > words.size) return
                 when (kind) {
+                    OPEN -> Exact.answer(id, "failed")
                     FILES -> Exact.answer(id, "file picker: activity unavailable")
                     AUTH -> Exact.answer(id, "cancelled")
                     AUTH_END -> Auth.end(words[body])
-                    MODULE -> Extensions.call(id, string(words, body).first)
+                    MODULE -> Extensions.call(id, string(words, body).first, module)
                     PRESENCE -> Presence.check(string(words, body).first)
+                    VIDEO_PICTURE -> if (i != body) pictureTarget(words, body).tell("pictureinpictureerror", "activity unavailable", "")
                     ACTIVITY -> Activities.request(string(words, body).first)
                 }
             }
@@ -372,8 +383,6 @@ internal class Requests(private val activity: ExactActivity) {
         }
 
         private const val TAG = "exact"
-        /** A URL's user name and password (to the authority's last `@`), which logcat is not given. */
-        private val USERINFO = Regex("^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#\\\\]*@")
         private const val ID = "id"
         /** The kinds (`presenter::Request`). */
         const val OPEN = 1
@@ -399,6 +408,9 @@ internal class Requests(private val activity: ExactActivity) {
         const val WINDOW_TITLE = 22
         const val DRAG = 23
         const val ACTIVITY = 24
+        const val VIDEO_PICTURE = 25
+        private fun pictureTarget(words: IntArray, at: Int) = MediaAllocation(words[at], words[at + 1], words[at + 2],
+            (words[at + 3].toLong() and 0xffffffffL) or (words[at + 4].toLong() shl 32))
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         private const val DISMISSED_MS = 500L
     }

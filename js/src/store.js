@@ -7,6 +7,7 @@
   "use strict";
   global.__exact_store = function (env) {
     var host = env.host,
+      rawThen = env.rawThen,
       browserSecrets = env.browserSecrets,
       inOverlay = env.inOverlay;
     var presence = env.presence(
@@ -113,7 +114,8 @@
         return;
       }
       try {
-        Promise.resolve(task.work()).then(
+        rawThen(
+          Promise.resolve(task.work()),
           function (v) {
             finish(true, v);
           },

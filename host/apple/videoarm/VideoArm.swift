@@ -148,6 +148,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     /// The full-screen presentation `requestFullscreen` made, while it shows.
     var fullscreen: FullscreenPlayer?
     #if os(iOS)
+    private var floatingController: AVPlayerViewController?
     var audioControls: AudioControls?
     var presentation: UIView? { audioControls ?? controller?.view ?? inline }
     #else
@@ -190,7 +191,13 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var hdrItem = false
     var hdrTask: Task<Void, Never>?
     var naturalSize = CGSize.zero
-    var wantsPlay = false
+    var wantsPlay = false {
+        didSet {
+            #if os(iOS)
+            if !wantsPlay { mayContinueAfterHome = false }
+            #endif
+        }
+    }
     /// The item played to its end (HTML's "ended playback"): the next play
     /// starts it over, as HTML's play() does (LLP 1042 §8: a sound effect
     /// replays by asking to play again).
@@ -249,6 +256,9 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
                 DispatchQueue.main.async { [weak self] in self?.advanced() }
             }
         ]
+        #if os(iOS)
+        NotificationCenter.default.addObserver(self, selector: #selector(backgrounded), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        #endif
         NowPlaying.shared.joined(self)
     }
     /// The periodic observer serves `timeupdate` handlers and inline audio
@@ -272,11 +282,46 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             player.removeTimeObserver(tick); self.tick = nil
         }
     }
+    #if os(iOS)
+    private var continuesVideo: Bool {
+        props["audiovisualBackgroundPlaybackPolicy"] == "continuesIfPossible"
+            && VideoBackgroundPlayback.configured && !player.isMuted && player.volume > 0
+    }
+
+    private let backgroundTracks = VideoBackgroundPlayback()
+    private var mayContinueAfterHome = false
+
+    @objc private func backgrounded() {
+        guard !invalidated, props["semanticTag"] != "audio" else { return }
+        mayContinueAfterHome = continuesVideo && player.timeControlStatus == .playing
+            && backgroundTracks.hasAudio(player.currentItem)
+        guard !mayContinueAfterHome else { return }
+        wantsPlay = false
+        let nativePause = VideoBackgroundPlayback.willPauseAtHome(player)
+        backgroundPolicy()
+        if !nativePause { player.pause() }
+    }
+
+    private func backgroundPolicy() {
+        guard props["semanticTag"] != "audio" else { return }
+        let background = UIApplication.shared.applicationState == .background
+        if background && mayContinueAfterHome && !continuesVideo {
+            mayContinueAfterHome = false
+            sessionPause()
+        }
+        let allow = continuesVideo && (!background || mayContinueAfterHome)
+        set(\.audiovisualBackgroundPlaybackPolicy, allow ? .continuesIfPossible : .pauses)
+    }
+    #endif
+
     func volumeChanged() {
         guard Thread.isMainThread else { DispatchQueue.main.async { [weak self] in self?.volumeChanged() }; return }
         let now = (player.volume, player.isMuted)
         guard !invalidated, now != reportedVolume else { return }
         reportedVolume = now
+        #if os(iOS)
+        backgroundPolicy()
+        #endif
         emit("volumechange")
     }
     func rateChanged() {
@@ -316,7 +361,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var isFullscreen: Bool { fullscreen != nil }
     var snapshot: [String: Any] {
         let duration = player.currentItem?.duration.seconds ?? .nan
-        return ["currentTime": seconds, "duration": duration.isFinite ? duration as Any : NSNull(),
+        var state: [String: Any] = ["currentTime": seconds, "duration": duration.isFinite ? duration as Any : NSNull(),
                 "playing": player.timeControlStatus == .playing, "paused": player.rate == 0, "muted": player.isMuted, "volume": player.volume,
                 "playbackRate": player.rate, "readyState": player.currentItem?.status == .readyToPlay ? 4 : 0,
                 "videoWidth": naturalSize.width, "videoHeight": naturalSize.height,
@@ -326,7 +371,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
                 // @ref LLP 1100 D11
                 "hdr": hdrItem, "eligibleForHDR": AVPlayer.eligibleForHDRPlayback,
                 "dynamicRange": props["dynamicRangeLimit"] ?? "no-limit",
-                "appliedDynamicRange": appliedDynamicRange].merging(fullscreenReport) { $1 }
+                "appliedDynamicRange": appliedDynamicRange]
+        #if os(iOS)
+        state["pictureInPicture"] = floatingController != nil
+        #endif
+        return state.merging(fullscreenReport) { $1 }
     }
     func emit(_ event: String = "snapshot", payload: String = "") {
         guard !invalidated else { return }
@@ -402,6 +451,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         }
         guard !invalidated, generation == token else { return }
         #if os(iOS)
+        if status == .paused, player.timeControlStatus == .paused { mayContinueAfterHome = false }
         audioControls?.refresh()
         #endif
         let paused = status == .paused
@@ -525,6 +575,9 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         if changed("exactSeek"), let request = props["exactSeek"]?.split(separator: " ").last.flatMap({ Double($0) }) {
             if request.isFinite, request >= 0 { seek(request) } else { fail("invalid-value", "Invalid fastSeek") }
         }
+        #if os(iOS)
+        backgroundPolicy()
+        #endif
         configureItem()
         queueLoop()
         if let error = props["sourceError"], error != old["sourceError"] { fail("src-not-supported", error) }
@@ -679,6 +732,9 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     }
     func giveItem(_ asset: AVURLAsset, bound: CGSize? = nil, first: Bool = false) {
         // preload is a hint: AVKit may prepare an item so its native Play control works.
+        #if os(iOS)
+        if VideoBackgroundPlayback.configured, props["semanticTag"] != "audio" { backgroundTracks.prepare(asset) }
+        #endif
         let item = AVPlayerItem(asset: asset)
         // Read only before the item's first variant choice.
         item.startsOnFirstEligibleVariant = first
@@ -769,6 +825,12 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         player.insert(copy, after: current)
     }
     func play() {
+        #if os(iOS)
+        if props["semanticTag"] != "audio", UIApplication.shared.applicationState == .background, !(continuesVideo && mayContinueAfterHome) {
+            sessionPause()
+            return
+        }
+        #endif
         player.defaultRate = rate
         if atEnd { atEnd = false; seek(0) }
         player.play()
@@ -1159,6 +1221,14 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     func invalidate() {
         guard !invalidated else { return }
         invalidated = true; generation += 1; posterGeneration += 1
+        #if os(iOS)
+        if let floatingController {
+            self.floatingController = nil
+            floatingController.player = nil
+            // Removal ends this presentation before AVKit can report its stop (LLP 1042 §9.3).
+            if listeners.contains("leavepictureinpicture") { send(["event": "leavepictureinpicture", "payload": ""]) }
+        }
+        #endif
         placePicture(nil, overlay: nil)
         variantRead?.cancel(); variantRead = nil
         clearPlaybackClock()
@@ -1195,13 +1265,30 @@ extension VideoArm: AVPlayerViewDelegate {
 #else
 extension VideoArm: AVPlayerViewControllerDelegate {
     #if os(iOS)
+    func playerViewControllerDidStartPictureInPicture(_ source: AVPlayerViewController) {
+        guard !invalidated, source.delegate === self else { return }
+        let entered = floatingController == nil
+        floatingController = source
+        if entered { emit("enterpictureinpicture") }
+    }
+    func playerViewControllerDidStopPictureInPicture(_ source: AVPlayerViewController) {
+        guard floatingController === source else { return }
+        floatingController = nil
+        emit("leavepictureinpicture")
+    }
+    func playerViewController(_ source: AVPlayerViewController, failedToStartPictureInPictureWithError error: Error) {
+        guard !invalidated, source.delegate === self else { return }
+        emit("pictureinpictureerror", payload: error.localizedDescription)
+    }
     func playerViewController(_ playerViewController: AVPlayerViewController, willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+        guard playerViewController === controller else { return }
         nativeFullscreen = true; layout()
         coordinator.animate(alongsideTransition: nil) { [weak self] context in
             if context.isCancelled { self?.nativeFullscreen = false; self?.layout() }
         }
     }
     func playerViewController(_ playerViewController: AVPlayerViewController, willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+        guard playerViewController === controller else { return }
         coordinator.animate(alongsideTransition: nil) { [weak self] context in
             if !context.isCancelled { self?.nativeFullscreen = false; self?.layout() }
         }
@@ -1238,6 +1325,8 @@ extension VideoArm {
         let full = FullscreenPlayer()
         #if os(iOS)
         // AVKit's default publishes Now Playing, which a claimant may own.
+        full.delegate = self
+        full.allowsPictureInPicturePlayback = !bool("disablepictureinpicture") && bool("allowsPictureInPicturePlayback", true)
         full.updatesNowPlayingInfoCenter = avkitPublishes
         #endif
         full.player = player

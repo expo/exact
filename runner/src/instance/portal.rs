@@ -577,7 +577,10 @@ impl Portals {
         // The surviving movers detached, in preorder: a destroy in this
         // batch takes none of their subtrees (`extracted`).
         let mut surviving = Vec::new();
-        for e in entries.iter().filter(|e| placeable(e)) {
+        for e in entries
+            .iter()
+            .filter(|e| placeable(e) || self.moved.contains_key(&e.view))
+        {
             let now = match moved.get(&e.view) {
                 Some(m) => m.at,
                 None => e.parent.map(view),

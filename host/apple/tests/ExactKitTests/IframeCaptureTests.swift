@@ -523,6 +523,76 @@ final class IframeCaptureTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testAuthoredMagnificationAcrossLoadsResizesAndValueChanges() throws {
+        let arm = try arm(), seen = Seen()
+        var options: [String: Any] = ["partition": "magnification", "magnification": "2", "allowsMagnification": true]
+        let handle = try mount(arm, seen, configuration: options, src: nil)
+        defer { arm.destroy(handle) }
+        let web = try XCTUnwrap(current(arm, handle) as? WKWebView)
+        func pinch() { web.setMagnification(1.5, centeredAt: .zero) }
+        func loaded(_ count: Int, at factor: CGFloat) {
+            spin { seen.loads >= count }
+            XCTAssertEqual(seen.loads, count)
+            XCTAssertEqual(web.magnification, factor)
+        }
+        pinch()
+        XCTAssertEqual(seen.loads, 0)
+        send("\(baseURL)/target", arm.setSrc, handle)
+        loaded(1, at: 2)
+        XCTAssertTrue(web.allowsMagnification)
+        options["magnification"] = "4"
+        json(options, arm.configure, handle)
+        XCTAssertEqual(web.magnification, 4)
+        pinch()
+        options["allowsBackForwardNavigationGestures"] = true
+        json(options, arm.configure, handle)
+        web.setFrameOrigin(NSPoint(x: 4, y: 3))
+        XCTAssertEqual(web.magnification, 1.5, "moving the view or changing another option preserves the pinch")
+        web.frame.size.width += 20
+        XCTAssertEqual(web.magnification, 4)
+        XCTAssertEqual(seen.loads, 1)
+        pinch()
+        web.load(URLRequest(url: URL(string: "\(baseURL)/target?next")!))
+        loaded(2, at: 4)
+        pinch()
+        web.reload()
+        loaded(3, at: 4)
+        options.removeValue(forKey: "magnification")
+        json(options, arm.configure, handle)
+        XCTAssertEqual(web.magnification, 1)
+        pinch()
+        web.frame.size.height += 10
+        XCTAssertEqual(web.magnification, 1.5, "an unsaid factor leaves the view to WebKit")
+    }
+
+    func testInvalidMagnificationReportsTheFactorAndKeepsTheLastValidValue() throws {
+        let arm = try arm(), seen = Seen()
+        let handle = try mount(arm, seen, configuration: ["magnification": "2"], src: "\(baseURL)/target")
+        defer { arm.destroy(handle) }
+        spin { seen.loads > 0 }
+        let web = try XCTUnwrap(current(arm, handle) as? WKWebView)
+        let pipe = Pipe(), saved = dup(STDERR_FILENO)
+        dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+        let invalid = ["0", "-1", "nan", "inf", "256.000000001", "0.00099"]
+        for word in invalid { json(["magnification": word], arm.configure, handle) }
+        dup2(saved, STDERR_FILENO)
+        close(saved)
+        try pipe.fileHandleForWriting.close()
+        let log = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        for word in invalid {
+            XCTAssertTrue(log.contains("apple.magnification needs a finite number from 0.001 through 256, got \(word)\n"), log)
+        }
+        web.frame.size.width += 1
+        XCTAssertEqual(web.magnification, 2)
+        web.setMagnification(1.5, centeredAt: .zero)
+        json(["magnification": "2"], arm.configure, handle)
+        XCTAssertEqual(web.magnification, 2, "returning from a refused binding reapplies the valid value")
+        for word in ["0.001", "256"] {
+            json(["magnification": word], arm.configure, handle)
+            XCTAssertEqual(web.magnification, CGFloat(Double(word)!))
+        }
+    }
+
     /// A frame under the opaque titlebar of a full-size-content window with
     /// a toolbar, as an app's top-right panel is, fills its box: WebKit's
     /// automatic content insets would lay the page out below the titlebar
@@ -683,8 +753,9 @@ final class CapturePages {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
             guard let data, let line = String(decoding: data, as: UTF8.self).split(separator: "\r\n").first else { return connection.cancel() }
             let path = line.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
-            let body = path == "/target" ? target : ""
-            let status = path == "/target" ? "200 OK" : "404 Not Found"
+            let found = path.split(separator: "?").first == "/target"
+            let body = found ? target : ""
+            let status = found ? "200 OK" : "404 Not Found"
             let response = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
             connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
         }

@@ -3,12 +3,18 @@
   "name": "@exact/clipboard",
   "version": "1.0.0",
   "substitute": "implementation",
+  "grants": ["clipboard.read"],
   "shapes": {
     "ClipboardItem": {
       "record": {
         "text/plain": {
           "type": "string",
           "maxBytes": 1048576
+        },
+        "text/html": {
+          "type": "string",
+          "maxBytes": 1048576,
+          "targets": ["macos", "ios", "web"]
         },
         "image/png": {
           "type": "path",
@@ -20,6 +26,30 @@
     }
   },
   "names": [
+    {
+      "send": "read",
+      "contract": false,
+      "params": [],
+      "options": {},
+      "answers": "ClipboardItem[]",
+      "origin": "input",
+      "grants": ["clipboard.read"],
+      "substitute": {
+        "unsupported": ["linux", "tvos", "windows"]
+      }
+    },
+    {
+      "send": "readText",
+      "contract": false,
+      "params": [],
+      "options": {},
+      "answers": "string",
+      "origin": "input",
+      "grants": ["clipboard.read"],
+      "substitute": {
+        "unsupported": ["linux", "tvos", "windows"]
+      }
+    },
     {
       "send": "write",
       "contract": false,

@@ -253,6 +253,32 @@ component App
 }
 
 #[test]
+fn a_postures_type_is_checked_when_its_value_is_unread_or_interpolated() {
+    for (ty, text) in [
+        ("number", "`${fold.devicePosture}`"),
+        ("bool", "`${fold.devicePosture}`"),
+        ("option<string>", "\"fold\""),
+        ("string[]", "\"fold\""),
+    ] {
+        let source = format!("shape Fold\n  devicePosture: {ty}\ncomponent App\n  resource fold = exactViewport() as shape Fold\n  view\n    text {text}\n");
+        let plan = contract::compile(&source).unwrap();
+        let why = match contract::bake(plan, boxed(NoData)) {
+            Err(contract::BakeError::Runner(RunnerError::Shape { resource, why })) => {
+                assert_eq!(resource, "fold");
+                why
+            }
+            other => panic!("devicePosture: {ty}: expected a shape refusal, got {other:?}"),
+        };
+        assert!(
+            why.contains("Fold.devicePosture") && why.contains("continuous"),
+            "{why}"
+        );
+        let repaired = source.replace(&format!("devicePosture: {ty}"), "devicePosture: string");
+        contract::bake(contract::compile(&repaired).unwrap(), boxed(NoData)).unwrap();
+    }
+}
+
+#[test]
 fn display_ratio_is_optional_host_data_and_updates_without_display_lengths() {
     let plan = contract::bake(contract::compile(
         "shape Viewport\n  devicePixelRatio: option<number>\ncomponent App\n  resource viewport = exactViewport() as shape Viewport\n  view\n    text \"Display\"\n",
@@ -451,4 +477,411 @@ component App
     assert_eq!(r.kernel().reported_display_scale(), None);
     assert!(r.set_display_scale(1.5).unwrap().is_some());
     assert_eq!(r.viewport().device_pixel_ratio, Some(1.5));
+}
+
+#[test]
+fn bottom_toolbar_belongs_to_one_route_column() {
+    let bar = "row role=\"toolbar\" toolbarPlacement=\"bottom\"";
+    let route = |body: &str| {
+        format!(
+            "component App\n  state left = true\n  state right = false\n  view\n    main navigationKey=\"home\"\n      column navigationKey=\"home\"\n{body}\n"
+        )
+    };
+    for (body, id) in [
+        (
+            format!("        {bar}\n        {bar}"),
+            "lower-toolbar-count",
+        ),
+        (
+            format!("        column\n          {bar}"),
+            "lower-toolbar-place",
+        ),
+        (
+            "        row toolbarPlacement=\"bottom\"".into(),
+            "lower-toolbar-place",
+        ),
+        (
+            "        row toolbarPlacement=\"\"".into(),
+            "lower-attr-value",
+        ),
+        (
+            "        row toolbarPlacement=\"botom\"".into(),
+            "lower-attr-value",
+        ),
+    ] {
+        assert_eq!(
+            contract::compile(&route(&body)).unwrap_err().id,
+            id,
+            "{body}"
+        );
+    }
+    for body in [
+        format!(
+            "        if left == right\n          {bar}\n        if left != right\n          {bar}"
+        ),
+        format!("        for n in [1,2] key=n\n          if n == 1\n            {bar}"),
+        format!(
+            "        if left == right\n          {bar}\n        if left != right\n          text \"Different\""
+        ),
+        format!("        {bar}\n        if left\n          {bar}"),
+    ] {
+        let (plan, warnings) = contract::compile_warned(&route(&body));
+        plan.unwrap();
+        assert!(
+            !warnings.iter().any(|w| w.id == "lower-toolbar-last"),
+            "{body}"
+        );
+    }
+    for before in [
+        format!("        {bar}"),
+        format!("        if left\n          {bar}"),
+    ] {
+        let (plan, warnings) =
+            contract::compile_warned(&route(&format!("{before}\n        text \"After\"")));
+        plan.unwrap();
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| w.id == "lower-toolbar-last")
+                .count(),
+            1
+        );
+    }
+    let dir = crate::scratch::Scratch::new(format!("toolbar-hosts-{}", std::process::id()));
+    std::fs::write(
+        dir.join("app.contract"),
+        route(&format!(
+            "        {bar}\n          if left\n            progress"
+        )),
+    )
+    .unwrap();
+    for target in ["web", "ios"] {
+        std::fs::write(
+            dir.join("app.json"),
+            format!(r#"{{"app":{{"name":"Bar","id":"dev.test.bar"}},"host":{{"{target}":{{}}}}}}"#),
+        )
+        .unwrap();
+        let (plan, _) = contract::compile_path_all_warned(&dir.join("app.contract"), false);
+        if target == "web" {
+            plan.unwrap();
+        } else {
+            assert_eq!(plan.err().unwrap()[0].id, "lower-toolbar-item");
+        }
+    }
+}
+
+#[test]
+fn bottom_toolbar_warns_only_for_a_proven_visit_under_native_tabs() {
+    let dir = crate::scratch::Scratch::new(format!("toolbar-tabs-{}", std::process::id()));
+    let manifest = dir.join("app.json");
+    std::fs::write(
+        &manifest,
+        r#"{"app":{"id":"dev.test.tabs","name":"Tabs"},"host":{"ios":{}}}"#,
+    )
+    .unwrap();
+    let route = include_str!("../../../../host/apple/tests/fixtures/static-toolbar-tabs.contract");
+    let root = include_str!("../../../../host/apple/tests/fixtures/bottom-toolbar.contract");
+    let conditional =
+        include_str!("../../../../host/apple/tests/fixtures/bottom-toolbar-tabs.contract");
+    let list = "row role=\"tablist\"";
+    let row = "row role=\"toolbar\" toolbarPlacement=\"bottom\"";
+    let names = &["typography", "swift", "detail", "single"][..];
+    let check = |source: &str, expected: &[&str]| {
+        let file = dir.join("app.contract");
+        std::fs::write(&file, source).unwrap();
+        let (plan, warnings) = contract::compile_path_all_warned(&file, false);
+        plan.unwrap();
+        let collisions: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.id.starts_with("lower-toolbar-tab"))
+            .collect();
+        if expected.is_empty() {
+            assert!(collisions.is_empty(), "{source}: {collisions:?}");
+            return;
+        }
+        let [w] = &collisions[..] else {
+            panic!("{source}: {collisions:?}")
+        };
+        assert!(
+            w.message.contains("On an iPhone, UIKit draws")
+                && w.message.contains("under the app's tab bar")
+        );
+        if expected == ["home"] {
+            assert_eq!(w.id, "lower-toolbar-tab-root");
+            assert!(
+                w.message.contains("`home` tab root")
+                    && w.message.contains("header or push the screen")
+            );
+        } else {
+            assert_eq!(w.id, "lower-toolbar-tabs");
+            let names = expected
+                .iter()
+                .map(|n| format!("\"{n}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let guard = if expected.len() == 1 {
+                format!("top(nav).name == {names}")
+            } else {
+                format!("[{names}].includes(top(nav).name)")
+            };
+            let display = format!("display=({guard} ? \"none\" : \"flex\")");
+            assert!(
+                w.message
+                    .contains(&format!("`{display}` on the app's tablist")),
+                "{}",
+                w.message
+            );
+            std::fs::write(&file, source.replace(list, &format!("{list} {display}"))).unwrap();
+            contract::compile_path(&file).unwrap();
+        }
+    };
+    check(route, names);
+    check(&route.replace("if e.name == \"typography\" or e.name == \"swift\" or e.name == \"single\" or e.name == \"detail\"", "if e.name == \"swift\""), &["swift"]);
+    check(root, &["home"]);
+    check(conditional, &[]);
+
+    let first_list = route.find("      row role=\"tablist\"").unwrap();
+    let page = route.find("\ncomponent Page").unwrap();
+    let root_only = format!(
+        "{}      if top(nav).name == \"labs\"\n{}\n{}",
+        &route[..first_list],
+        route[first_list..page]
+            .lines()
+            .map(|l| format!("  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        &route[page..]
+    );
+    let app_drawn = route
+        .replace(
+            "component ToolbarTabs",
+            "style Painted\n  appearance=\"none\"\n\ncomponent ToolbarTabs",
+        )
+        .replace(list, &format!("{list} class=Painted"));
+    for source in [
+        root_only, app_drawn,
+        route.replace("component ToolbarTabs", "shape PinnedLocation\n  id: number\nfn top(r: Router): PinnedLocation = PinnedLocation(id=0)\ncomponent ToolbarTabs"),
+        route.replace("              else\n                Page", "              else if e.name == \"labs\"\n                column navigationKey=`${e.id}` role=\"tablist\"\n                  button role=\"tab\" aria-controls=\"panel-controls\"\n                    text \"Controls\"\n              else\n                Page"),
+        route.replace(list, &format!("{list} display=\"none\"")),
+        route.replace(list, &format!("{list} display=\"flex\"")),
+        route.replace(list, &format!("{list} display=(top(nav).name == \"swift\" ? \"none\" : \"flex\")")),
+        route.replace("aria-controls=`panel-", "aria-controls=`other-"),
+        route.replace(row, &format!("{row} display=\"none\"")),
+        route.replace("                    button testId=\"widget\"", "                    if last == \"\"\n                      button testId=\"widget\"")
+            .replace("                      text \"Widget\"", "                        text \"Widget\""),
+        route.replace("column navigationKey=visit", "column navigationKey=visit navigationPresentation=\"modal\""),
+    ] { check(&source, &[]); }
+    let start = route
+        .find("                  row role=\"toolbar\"")
+        .unwrap();
+    let end = route
+        .find("              else\n                Page")
+        .unwrap();
+    let indent = |text: &str| text.lines().map(|l| format!("  {l}\n")).collect::<String>();
+    let toolbar = &route[start..end];
+    for block in [
+        format!("                  for n in [1] key=n\n{}", indent(toolbar)),
+        format!("                  match some(1)\n                    case some(n)\n{}                    case none\n                      text \"None\"\n", indent(&indent(toolbar))),
+        format!("                  {row}\n                    spacer\n"),
+    ] {
+        check(&route.replace(toolbar, &block), &[]);
+    }
+    check(
+        &route.replace(
+            toolbar,
+            &format!("{toolbar}                  if last == \"\"\n                    {row}\n                      spacer\n"),
+        ),
+        names,
+    );
+    // Detail itself is pushed, but its Section parent starts a presented stack.
+    let presented = route.replace("              else\n                Page", "              else if e.name == \"section\"\n                column navigationKey=`${e.id}` navigationPresentation=\"modal\"\n                  text \"Section\"\n              else\n                Page");
+    check(&presented, &["typography", "swift", "single"]);
+    let outside_tabs = route
+        .replace(
+            "    section \"/section\"\n      detail \"/section/detail\"",
+            "    section \"/section\"",
+        )
+        .replace(
+            "  tab sound \"/sound\"",
+            "  tab sound \"/sound\"\n  detail \"/detail\"",
+        );
+    check(&outside_tabs, &["typography", "swift", "single"]);
+
+    for host in [
+        r#"{"app":{"id":"dev.test.tabs","name":"Tabs"},"host":{"ios":{"deviceFamily":["ipad"]}}}"#,
+        r#"{"app":{"id":"dev.test.tabs","name":"Tabs"},"host":{"web":{}}}"#,
+        r#"{"app":{"id":"dev.test.tabs","name":"Tabs"},"host":{"android":{}}}"#,
+    ] {
+        std::fs::write(&manifest, host).unwrap();
+        check(route, &[]);
+    }
+}
+
+#[test]
+fn shared_placement_action_keeps_its_old_words_and_cannot_make_an_unchecked_bottom_toolbar() {
+    let source = r#"component App
+  state placement = "window"
+  action place(value: string)
+    placement = value
+  view
+    column
+      row role="toolbar" toolbarPlacement=placement testId="tools"
+        text "Actions"
+      button "Keyboard" testId="keys" press=place("keyboard")
+      button "Bottom" testId="bad" press=place("bottom")
+"#;
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
+    let mut runner = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let key = runner.kernel().find_by_test_id("tools")[0];
+    for (button, expected) in [
+        ("keys", Some("keyboard")),
+        ("bad", None),
+        ("keys", Some("keyboard")),
+    ] {
+        let target = runner.kernel().find_by_test_id(button)[0];
+        let id = runner.kernel().node_by_key(target).unwrap().id;
+        runner.dispatch(id, exact_runner::Event::Press).unwrap();
+        assert_eq!(
+            runner
+                .kernel()
+                .node_by_key(key)
+                .unwrap()
+                .props
+                .str(PropId::ToolbarPlacement),
+            expected
+        );
+    }
+    assert!(agent::logs(&runner, 0).contains("write a literal bottom toolbar row"));
+}
+
+#[test]
+fn child_gated_device_fact_and_device_fact_mutation_refresh_bind_to_child() {
+    // Gated child device fact compiles with and without a same-named root state,
+    // and its gate reads the child's prop rather than the root's `active`.
+    let gated_without_root = r#"shape VP
+  width: number
+component App
+  state ready = true
+  view
+    Child(active=ready)
+component Child
+  props
+    active: bool
+  resource vp = exactViewport() when active as shape VP
+  view
+    text `${vp.width}` testId="w"
+"#;
+    contract::compile(gated_without_root).unwrap();
+
+    let gated_with_root = r#"shape VP
+  width: number
+component App
+  state active = false
+  state ready = true
+  action toggleReady
+    ready = not ready
+  view
+    column
+      button "Toggle" testId="toggle" press=toggleReady
+      Child(active=ready)
+component Child
+  props
+    active: bool
+  resource vp = exactViewport() when active as shape VP
+  view
+    text `${vp.width}` testId="w"
+"#;
+    let plan = contract::compile(gated_with_root).unwrap();
+    let gate_arg = plan.resources[0].gate.iter().next().unwrap();
+    let gate = plan.code(plan.arg(gate_arg).expr);
+    let loaded_slots: Vec<u64> = exact_runner::vm::instructions(gate)
+        .map(Result::unwrap)
+        .filter(|ins| ins.op == exact_plan::Opcode::LoadSlot)
+        .map(|ins| ins.args[0])
+        .collect();
+    let ready_slot = plan
+        .slots
+        .iter()
+        .position(|s| plan.str(s.name) == "ready")
+        .unwrap() as u64;
+    assert_eq!(loaded_slots, vec![ready_slot]);
+
+    // Child mutation refreshing a hoisted device fact compiles without a root
+    // `vp`, and with a root `vp` still refreshes `vp@Child` rather than root `vp`.
+    let refresh_without_root = r#"shape VP
+  width: number
+component App
+  view
+    Child()
+component Child
+  resource vp = exactViewport() as shape VP
+  mutation save as shape number refreshes vp
+  view
+    text `${vp.width}`
+"#;
+    let plan = contract::compile(refresh_without_root).unwrap();
+    let range = plan.mutations[0].refreshes;
+    let refreshed: Vec<&str> = plan.mutation_refreshes
+        [range.start as usize..(range.start + range.len) as usize]
+        .iter()
+        .map(|row| plan.str(plan.resources[row.resource.0 as usize].name))
+        .collect();
+    assert_eq!(refreshed, vec!["vp@Child"]);
+
+    let refresh_with_root = r#"shape VP
+  width: number
+component App
+  resource vp = loadRoot() as shape number
+  view
+    column
+      text `${vp}`
+      Child()
+component Child
+  resource vp = exactViewport() as shape VP
+  mutation save as shape number refreshes vp
+  view
+    text `${vp.width}`
+"#;
+    let plan = contract::compile(refresh_with_root).unwrap();
+    let range = plan.mutations[0].refreshes;
+    let refreshed: Vec<(&str, &str)> = plan.mutation_refreshes
+        [range.start as usize..(range.start + range.len) as usize]
+        .iter()
+        .map(|row| {
+            let r = &plan.resources[row.resource.0 as usize];
+            (plan.str(r.name), plan.str(r.source))
+        })
+        .collect();
+    assert_eq!(refreshed, vec![("vp@Child", "exactViewport")]);
+
+    // A package component may still declare a gated device fact.
+    let dir = std::env::temp_dir().join(format!("exact-pkg-gated-vp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("node_modules/pkg/src")).unwrap();
+    std::fs::write(
+        dir.join("node_modules/pkg/package.json"),
+        r#"{"name":"pkg","exports":{"./card":"./src/card.contract"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("node_modules/pkg/src/card.contract"),
+        "shape VP\n  width: number\ncomponent Card\n  props\n    active: bool\n  resource vp = exactViewport() when active as shape VP\n  view\n    text `${vp.width}`\n",
+    )
+    .unwrap();
+    let root = dir.join("app.contract");
+    std::fs::write(
+        &root,
+        "use Card from \"pkg/card\"\ncomponent App\n  state on = true\n  view\n    Card(active=on)\n",
+    )
+    .unwrap();
+    let compiled = contract::compile_path(&root);
+    let _ = std::fs::remove_dir_all(&dir);
+    compiled.unwrap();
 }

@@ -76,6 +76,9 @@ package enum PickerRequests {
         }
         let start = directory ? 1 : 2
         if args.count > start, let startIn = args[start] as? String { request["startIn"] = startIn }
+        #if os(macOS)
+        if args.count > start + 1, let message = args[start + 1] as? String { request["apple.message"] = message }
+        #endif
         return request
     }
 }

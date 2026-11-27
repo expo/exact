@@ -46,6 +46,60 @@ enum Back {
     Refused,
 }
 
+/// The open Exact layers and the selected sheet, if the route presents one.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BackLayers {
+    pub(crate) route: bool,
+    pub(crate) sheet: ViewId,
+    pub(crate) stacked_sheets: Vec<ViewId>,
+    pub(crate) popover: ViewId,
+    pub(crate) menu: ViewId,
+    pub(crate) window: u32,
+    opening: Vec<(i32, u32)>,
+}
+
+impl BackLayers {
+    fn words(&self) -> Vec<i32> {
+        let (active, id) = self.target();
+        let mut out = vec![i32::from(self.route), active, id as i32];
+        for &id in &self.stacked_sheets {
+            out.extend([2, id as i32]);
+        }
+        for (kind, id) in [(3, self.popover), (4, self.menu), (5, self.window)]
+            .into_iter()
+            .chain(self.opening.iter().copied())
+        {
+            if id != 0 {
+                out.extend([kind, id as i32]);
+            }
+        }
+        out
+    }
+
+    fn target(&self) -> (i32, u32) {
+        if let Some(&opening) = self.opening.last() {
+            opening
+        } else if self.window != 0 {
+            (5, self.window)
+        } else if self.menu != 0 {
+            (4, self.menu)
+        } else if self.popover != 0 {
+            (3, self.popover)
+        } else if self.sheet != 0 {
+            (2, self.sheet)
+        } else if self.route {
+            (1, 1)
+        } else {
+            (0, 0)
+        }
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn takes(&self, kind: i32, id: ViewId) -> bool {
+        self.target() == (kind, id)
+    }
+}
+
 impl<D: DataSource> Presenter<D> {
     /// The navigation root that shows: the first node in tree order that
     /// carries `navigationBack` (lowering gives the first root with a
@@ -201,6 +255,66 @@ impl<D: DataSource> Presenter<D> {
         self.surface_takes_back() || self.back().is_some() || self.remote_back_target().is_some()
     }
 
+    /// The first hosted view needs the current identities before it registers a callback.
+    /// A replacement activity starts with the ordinary one-word Back request again.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn hosted_back(&mut self, notify: Option<fn(&[i32])>) {
+        self.requests.back = None;
+        self.requests.hosted_back = notify;
+        self.requests.back_layers = None;
+        self.back_changed();
+    }
+
+    /// Admit a layer on the reader's main thread before returning to the presenter.
+    /// Asynchronous window and frame reports carry no dispatcher registrations.
+    pub(super) fn update_hosted_back(&mut self) {
+        let Some(notify) = self.requests.hosted_back else {
+            return;
+        };
+        let layers = self.back_layers();
+        if self.requests.back_layers.as_ref() != Some(&layers) {
+            notify(&layers.words());
+            self.requests.back_layers = Some(layers);
+        }
+    }
+
+    /// A replacement requests its own callback before closing the old surface. A blur
+    /// handler during that close can itself request a presentation.
+    pub(super) fn request_back_layer(&mut self, kind: i32) -> Option<u32> {
+        self.requests.hosted_back?;
+        let serial = self.next_surface_serial();
+        self.requests.opening_back_layers.push((kind, serial));
+        self.update_hosted_back();
+        Some(serial)
+    }
+
+    pub(super) fn resolve_back_layer(&mut self, request: Option<u32>) {
+        if let Some(serial) = request {
+            let opening = self.requests.opening_back_layers.pop();
+            debug_assert_eq!(opening.map(|(_, id)| id), Some(serial));
+        }
+        self.update_hosted_back();
+    }
+
+    pub(crate) fn back_layers(&mut self) -> BackLayers {
+        let route = self.back().is_some() || self.remote_back_target().is_some();
+        let (stacked_sheets, selected) = self.back_sheets();
+        let sheet = selected.filter(|_| route);
+        BackLayers {
+            route,
+            sheet: sheet.unwrap_or_default(),
+            stacked_sheets,
+            popover: self
+                .alert
+                .as_ref()
+                .filter(|_| self.alert_root().is_some() && self.alert_takes_back())
+                .map_or(0, |open| open.serial),
+            menu: self.menu.unwrap_or_default(),
+            window: self.surface().map_or(0, |window| window.serial),
+            opening: self.requests.opening_back_layers.clone(),
+        }
+    }
+
     /// Whether an open surface of the top layer hears Back: not a manual
     /// popover, whose page keeps Back (HTML: it has no close watcher).
     fn surface_takes_back(&self) -> bool {
@@ -243,6 +357,55 @@ impl<D: DataSource> Presenter<D> {
         if self.close_menu() || self.dismiss_surface(now_ms) {
             return true;
         }
+        self.route_back(now_ms)
+    }
+
+    /// A stale callback may finish its own preview, but cannot start or move another layer's.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn dispatched_progress(
+        &mut self,
+        kind: i32,
+        id: ViewId,
+        phase: i32,
+        progress: f32,
+        edge: i32,
+        now_ms: f64,
+    ) -> bool {
+        if !self.back_layers().takes(kind, id) {
+            if self.back_previewing() {
+                self.back_progress(2, 0.0, edge, now_ms);
+            }
+            return false;
+        }
+        if phase != 0 && !self.back_previewing() {
+            return false;
+        }
+        self.back_progress(phase, progress, edge, now_ms)
+    }
+
+    /// Commit only the callback AndroidX selected. The reader and presenter run on different
+    /// threads, so a layer can disappear between receiving Back and executing it.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn dispatched_back(&mut self, kind: i32, id: ViewId, now_ms: f64) -> i32 {
+        let layers = self.back_layers();
+        if !layers.takes(kind, id) {
+            if self.back_previewing() {
+                self.back_progress(2, 0.0, 0, now_ms);
+            }
+            // Redispatch on the reader with the targets this turn observed.
+            self.update_hosted_back();
+            return -1;
+        }
+        let taken = match kind {
+            1 | 2 => self.route_back(now_ms),
+            3 | 5 => self.dismiss_surface(now_ms),
+            4 => self.close_menu(),
+            _ => unreachable!(),
+        };
+        i32::from(taken)
+    }
+
+    fn route_back(&mut self, now_ms: f64) -> bool {
         let Some(back) = self.back() else {
             // A TV's remote has no Escape key: its Back is one (LLP 1115.001.003 D3).
             return self.remote_back(now_ms);

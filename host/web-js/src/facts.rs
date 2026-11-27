@@ -32,7 +32,7 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
             ][..],
             "activities",
         ),
-        // @ref LLP 1123 D6 — unavailable until the web's owners report geometry (D17)
+        // @ref LLP 1123 D6 — the browser's layout, the quantities only a native host has unavailable
         (geometry::GEOMETRY, geometry::GEOMETRY_FIELDS, "geometry"),
         (geometry::CHAIN, geometry::CHAIN_FIELDS, "nativeChain"),
         (
@@ -111,7 +111,7 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
                 if source == "exactDelivery" && !baked.is_empty() {
                     let v = Value::from_bytes(baked).map_err(|e| e.to_string())?;
                     format!("[{}],{}", names.join(","), value_js(&v))
-                } else if source == "exactViewport" {
+                } else if matches!(source, "exactViewport" | "exactGeometry") {
                     format!("[{}],{}", names.join(","), surface_type_json(plan, r.ty))
                 } else {
                     format!("[{}]", names.join(","))
@@ -252,12 +252,13 @@ fn modules(plan: &Plan, body: &mut String) -> String {
         .map(|v| {
             let binds: Vec<&str> = plan.str(v.binds).split_whitespace().collect();
             format!(
-                "{}:[{},{},{},{}]",
+                "{}:[{},{},{},{},{}]",
                 serde_json::to_string(plan.str(v.tag)).unwrap(),
                 serde_json::to_string(plan.str(v.extension)).unwrap(),
                 v.displayed,
                 serde_json::to_string(&binds).unwrap(),
-                plan.str(v.agent)
+                plan.str(v.agent),
+                serde_json::to_string(plan.str(v.package)).unwrap(),
             )
         })
         .collect();
@@ -363,7 +364,9 @@ fn a_view_carries_its_agent_vocabulary_without_module_names() {
     );
     let mut body = String::new();
     modules(&plan, &mut body);
-    assert!(body.contains(r#""words-panel":["words",false,[],{"heard":"string"}]"#));
+    assert!(
+        body.contains(r#""words-panel":["words",false,[],{"heard":"string"},"@fixture/words"]"#)
+    );
     assert!(body.contains(r#""words":()=>import("./ext-words.js")"#));
 }
 

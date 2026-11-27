@@ -37,6 +37,31 @@ fn inline_formats_leave_block_prefixes_outside_the_markers() {
 }
 
 #[test]
+fn commands_take_the_whole_space_after_a_list_marker() {
+    for (before, command, after) in [
+        ("-   item|", Command::Newline, "-   item\n-   |"),
+        ("-\titem|", Command::Newline, "-\titem\n-\t|"),
+        ("1.  item|", Command::Newline, "1.  item\n2.  |"),
+        ("-  [x] done|", Command::Newline, "-  [x] done\n- [ ] |"),
+        ("-   |", Command::Newline, "|"),
+        ("-   it|em", Command::Bullet, "it|em"),
+        ("-\tit|em", Command::Bullet, "it|em"),
+        ("1.  it|em", Command::Ordered, "it|em"),
+        ("-  [ ] ta|sk", Command::Task, "ta|sk"),
+        ("-   it|em", Command::Task, "- [ ] it|em"),
+        ("-  [ ] ta|sk", Command::ToggleTask, "-  [x] ta|sk"),
+        ("-   it|em", Command::Indent, "  -   it|em"),
+        ("  -   it|em", Command::Outdent, "-   it|em"),
+    ] {
+        assert_eq!(
+            run(before, command.clone()),
+            after,
+            "{before:?} {command:?}"
+        );
+    }
+}
+
+#[test]
 fn return_preserves_inline_constructs_across_block_breaks() {
     for (before, after) in [
         ("- **|Note:** details", "- \n- |**Note:** details"),
@@ -202,6 +227,11 @@ fn inline_commands_toggle() {
     );
     assert_eq!(run("make **th|is** bold", Command::Bold), "make th|is bold");
     assert_eq!(
+        run("**a **b**| c**", Command::Bold),
+        "a **b**| c",
+        "collapsed caret after nested closer targets the enclosing construct"
+    );
+    assert_eq!(
         run("make **|this|** bold", Command::Bold),
         "make |this| bold"
     );
@@ -232,6 +262,8 @@ fn block_commands_toggle_lines() {
     assert_eq!(run("a tit|le", Command::Heading(2)), "## a tit|le");
     assert_eq!(run("## a tit|le", Command::Heading(2)), "a tit|le");
     assert_eq!(run("## a tit|le", Command::Heading(1)), "# a tit|le");
+    assert_eq!(run("   ## a tit|le", Command::Heading(2)), "   a tit|le");
+    assert_eq!(run("   ## a tit|le", Command::Heading(1)), "   # a tit|le");
     assert_eq!(run("|one\n\ntwo|", Command::Bullet), "- |one\n\n- two|");
     assert_eq!(run("- |one\n- two|", Command::Ordered), "1. |one\n2. two|");
     assert_eq!(run("1. one|", Command::Task), "- [ ] one|");

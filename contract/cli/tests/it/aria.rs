@@ -282,7 +282,7 @@ fn an_unknown_aria_name_lists_the_carried_ones() {
     };
     let count = refused("aria-rowcount");
     assert!(
-        count.contains("`aria-rowcount` is ARIA's, and Contract does not carry it yet; Contract carries aria-activedescendant, aria-atomic, aria-busy, aria-checked, "),
+        count.contains("`aria-rowcount` is ARIA's, and Contract does not carry it yet; Contract carries aria-actions, aria-activedescendant, aria-atomic, aria-busy, aria-checked, "),
         "{count}"
     );
     assert!(
@@ -469,4 +469,66 @@ fn an_active_descendant_is_carried_on_any_element_and_follows_state() {
     let clear = view_of(&r, "clear");
     r.dispatch(clear, Event::Press).unwrap();
     assert_eq!(prop(&r, "field", id).as_deref(), Some(""));
+}
+
+#[test]
+fn custom_action_ids_name_other_press_targets() {
+    let missing = "component App\n  state n = 0\n  action reset\n    n = 0\n  view\n    column aria-actions=\"missing\"\n      button \"Reset\" id=`row-${n}` press=reset\n";
+    assert!(contract::compile(missing)
+        .unwrap_err()
+        .to_string()
+        .contains("lower-aria-action-target"));
+    boot("component App\n  view\n    column aria-actions=\"child\"\n      Child()\ncomponent Child\n  view\n    link id=\"child\" href=\"/child\"\n      text \"Child\"\n");
+    for (id, reason) in [
+        ("owner", "itself"),
+        ("caption", "no press"),
+        ("missing", "no element"),
+    ] {
+        let src = format!("component App\n  state n = 0\n  action reset\n    n = 0\n  view\n    column id=\"owner\" aria-actions=\"reset {id}\"\n      text \"Quantity\" id=\"caption\"\n      button \"Reset\" press=reset id=\"reset\"\n");
+        let error = contract::compile(&src).unwrap_err().to_string();
+        assert!(
+            error.matches("lower-aria-action-target").count() == 1 && error.contains(reason),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn custom_action_targets_resolve_on_the_owners_conditional_arm() {
+    let src = r#"component App
+  state on = true
+  action reset
+    on = false
+  view
+    column
+      if on
+        column aria-actions="reset"
+          button "Reset" id="reset" press=reset
+      else
+        text "Done" id="reset"
+"#;
+    boot(src);
+    boot(&src.replace("    column\n", "    column aria-actions=\"reset\"\n"));
+    boot(&src.replace(
+        "      else\n        text \"Done\" id=\"reset\"",
+        "          text \"Done\" id=\"reset\"",
+    ));
+    for target in [
+        "button \"Docs\" id=\"reset\" href=\"/docs\"",
+        "text\n        text \"Docs\" id=\"reset\" href=\"/docs\"",
+    ] {
+        boot(&format!(
+            "component App\n  view\n    column aria-actions=\"reset\"\n      {target}\n"
+        ));
+    }
+    let other_arm = src
+        .replace("button \"Reset\" id=\"reset\" press=reset", "text \"Done\"")
+        .replace(
+            "text \"Done\" id=\"reset\"",
+            "button \"Reset\" id=\"reset\" press=reset",
+        );
+    assert!(contract::compile(&other_arm)
+        .unwrap_err()
+        .to_string()
+        .contains("names no element"));
 }

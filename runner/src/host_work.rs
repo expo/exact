@@ -9,11 +9,20 @@
 /// child does. The type is not checked to be the answering source: one that
 /// names another type, or fills the field by hand, goes unseen by the bake,
 /// and an Apple host without I/O refuses its work by name.
-pub trait HostWork {}
+pub trait HostWork {
+    /// Whether continuations handed out by this source are local module/storage
+    /// turns that may run beside plain HTTP `Read`s for `Target::Resource`
+    /// (LLP 1162 §8 Q2).
+    const LOCAL: bool = false;
+}
 
 /// A build script may name its source by reference.
-impl<T: HostWork + ?Sized> HostWork for &T {}
-impl<T: HostWork + ?Sized> HostWork for &mut T {}
+impl<T: HostWork + ?Sized> HostWork for &T {
+    const LOCAL: bool = T::LOCAL;
+}
+impl<T: HostWork + ?Sized> HostWork for &mut T {
+    const LOCAL: bool = T::LOCAL;
+}
 
 /// A native module's call, which a host's executor runs: an Apple
 /// composition that links modules links I/O with them.

@@ -206,7 +206,7 @@ pub fn timeline<D: DataSource>(
     });
     // The store as the app left it, read only: a refresh writes nothing
     // (LLP 1126 D3, stage 1).
-    let (snapshot, _) = crate::host::system::store_read(&app, false);
+    let (snapshot, _) = crate::host::system::store_read(&app, &grants, false).unwrap_or_default();
     let mut executor: Option<crate::executor::Executor> = None;
     let result = runner.snapshot_timeline(
         now,
@@ -234,19 +234,17 @@ pub fn timeline<D: DataSource>(
             } else {
                 exact_runner::RequestClass::Ordered
             };
-            executor
-                .run(
-                    exact_runner::RequestOut {
-                        completion: None,
-                        class,
-                        ticket: 1,
-                        target: "widget refresh".into(),
-                        request,
-                        forced: false,
-                    },
-                    work,
-                )
-                .map_err(str::to_owned)?;
+            executor.run(
+                exact_runner::RequestOut {
+                    completion: None,
+                    class,
+                    ticket: 1,
+                    target: "widget refresh".into(),
+                    request,
+                    forced: false,
+                },
+                work,
+            )?;
             loop {
                 executor.begin_pump();
                 if let Some((_, outcome, _)) = executor.drain().into_iter().next() {

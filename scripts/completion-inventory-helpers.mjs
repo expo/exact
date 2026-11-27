@@ -1,6 +1,10 @@
 // Synchronous runner APIs and their value helpers, plus the platform adapters that use them.
 export function helperClassifications(group) {
   return [
+  group("drag file transfers", ["subscription", "one-shot"], "the process's document-portal connections and probe, and one transfer key per receiver's request", "durable",
+    "host/painted/src/portal/transfer.rs keeps the process's session-bus connection that registers transfers, since a transfer key dies with its sender's connection, and another for probes and redemptions, so their failures end no key; it follows the portal's owner on the bus. Each key is registered for one request and redeemed once (autostop), and may be redeemed after the drag that gave it ends. No view holds either.", [
+    ["painted:host/painted/src/portal/transfer.rs", "Portal::available Portal::reprobe Portal::retrieve Portal::send Portal::session Portal::stop"],
+  ]),
   group("delivery", ["durable operation"], "installed app/update stream; session application is synchronous", "durable",
     "The named public runner-crate source is the delivery API or its value/admission helper. runner/src/runner/delivery.rs exposes the app delivery state; host delivery synchronization applies persisted stream facts to the current session.", [
     ["runner:runner/src/delivery.rs", "Delivery::field Delivery::with_compat production refuse_analysis"],
@@ -10,8 +14,9 @@ export function helperClassifications(group) {
     ["runner:runner/src/design.rs", "batch digest Edit::json Edit::parse notice Scrub::older shape snapshot structure tokens"],
     ["runner:runner/src/desktop.rs", "buttons dock_menu presents status_items"],
     ["runner:runner/src/geometry.rs",
-      "GeometryAnswer::of GeometryAnswer::value GeometryEnv::new GeometryEnv::read GeometryLinks::ahead GeometryLinks::new GeometryLinks::with_range_frame GeometryLinks::with_scroll_metrics " +
+      "GeometryAnswer::of GeometryAnswer::value GeometryEnv::new GeometryEnv::read " +
       "Scrolled::note Scrolled::place Scrolled::shown Scrolled::top_layer Scrolled::top_layer_frames"],
+    ["runner:runner/src/geometry/links.rs", "GeometryLinks::ahead GeometryLinks::new GeometryLinks::with_page_box GeometryLinks::with_range_frame GeometryLinks::with_scroll_metrics"],
     ["runner:runner/src/geometry/modal.rs", "Scrolled::top_layer_backdrop"],
     ["runner:runner/src/head.rs", "Head::fields"],
     ["runner:runner/src/orientation.rs", "conflict_line Lock::json session Session::lock types"],
@@ -57,6 +62,8 @@ export function helperClassifications(group) {
   ]),
   group("module announcements", ["subscription"], "bound source/module and its active readers in this session", "UI-owned",
     "The named public runner-crate source is the module announcements API or its value/admission helper. runner/src/runner/time.rs changed/apply_announced settle source watches; modules/events.rs raises events into the live module bindings. No durable outcome record is provided.", [
+    ["runner:runner/src/runner/modules/agent.rs", "check_source_substitute"],
+    ["runner:runner/src/runner/modules/arrival.rs", "check_arrival_field"],
     ["runner:runner/src/local_network.rs", "fact launch launch_once prompts Reach::refusal Reach::static_risk report State::parse State::word"],
     ["runner:runner/src/runner/source.rs", "Interrupt::trigger Native::changed Native::on_changed"],
   ]),
@@ -106,15 +113,17 @@ export function helperClassifications(group) {
   ]),
   group("UI input", ["one-shot"], "current mounted view, action binding or interaction", "UI-owned",
     "The named public runner-crate source is the UI input API or its value/admission helper. runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied.", [
+    ["runner:runner/src/runner/host_kinds.rs", "Event::scroll_payload"],
     ["runner:runner/src/runner/event.rs",
       "ActionBinding::retained_utf8_bytes Event::checked_payload Event::focus_payload Event::height_release_payload Event::key Event::pan_payload " +
-      "Event::pan_release_payload Event::press Event::pressed Event::record Event::scroll_payload Event::transform_geometry_payload Event::transform_release_payload " +
+      "Event::pan_release_payload Event::press Event::pressed Event::record Event::transform_geometry_payload Event::transform_release_payload " +
       "KeyModifiers::held KeyModifiers::split"],
     ["runner:runner/src/runner/event/frame_navigation.rs", "FrameNavigation::parse FrameNavigation::value other"],
     ["runner:runner/src/runner/event/keyboard.rs", "KeyboardEvent::chord KeyboardEvent::parse KeyboardEvent::value"],
-    ["runner:runner/src/runner/field.rs", "Event::edit_payload Event::field_payload FieldSelection::at_end FieldSelection::caret FieldSelection::clamped FieldSelection::parse SelectionDirection::name SelectionDirection::of utf16_len"],
+    ["runner:runner/src/runner/field.rs", "Event::edit_payload Event::field_payload FieldSelection::at_end FieldSelection::caret FieldSelection::clamped FieldSelection::parse FieldSelection::through_rewrite SelectionDirection::name SelectionDirection::of utf16_len"],
     ["runner:runner/src/runner/host_kinds.rs", "Event::clipboard_payload Event::media_payload Event::of_host_kind Event::paste_files_payload Event::selection_change_payload Event::selection_payload"],
     ["runner:runner/src/runner/modules/declared/desktop.rs", "chord_refusal"],
+    ["runner:runner/src/desktop.rs", "single_side_shortcut"],
     ["runner:runner/src/runner/pointer.rs",
       "AtomEvent::parse AtomEvent::value DropEvent::parse DropEvent::parse_point DropEvent::value Event::contextmenu_payload Event::pointer_payload MouseEvent::parse " +
       "MouseEvent::value PointerEvent::parse PointerEvent::value WheelEvent::parse WheelEvent::value"],
@@ -149,7 +158,7 @@ export function helperClassifications(group) {
     "The named public runner-crate source is the module lifecycle API or its value/admission helper. runner/src/runner/modules/bound.rs binds live module instances; runner/src/runner/kept.rs data_ready reconciles the current source/store before settlement.", [
     ["runner:runner/src/runner/retirement.rs", "ModuleIdentity::instance ModuleIdentity::retire ModuleInstance::failure"],
     ["runner:runner/src/runner/source.rs",
-      "Interrupt::new Native::extension_handler Native::handler Native::host Native::host_call Native::hosted Native::hosted_call Native::set Native::sync Native::sync_form Native::synced PreloadWake::ask " +
+      "Interrupt::new Native::extension_handler Native::handler Native::host Native::host_call Native::host_packages Native::hosted Native::hosted_call Native::set Native::sync Native::sync_form Native::synced PreloadWake::ask " +
       "PreloadWake::set Target::mutation Target::text"],
   ]),
   group("navigation", ["one-shot"], "current router, visit, tab or navigation operation", "UI-owned",
@@ -209,7 +218,6 @@ export function helperClassifications(group) {
     ["runner:runner/src/runner/router.rs", "Runner::host_root"],
     ["painted:host/painted/src/flights.rs", "Host::flying Host::start_flights"],
     ["painted:host/painted/src/presenter/arrive.rs", "Presenter::focus_landed"],
-    ["painted:host/painted/src/presenter/reveal.rs", "Presenter::reveal_flights"],
     ["painted:host/painted/src/presenter/stage/authored.rs", "Presenter::entrance Presenter::hold_arriving Presenter::top_of"],
     ["painted:host/painted/src/presenter/stage/zoom.rs", "Presenter::navigation_container Presenter::source_node Presenter::source_rect Presenter::sync_sources"],
   ]),
@@ -238,6 +246,7 @@ export function helperClassifications(group) {
     ["runner:runner/src/canvas_capture.rs", "Encoding::lossy_quality Encoding::new media_type_of Request::capture_canvas_as"],
     ["runner:runner/src/desktop.rs", "image_node label"],
     ["runner:runner/src/instance/owners.rs", "Tree::owners"],
+    ["runner:runner/src/lib.rs", "is_package_handler"],
     ["runner:runner/src/request_preload.rs", "secret_in_origin"],
     ["runner:runner/src/runner.rs", "Runner::plan_site_of"],
     ["runner:runner/src/runner/checkpoint.rs", "Runner::record_render_request"],
@@ -261,12 +270,20 @@ export function helperClassifications(group) {
   group("presentation helpers", ["one-shot"], "current painted frame, geometry, menu or paint resource", "UI-owned",
     "paint/shared.rs retains the host's current flight frames; top/status.rs projects and paints the live menu. These helpers create no runner request.", [
     ["painted:host/painted/src/bars.rs", "Host::place_status_items"],
-    ["painted:host/painted/src/paint_motion.rs", "Host::presented_filter"],
+    ["painted:host/painted/src/paint_motion.rs", "Host::presented_clip Host::presented_filter"],
     ["painted:host/painted/src/paint/shape.rs", "PaintedBox::contains"],
     ["painted:host/painted/src/paint/shared.rs", "SharedState::update"],
     ["painted:host/painted/src/presenter/alert.rs", "Presenter::alert_anchor_scroll Presenter::backdrop"],
+    ["painted:host/painted/src/presenter/collection.rs", "Presenter::list_claim"],
+    ["painted:host/painted/src/presenter/owners.rs", "Presenter::owner_updates"],
+    ["painted:host/painted/src/presenter/reach.rs", "Presenter::displaced_scroll Presenter::renew_reach Presenter::rests_at_end Presenter::set_box_extension Presenter::set_box_reach Presenter::set_scroll_claim Presenter::tell_covered"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::surface_clock"],
     ["painted:host/painted/src/presenter/top/status.rs", "Presenter::place_status_items Presenter::status_icon Presenter::status_items Presenter::status_menu Presenter::status_menu_ancestors Presenter::status_menu_pixels Presenter::status_popover Presenter::status_quit_removed Presenter::with_exit"],
+  ]),
+  group("surface wakes", ["subscription"], "process-local surface wake pipe for the live host event loop", "UI-owned",
+    "host/painted/src/surfaces/wake.rs and canvas/surface.rs expose the non-blocking socketpair fd signaled by SurfaceWaker::wake (LLP 1009 D12) so Linux and Android event loops poll resting surfaces without creating any runner request.", [
+    ["painted:host/painted/src/canvas/surface.rs", "CanvasHost::surface_wake_fd"],
+    ["painted:host/painted/src/surfaces/wake.rs", "Presenter::surface_wake_fd"],
   ]),
   ];
 }

@@ -11,6 +11,76 @@ pub(crate) fn requested() -> Result<Option<Rotation>, String> {
         .transpose()
 }
 
+#[cfg(target_os = "linux")]
+use smithay_client_toolkit::{
+    compositor::SurfaceData,
+    output::OutputData,
+    reexports::client::{
+        backend::{Backend, ObjectData, ObjectId},
+        protocol::wl_surface::WlSurface,
+        Proxy,
+    },
+};
+
+/// Borrow the surface data Winit's Wayland dispatcher keeps current.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+pub(super) fn surface_data(
+    window: &winit::window::Window,
+) -> Option<std::sync::Arc<dyn ObjectData>> {
+    use winit::raw_window_handle::{
+        HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+    };
+    let RawDisplayHandle::Wayland(display) = window.display_handle().ok()?.as_raw() else {
+        return None;
+    };
+    let RawWindowHandle::Wayland(surface) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    // The borrowed Window owns both handles throughout these calls. Only the reference-counted data escapes.
+    let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
+    let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), surface.surface.as_ptr().cast()) }
+        .ok()?;
+    backend.get_data(id).ok()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn screen(
+    window: &winit::window::Window,
+    surface: Option<&dyn ObjectData>,
+) -> Option<exact_runner::ScreenOrientation> {
+    surface.and_then(wayland).or_else(|| {
+        // Before wl_surface.enter the compositor has not placed the window.
+        let monitor = window
+            .current_monitor()
+            .or_else(|| window.available_monitors().next())?;
+        let size = monitor.size();
+        Some(exact_runner::ScreenOrientation::rotated(
+            size.height >= size.width,
+            0,
+        ))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn wayland(surface: &dyn ObjectData) -> Option<exact_runner::ScreenOrientation> {
+    // Winit chooses the first entered output for Window::current_monitor on Wayland.
+    let output = surface
+        .data_as_any()
+        .downcast_ref::<SurfaceData>()?
+        .outputs()
+        .next()?;
+    output.data::<OutputData>()?.with_output_info(|info| {
+        let (width, height) = info.modes.iter().find(|mode| mode.current)?.dimensions;
+        // wl_output.transform gives the counterclockwise compensation. Mirroring preserves the rotation.
+        let turns = (4 - (info.transform as u8 % 4)) % 4;
+        Some(exact_runner::ScreenOrientation::rotated(
+            height >= width,
+            turns,
+        ))
+    })
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn panel_rotation(name: &str) -> Rotation {
     // KMS names the mounted edge. Our angle turns the image clockwise,

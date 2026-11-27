@@ -19,7 +19,7 @@ pub(super) use templates::{
 };
 
 /// The host's names a value reads (LLP 1123 D9, D16), as a refusal lists them.
-pub(crate) const HOST_NAMES: &str = "the observations `var(--exact-<family>-inset-<edge>)`, the edge `top`, `right`, `bottom` or `left`, or `start` or `end` for any family but `safe-area`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, and a native target's raw safe area `var(--exact-<target>-safe-area-inset-<edge>)`, any of the six edges, the target `native-<n>` for the nth chain entry, from 1 to 255, `owner`, `parent`, `navigation`, `tab`, `split`, `column`, `presenter`, `session`, `root`, `window`, `tab-content`, `window-content`, `screen` or `target-<name>` for one native code registered, a name of lowercase letters, digits and inner hyphens, and a field of the owner's segment `var(--exact-viewport-segment-<field>-<x>-<y>)`, the field `width`, `height`, `top`, `left`, `bottom` or `right`, each index 0 to 15";
+pub(crate) const HOST_NAMES: &str = "the observations `var(--exact-<family>-inset-<edge>)`, the edge `top`, `right`, `bottom` or `left`, or `start` or `end` for any family but `safe-area`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, the width of route navigation on an inline side `var(--exact-bar-inset-start)` or `var(--exact-bar-inset-end)`, and a native target's raw safe area `var(--exact-<target>-safe-area-inset-<edge>)`, any of the six edges, the target `native-<n>` for the nth chain entry, from 1 to 255, `owner`, `parent`, `navigation`, `tab`, `split`, `column`, `presenter`, `session`, `root`, `window`, `tab-content`, `window-content`, `screen` or `target-<name>` for one native code registered, a name of lowercase letters, digits and inner hyphens, and a field of the owner's segment `var(--exact-viewport-segment-<field>-<x>-<y>)`, the field `width`, `height`, `top`, `left`, `bottom` or `right`, each index 0 to 15";
 
 /// A literal, as an author wrote it, for a message.
 fn literal_text(e: &Expr) -> String {
@@ -30,15 +30,17 @@ fn literal_text(e: &Expr) -> String {
         _ => "…".into(),
     }
 }
-/// `navigationSplit`'s column width written as a number: its text, as the
-/// prop carries it (LLP 1116.004 D1.2).
-pub(crate) fn split_width(prop: PropId, e: &Expr) -> Option<Expr> {
-    match e {
-        Expr::Number(n, span) if prop == PropId::NavigationSplit => {
-            Some(Expr::Str(n.to_string(), *span))
-        }
-        _ => None,
+/// `navigationSplit` as the prop carries it where the compiler knows its text (`routes::split_text`): that text, one
+/// string literal, so every reader of the plan, the runner's scan of a tab's ask included, reads the value the compiler
+/// judged (LLP 1127 D1, D19). A switch stays itself, for its own refusal.
+pub(crate) fn split_literal(prop: PropId, e: &Expr) -> Option<Expr> {
+    if prop != PropId::NavigationSplit || matches!(e, Expr::Str(..)) {
+        return None;
     }
+    if matches!(crate::routes::untyped(e), Expr::Bool(..)) {
+        return None;
+    }
+    crate::routes::split_text(e).map(|text| Expr::Str(text, e.span()))
 }
 /// `glassGroup`'s value to compile (LLP 1053.000.000 D1, 1053.000.000.000
 /// D1): each literal spacing, at the top and in every arm of a choice, is 0 to
@@ -163,6 +165,7 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::BadShapeOutside { .. } => "expected none, circle(), ellipse(), inset() with one round radius, or polygon() with at most 64 vertices; lengths are points/px or percentages".into(),
         StyleValueError::BadClipPath { .. } => "expected none, polygon(), inset() with optional round radii, circle(), ellipse() (px or %), path() with valid SVG path data in CSS pixels, or url(#id) on an SVG element".into(),
         StyleValueError::BadAspectRatio { .. } => "expected auto, a ratio (`16 / 9`, or a number), or both (`auto 4 / 3`); numbers are nonnegative".into(),
+        StyleValueError::BadAspectFit { .. } => "expected none or a positive ratio, width over height (`16 / 9`, or a number); both numbers and their quotient finite and above zero".into(),
         StyleValueError::BadBackgroundImage { .. } => "expected none, or up to four of linear-gradient(…), radial-gradient(…) and conic-gradient(…)".into(),
         StyleValueError::BadMaskImage { .. } => "expected none, or one linear-gradient(…), radial-gradient(…) or conic-gradient(…)".into(),
         StyleValueError::BadTextShadow { .. } => "expected none, or one shadow: <offset-x> <offset-y> [<blur>] and an optional colour".into(),
@@ -524,7 +527,7 @@ fn style_value(
             }
             if rows.contains(&StyleId::Transition) {
                 if let Err(reason) = exact_motion::Transitions::parse(v) {
-                    let supported = "translate, scale, rotate, opacity; color, background-color, border-color (and each side), -exact-tint-color, box-shadow, filter; font-weight, font-stretch, font-variation-settings; SVG fill, stroke, stroke-dashoffset, r, cx, cy, x, y, rx, ry, d; numeric height on admitted height owners";
+                    let supported = "translate, scale, rotate, opacity; color, background-color, border-color (and each side), -exact-tint-color, box-shadow, filter, a box's clip-path; font-weight, font-stretch, font-variation-settings; SVG fill, stroke, stroke-dashoffset, r, cx, cy, x, y, rx, ry, d; numeric height on supported boxes";
                     let why = match reason {
                         exact_motion::ParseError::UnknownProperty(property) => {
                             crate::motion::layout_property_refusal(&property, supported).unwrap_or_else(|| format!("`{property}` is not a supported transition property: transitions animate {supported}"))
@@ -650,14 +653,13 @@ fn style_value(
                 Some(StyleValue::Number(numeric_literal(expr).unwrap()))
             }
             Expr::Str(s, _) => Some(
-                // Enum keywords stay text, including `auto` (as in the runner).
+                // A keyword row's `auto` stays text (as in the runner): an
+                // enum's, or one of a row of keyword bits (`-exact-safe-area`).
                 // Other codecs retain their existing dimension/keyword handling.
                 // A keyword is ASCII case-insensitive, as the runner reads it.
                 if s.trim_matches(['\t', '\n', '\u{c}', '\r', ' '])
                     .eq_ignore_ascii_case("auto")
-                    && !rows
-                        .iter()
-                        .all(|row| row.codec() == exact_kernel::StyleCodec::Enum)
+                    && !rows.iter().all(|row| !row.enum_names().is_empty())
                 {
                     StyleValue::Auto
                 } else if let Some(pct) = s.strip_suffix('%').and_then(|p| p.parse::<f64>().ok()) {
@@ -1013,6 +1015,18 @@ pub(crate) fn check_prop_value(
     ty: &Ty,
 ) -> Result<(), LowerError> {
     media::check(name, value, span)?;
+    if let (PropId::ToolbarPlacement, Expr::Str(word, _)) = (prop, value) {
+        if !vocab::TOOLBAR_PLACEMENTS.contains(&word.as_str()) {
+            return err(
+                "lower-attr-value",
+                format!(
+                    "`toolbarPlacement` takes {}; given {word:?}",
+                    vocab::TOOLBAR_PLACEMENTS.join(", ")
+                ),
+                span,
+            );
+        }
+    }
     if prop == PropId::AccessibilityRole {
         crate::roles::check(value)?;
     }
@@ -1118,16 +1132,32 @@ pub(crate) fn check_prop_value(
             }
         }
     }
-    // @ref LLP 1116.004 D1.2, LLP 1116.006 D2 — a stack's split on a wide window: off, or the list column's
-    // width; or, on a box in the root route, the detail pane's placeholder.
-    if prop == PropId::NavigationSplit
-        && matches!(value, Expr::Str(s, _) if s != "none" && s != "placeholder" && !s.parse::<f64>().is_ok_and(|w| w.is_finite() && w > 0.0))
-    {
-        return err(
-            "lower-attr-value",
-            "`navigationSplit` takes \"none\" (the stack pushes on a wide window too) or the list column's width, a positive number, on the root route; or \"placeholder\" on a box in it, which the detail pane shows while nothing is selected",
-            span,
-        );
+    // @ref LLP 1127 D1 — a stack's split, asked on its root route: "split", or the list column's width;
+    // "none" pushes on every host; or, on a box in the root route, the detail pane's placeholder, which asks too.
+    // Only a value as written is judged: a computed one is the app's at run time, where every host
+    // reads the words it knows and takes any other as saying nothing
+    if prop == PropId::NavigationSplit {
+        let refusal = match (crate::routes::split_text(value), crate::routes::untyped(value)) {
+            (_, Expr::Bool(b, _)) => Some(format!(
+                "`navigationSplit={b}` is not a value: the attribute says how the stack splits and is no switch. Write \"split\" for a list beside its detail, or \"none\" for no split"
+            )),
+            (Some(s), _) if s == "auto" => Some(
+                "`navigationSplit=\"auto\"` is not a value: leave the attribute out for each host's own default, or write \"split\" for a list beside its detail, a width in px, or \"none\" to push on every host".to_string(),
+            ),
+            (Some(s), _)
+                if ["split", "none", "placeholder"].contains(&s.as_str())
+                    || exact_kernel::props::split_width(&s).is_some() =>
+            {
+                None
+            }
+            (Some(s), _) => Some(format!(
+                "`navigationSplit=\"{s}\"` is not a value: a stack's root route takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\", and a plain box that is its own child \"placeholder\""
+            )),
+            (None, _) => None,
+        };
+        if let Some(message) = refusal {
+            return err("lower-attr-value", message, span);
+        }
     }
     // A prop that takes one of a few words, and what its refusal says.
     let words: Option<(&[&str], &str)> = match prop {
@@ -1136,10 +1166,20 @@ pub(crate) fn check_prop_value(
         PropId::NavigationBar => Some((&["none", "auto", "transparent"], "`navigationBar` takes \"none\" (this route shows no navigation bar: a full-bleed screen that draws its own way back), \"transparent\" (the bar drawn clear at the top of the route's scroller, whose content starts under it: a full-bleed picture) or \"auto\" (the platform's bar, the default)")),
         // A sheet's grabber, said or left to the platform (LLP 1115 §2).
         PropId::NavigationGrabber => Some((&["visible", "hidden", "auto"], "`navigationGrabber` takes \"visible\", \"hidden\" or \"auto\" (the default: the platform's, a grabber on a sheet with several detents)")),
+        // @ref LLP 1123 D7 — a sheet route's choices, each one UIKit property.
+        PropId::NavigationEdgeAttachedInCompactHeight => Some((&["true", "false"], "`navigationEdgeAttachedInCompactHeight` takes \"true\" (in a short window, as an iPhone's in landscape, the sheet rests on the screen's bottom edge as it does in a tall one) or \"false\" (the default: the platform's, a sheet that covers the short window's height)")),
+        PropId::NavigationWidthFollowsPreferredContentSize => Some((&["true", "false"], "`navigationWidthFollowsPreferredContentSize` takes \"true\" (a sheet on a short window's bottom edge takes its content's preferred width) or \"false\" (the default: the window's width)")),
+        PropId::NavigationScrollExpands => Some((&["true", "false"], "`navigationScrollExpands` takes \"true\" (scrolling the sheet's content at its top grows the sheet to its next detent) or \"false\" (the content scrolls and the sheet keeps its height); unsaid, the platform's: it grows on a sheet with several detents")),
+        PropId::NavigationFullSizeContent => Some((&["true", "false"], "`navigationFullSizeContent` takes \"true\" (AppKit's content runs under its chrome: a popover route's under its arrow, the window's root route's under the title bar and toolbar) or \"false\"")),
+        PropId::NavigationPopoverOverlapsSource => Some((&["true", "false"], "`navigationPopoverOverlapsSource` takes \"true\" (the popover may cover its anchor where it cannot fit beside it) or \"false\" (the default: it keeps beside its anchor)")),
+        PropId::NavigationPopoverAdaptation => Some((&["sheet", "none"], "`navigationPopoverAdaptation` takes \"sheet\" (the default: in a compact-width window, as an iPhone's in portrait, the popover is a sheet, as the platform adapts it) or \"none\" (a popover there too)")),
+        PropId::NavigationSizing => Some((&["page", "form", "automatic"], "`navigationSizing` takes \"automatic\" (the default: the platform's sheet, a form sheet on iPadOS 18 and later and a page sheet before), \"page\" (a page sheet, the window's full width on an iPad) or \"form\" (a form sheet, centred at a standard size in a regular-width window)")),
         // @ref LLP 1115.000 D5.5 — the ways the navigation root offers now.
         PropId::NavigationHistory => Some((&["back forward", "back", "forward", "none"], "`navigationHistory` takes \"back forward\" (the default: Back and Forward, wherever the router has somewhere to go), \"back\", \"forward\" or \"none\", the ways through history the navigation root offers now")),
         // @ref LLP 1115.000 D7.3 — Return presses a focused pressable under the node, as Chromium's Enter does.
         PropId::ReturnPresses => Some((&["descendants", "none"], "`-exact-return-presses` takes \"descendants\" (Return presses a focused button under this node, as Space does) or \"none\" (the default: Return is the dialog's default button's)")),
+        // @ref LLP 1188 D3 — two parts that stand together, as UIKit arranges them.
+        PropId::Arrangement => Some((crate::routes::arrangement::WORDS, crate::routes::arrangement::TAKES)),
         PropId::FocusGuide => Some((&["auto"], "`focusGuide` takes \"auto\"")),
         PropId::MenuOrder => Some((&["fixed", "priority", "automatic"], "`menuOrder` takes \"fixed\" (the rows as written, wherever the menu opens), \"priority\" (the first row nearest the finger) or \"automatic\" (the default: the platform's order, which on iOS shows a menu that opens upward last row first)")),
         PropId::Wakelock => Some((&["screen", "none"], "`wakelock` takes \"screen\" (the display stays awake while this element is displayed) or \"none\" (the default)")),

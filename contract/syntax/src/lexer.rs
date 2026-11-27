@@ -13,6 +13,8 @@ use crate::Span;
 pub enum TokenKind {
     /// An identifier or keyword.
     Ident(String),
+    /// A package substitute, in JSON's literal grammar.
+    Json(String),
     /// A number literal.
     Number(f64),
     /// A `"…"` string literal, unescaped.
@@ -109,12 +111,16 @@ impl Lexer {
         let mut indents: Vec<usize> = vec![0];
         let mut depth = 0usize; // bracket depth
         let mut errors = Vec::new();
-        let line = |out: &mut Vec<Token>,
-                    indents: &mut Vec<usize>,
-                    depth: &mut usize,
-                    i: usize,
-                    raw: &str|
+        let mut next_line = 0;
+        let mut line = |out: &mut Vec<Token>,
+                        indents: &mut Vec<usize>,
+                        depth: &mut usize,
+                        i: usize,
+                        raw: &str|
          -> Result<(), LexError> {
+            if i < next_line {
+                return Ok(());
+            }
             let line_no = origin.line + i as u32;
             let mut first_col = if i == 0 { origin.col } else { 1 };
             let raw = if i == 0 && origin.line == 1 && origin.col == 1 {
@@ -244,6 +250,89 @@ impl Lexer {
                     break;
                 }
                 let span = col_of(pos);
+                // An extension key uses the drive's alphabet, including an implementation's import path.
+                if matches!(out.last(), Some(Token {kind: TokenKind::Ident(w), ..}) if w == "extension")
+                    && trimmed[..pos]
+                        .split_whitespace()
+                        .eq(["prefer", "extension"])
+                {
+                    let raw = trimmed[pos..].split(['=', ' ', '\t']).next().unwrap_or("");
+                    let (source, owner) = raw
+                        .split_once('#')
+                        .map_or((raw, None), |(s, p)| (s, Some(p)));
+                    let word = |s: &str, extra: &[u8]| {
+                        !s.is_empty()
+                            && s.bytes().all(|b| {
+                                b.is_ascii_alphanumeric() || b == b'_' || extra.contains(&b)
+                            })
+                    };
+                    if !source
+                        .split_once('.')
+                        .is_some_and(|(package, name)| word(package, b"-") && word(name, b""))
+                        || owner.is_some_and(|p| {
+                            !p.strip_prefix('@')
+                                .unwrap_or(p)
+                                .split('/')
+                                .all(|s| word(s, b".-"))
+                        })
+                    {
+                        return Err(LexError { id: "syntax-expected-step", message: "expected an extension key: <extension>.<name>[#<import path>]=<JSON>|clear".into(), span });
+                    }
+                    pos += raw.len();
+                    out.push(Token {
+                        kind: TokenKind::Ident(raw.into()),
+                        span: Span {
+                            end_col: col_of(pos).col,
+                            ..span
+                        },
+                    });
+                    // Read JSON in its own grammar, including exponents and surrogate pairs.
+                    let rest = trimmed[pos..].trim_start();
+                    if let Some(tail) = rest.strip_prefix('=') {
+                        let equal = bytes.len() - rest.len();
+                        let start = bytes.len() - tail.trim_start().len();
+                        if !tail.trim_start().starts_with("clear") {
+                            let offset = trimmed.as_ptr() as usize - src.as_ptr() as usize + start;
+                            let input = &src[offset..];
+                            let mut values = serde_json::Deserializer::from_str(input)
+                                .into_iter::<serde_json::Value>();
+                            let error = |why: String| LexError {
+                                id: "syntax-expected-step",
+                                message: format!("expected a JSON substitute or `clear`: {why}"),
+                                span: col_of(start),
+                            };
+                            values
+                                .next()
+                                .ok_or_else(|| error("missing value".into()))?
+                                .map_err(|e| error(e.to_string()))?;
+                            let end = values.byte_offset();
+                            let extra = input[end..].lines().next().unwrap_or("").trim();
+                            if !extra.is_empty() && !extra.starts_with("//") {
+                                return Err(error("unexpected text after the value".into()));
+                            }
+                            let json = &input[..end];
+                            next_line = i + 1 + json.bytes().filter(|&c| c == b'\n').count();
+                            out.push(Token {
+                                kind: TokenKind::Punct("="),
+                                span: Span {
+                                    end_col: col_of(equal + 1).col,
+                                    ..col_of(equal)
+                                },
+                            });
+                            // A value spanning lines ends its span on the first.
+                            let first = json.lines().next().map_or(0, str::len);
+                            out.push(Token {
+                                kind: TokenKind::Json(json.into()),
+                                span: Span {
+                                    end_col: col_of(start + first).col,
+                                    ..col_of(start)
+                                },
+                            });
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 // A vendor-prefixed CSS name, as the Compat Standard spells
                 // some (`-webkit-text-stroke`, LLP 1077 D7), or one Exact
                 // invents (`-exact-press-scale`, LLP 1081 D7), or a custom
@@ -280,11 +369,23 @@ impl Lexer {
                     // A custom property's name, only ever an attribute's, takes
                     // every character CSS's does (`--gap-2`)
                     let custom = dashes == 2;
+                    // Data attributes admit any following digits and hyphens
+                    // (LLP 1075.003 §3.3); an expression still reads `data-x-1`
+                    // as subtraction.
+                    let data = trimmed[pos..].starts_with("data-") && {
+                        let rest = &trimmed[pos..];
+                        let end = rest
+                            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                            .unwrap_or(rest.len());
+                        let after = rest[end..].trim_start_matches([' ', '\t']);
+                        after.starts_with('=') && !after.starts_with("==")
+                    };
                     while pos < bytes.len()
                         && ((bytes[pos] as char).is_ascii_alphanumeric()
                             || bytes[pos] == b'_'
                             || (bytes[pos] == b'-'
                                 && (custom
+                                    || data
                                     || bytes
                                         .get(pos + 1)
                                         .is_some_and(|n| (*n as char).is_ascii_alphabetic()))))
@@ -333,10 +434,20 @@ impl Lexer {
                             });
                         }
                     }
+                    // A number after `.` is a list index, digits only, so
+                    // `rows.1.0` is two indexes, not `rows` and the number `1.0`.
+                    let index = matches!(
+                        out.last(),
+                        Some(Token {
+                            kind: TokenKind::Punct("."),
+                            ..
+                        })
+                    );
                     // A dot is the decimal point only when a digit follows, so
                     // `rows.0.steps` is an index and then a field, not the
                     // number `0.` (drums R7).
-                    if bytes.get(pos) == Some(&b'.')
+                    if !index
+                        && bytes.get(pos) == Some(&b'.')
                         && bytes
                             .get(pos + 1)
                             .is_some_and(|n| (*n as char).is_ascii_digit())
@@ -351,7 +462,7 @@ impl Lexer {
                     // least one digit. Without the digit the `e` is not part of
                     // the number, so a unit written against it (`2em`) is still
                     // the unquoted length it was.
-                    if matches!(bytes.get(pos), Some(b'e' | b'E')) {
+                    if !index && matches!(bytes.get(pos), Some(b'e' | b'E')) {
                         let sign = usize::from(matches!(bytes.get(pos + 1), Some(b'+' | b'-')));
                         if bytes
                             .get(pos + 1 + sign)
@@ -458,7 +569,11 @@ impl Lexer {
                     let c = trimmed[pos..].chars().next().unwrap_or(c);
                     LexError {
                         id: "syntax-unexpected-char",
-                        message: format!("unexpected `{c}`"),
+                        message: if c == '@' {
+                            "unexpected `@`: quote a held ticket target in a test step, as `tap \"@browser\" dismissed` or `type \"@date\" \"2026-10-10\"`".into()
+                        } else {
+                            format!("unexpected `{c}`")
+                        },
                         span: Span {
                             end_col: col_of(pos + c.len_utf8()).col,
                             ..span

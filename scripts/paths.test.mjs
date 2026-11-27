@@ -2,7 +2,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { posix, win32 } from 'node:path';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, parse, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { pathFrom, pathWithin, slashRelative, systemChrome, within } from './paths.mjs';
@@ -28,6 +28,14 @@ test('a relative path is written with slashes on either platform', () => {
   assert.equal(slashRelative('/w/app', '/w/app/assets/a.png', posix), 'assets/a.png');
   assert.equal(slashRelative('C:\\w\\app', 'C:\\w\\app\\assets\\a.png', win32), 'assets/a.png');
   assert.equal(slashRelative('C:\\w\\app', 'C:\\w\\other', win32), '../other');
+});
+
+test('a written path from the filesystem root has one leading separator', () => {
+  const cwd = parse(process.cwd()).root;
+  const script = `import { writtenPath } from ${JSON.stringify(import.meta.resolve('./paths.mjs'))}; console.log(writtenPath('tools'));`;
+  const result = spawnSync(process.execPath, ['-e', script], { cwd, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), resolve(cwd, 'tools'));
 });
 
 test('the process command recovers the invoked checkout entry on each platform', () => {

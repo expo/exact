@@ -86,6 +86,88 @@ fn assert_fallback(
 }
 
 #[test]
+fn emoji_presentation_selects_a_face_for_the_whole_grapheme() {
+    const EMOJI: &[u8] = include_bytes!("../../tests/fonts/NotoColorEmoji-subset.ttf");
+    let catalog = catalog::Catalog::from_bytes(&[FIRST, PLATFORM, EMOJI], "Roboto Flex");
+    let mut engine = TextEngine::with_catalog(catalog);
+    for (text, face) in [
+        ("↗", PLATFORM),
+        ("↗\u{fe0e}", PLATFORM),
+        ("↗\u{fe0f}", EMOJI),
+        ("↔", PLATFORM),
+        ("✌", EMOJI), // The fixture has no text face for the victory hand.
+        ("✌\u{fe0f}", EMOJI),
+        ("✌🏽", EMOJI),
+        ("1", PLATFORM),
+        ("1\u{fe0e}", PLATFORM),
+        ("1\u{fe0f}", EMOJI),
+        ("1\u{20e3}", EMOJI),
+        ("1\u{fe0f}\u{20e3}", EMOJI),
+        ("☕", EMOJI),
+        ("☕\u{fe0e}", PLATFORM),
+        ("🇺🇸", EMOJI),
+        ("👍🏽", EMOJI),
+    ] {
+        let p = engine.paragraph(&spec(0, text), None);
+        let p_face = &p.lines().faces[p.lines().glyphs[0].face as usize];
+        assert!(p_face.font.data.data() == face, "{text:?}");
+        assert_ne!(p.lines().glyphs[0].glyph_id, 0, "{text:?}");
+        // An unsupported selector can leave an invisible, zero-advance glyph.
+        assert!(
+            p.lines().glyphs.iter().skip(1).all(|g| g.w == 0.),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn a_mixed_face_keeps_its_text_arrows_and_shapes_its_explicit_variant() {
+    const MIXED: &[u8] = include_bytes!("../../tests/fonts/MixedPresentation.ttf");
+    const EMOJI: &[u8] = include_bytes!("../../tests/fonts/NotoColorEmoji-subset.ttf");
+    let mut catalog = catalog::Catalog::from_bytes(&[MIXED, EMOJI, PLATFORM], "Mixed Presentation");
+    catalog.install_runtime(8, &["Mixed Presentation".into()]);
+    catalog.install_runtime(9, &["Noto Color Emoji".into()]);
+    let mut engine = TextEngine::with_catalog(catalog);
+    let authored = engine.paragraph(&spec(9, "↗"), None);
+    assert_face(&authored, 0, EMOJI);
+    for (text, face) in [("↗", MIXED), ("↗\u{fe0f}", EMOJI), ("↔\u{fe0e}", MIXED)] {
+        let p = engine.paragraph(&spec(8, text), None);
+        assert_face(&p, 0, face);
+        if text.ends_with('\u{fe0e}') {
+            assert_eq!(p.lines().glyphs[0].glyph_id, 3);
+        }
+    }
+    for text in ["1\u{fe0e}\u{20e3}", "*\u{fe0e}\u{20e3}"] {
+        let p = engine.paragraph(&spec(0, text), None);
+        assert_face(&p, 0, PLATFORM);
+        assert!(p.lines().glyphs.iter().any(|g| g.start == 4));
+    }
+    let joined = "🌈\u{200d}↗\u{fe0e}";
+    let p = engine.paragraph(&spec(8, joined), None);
+    assert_face(&p, 0, EMOJI);
+    assert_face(&p, "🌈\u{200d}".len() as u32, MIXED);
+}
+
+#[test]
+fn fallback_reaches_each_subset_of_the_matching_style() {
+    let mut collection = fonts::empty_collection();
+    for bytes in [SECOND, PLATFORM] {
+        collection.register_fonts(
+            fontique::Blob::new(Arc::new(bytes.to_vec())),
+            Some(fontique::FontInfoOverride {
+                family_name: Some("Symbols"),
+                ..Default::default()
+            }),
+        );
+    }
+    let catalog = catalog::Catalog::with_collection(collection, Arc::default(), "en");
+    let mut engine = TextEngine::with_catalog(catalog);
+    let p = engine.paragraph(&spec(0, "⁴↝"), None);
+    assert_face(&p, 0, SECOND);
+    assert_face(&p, "⁴".len() as u32, PLATFORM);
+}
+
+#[test]
 fn runtime_stack_uses_second_authored_face_before_platform_fallback() {
     for (bytes, covered) in [(FIRST, false), (SECOND, true), (PLATFORM, true)] {
         assert_eq!(
@@ -389,5 +471,58 @@ fn svg_family_ids_resolve_in_the_pictures_own_catalog() {
             .resolved_face_id(run.style.font_family, 400, false)
             .expect("fixture generic face");
         assert_eq!(Some(face), text.resolved_face_id(generic, 400, false));
+    }
+}
+
+#[test]
+fn android_resolves_text_default_symbols_by_file_and_explicit_presentation() {
+    const EARLY: &[u8] = include_bytes!("../../tests/fonts/MixedPresentation.ttf");
+    const LATE: &[u8] = include_bytes!("../../tests/fonts/MixedPresentation-hand.ttf");
+    const EMOJI: &[u8] = include_bytes!("../../tests/fonts/NotoColorEmoji-subset.ttf");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fonts");
+    let paths = [
+        "RobotoFlex-subset.ttf",
+        "MixedPresentation.ttf",
+        "NotoColorEmoji-subset.ttf",
+        "MixedPresentation-hand.ttf",
+    ]
+    .map(|name| dir.join(name));
+    let xml = r#"<familyset>
+      <family><font>RobotoFlex-subset.ttf</font><font>MixedPresentation.ttf</font></family>
+      <family lang="und-Zsye"><font>NotoColorEmoji-subset.ttf</font><font fallbackFor="serif">MixedPresentation-hand.ttf</font></family>
+      <family lang="und-Zsym"><font>MixedPresentation-hand.ttf</font></family>
+    </familyset>"#;
+    for (locale, arrow, hand) in [
+        ("", EARLY, LATE),
+        ("en", EARLY, EMOJI),
+        ("en-u-em-text", EARLY, LATE),
+        ("en-u-em-emoji", EMOJI, EMOJI),
+    ] {
+        let mut c =
+            catalog::Catalog::from_files(&paths.each_ref().map(|p| p.as_path()), "Roboto Flex");
+        fonts::set_generic(
+            &mut c.fonts.collection,
+            fontique::GenericFamily::Serif,
+            "Roboto Flex",
+        );
+        if !locale.is_empty() {
+            let order =
+                android_symbols::Families::read(&mut c.fonts.collection, &c.files, &dir, xml)
+                    .unwrap();
+            Arc::new(order).configure(&mut c.fonts.collection, locale);
+        }
+        let mut engine = TextEngine::with_catalog(c);
+        if locale == "en" {
+            assert_face(&engine.paragraph(&spec(4, "✌"), None), 0, LATE);
+        }
+        for (text, face) in [
+            ("↗", arrow),
+            ("↔", arrow),
+            ("✌", hand),
+            ("✌︎", LATE),
+            ("✌️", EMOJI),
+        ] {
+            assert_face(&engine.paragraph(&spec(0, text), None), 0, face);
+        }
     }
 }

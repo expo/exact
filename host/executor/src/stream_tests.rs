@@ -695,14 +695,18 @@ fn streams_have_their_own_bound_beside_a_full_independent_lane() {
         request: Request::get("https://example.test/read").independent_http(4096),
         forced: false,
     };
-    assert!(core.run_owned(read(500), None).is_err(), "the lane is full");
+    assert_eq!(
+        core.run_owned(read(500), None).unwrap_err(),
+        "129 independent requests requested (128 in use, maximum 128)"
+    );
     for ticket in 1000..1016 {
         core.run_owned(stream(ticket, "/plain", 4096), None)
             .unwrap();
     }
-    assert!(
-        core.run_owned(stream(2000, "/plain", 4096), None).is_err(),
-        "sixteen streams at most"
+    assert_eq!(
+        core.run_owned(stream(2000, "/plain", 4096), None)
+            .unwrap_err(),
+        "17 network streams requested (16 in use, maximum 16). Long polls, event feeds, WebSockets, listeners and running uploads each use a network slot"
     );
 }
 
@@ -1043,7 +1047,7 @@ fn an_upload_is_refused_where_it_could_send_no_body() {
     get.request.body.clear();
     assert_eq!(
         core.run_owned(get, None),
-        Err("exactUploadProgress: a GET or HEAD request sends no body")
+        Err("exactUploadProgress: a GET or HEAD request sends no body".into())
     );
 }
 
@@ -1326,7 +1330,7 @@ fn the_uploads_let_go_that_had_started_are_told_once() {
     drop(going);
     let lane = || {
         let state = core.shared.state.lock().unwrap();
-        (state.counts[1], state.bytes[1], state.streams)
+        (state.counts[1], state.bytes[1], state.streams.len())
     };
     let deadline = Instant::now() + Duration::from_secs(5);
     while lane() != (0, 0, 0) {
@@ -1378,7 +1382,7 @@ fn the_bodies_of_uploads_waiting_are_bounded() {
     assert_eq!(core.shared.uploads.waiting().0, 2);
     assert_eq!(
         core.run_owned(upload(6, "/upload", 4 << 10), None),
-        Err("native executor upload queue limit reached")
+        Err("12288 queued upload body bytes requested (8192 in use, maximum 8192)".into())
     );
 }
 

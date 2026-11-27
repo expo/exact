@@ -217,13 +217,16 @@ fn seeded_512_trees_match_fresh_frames_content_and_baselines() {
                 let x = incremental.layout(a.taffy(slot).unwrap());
                 let y = fresh.layout(b.taffy(slot).unwrap());
                 let bits = |v: taffy::tree::Layout| {
+                    let o = v.scrollable_overflow_rect;
                     [
                         v.location.x,
                         v.location.y,
                         v.size.width,
                         v.size.height,
-                        v.scrollable_overflow_rect.right,
-                        v.scrollable_overflow_rect.bottom,
+                        o.left(),
+                        o.right(),
+                        o.top(),
+                        o.bottom(),
                         v.border.left,
                         v.border.top,
                         v.padding.left,
@@ -420,6 +423,7 @@ fn flow_proof_across_offers(display: &str, width: taffy::Dimension) {
                 (StyleId::Display, t(display)),
                 (StyleId::Height, n(200.)),
                 (StyleId::AlignContent, t("start")),
+                (StyleId::AlignItems, t("flex-start")),
                 (StyleId::PositionType, t("relative")),
             ],
         ),

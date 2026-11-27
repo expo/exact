@@ -3,7 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
-import { webChanges, webInputDigests } from '../../scripts/agent-launch.mjs';
+import { chromium, webChanges, webInputDigests } from '../../scripts/agent-launch.mjs';
+import { need } from '../../scripts/coverage.mjs';
 import { versionFile, webSourceRoots } from './build.mjs';
 import { appSources } from './serve.mjs';
 import { WEB_TOOLCHAIN } from '../../scripts/app.mjs';
@@ -14,6 +15,64 @@ const write = (dir, file, text) => {
   mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text);
   return path;
 };
+
+test('a declarative web roster needs the page ABI and checks the current artifact', async () => {
+  const { webModuleTags } = await import('../web-js/module.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'web-module-roster-'));
+  const tags = () => webModuleTags(dir, '/', ['map-view'], true);
+  try {
+    const declarations = "export const abi = 1, roster = { 'map-view': {} };";
+    write(dir, 'modules/index.js', declarations);
+    expect(await tags()).toEqual([]);
+    write(dir, 'modules/index.js', declarations + 'export function create() {} export function setProps() {} export function destroy() {}');
+    expect(await tags()).toEqual(['map-view']);
+    write(dir, 'modules/table.js', readFileSync(resolve(dir, 'modules/index.js'), 'utf8'));
+    write(dir, 'modules/index.js', "export * from './table.js';");
+    expect(await tags()).toEqual(['map-view']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('webModuleBackend configures Chrome without sandbox off macOS', async () => {
+  const { webModuleBackend } = await import('../web-js/module.mjs');
+  expect(webModuleBackend(null, 'darwin')).toBe('webkit');
+  expect(webModuleBackend({ executable: '/usr/bin/chrome', unavailable: null }, 'linux')).toEqual({
+    type: 'chrome', path: '/usr/bin/chrome', argv: ['--no-sandbox', '--disable-dev-shm-usage'],
+  });
+  expect(webModuleBackend({ executable: 'C:\\chrome.exe', unavailable: null }, 'win32')).toEqual({
+    type: 'chrome', path: 'C:\\chrome.exe', argv: ['--no-sandbox'],
+  });
+  expect(() => webModuleBackend({ executable: null, unavailable: 'no chrome' }, 'linux')).toThrow('no chrome');
+});
+
+need('chrome', chromium().unavailable)('a DOM-dependent roster reads the staged page and its assets in headless Chrome without sandbox', async () => {
+  const { webModuleTags } = await import('../web-js/module.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'web-page-roster-chrome-'));
+  try {
+    write(dir, 'index.html', '<meta name="table" content="./assets/table.json">');
+    write(dir, 'assets/table.json', '{"map-view":{}}');
+    write(dir, 'modules/index.js', `
+      const table = document.querySelector('meta[name=table]').content;
+      export const abi = 1, roster = await (await fetch(table)).json();
+      export function create() {} export function setProps() {} export function destroy() {}
+    `);
+    expect(await webModuleTags(dir, '/mounted/', ['map-view'], true, { platform: 'linux' })).toEqual(['map-view']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
+
+test.skipIf(process.platform !== 'darwin')('a DOM-dependent roster reads the staged page and its assets in system WebKit', async () => {
+  const { webModuleTags } = await import('../web-js/module.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'web-page-roster-'));
+  try {
+    write(dir, 'index.html', '<meta name="table" content="./assets/table.json">');
+    write(dir, 'assets/table.json', '{"map-view":{}}');
+    write(dir, 'modules/index.js', `
+      const table = document.querySelector('meta[name=table]').content;
+      export const abi = 1, roster = await (await fetch(table)).json();
+      export function create() {} export function setProps() {} export function destroy() {}
+    `);
+    expect(await webModuleTags(dir, '/mounted/', ['map-view'], true)).toEqual(['map-view']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test.each([false, true].flatMap(game => [null, WEB_TOOLCHAIN].map(toolchain => [game, toolchain])))('web receipts include external Cargo inputs (generated game: %s, toolchain: %s)', (game, toolchain) => {
   const dir = mkdtempSync(resolve(root, 'target/web-external-'));

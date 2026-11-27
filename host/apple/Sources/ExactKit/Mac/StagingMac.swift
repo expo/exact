@@ -52,7 +52,7 @@ extension Presenter {
                 if let parent = plan.tops[id], let container = views[parent]?.container {
                     v.holdOffstage()
                     v.prepareToMount()
-                    container.addSubview(v)
+                    mountTop(v, in: container, parent: parent, plan: plan)
                     regrid(v)
                 }
             case .paragraph: applyParagraph(id, op.runs)
@@ -114,6 +114,149 @@ extension Presenter {
             if node.props["title"] != nil || node.isButton { plan.tips.append(node) }
             if node.hasCursorRects { plan.cursorRects.append(node) }
         }
+        prepareRetireScan(plan, until: deadline)
+    }
+
+    /// Places a newly created empty top in its reveal slot relative to surviving
+    /// siblings so the reveal's `orderChildren` does not reorder a populated subtree.
+    private func mountTop(_ view: NodeView, in container: NSView, parent: UInt32, plan: StagePlan) {
+        if let ids = plan.parentChildren[parent], let idx = ids.firstIndex(of: view.id) {
+            for sibling in ids[(idx + 1)...] where !plan.destroyed.contains(sibling) {
+                if let after = views[sibling], after.superview === container {
+                    container.addSubview(view, positioned: .below, relativeTo: after)
+                    return
+                }
+            }
+            for sibling in ids[..<idx].reversed() where !plan.destroyed.contains(sibling) {
+                if let before = views[sibling], before.superview === container {
+                    container.addSubview(view, positioned: .above, relativeTo: before)
+                    return
+                }
+            }
+        }
+        container.addSubview(view)
+    }
+
+    /// Classifies plain destroyed descendants under a plain retiring top during
+    /// preparation so the reveal retires them in one bulk pass instead of
+    /// scanning every per-op batch pass over them.
+    private func prepareRetireScan(_ plan: StagePlan, until deadline: CFTimeInterval) {
+        guard !plan.retireScanDone else { return }
+        let ops = plan.batch.ops
+        if plan.retiredOps.isEmpty && !ops.isEmpty { plan.retiredOps = [Bool](repeating: false, count: ops.count) }
+        func validTop(of node: NodeView) -> (id: UInt32, view: ObjectIdentifier)? {
+            guard let first = node.nodeSuperview, plan.destroyed.contains(first.id) else { return nil }
+            var chain: [UInt32] = []
+            var cur = first
+            while true {
+                if let known = plan.retireTopValid[cur.id] {
+                    for id in chain { plan.retireTopValid[id] = known }
+                    return known
+                }
+                chain.append(cur.id)
+                let ok = !plan.created.contains(cur.id) && !plan.touchedDestroyed.contains(cur.id)
+                    && StagePlan.plainKinds.contains(cur.kind)
+                    && leaving[cur.id] == nil && !navigation.keepsForExit(cur.id) && cur.superview != nil
+                    && cur.props["hatch"] == nil && !blocks.hasEntry(cur.id)
+                    && tableGrid.sizes[cur.id] == nil && tableGrid.places[cur.id] == nil
+                guard ok else {
+                    for id in chain { plan.retireTopValid[id] = .some(nil) }
+                    return nil
+                }
+                if let up = cur.nodeSuperview, plan.destroyed.contains(up.id) { cur = up; continue }
+                let top = (id: cur.id, view: ObjectIdentifier(cur))
+                for id in chain { plan.retireTopValid[id] = .some(top) }
+                return top
+            }
+        }
+        while plan.retireCursor < ops.count {
+            if plan.retireCursor & 63 == 63, CACurrentMediaTime() >= deadline { return }
+            let index = plan.retireCursor
+            plan.retireCursor += 1
+            let op = ops[index]
+            guard op.op == .destroy else { continue }
+            let id = op.id
+            guard !plan.created.contains(id), !plan.touchedDestroyed.contains(id),
+                  let v = views[id], let superview = v.superview, StagePlan.plainKinds.contains(v.kind) else { continue }
+            guard v.scroll == nil, !scrollers.contains(id), listViews[id] == nil, leaving[id] == nil,
+                  !navigation.keepsForExit(id), !navigation.tracks(id), v.props["hatch"] == nil, controls.controls[id] == nil else { continue }
+            guard subsystemTracked.isEmpty || !subsystemTracked.contains(id) else { continue }
+            guard !boxAnimations.tracks(id), !blocks.hasEntry(id), tableGrid.sizes[id] == nil, tableGrid.places[id] == nil else { continue }
+            guard !toolbar.reads.nodes.contains(id) else { continue }
+            guard let top = validTop(of: v) else { continue }
+            plan.retiredOps[index] = true
+            plan.retiredPlain.append(StagePlan.RetiredCandidate(id: id, view: ObjectIdentifier(v), superview: ObjectIdentifier(superview)))
+            plan.retiredPlainSet.insert(id)
+            plan.retiredTops[top.id] = top.view
+        }
+        plan.retireScanDone = true
+    }
+
+    /// Retires the plain descendants that `prepareRetireScan` pulled out of
+    /// `reveal.ops`. If every outermost top entered `Teardown` and every
+    /// scanned descendant still stands at its scanned view and superview, each
+    /// descendant is detached from `views` and marked for `Teardown` to forget
+    /// as it leaves; otherwise every candidate falls back to `destroyOne`.
+    func retirePlainDescendants(_ plan: StagePlan, retiring: inout Set<UInt32>) {
+        guard !plan.retiredPlain.isEmpty else { return }
+        let intact = plan.retiredTops.values.allSatisfy({ teardown.holds($0) }) && plan.retiredPlain.allSatisfy { c in
+            guard let v = views[c.id], ObjectIdentifier(v) == c.view else { return false }
+            return v.superview.map(ObjectIdentifier.init) == c.superview
+        }
+        guard intact else {
+            for c in plan.retiredPlain { destroyOne(c.id, stage: plan, retired: &retiring) }
+            return
+        }
+        let ids = plan.retiredPlainSet
+        if let sw = mouseSwipe.candidate?.id, ids.contains(sw) { mouseSwipe.retire(sw) }
+        if let lp = mouseLayoutPan.candidate?.id, ids.contains(lp) { mouseLayoutPan.retire(lp) }
+        if let hd = mouseDrags.height.armed?.id, ids.contains(hd) { mouseDrags.height.retire(hd) }
+        if let td = mouseDrags.transform.armed?.id, ids.contains(td) { mouseDrags.transform.retire(td) }
+        if let rm = reorders.mouse.armed?.id, ids.contains(rm) { reorders.mouse.retire(rm) }
+        focusEvents.removed(all: ids)
+        if let ph = pointerHeld, ids.contains(ph) { pointerHeld = nil }
+        if !pointerPath.isEmpty { pointerPath.removeAll { ids.contains($0) } }
+        MainActor.assumeIsolated { if let held = HeldState.view, held.presenter === self, ids.contains(held.id) { held.holdGone() } }
+        let bubbled = mouseChain.bubbledPress
+        let hasReader = session?.text.readerParagraphs.isEmpty == false
+        let hasAutofocus = !autofocusProcessed.isEmpty
+        let hasPendingScrolls = !pendingScrolls.isEmpty
+        let hasListTravel = !listTravel.isEmpty
+        let hasListFill = !listFillCosts.isEmpty
+        retiring.reserveCapacity(retiring.count + plan.retiredPlain.count)
+        for c in plan.retiredPlain {
+            let id = c.id
+            guard let gone = views.removeValue(forKey: id) else { continue }
+            if let bubbled { bubbled.cancel(in: gone) }
+            if hasReader { session?.text.readerParagraphs.removeValue(forKey: id) }
+            if hasAutofocus { autofocusProcessed.remove(ObjectIdentifier(gone)) }
+            if hasPendingScrolls { pendingScrolls.remove(id) }
+            if hasListTravel { listTravel.removeValue(forKey: id) }
+            if hasListFill { listFillCosts.removeValue(forKey: id) }
+            gone.stage = .retired
+            gone.needsTeardownForget = true
+            if gone.hasToolTip { gone.setToolTip(nil) }
+            if gone.hasCursorRects { gone.window?.invalidateCursorRects(for: gone) }
+            retiring.insert(id)
+        }
+    }
+
+    func destroyOne(_ id: UInt32, stage: StagePlan?, retired: inout Set<UInt32>) {
+        elements.destroyed(id)
+        blocks.destroyed(id)
+        stickies.forget(id)
+        tableGrid.forget(id)
+        flightHost.forget(id)
+        views[id]?.holdGone()
+        if endExit(id) { return }
+        // A route that left with its exit to play stays for it (RouteTransitionMac.swift).
+        if navigation.keepsForExit(id) { beginExit(id); return }
+        // A plain box under one the reveal takes down lets its caches go as it leaves (`Teardown`).
+        let underRetired = stage.map { stage in views[id].map { StagePlan.plainKinds.contains($0.kind) && $0.nodeSuperview.map { stage.destroyed.contains($0.id) } == true } == true } == true
+        if let gone = release(id, forget: !underRetired, retiring: &retired) {
+            if underRetired { teardown.forgetAsRemoved(gone) }
+            if !(stage.map { retire(gone, $0) } ?? false) { gone.removeFromSuperview() }
+        }
     }
 
     /// The reveal: what preparation made joins the committed tree, with the
@@ -125,7 +268,7 @@ extension Presenter {
         afterBatchWork.append(contentsOf: plan.afterReveal)
         plan.afterReveal = []
         // What a box lays out from its committed children (a form row's bezel) counts the new ones.
-        for parent in Set(plan.tops.values) { views[parent]?.needsLayout = true }
+        for parent in Set(plan.tops.values) where views[parent]?.style["appearance"] != nil { views[parent]?.needsLayout = true }
     }
 
     /// Ends a stage before its reveal (`ExactSession.cancelStage`): what it
@@ -147,8 +290,8 @@ extension Presenter {
     /// a 2,400-view subtree costs AppKit about 13 ms.
     func retire(_ view: NodeView, _ plan: StagePlan) -> Bool {
         view.stage = .retired
-        view.toolTip = nil
-        view.window?.invalidateCursorRects(for: view)
+        if view.hasToolTip { view.setToolTip(nil) }
+        if view.hasCursorRects { view.window?.invalidateCursorRects(for: view) }
         if let up = view.nodeSuperview, plan.destroyed.contains(up.id) { return true }
         guard view.superview != nil else { return false }
         // A field being edited in it ends editing and gives up the keyboard, as removing it would.
@@ -199,6 +342,7 @@ final class Teardown {
 
     /// Whether `view` is a top that waits here to be removed.
     func holds(_ view: NSView) -> Bool { !tops.isEmpty && tops.contains(ObjectIdentifier(view)) }
+    func holds(_ identity: ObjectIdentifier) -> Bool { !tops.isEmpty && tops.contains(identity) }
 
     private var hasWork: Bool { !path.isEmpty || next < roots.count || !forgetting.isEmpty }
 
@@ -239,7 +383,8 @@ final class Teardown {
         }
         let node = path.removeLast().node
         let parent = path.last?.node
-        forgetting.removeValue(forKey: ObjectIdentifier(node))?.forget()
+        if node.needsTeardownForget { node.needsTeardownForget = false; node.forget() }
+        else { forgetting.removeValue(forKey: ObjectIdentifier(node))?.forget() }
         if parent == nil || node.nodeSuperview === parent { node.removeFromSuperview() }
         tops.remove(ObjectIdentifier(node))
     }

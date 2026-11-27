@@ -253,6 +253,10 @@ extension HeaderShape {
 final class HeaderTitleView: UIControl {
     private weak var host: NavigationHost?
     private var tap: UInt32?
+    #if os(iOS)
+    /// The pressable group the title stands for, as mounted when the title last updated
+    private weak var source: NodeView?
+    #endif
     #if EXACT_INSPECT
     /// The heading's group this title is drawn from (inspect mode selects it).
     private(set) var groupId: UInt32?
@@ -380,6 +384,12 @@ final class HeaderTitleView: UIControl {
     /// label's `textColor` recolours all of its attributed text (Apple,
     /// `UILabel.textColor`), so a coloured symbol in the line would take it.
     func update(_ group: HeaderTitle, title text: String, ink: UIColor = .label) {
+        tap = group.tap
+        #if os(iOS)
+        source = group.tap.flatMap { host?.presenter.views[$0] }
+        // The group's menu can come or go without a change to the title's drawing
+        host?.presenter.syncGroupedMenu(on: self)
+        #endif
         // Every batch projects the routes again: an unchanged title is left
         // alone, since invalidating its size relaid the whole navigation
         // bar out each time (~1 ms a batch, a fling's every frame).
@@ -390,7 +400,6 @@ final class HeaderTitleView: UIControl {
         #if EXACT_INSPECT
         groupId = group.id
         #endif
-        tap = group.tap
         avatar.image = group.avatar?.image
         avatar.isHidden = group.avatar == nil
         avatarWidth.constant = group.avatar?.size ?? 0
@@ -411,9 +420,43 @@ final class HeaderTitleView: UIControl {
     }
 
     @objc private func pressed() {
-        if let tap { _ = host?.presenter.hatchAct(tap, 0, NavigationMarks.shared.personNow()) }
+        if let tap { host?.presenter.pressFromBar(tap, origin: NavigationMarks.shared.personNow()) }
     }
 }
+
+#if os(iOS)
+extension HeaderTitleView: TitleMenuSurface {
+    var menuSource: NodeView? {
+        guard let source, host?.presenter.views[source.id] === source else { return nil }
+        return source
+    }
+    var showsSource: Bool { menuSource.map { host?.projectedTitle(for: $0) === self } ?? false }
+    var avatarLift: (view: UIView, outline: UIBezierPath)? {
+        guard let face = shown?.0.avatar, !avatar.isHidden else { return nil }
+        return (avatar, UIBezierPath(cgPath: face.outline(in: avatar.bounds)))
+    }
+}
+
+extension NavigationHost {
+    /// The title a bar shows now for `node`, the pressable group the page
+    /// hides for it: on top of its stack's bar, which may be a collapsed
+    /// split column's own (`barShowing`).
+    func projectedTitle(for node: NodeView) -> HeaderTitleView? {
+        controllers.values.lazy.compactMap { c -> HeaderTitleView? in
+            guard let title = c.titleView, c.navigationItem.titleView === title, title.menuSource === node, title.window != nil, !title.isHidden, title.alpha > 0,
+                  let bar = Self.barShowing(title), bar.topItem === c.navigationItem, !bar.isHidden, bar.alpha > 0 else { return nil }
+            return title
+        }.first
+    }
+
+    /// The bar a title view is shown in: a collapsed split shows a route
+    /// pushed in its column in that column's own bar, not its navigation
+    /// controller's `navigationBar`.
+    static func barShowing(_ title: UIView) -> UINavigationBar? {
+        sequence(first: title.superview, next: { $0?.superview }).lazy.compactMap { $0 as? UINavigationBar }.first
+    }
+}
+#endif
 
 extension NavigationHost {
 
@@ -515,11 +558,18 @@ extension NavigationHost {
     /// Called from `willShow`, UIKit's place for it: the bar moves with the
     /// transition, an interactive pop's included, and back on a cancel.
     func showBar(_ nav: UINavigationController, for c: RouteController? = nil, animated: Bool) {
+        #if os(iOS)
+        showBottomToolbar(nav, for: c ?? barTop(nav), animated: animated)
+        #endif
         // Nested in a split's list column, the detail's column has its bar
         // hidden by UIKit, which shows its top in the list's: the route on top
         // decides that bar, under its own column's opt-outs (LLP 1127 D7)
-        if let split, nav === split.detail, split.nested { return showBar(split.list, for: c, animated: animated) }
-        let c = c ?? barTop(nav)
+        if let split, nav === split.detail, split.nested { return showNavigationBar(split.list, for: c, animated: animated) }
+        showNavigationBar(nav, for: c, animated: animated)
+    }
+
+    private func showNavigationBar(_ nav: UINavigationController, for route: RouteController?, animated: Bool) {
+        let c = route ?? barTop(nav)
         guard let stack = stacks[ObjectIdentifier(nav)] else { return }
         // The bar's tint is the route's accent, as a hand-built app tints its bar for the screen it shows:
         // its title, items and field in the tint draw it and grey behind a sheet or an alert. A tint a
@@ -625,9 +675,10 @@ extension NavigationHost {
                 continue
             }
             if tablistOwed === c { tablistOwed = nil }
-            // (An iPad's floating bar: the whole stack's wish, as on a push. A
-            // bar a route under this one hides, by UIKit's flag, is not shown.)
-            let wish = floatingStackHides(nav) ?? hidden
+            // (Where Exact keeps the bar's hidden state, the whole stack
+            // decides, as on a push. A bar that a route below this one hides
+            // with UIKit's flag stays hidden.)
+            let wish = stackHidesTabBar(nav) ?? hidden
             if !wish, Self.underHides(nav, c) { continue }
             if tabs.isTabBarHidden != wish {
                 setTabBarHidden(wish, in: tabs, animated: nav.view.window != nil)
@@ -640,7 +691,7 @@ extension NavigationHost {
         // only `hidesBottomBarWhenPushed` would. The selected route wanting
         // it shown brings it back now, pushed or not yet.
         // (Not while a route above the root still hides it, on a phone by UIKit's flag, on an iPad by Exact's.)
-        if !hidden, !nav.viewControllers.dropFirst().contains(where: Self.hidesBar),
+        if !hidden, !nav.stackRoutes.dropFirst().contains(where: Self.hidesBar),
            tablistHidBar, nav.transitionCoordinator == nil, tabBarShows, let tabs = tabController, nav.tabBarController === tabs {
             if #available(iOS 18.0, tvOS 18.0, *), tabs.isTabBarHidden { setTabBarHidden(false, in: tabs, animated: nav.view.window != nil) }
             tablistHidBar = false
@@ -686,30 +737,45 @@ extension NavigationHost {
         }
     }
 
-    /// iPadOS 18's floating tab bar (a regular width) does not take
-    /// `hidesBottomBarWhenPushed`, so a pushed route whose tablist is hidden
-    /// would keep it: as the transition to a pushed route starts, the bar
-    /// takes that route's wish with `setTabBarHidden`, hidden if it or a
-    /// route below it (the root aside) hides it, as UIKit reads the flag on
-    /// a phone, and shown again only if Exact hid it (`tablistHidBar`). The
-    /// root on top is `followTablistAtRoot`'s, after the transition (the
-    /// lead's ruling, 2026-10-19). An interactive pop that is cancelled shows
-    /// its source again, and so its wish.
-    func followFloatingBar(_ nav: UINavigationController, for c: UIViewController, animated: Bool) {
+    /// Keep the tab bar's hidden state (`setTabBarHidden`, iOS 18) in step
+    /// with the stack that shows the selected tab. As a transition to a route
+    /// starts, hide the bar if that route or one below it, other than the
+    /// root, has UIKit's flag (`hidesBottomBarWhenPushed`), and show it again
+    /// if Exact hid it (`tablistHidBar`). On a phone the flag already hides
+    /// and shows the bar with each transition; the kept state is what stops
+    /// UIKit from dropping such a route when it moves the route's tab out of
+    /// More (LLP 1075.003 §9.16). iPadOS's floating tab bar (an iPad at a
+    /// regular width) ignores the flag, so there the kept state alone hides
+    /// the bar. When a root comes back on top, a bottom bar (a phone's, or an
+    /// iPad's at a compact width) shows with the transition, as the flag shows
+    /// it, if the root's own tablist is known to be shown; otherwise, and on
+    /// the floating bar, the root is left to `followTablistAtRoot`, after the
+    /// transition (the lead's ruling, 2026-10-19). Only a route that comes on
+    /// top writes the state (`tabBarWishRoute`), not UIKit's move of a tab nor
+    /// the same route shown again after it, so a hatch's own write stands. A
+    /// cancelled interactive pop shows its source again, and the bar follows
+    /// that source.
+    func followTabBarWish(_ nav: UINavigationController, for c: UIViewController, animated: Bool) {
         #if os(iOS)
-        // The selected tab's stack only: another's late transition is not what shows.
-        guard #available(iOS 18.0, *), let tabs = tabController, tabs.selectedViewController === nav else { return }
-        // A cancelled pop's source comes back before it is in the stack again.
-        let stack = nav.viewControllers.contains { $0 === c } ? nav.viewControllers : nav.viewControllers + [c]
+        // The selected tab's stack only: another's late transition is not what shows. Nothing UIKit shows as it moves a tab
+        // between the bar and More (`whileTabsChange`) is a route coming on top.
+        guard #available(iOS 18.0, *), let tabs = tabController, (tabs as? TabController)?.changes ?? 0 == 0,
+              selectedTabStack(tabs) === nav else { return }
+        // A cancelled pop's source comes back before it is in the stack again; More's list is not a route, so read the routes only
+        let routes = nav.stackRoutes
+        let stack = routes.contains { $0 === c } ? routes : routes + [c]
         // However the transition ends (a custom interactive pop's cancel tells
         // the delegate nothing), the stack it leaves takes its wish then.
         if let coordinator = nav.transitionCoordinator {
             coordinator.animate(alongsideTransition: nil) { [weak self, weak nav] _ in
                 guard let self, let nav, nav.transitionCoordinator == nil, let top = nav.topViewController else { return }
-                self.followFloatingBar(nav, for: top, animated: false)
+                self.followTabBarWish(nav, for: top, animated: false)
             }
         }
-        guard let at = stack.firstIndex(where: { $0 === c }), at > 0, let hidden = floatingStackHides(nav, through: Array(stack[...at])) else { return }
+        guard let at = stack.firstIndex(where: { $0 === c }), let hidden = stackHidesTabBar(nav, through: Array(stack[...at])),
+              c !== tabBarWishRoute else { return }
+        tabBarWishRoute = c
+        if at == 0, Self.floats(tabs) || (c as? RouteController)?.tablistHidden != false { return }
         if hidden, !tabs.isTabBarHidden {
             setTabBarHidden(true, in: tabs, animated: animated)
             tablistHidBar = true
@@ -720,19 +786,28 @@ extension NavigationHost {
         #endif
     }
 
-    /// Whether a stack whose routes are `stack` (its root first) hides the
-    /// floating tab bar: a route above the root asks it, as UIKit reads
-    /// `hidesBottomBarWhenPushed` on a phone. Nil where the bar is not
-    /// iPadOS 18's floating one (a phone, a compact width, iOS 17, an
-    /// authored or hatched tab bar), where UIKit's own flag does it.
-    func floatingStackHides(_ nav: UINavigationController, through stack: [UIViewController]? = nil) -> Bool? {
+    /// Whether the routes `stack` (root first; by default the stack's own)
+    /// hide the tab bar: whether one above the root has UIKit's flag
+    /// (`hidesBottomBarWhenPushed`). Nil where Exact keeps no hidden state for
+    /// the bar: on iOS 17, which has no `setTabBarHidden`, and with an
+    /// authored or hatched tab bar.
+    func stackHidesTabBar(_ nav: UINavigationController, through stack: [UIViewController]? = nil) -> Bool? {
         #if os(iOS)
-        guard #available(iOS 18.0, *), !ExactEnv.authoredChrome, tabBarShows, let tabs = tabController, nav.tabBarController === tabs,
-              tabs.traitCollection.userInterfaceIdiom == .pad, tabs.traitCollection.horizontalSizeClass == .regular else { return nil }
-        return (stack ?? nav.viewControllers).dropFirst().contains { $0.hidesBottomBarWhenPushed }
+        guard #available(iOS 18.0, *), !ExactEnv.authoredChrome, tabBarShows, let tabs = tabController, nav.tabBarController === tabs else { return nil }
+        return (stack ?? nav.stackRoutes).dropFirst().contains { $0.hidesBottomBarWhenPushed }
         #else
         return nil
         #endif
+    }
+
+    /// Whether `tabs` shows iPadOS 18's floating tab bar: an iPad at a regular width.
+    static func floats(_ tabs: UITabBarController) -> Bool {
+        tabs.traitCollection.userInterfaceIdiom == .pad && tabs.traitCollection.horizontalSizeClass == .regular
+    }
+
+    /// The stack that shows the selected tab: More while it holds that tab's routes, else the tab's own.
+    func selectedTabStack(_ tabs: UITabBarController) -> UINavigationController? {
+        tabIndex(of: tabs.selectedViewController).flatMap(routesStack) as? UINavigationController
     }
 
     /// Whether a route between the root and `c` (not `c`) hides the bar by
@@ -752,19 +827,20 @@ extension NavigationHost {
         #endif
     }
 
-    /// The selected stack's top takes its wish again where nothing pushed or
-    /// popped: a tab selected, the width becoming regular (once a resize's
-    /// own transition is over; a push or pop has its own didShow).
-    func refollowFloatingBar() {
-        guard let tabs = tabController, let nav = tabs.selectedViewController as? UINavigationController, nav.topViewController != nil else { return }
+    /// Apply the selected stack's top route to the bar again where nothing
+    /// pushed or popped: when a tab is selected, or the horizontal size class
+    /// changes (after a resize's own transition; a push or pop has its own
+    /// didShow).
+    func refollowTabBarWish() {
+        guard let tabs = tabController, let nav = selectedTabStack(tabs), nav.topViewController != nil else { return }
         if let resizing = tabs.transitionCoordinator ?? nav.transitionCoordinator {
             let taken = resizing.animate(alongsideTransition: nil) { [weak self, weak nav] _ in
                 guard let self, let nav, nav.transitionCoordinator == nil, let top = nav.topViewController else { return }
-                self.followFloatingBar(nav, for: top, animated: false)
+                self.followTabBarWish(nav, for: top, animated: false)
             }
             if taken { return }
         }
-        followFloatingBar(nav, for: nav.topViewController!, animated: false)
+        followTabBarWish(nav, for: nav.topViewController!, animated: false)
     }
 
     /// A push or pop of the stack settled (`completeTransition`): the root, if

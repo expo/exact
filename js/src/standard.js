@@ -45,12 +45,18 @@
   function cloneError(what) {
     return new global.DOMException(what + ' could not be cloned.', 'DataCloneError');
   }
+  var cloneBlob = null;
+  global.__exact_set_blob_clone = function (fn) { cloneBlob = fn; };
   var errors = ['Error', 'EvalError', 'RangeError', 'ReferenceError', 'SyntaxError', 'TypeError', 'URIError'];
   function clone(value, memo) {
     if (typeof value === 'symbol') throw cloneError(String(value));
     if (typeof value === 'function') throw cloneError(value.name ? 'function ' + value.name : 'A function');
     if (value === null || typeof value !== 'object') return value;
     if (memo.has(value)) return memo.get(value);
+    if (cloneBlob) {
+      var clonedBlob = cloneBlob(value);
+      if (clonedBlob !== undefined) { memo.set(value, clonedBlob); return clonedBlob; }
+    }
     var out, typed = typedName.call(value);
     for (var b = 0; b < boxes.length && out === undefined; b++) {
       if (brand(boxes[b][1], value)) out = Object(boxes[b][1].call(value));

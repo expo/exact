@@ -9,7 +9,7 @@ import Foundation
 enum FrameHealthCardFace {
     enum Status { case live, paused, idle }
     enum Control: Equatable {
-        case close, title, status, details, share, charts, table
+        case close, title, status, clear, details, share, charts, table
         #if os(iOS)
         case minimize
         #endif
@@ -91,7 +91,9 @@ enum FrameHealthCardFace {
             return CGRect(x: self.width - 6 - width, y: 47, width: width, height: 32)
         }
         private static let doneWidth = ceil(FrameHealthCardDrawing.width("Done", FrameHealthCardFace.strong)) + 16
-        /// The line under the header: the requested rate and the display, and Details
+        var clear: CGRect { CGRect(x: details.minX - Self.clearWidth - 4, y: 47, width: Self.clearWidth, height: 32) }
+        private static let clearWidth = ceil(FrameHealthCardDrawing.width("Clear", FrameHealthCardFace.strong)) + 16
+        /// The line under the header: the requested rate and the display, Clear and Details
         var context: CGRect { CGRect(x: 0, y: 44, width: width, height: 38) }
         /// The title is the definitions button, with 4 points of fill on either side of its text. It stands 2 points plus
         /// Close's room from Close or Minimize, so Close can move in without moving it.
@@ -140,7 +142,7 @@ enum FrameHealthCardFace {
         func control(at point: CGPoint) -> Control? {
             func target(_ rect: CGRect) -> CGRect { rect.insetBy(dx: min(0, (rect.width - 44) / 2), dy: min(0, (rect.height - 44) / 2)) }
             func distance(_ rect: CGRect) -> CGFloat { max(rect.minX - point.x, point.x - rect.maxX, 0) + max(rect.minY - point.y, point.y - rect.maxY, 0) }
-            var buttons = [(Control.close, close), (.title, title), (.status, status), (.share, share), (.details, details)]
+            var buttons = [(Control.close, close), (.title, title), (.status, status), (.share, share), (.details, details), (.clear, clear)]
             #if os(iOS)
             if minimized { return CGRect(x: 0, y: 0, width: width, height: cardHeight).contains(point) ? .minimize : nil }
             if minimizable { buttons.append((.minimize, minimize)) }
@@ -277,8 +279,8 @@ enum FrameHealthCardFace {
         }
         if bands.contains(.header) { header(ctx, layout, state: state, palette: p) }
         if bands.contains(.context) {
-            // Context: the request and any system limit, then the display, short of Details
-            let right = layout.details.minX - 8
+            // Context: the request and any system limit, then the display, short of Clear and Details
+            let right = layout.clear.minX - 8
             let request = state.request.0 + (state.request.1.isEmpty ? "" : " ")
             D.text(ctx, request, x: 12, y: 52, body, p.label, .left, limit: right - 12)
             if !state.request.1.isEmpty {
@@ -286,6 +288,8 @@ enum FrameHealthCardFace {
                 D.text(ctx, "· " + state.request.1, x: x, y: 52, body, p.secondary, .left, limit: max(0, right - x))
             }
             D.text(ctx, state.display, x: 12, y: 68, body, p.secondary, .left, limit: right - 12)
+            fill(ctx, layout, .clear, layout.clear, state: state, palette: p)
+            D.text(ctx, "Clear", x: layout.clear.midX - D.width("Clear", strong) / 2, y: layout.clear.midY, strong, p.label, .left)
             fill(ctx, layout, .details, layout.details, state: state, palette: p)
             if state.showsDetails {
                 D.text(ctx, "Done", x: layout.details.midX - D.width("Done", strong) / 2, y: layout.details.midY, strong, p.label, .left)

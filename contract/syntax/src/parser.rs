@@ -36,9 +36,10 @@ mod state_step;
 mod states;
 mod steps;
 mod theme;
+mod ticket_step;
 mod tool;
 mod view;
-pub use steps::{is_launch, same_launch};
+pub use steps::{is_launch, same_launch, TEST_HOSTS};
 use steps::{launch_word, LAUNCH};
 
 /// A parse failure.
@@ -132,7 +133,9 @@ struct Parser {
     view_ranges: bool,
     /// Expressions (and prefix operators) open around the current token.
     depth: u32,
+    stmt_depth: usize,
     view_depth: usize,
+    platform_matches: Vec<(String, Span)>,
     /// The tree depth of the expression last parsed.
     last: usize,
     /// Free calls of a method's name (`trim(s)`), each with its refusal: refused
@@ -870,67 +873,6 @@ impl Parser {
         Ok(ShapeDecl { name, fields, span })
     }
 
-    fn type_expr(&mut self) -> R<TypeExpr> {
-        // `action` is a keyword everywhere else; as a prop type it names an
-        // action reference (LLP 1004 D3: children are views over their props).
-        if self.at_ident("action") {
-            let span = self.next().span;
-            return Ok(TypeExpr::Named("action".into(), span));
-        }
-        let (name, span) = self.ident()?;
-        let mut ty = match name.as_str() {
-            "enum" => {
-                self.expect_punct("<")?;
-                let mut values = Vec::new();
-                loop {
-                    let token = self.next();
-                    let TokenKind::Str(value) = token.kind else {
-                        return self.err("syntax-enum", "enum members are quoted strings");
-                    };
-                    if values.contains(&value) {
-                        return self.err("syntax-enum", "enum members must be distinct");
-                    }
-                    values.push(value);
-                    if self.at_punct(">") {
-                        break;
-                    }
-                    self.expect_punct(",")?;
-                }
-                self.expect_punct(">")?;
-                TypeExpr::Enum(values, span)
-            }
-            "option" => {
-                self.expect_punct("<")?;
-                let inner = self.type_expr()?;
-                self.expect_punct(">")?;
-                TypeExpr::Option(Box::new(inner), span)
-            }
-            // @ref LLP 1116.015 D2 — a list type is `T[]`.
-            "list" if self.at_punct("<") => {
-                let open = self.next().span;
-                let inner = self.type_expr()?;
-                let close = self.expect_punct(">")?;
-                self.edits.push(crate::migrate::Edit::new(span, span, ""));
-                self.edits.push(crate::migrate::Edit::new(open, open, ""));
-                self.edits
-                    .push(crate::migrate::Edit::new(close, close, "[]"));
-                self.retired.push(SyntaxError {
-                    id: "syntax-list-type",
-                    message: format!("write `{inner}[]`: a list type is `T[]`, as in TypeScript"),
-                    span,
-                });
-                TypeExpr::List(Box::new(inner), span)
-            }
-            _ => TypeExpr::Named(name, span),
-        };
-        while self.at_punct("[") && matches!(self.peek2(), TokenKind::Punct("]")) {
-            self.next();
-            self.next();
-            ty = TypeExpr::List(Box::new(ty), span);
-        }
-        Ok(ty)
-    }
-
     /// An action's line, through its newline: the action with no body yet.
     fn action_signature(&mut self) -> R<Action> {
         let span = self.expect_word("action")?;
@@ -977,6 +919,20 @@ impl Parser {
     }
 
     fn stmt(&mut self) -> R<Stmt> {
+        const MAX_STMT_DEPTH: usize = 64;
+        if self.stmt_depth >= MAX_STMT_DEPTH {
+            return self.err(
+                "syntax-statement-depth",
+                format!("statements nest more than {MAX_STMT_DEPTH} levels deep"),
+            );
+        }
+        self.stmt_depth += 1;
+        let result = self.stmt_inner();
+        self.stmt_depth -= 1;
+        result
+    }
+
+    fn stmt_inner(&mut self) -> R<Stmt> {
         if self.at_ident("if") {
             let span = self.expect_word("if")?;
             let cond = self.expr()?;
@@ -1457,6 +1413,7 @@ impl Parser {
 fn describe(k: &TokenKind) -> String {
     match k {
         TokenKind::Ident(w) => format!("`{w}`"),
+        TokenKind::Json(_) => "a JSON value".into(),
         TokenKind::Number(n) => format!("number {n}"),
         TokenKind::Str(_) => "a string".into(),
         TokenKind::Template(_) => "a template string".into(),

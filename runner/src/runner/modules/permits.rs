@@ -23,20 +23,33 @@ use super::{Decision, Json, ModulesRow, Route, Runner, Waits};
 use crate::HoldAnswer;
 use serde_json::{json, Map};
 
+pub(super) fn statuses(sub: &Json, declared: &str) -> Vec<Json> {
+    let mut out: Vec<Json> = (sub["permissionList"].as_array().into_iter().flatten())
+        .filter(|p| p["status"] == declared)
+        .cloned()
+        .collect();
+    if out.is_empty() && sub["permission"]["status"] == declared {
+        out.push(sub["permission"].clone());
+    }
+    out
+}
+
+// An unavailable target keeps the status its declaration gives it (LLP 1133.030 D7).
+pub(super) fn fixed_state<'a>(sub: &'a Json, target: &str, field: &str) -> Option<&'a str> {
+    let restricted = &sub["targets"][target];
+    if restricted["available"] != false {
+        return None;
+    }
+    super::ceremony::at(restricted, field)
+        .or_else(|| super::ceremony::at(&sub["default"], field))?
+        .as_str()
+}
+
 impl<D: DataSource> Runner<D> {
     /// The permissions whose state `row`'s source answers (its `status`):
     /// every one of its interface's that names it.
     pub(super) fn statuses_of(&self, row: &ModulesRow) -> Vec<Json> {
-        let sub = self.substitute(row);
-        let declared = self.plan.str(row.declared);
-        let mut out: Vec<Json> = (sub["permissionList"].as_array().into_iter().flatten())
-            .filter(|p| p["status"] == declared)
-            .cloned()
-            .collect();
-        if out.is_empty() && sub["permission"]["status"] == declared {
-            out.push(sub["permission"].clone());
-        }
-        out
+        statuses(&self.substitute(row), self.plan.str(row.declared))
     }
 
     /// A `choose` ticket answered: a `type @t` answer (a comma list, or a
@@ -445,9 +458,9 @@ impl<D: DataSource> Runner<D> {
         Some(out)
     }
 
-    /// Whether the app declares grant line `line`.
+    /// Whether the active grant scope declares grant line `line`.
     pub(super) fn declares(&self, line: &str) -> bool {
-        (self.data.grants().lines()).any(|g| g.split_whitespace().next() == Some(line))
+        (self.module_grants().lines()).any(|g| g.split_whitespace().next() == Some(line))
     }
 
     /// The grant line a request of `row` asks (`asks`, LLP 1133.018 D13 item

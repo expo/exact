@@ -225,6 +225,24 @@ function armRegion(p, subject, a0, a1, matched) {
 export function when(p, subject, a0, a1) { armRegion(p, subject, a0, a1, false); }
 /** `match`: arm 0 with the bound value while the subject is `some`, else arm 1. */
 export function match(p, subject, a0, a1) { armRegion(p, subject, a0, a1, true); }
+function markRow(r) {
+  r.start.$rowKey = r.k;
+  if (r.start !== r.end) r.start.$rowEnd = r.end;
+  else r.start.$row = r;
+}
+/** An element replaced in place (e.g., `mde` swapping its textarea) keeps its `each` row anchor and key. */
+export function replaceRowNode(from, to) {
+  const r = from.$row;
+  if (!r) return;
+  if (r.start === from) r.start = to;
+  if (r.end === from) r.end = to;
+  if (Object.hasOwn(from, '$rowKey')) {
+    to.$rowKey = from.$rowKey;
+    delete from.$rowKey;
+  }
+  to.$row = r;
+  delete from.$row;
+}
 /** `each`: rows by key in item order; a kept row keeps its elements, its
  * item and position are signals its bindings read. */
 export function each(p, list, key, row, pure) {
@@ -340,6 +358,7 @@ export function each(p, list, key, row, pure) {
           r.frag = frag;
         }
         r.k = k;
+        markRow(r);
         if (PrepareTasks && r.s) r.s.taskCurrent = () => (prepared()?.next ?? rows).get(k) === r;
         next.set(k, r);
       });
@@ -363,7 +382,7 @@ export function each(p, list, key, row, pure) {
         list.every(r => r.frag) &&
         !a.previousSibling &&
         !b.nextSibling &&
-        !viewChildren(parent).some(r => r.getAttribute('navigationPresentation') === 'modal')
+        !viewChildren(parent).some(r => ['modal', 'popover'].includes(r.getAttribute('navigationPresentation')))
       ) {
         endAll(gone);
         Portals?.rescue(parent);
@@ -489,6 +508,7 @@ function adoptLazy(x) {
     }
     old.replaceWith(frag);
   } finally {
+    markRow(r);
     Adopt = a;
     p.$n = save;
   }
@@ -540,6 +560,7 @@ export function mount(f) {
   });
   // Under the agent, and in a render, the clock is the driver's: no timer runs by itself.
   clock.agent = agentMode();
+  if (clock.agent) clock.clipboard = { item: null };
   // (a build kept no more: the page again, once)
   if (!clock.agent && typeof window !== 'undefined') reloadOnGone(window);
   Store.load();

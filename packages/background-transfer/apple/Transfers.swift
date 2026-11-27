@@ -48,7 +48,7 @@ public final class BackgroundTransferModule: NSObject, ExactPackage {
             case "abortBackgroundFetch": reply(["exact:answer": context.transfers.abort(id: id)])
             case "retireBackgroundFetch":
                 context.transfers.retire(id: id)
-                if let folder = context.file(Self.kept(id)) { try? FileManager.default.removeItem(at: folder) }
+                if !id.isEmpty, let folder = context.directory(Self.kept(id)) { try? FileManager.default.removeItem(at: folder) }
                 context.log("background-transfer: \(id) retired")
                 changed()
                 reply([:])

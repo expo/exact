@@ -39,7 +39,7 @@ import UIKit
 #endif
 
 public enum WakeStore {
-    private struct Request: Codable {
+    struct Request: Codable {
         var package: String, key: String, kind: String, at: Double, network: Bool, power: Bool
     }
 
@@ -59,7 +59,7 @@ public enum WakeStore {
     }
 
     private static let key = "exact.wakes"
-    private static var requests: [String: Request] = [:]
+    static var requests: [String: Request] = [:]
     private static var arrivals: [Arrival] = []
     private static var installed = false, readied = false
     /// Boots a session with no view for a wake that found no module ready;
@@ -67,7 +67,7 @@ public enum WakeStore {
     public static var boot: (() -> Void)?
     #if os(macOS)
     /// Each request's scheduler, with the time it was made for.
-    private static var schedulers: [String: (NSBackgroundActivityScheduler, Double)] = [:]
+    static var schedulers: [String: (NSBackgroundActivityScheduler, Double)] = [:]
     #endif
 
     private static var bundle: String { Bundle.main.bundleIdentifier ?? "app" }
@@ -284,16 +284,24 @@ public enum WakeStore {
             s.tolerance = wait / 2
             s.schedule { done in
                 DispatchQueue.main.async {
-                    schedulers[id] = nil
-                    guard let r = requests.removeValue(forKey: id) else { return done(.finished) }
-                    keep()
-                    let a = Arrival(kind: r.kind, due: [r]) { _ in done(.finished) }
-                    arrivals.append(a)
-                    offer(a)
+                    fired(id: id, scheduler: s) { done(.finished) }
                 }
             }
             schedulers[id] = (s, r.at)
         }
+    }
+
+    /// Run a macOS wake callback on the main queue only if `scheduler` is still
+    /// the active scheduler for `id`; stale callbacks from invalidated or
+    /// superseded schedulers finish without touching `schedulers` or `requests`.
+    static func fired(id: String, scheduler s: NSBackgroundActivityScheduler, finish: @escaping () -> Void) {
+        guard schedulers[id]?.0 === s else { return finish() }
+        schedulers[id] = nil
+        guard let r = requests.removeValue(forKey: id) else { return finish() }
+        keep()
+        let a = Arrival(kind: r.kind, due: [r]) { _ in finish() }
+        arrivals.append(a)
+        offer(a)
     }
     #endif
 

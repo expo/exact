@@ -1,4 +1,4 @@
-use ArrangementScreen from "./arrangement.contract"
+use ArrangementScreen, PaneViewport, foldBand, foldFirst, foldSpring from "./arrangement.contract"
 use ArrangementView, ArrangementSettings from "./arrangement-view.contract"
 
 // Duo Lab (LLP 1078 D8): the first consumer of `device-posture` and the
@@ -39,6 +39,7 @@ shape Viewport
   devicePosture: string
   horizontalViewportSegments: number
   verticalViewportSegments: number
+  keyboardHeight: number
 shape Item
   id: number
   title: string
@@ -82,13 +83,15 @@ style ReadingBody
   padding-bottom=16
   padding-left="max(calc(env(-exact-safe-area-corners-inset-left) + 16px), env(-exact-readable-content-corners-inset-left))"
   padding-right="max(calc(env(-exact-safe-area-corners-inset-right) + 16px), env(-exact-readable-content-corners-inset-right))"
-// The safe area kept clear of the panel's rounded corners (LLP 1123 D10)
+// The safe area kept clear of the panel's rounded corners (LLP 1123 D10), and at least the route's own inset, which
+// holds UIKit's bars, on a route that clears no edge itself; at the bottom the route's own alone, which holds the home
+// indicator and UIKit's tab bar along the bottom and is 0 above the web's tab bar
 style Safe
   box-sizing="border-box"
-  padding-top="env(-exact-safe-area-corners-inset-top)"
-  padding-right="env(-exact-safe-area-corners-inset-right)"
-  padding-bottom="env(-exact-safe-area-corners-inset-bottom)"
-  padding-left="env(-exact-safe-area-corners-inset-left)"
+  padding-top="max(env(-exact-safe-area-corners-inset-top), var(--exact-safe-area-inset-top))"
+  padding-right="max(env(-exact-safe-area-corners-inset-right), var(--exact-safe-area-inset-right))"
+  padding-bottom="var(--exact-safe-area-inset-bottom)"
+  padding-left="max(env(-exact-safe-area-corners-inset-left), var(--exact-safe-area-inset-left))"
 // A header as the agent and the web paint it, clear of the corners; on iOS
 // it is UIKit's navigation bar
 style Head
@@ -126,6 +129,7 @@ fn sheetStop(projected: number): number = projected < 300 ? 200 : 400
 component DuoLab
   resource paneSupport = arrangementSupport() as shape ArrangementSupport
   resource viewport = exactViewport() as shape Viewport
+  resource paneViewport = exactViewport() as shape PaneViewport
   resource items = items() as shape Item[]
   resource rows = imageRows() as shape ImageRow[]
   resource doc = document() as shape Document
@@ -159,12 +163,33 @@ component DuoLab
   // panel, so a fold hardly resizes it; it is centred on the display, as UIKit centres a
   // form sheet there. Its padding keeps only the part of an inset that its margin does
   // not clear.
-  // The tablist's tabs, where it is a bar along the bottom, keep to the trailing segment too.
+  // The tablist's tabs, on a book fold, keep off the band between the segments, as Apple keeps
+  // controls off the hinge: the first three share the first segment inside the bar's left
+  // padding, the fourth starts after the band, and the rest share the second segment with it.
+  // The bar writes that padding itself, since the web drops its own where Safari's keyboard
+  // lifts the bar. Duo Lab is left to right (it has no strings table), so the first segment is
+  // the left one, and each segment holds its tabs, as the Duo's do; one too narrow for them
+  // would push them off it. Each tab moves on the panes' spring.
+  derive tabBasis = twoAcross ? `calc((${foldFirst(paneViewport)} - env(safe-area-inset-left, 0px)) / 3)` : "0%"
+  derive tabBand = twoAcross ? foldBand(paneViewport) : "0px"
+  derive spring = foldSpring(paneViewport)
   derive gutter = "max(0px, calc((100% - 480px) / 2))"
   derive paneLeft = twoAcross ? "env(viewport-segment-left 1 0)" : gutter
   derive paneRight = twoAcross ? "0px" : gutter
   derive panePadLeft = `max(0px, calc(env(-exact-readable-content-corners-inset-left) - 16px - ${paneLeft}))`
-  derive panePadRight = twoAcross ? "env(-exact-safe-area-corners-inset-right)" : `max(0px, calc(env(-exact-readable-content-corners-inset-right) - 16px - ${gutter}))`
+  derive panePadRight = twoAcross ? safeRight : `max(0px, calc(env(-exact-readable-content-corners-inset-right) - 16px - ${gutter}))`
+  // Fold, Combinations and the note screen clear no edge of their routes and pad as `Safe` does
+  derive safeTop = "max(env(-exact-safe-area-corners-inset-top), var(--exact-safe-area-inset-top))"
+  derive safeRight = "max(env(-exact-safe-area-corners-inset-right), var(--exact-safe-area-inset-right))"
+  derive safeBottom = "var(--exact-safe-area-inset-bottom)"
+  derive safeLeft = "max(env(-exact-safe-area-corners-inset-left), var(--exact-safe-area-inset-left))"
+  // Folded like a laptop, the note sheet keeps to the lower segment while that holds its handle and a field, 140
+  // points; with less, as in a short window, it moves above the fold, its bottom at the fold's top, so a field stays in
+  // reach. While the keyboard ends the route above the fold, the sheet rides it at the route's end. The step
+  // `(lower segment's top - (100% - 140px)) * 1000000` is 0 while that room is there and past any length once it falls
+  // short.
+  derive sheetLift = "max(0px, (env(viewport-segment-top 0 1) - (100% - 140px)) * 1000000)"
+  derive sheetBottom = twoDown ? `min(calc(100% - min(100%, env(viewport-segment-bottom 0 0))), ${sheetLift})` : "0px"
   action choose(id: number)
     selected = id
   action selectTab(name: string)
@@ -234,7 +259,7 @@ component DuoLab
           column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
             for entry, i in t.stack key=entry.id
               if t.name == "keyboard"
-                column navigationKey=`${entry.id}` navigationScroll=`keyboard-scroll-${entry.id}` id=`keyboard-route-${entry.id}` hatch="keyboard-route" data-keyboard-screen=entry.name data-focus-on-show=(entry.name == "keyboard-editor" ? "keyboard-editor" : entry.name == "keyboard" and returnFocus ? "keyboard-return" : "") class=Screen background-color=((entry.name == "keyboard" or entry.name == "keyboard-form") ? "-exact-grouped-background" : "Canvas") testId=`screen-${entry.name}`
+                column navigationKey=`${entry.id}` navigationSplit="none" navigationScroll=`keyboard-scroll-${entry.id}` id=`keyboard-route-${entry.id}` hatch="keyboard-route" -exact-safe-area="left right" data-keyboard-screen=entry.name data-focus-on-show=(entry.name == "keyboard-editor" ? "keyboard-editor" : entry.name == "keyboard" and returnFocus ? "keyboard-return" : "") class=Screen background-color=((entry.name == "keyboard" or entry.name == "keyboard-form") ? "-exact-grouped-background" : "Canvas") testId=`screen-${entry.name}`
                   header class=Head display="flex" align-items="center" gap=8
                     text (entry.name == "keyboard" ? "Keyboard Check" : entry.name == "keyboard-form" ? "Far Focus" : entry.name == "keyboard-search" ? "Search" : "Editor") role="heading" aria-level=2
                     if entry.name == "keyboard-form"
@@ -319,7 +344,7 @@ component DuoLab
               // and the note screen draw their own headers, which move with their
               // panes when the device folds (LLP 1115.000 D5.2).
               if entry.name == "images"
-                column navigationKey=`${entry.id}` navigationScroll="image-list" class=Screen testId="screen-images"
+                column navigationKey=`${entry.id}` navigationScroll="image-list" -exact-safe-area="left right" class=Screen testId="screen-images"
                   header class=Head
                     text "Images" role="heading" aria-level=1 testId="images-title"
                     text `${rows.length} ${rows.length == 1 ? "row" : "rows"} over four pictures; fold mid-scroll.`
@@ -329,7 +354,7 @@ component DuoLab
                         image row.asset aria-label=row.caption width="100%" height=190 border-radius=12 object-fit="cover" background-color="-exact-secondary-background" testId=`image-${row.id}`
                         text row.caption font-size=13 padding-top=6 color="-exact-secondary-label" testId=`image-caption-${row.id}`
               if entry.name == "reflow"
-                column navigationKey=`${entry.id}` navigationScroll="reflow-scroll" class=Screen testId="screen-reflow"
+                column navigationKey=`${entry.id}` navigationScroll="reflow-scroll" -exact-safe-area="left right" class=Screen testId="screen-reflow"
                   header class=Head
                     text "Reflow" role="heading" aria-level=1 testId="reflow-title"
                   scroll id="reflow-scroll" flex=1 min-height=0 width="100%" box-sizing="border-box" testId="reflow-scroll"
@@ -352,7 +377,7 @@ component DuoLab
               if t.name == "arrangement"
                 ArrangementView(routeKey=`${entry.id}`, depth=(match parseNumber(entry.params.depth) { case some(n) => n, case none => i + 1 }), native=paneSupport.available, seed=arrangementSeed, openNext=openArrangement)
               if entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes" and t.name != "arrangement"
-                column navigationKey=`${entry.id}` navigationBar="none" class=Screen testId=`screen-${entry.name}`
+                column navigationKey=`${entry.id}` navigationBar="none" -exact-safe-area="none" class=Screen testId=`screen-${entry.name}`
                   if entry.name == "fold"
                     // Two segments across: the list on the first, the detail on the
                     // second, each inset on its own side by the safe area kept clear
@@ -364,23 +389,23 @@ component DuoLab
                     // UIKit's rail; above the web's tablist. The band
                     // belongs to neither (LLP 1078 D1, D3); one segment stacks the panes.
                     if twoAcross
-                      column testId="pane-list" width="env(viewport-segment-width 0 0)" height="100%" box-sizing="border-box" padding-top="env(-exact-safe-area-corners-inset-top)" padding-bottom="env(-exact-safe-area-corners-inset-bottom)" padding-left="env(-exact-safe-area-corners-inset-left)"
+                      column testId="pane-list" width="env(viewport-segment-width 0 0)" height="100%" box-sizing="border-box" padding-top=safeTop padding-bottom=safeBottom padding-left=safeLeft
                         Facts(viewport=viewport)
                         ItemList(items=items, selected=selected, choose=choose)
-                      column testId="pane-detail" position="absolute" top=0 left="env(viewport-segment-left 1 0)" width="env(viewport-segment-width 1 0)" height="100%" box-sizing="border-box" padding-top="env(-exact-safe-area-corners-inset-top)" padding-right="env(-exact-safe-area-corners-inset-right)" padding-bottom="env(-exact-safe-area-corners-inset-bottom)" background-color="-exact-secondary-background"
+                      column testId="pane-detail" position="absolute" top=0 left="env(viewport-segment-left 1 0)" width="env(viewport-segment-width 1 0)" height="100%" box-sizing="border-box" padding-top=safeTop padding-right=safeRight padding-bottom=safeBottom background-color="-exact-secondary-background"
                         Detail(items=items, selected=selected)
                     else
                       if twoDown
-                        column testId="pane-list" width="100%" height="env(viewport-segment-height 0 0)" box-sizing="border-box" padding-top="env(-exact-safe-area-corners-inset-top)" padding-right="env(-exact-safe-area-corners-inset-right)" padding-left="env(-exact-safe-area-corners-inset-left)"
+                        column testId="pane-list" width="100%" height="env(viewport-segment-height 0 0)" box-sizing="border-box" padding-top=safeTop padding-right=safeRight padding-left=safeLeft
                           Facts(viewport=viewport)
                           ItemList(items=items, selected=selected, choose=choose)
-                        column testId="pane-detail" position="absolute" left=0 top="env(viewport-segment-top 0 1)" bottom=0 width="100%" box-sizing="border-box" padding-right="env(-exact-safe-area-corners-inset-right)" padding-bottom="env(-exact-safe-area-corners-inset-bottom)" padding-left="env(-exact-safe-area-corners-inset-left)" background-color="-exact-secondary-background"
+                        column testId="pane-detail" position="absolute" left=0 top="env(viewport-segment-top 0 1)" bottom=0 width="100%" box-sizing="border-box" padding-right=safeRight padding-bottom=safeBottom padding-left=safeLeft background-color="-exact-secondary-background"
                           Detail(items=items, selected=selected)
                       else
-                        column testId="pane-list" flex=1 min-height=0 width="100%" box-sizing="border-box" padding-top="env(-exact-safe-area-corners-inset-top)" padding-right="env(-exact-safe-area-corners-inset-right)" padding-left="env(-exact-safe-area-corners-inset-left)"
+                        column testId="pane-list" flex=1 min-height=0 width="100%" box-sizing="border-box" padding-top=safeTop padding-right=safeRight padding-left=safeLeft
                           Facts(viewport=viewport)
                           ItemList(items=items, selected=selected, choose=choose)
-                        column testId="pane-detail" flex=1 min-height=0 width="100%" box-sizing="border-box" padding-right="env(-exact-safe-area-corners-inset-right)" padding-bottom="env(-exact-safe-area-corners-inset-bottom)" padding-left="env(-exact-safe-area-corners-inset-left)" background-color="-exact-secondary-background"
+                        column testId="pane-detail" flex=1 min-height=0 width="100%" box-sizing="border-box" padding-right=safeRight padding-bottom=safeBottom padding-left=safeLeft background-color="-exact-secondary-background"
                           Detail(items=items, selected=selected)
                   if entry.name == "combos"
                     column flex=1 min-height=0 margin-left=paneLeft margin-right=paneRight class=Safe padding-left=panePadLeft padding-right=panePadRight
@@ -399,13 +424,13 @@ component DuoLab
                       text "This pushed route hides the tab bar on purpose, to test a route without one; Back shows it again. The sheet below holds a textarea; its keyboard shortens the viewport (resizes-content)." class=Note padding-top=8
                     // Partially folded like a laptop (two segments down), the sheet keeps below the
                     // header and on the lower segment, where Apple's talk puts controls, down to the
-                    // route's end: the viewport's bottom, as this screen hides the tab bar. The
-                    // keyboard covers that segment and ends the route above it; the segment keeps its
-                    // top, 0 tall (LLP 1078, the keyboard). The step `(segment top - 100%) * 1000`,
-                    // at most zero while the route reaches the segment and past any cap once it ends
-                    // a point or more above it, then lifts the segment's cap, and the sheet riding
-                    // the keyboard takes the room below the header.
-                    column id="note-sheet" testId="note-sheet" position="absolute" bottom=0 left=paneLeft right=paneRight height=sheetPx max-height=(twoDown ? "min(calc(100% - env(-exact-safe-area-corners-inset-top) - 72px), max(calc(100% - env(viewport-segment-top 0 1)), calc((env(viewport-segment-top 0 1) - 100%) * 1000)))" : "calc(100% - 72px)") box-sizing="border-box" padding=16 padding-right=`calc(max(0px, env(-exact-safe-area-corners-inset-right) - ${paneRight}) + 16px)` padding-bottom="calc(env(-exact-safe-area-corners-inset-bottom) + 16px)" padding-left=`calc(max(0px, env(-exact-safe-area-corners-inset-left) - ${paneLeft}) + 16px)` gap=12 background-color="-exact-secondary-background" border-top-left-radius=20 border-top-right-radius=20 transition="height -exact-spring(300, 30, 1)"
+                    // route's end: the viewport's bottom, as this screen hides the tab bar. Where that
+                    // segment cannot hold its handle and a field, it moves above the fold
+                    // (`sheetBottom`). The keyboard covers the lower segment and ends the route above
+                    // it; the segment keeps its top, 0 tall (LLP 1078, the keyboard), and the sheet
+                    // riding the keyboard takes the room below the header. Its bottom pads by the
+                    // route's own inset, but for the keyboard's, which covers the home indicator.
+                    column id="note-sheet" testId="note-sheet" position="absolute" bottom=sheetBottom left=paneLeft right=paneRight height=sheetPx max-height=(twoDown ? `min(calc(100% - ${sheetBottom} - ${safeTop} - 72px), max(calc(100% - env(viewport-segment-top 0 1)), ${sheetLift}))` : "calc(100% - 72px)") box-sizing="border-box" padding=16 padding-right=`calc(max(0px, env(-exact-safe-area-corners-inset-right) - ${paneRight}) + 16px)` padding-bottom=(viewport.keyboardHeight > 0 ? "16px" : `calc(${safeBottom} + 16px)`) padding-left=`calc(max(0px, env(-exact-safe-area-corners-inset-left) - ${paneLeft}) + 16px)` gap=12 background-color="-exact-secondary-background" border-top-left-radius=20 border-top-right-radius=20 transition="height -exact-spring(300, 30, 1)"
                       column heightDragFor="note-sheet" heightrelease=snapSheet touch-action="none" testId="sheet-handle" aria-label="Resize the note sheet" gap=3
                         text "Note" font-size=18 font-weight=600
                         text "Drag to resize" font-size=11 color="-exact-secondary-label"
@@ -416,29 +441,27 @@ component DuoLab
                       input appearance="none" value=title input=writeTitle focus=focusIn blur=focusOut placeholder="Title" testId="note-title-input" aria-label="Title" width="100%" box-sizing="border-box" padding=10 border-width=1 border-style="solid" border-color="-exact-separator" border-radius=10 font-size=16
                       textarea appearance="none" value=draft input=write focus=focusIn blur=focusOut placeholder="Write, then fold" testId="note-textarea" aria-label="Note" width="100%" min-height=96 box-sizing="border-box" padding=12 border-width=1 border-style="solid" border-color="-exact-separator" border-radius=10 font-size=16 line-height="22px"
       // Hidden on the note screen, an editor, as the guide hides a route's tab bar
-      // (docs/contract-for-agents.md, "Hide the tab bar on a route"). On a book
-      // fold its tabs keep to the trailing segment with the panes, by a padding the web's
-      // sidebar (900px and wider) overrides.
-      row role="tablist" testId="tab-bar" display=(current.name == "note" ? "none" : "flex") padding-left=(twoAcross ? "env(viewport-segment-left 1 0)" : "0px")
-        button role="tab" aria-controls="panel-fold" aria-selected=(nav.tab == "fold") press=selectTab("fold") testId="tab-fold" flex=1
+      // (docs/contract-for-agents.md, "Hide the tab bar on a route").
+      row role="tablist" testId="tab-bar" position="sticky" bottom=0 display=(current.name == "note" ? "none" : "flex") padding-left="env(safe-area-inset-left, 0px)"
+        button role="tab" aria-controls="panel-fold" aria-selected=(nav.tab == "fold") press=selectTab("fold") testId="tab-fold" -exact-layout-transition=spring flex-grow=(twoAcross ? 0 : 1) flex-shrink=(twoAcross ? 0 : 1) flex-basis=tabBasis
           image "symbol:book"
           text "Fold"
-        button role="tab" aria-controls="panel-panes" aria-selected=(nav.tab == "panes") press=selectTab("panes") testId="tab-panes" flex=1
+        button role="tab" aria-controls="panel-panes" aria-selected=(nav.tab == "panes") press=selectTab("panes") testId="tab-panes" -exact-layout-transition=spring flex-grow=(twoAcross ? 0 : 1) flex-shrink=(twoAcross ? 0 : 1) flex-basis=tabBasis
           image "symbol:layers"
           text "Panes"
-        button role="tab" aria-controls="panel-images" aria-selected=(nav.tab == "images") press=selectTab("images") testId="tab-images" flex=1
+        button role="tab" aria-controls="panel-images" aria-selected=(nav.tab == "images") press=selectTab("images") testId="tab-images" -exact-layout-transition=spring flex-grow=(twoAcross ? 0 : 1) flex-shrink=(twoAcross ? 0 : 1) flex-basis=tabBasis
           image "symbol:photo"
           text "Images"
-        button role="tab" aria-controls="panel-reflow" aria-selected=(nav.tab == "reflow") press=selectTab("reflow") testId="tab-reflow" flex=1
+        button role="tab" aria-controls="panel-reflow" aria-selected=(nav.tab == "reflow") press=selectTab("reflow") testId="tab-reflow" -exact-layout-transition=spring flex=1 margin-left=tabBand
           image "symbol:document"
           text "Reflow"
-        button role="tab" aria-controls="panel-combos" aria-selected=(nav.tab == "combos") press=selectTab("combos") testId="tab-combos" flex=1
+        button role="tab" aria-controls="panel-combos" aria-selected=(nav.tab == "combos") press=selectTab("combos") testId="tab-combos" -exact-layout-transition=spring flex=1
           image "symbol:layers"
           text "Combos"
-        button role="tab" aria-controls="panel-keyboard" aria-selected=(nav.tab == "keyboard") press=selectTab("keyboard") testId="tab-keyboard" flex=1
+        button role="tab" aria-controls="panel-keyboard" aria-selected=(nav.tab == "keyboard") press=selectTab("keyboard") testId="tab-keyboard" -exact-layout-transition=spring flex=1
           image "symbol:icon.keyboard"
           text "Keyboard"
-        button role="tab" aria-controls="panel-arrangement" aria-selected=(nav.tab == "arrangement") press=selectTab("arrangement") testId="tab-arrangement" flex=1
+        button role="tab" aria-controls="panel-arrangement" aria-selected=(nav.tab == "arrangement") press=selectTab("arrangement") testId="tab-arrangement" -exact-layout-transition=spring flex=1
           image "symbol:icon.split"
           text "Arrange"
 

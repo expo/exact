@@ -39,10 +39,14 @@ impl Drop for App {
     }
 }
 
-const HEAD: &str = "use showNotification, closeNotification, setAppBadge, clearAppBadge, notificationStatus, requestNotificationPermission, notificationclick, NotificationStatus, NotificationEvent from \"@exact/notifications\"\n";
+const HEAD: &str = "use showNotification, closeNotification, setAppBadge, clearAppBadge, notificationStatus, requestNotificationPermission, notificationclick, notificationshow, NotificationStatus, NotificationEvent from \"@exact/notifications\"\n";
 
 const APP: &str = r#"component App
   state opened = ""
+  state arrived = ""
+  action shown(tag: string, e: NotificationEvent)
+    arrived = `${tag} ${e.title}`
+    send asked = requestNotificationPermission()
   resource status = notificationStatus() as shape NotificationStatus
   mutation asked as shape NotificationStatus
   action clicked(tag: string, e: NotificationEvent)
@@ -57,6 +61,8 @@ const APP: &str = r#"component App
     showNotification(title="Build finished again", tag="thread-3", data="/thread/3")
   action later
     showNotification(title="Stretch", tag="stretch", showTrigger=1800000000000)
+  action timed(tag: string, title: string, at: number)
+    showNotification(title=title, tag=tag, showTrigger=at)
   action route
     showNotification(title="Inbox", tag="inbox", navigate="/inbox")
   action close
@@ -74,7 +80,7 @@ const APP: &str = r#"component App
   action ask
     send asked = requestNotificationPermission()
   view
-    column notificationclick=clicked
+    column notificationclick=clicked notificationshow=shown
       text status.state
       text opened
 "#;
@@ -92,8 +98,12 @@ impl exact_runner::DataSource for Grants {
 const GRANTED: &str = "device.notifications purpose.notifications\n";
 
 fn boot(grants: &'static str) -> (App, Runner<Source>) {
+    boot_app(grants, APP)
+}
+
+fn boot_app(grants: &'static str, body: &str) -> (App, Runner<Source>) {
     let app = App::new("runner");
-    let plan = app.compile(APP).unwrap_or_else(|e| panic!("{e:?}"));
+    let plan = app.compile(body).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
         boxed(Grants(grants)),
@@ -149,7 +159,13 @@ fn the_package_compiles_its_sends_as_statements_and_its_click_as_a_root_event() 
             )
         })
         .collect();
-    assert_eq!(events, ["notifications.notificationclick 16"]);
+    assert_eq!(
+        events,
+        [
+            "notifications.notificationclick 16",
+            "notifications.notificationshow 16"
+        ]
+    );
     let refused = |body: &str| -> Vec<String> {
         let app = App::new("refused");
         match app.compile(body) {
@@ -177,10 +193,140 @@ fn the_package_compiles_its_sends_as_statements_and_its_click_as_a_root_event() 
             "showNotification(title=\"Stretch\", apple.interruptionLevel=\"loud\")",
             "contract-module-argument",
         ),
+        (
+            r#"showNotification(title="Fern", android.group=3)"#,
+            "android.group",
+        ),
+        (
+            r#"showNotification(title="Fern", android.group="")"#,
+            "android.group",
+        ),
+        (
+            r#"showNotification(title="Trip", android.groupSummary=false)"#,
+            "android.groupSummary requires android.group",
+        ),
+        (
+            r#"showNotification(title="Trip", android.group="trip", android.groupSummary="yes")"#,
+            "android.groupSummary",
+        ),
+        (
+            r#"showNotification(title="Trip", android.groupAlertBehavior="children")"#,
+            "no word `groupAlertBehavior`",
+        ),
     ] {
         let all = refused(&go(call));
         assert!(all.iter().any(|e| e.contains(want)), "{call}: {all:?}");
     }
+}
+
+#[test]
+fn android_groups_follow_the_tag_and_only_delivered_children_close_with_the_summary() {
+    let app = r#"component App
+  action post(tag: string, group: string, summary: bool, at: number)
+    showNotification(title=tag, tag=tag, android.group=group, android.groupSummary=summary, showTrigger=at)
+  action close(tag: string)
+    closeNotification(tag=tag)
+  action quiet
+    showNotification(title="Quiet", tag="quiet", silent=true)
+  view
+    text "Field trip"
+"#;
+    let (_app, mut r) = boot_app(GRANTED, app);
+    r.set_module_target("android");
+    r.set_time(0.0, 0.0).unwrap();
+    r.extension_agent(r#"{"op":"prefer","permission":{"notifications":"granted"}}"#)
+        .unwrap()
+        .1
+        .unwrap();
+    let post = |r: &mut Runner<Source>, tag, group, summary, at| {
+        r.act(
+            "post",
+            vec![
+                Value::str(tag),
+                Value::str(group),
+                Value::Bool(summary),
+                Value::Number(at),
+            ],
+        )
+        .unwrap();
+    };
+    post(&mut r, "fern", "", false, 0.0);
+    assert!(logs(&r).contains("android.group must be a non-empty string"));
+    assert_eq!(state(&r)["notifications"], serde_json::json!([]));
+    r.act("quiet", vec![]).unwrap();
+    post(&mut r, "fern", "field-trip", false, 0.0);
+    post(&mut r, "fern", "field-trip", false, 0.0);
+    post(&mut r, "summary", "field-trip", true, 0.0);
+    post(&mut r, "moss", "field-trip", false, 1000.0);
+    let items = |r: &Runner<Source>| state(r)["notifications"].as_array().unwrap().clone();
+    let before = items(&r);
+    assert_eq!(before.len(), 4);
+    assert_eq!(before[0]["android"]["group"], "silent");
+    assert_eq!(before[1]["android"]["groupSummary"], false);
+    assert_eq!(before[2]["android"]["groupSummary"], true);
+    assert_eq!(before[3]["delivered"], false);
+    post(&mut r, "summary", "next-trip", true, 500.0);
+    assert_eq!(
+        items(&r).len(),
+        5,
+        "the alarm leaves the posted summary active"
+    );
+    r.act("close", vec![Value::str("summary")]).unwrap();
+    r.advance(1000.0).unwrap();
+    let after = items(&r);
+    assert_eq!(after.len(), 2);
+    assert_eq!(after[1]["tag"], "moss");
+    assert_eq!(after[1]["android"]["group"], "field-trip");
+    assert_eq!(after[1]["delivered"], true);
+    post(&mut r, "summary", "field-trip", true, 0.0);
+    post(&mut r, "summary", "next-trip", true, 2000.0);
+    r.advance(2000.0).unwrap();
+    let moved = items(&r);
+    assert_eq!(
+        moved.len(),
+        2,
+        "moving the summary dismisses its old children"
+    );
+    assert_eq!(moved[1]["android"]["group"], "next-trip");
+    post(&mut r, "leaf", "next-trip", false, 0.0);
+    let summary = moved[1]["ref"].as_u64().unwrap();
+    assert!(tap(&mut r, summary, None).contains("notificationclick"));
+    assert_eq!(
+        items(&r).len(),
+        1,
+        "tapping the summary also dismisses its posted child"
+    );
+    for (words, name) in [
+        (serde_json::json!({"group": null}), "android.group"),
+        (
+            serde_json::json!({"group": "trip", "groupSummary": 1}),
+            "android.groupSummary",
+        ),
+        (
+            serde_json::json!({"groupAlertBehavior": 2}),
+            "android.groupAlertBehavior",
+        ),
+    ] {
+        let body = serde_json::json!({ "extension": "notifications", "send": "showNotification",
+            "args": { "title": "Trip", "android": words } });
+        let request = exact_runner::Request::native(body.to_string().into_bytes());
+        let exact_runner::Dispatch::Run(exact_runner::Work::Now(work)) = r.native_work(&request)
+        else {
+            panic!("invalid words must be refused immediately");
+        };
+        let exact_runner::Outcome::Response(response) = work() else {
+            panic!("expected a refusal")
+        };
+        let refusal: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(refusal["error"], "TypeError");
+        assert!(
+            refusal["message"].as_str().unwrap().contains(name),
+            "{refusal}"
+        );
+    }
+    r.set_module_target("ios");
+    post(&mut r, "ordinary", "", false, 0.0);
+    assert_eq!(items(&r).last().unwrap()["tag"], "ordinary");
 }
 
 /// §7 under the agent: the post waits on the permission ticket, then is
@@ -244,6 +390,111 @@ fn the_substitute_lists_posts_holds_the_badge_and_taps_a_click() {
         "{}",
         logs(&r)
     );
+}
+
+#[test]
+fn a_presentation_obeys_event_order_and_the_clock_stops_on_an_earlier_request() {
+    let app = APP.replace(
+        "    match e.data",
+        "    showNotification(title=tag, tag=tag)\n    match e.data",
+    );
+    let (_app, mut r) = boot_app(GRANTED, &app);
+    r.set_time(1_799_999_995_000.0, 0.0).unwrap();
+    let prefer = |r: &mut Runner<Source>, permission| {
+        r.extension_agent(&format!(
+            r#"{{"op":"prefer","permission":{{"notifications":"{permission}"}}}}"#
+        ))
+        .unwrap()
+        .1
+        .unwrap();
+    };
+    let click = |r: &mut Runner<Source>, tag| {
+        let args = serde_json::json!([tag, {"tag":tag,"title":tag,"data":null,"body":null}]);
+        r.raise_module_event(
+            "notifications",
+            "notificationclick",
+            &args.to_string(),
+            exact_runner::CallOrigin::App,
+        )
+        .unwrap();
+    };
+    prefer(&mut r, "granted");
+    click(&mut r, "first");
+    r.apply_announced();
+    click(&mut r, "second");
+    r.apply_announced();
+    let journal = logs(&r);
+    let handlers: Vec<_> = journal
+        .split("heard by ")
+        .skip(1)
+        .map(|line| line.split('"').next().unwrap())
+        .collect();
+    assert_eq!(handlers, ["clicked", "shown", "clicked"]);
+    r.apply_announced();
+    r.act("later", vec![]).unwrap();
+    prefer(&mut r, "prompt");
+    click(&mut r, "third");
+    let jump = r.advance_until_request(5000.0);
+    assert!(jump.stopped_on_request);
+    assert_eq!(jump.now_ms, 0.0);
+    assert_eq!(state(&r)["slots"]["arrived"], "second second");
+    r.advance(5000.0).unwrap();
+    assert_eq!(state(&r)["slots"]["arrived"], "stretch Stretch");
+}
+
+#[test]
+fn replacing_or_closing_a_pending_reminder_withdraws_its_show() {
+    let (_app, mut r) = boot(GRANTED);
+    r.set_time(0.0, 0.0).unwrap();
+    r.extension_agent(r#"{"op":"prefer","permission":{"notifications":"granted"}}"#)
+        .unwrap()
+        .1
+        .unwrap();
+    for (tag, title, at) in [
+        ("thread-3", "Closed", 5000.0),
+        ("lab", "Old", 5000.0),
+        ("lab", "New", 6000.0),
+    ] {
+        r.act(
+            "timed",
+            vec![Value::str(tag), Value::str(title), Value::Number(at)],
+        )
+        .unwrap();
+    }
+    r.act("close", vec![]).unwrap();
+    r.advance(5000.0).unwrap();
+    assert_eq!(state(&r)["slots"]["arrived"], "");
+    r.advance(6000.0).unwrap();
+    assert_eq!(state(&r)["slots"]["arrived"], "lab New");
+}
+
+#[test]
+fn the_clock_presents_a_visible_reminder_once_with_device_authority() {
+    let (_app, mut r) = boot(GRANTED);
+    r.set_time(1_799_999_995_000.0, 0.0).unwrap();
+    r.act("later", vec![]).unwrap();
+    let ticket = permission(&r);
+    tap(&mut r, ticket, Some("allow"));
+    r.extension_agent(r#"{"op":"prefer","permission":{"notifications":"prompt"}}"#)
+        .unwrap()
+        .1
+        .unwrap();
+    r.advance(4999.0).unwrap();
+    assert_eq!(state(&r)["slots"]["arrived"], "");
+    r.advance(5000.0).unwrap();
+    assert_eq!(state(&r)["slots"]["arrived"], "stretch Stretch");
+    r.advance(6000.0).unwrap();
+    let journal = logs(&r);
+    assert_eq!(
+        journal.matches("notificationshow: heard by shown").count(),
+        1,
+        "{journal}"
+    );
+    assert!(
+        journal.contains("person-required (device origin)"),
+        "{journal}"
+    );
+    assert!(r.device_holds().is_empty());
 }
 
 /// The grant rule moved into the package's admission: without
@@ -385,4 +636,31 @@ fn a_package_only_data_code_imports_is_in_the_plan() {
         "{listed}: {}",
         logs(&r)
     );
+}
+
+#[test]
+fn a_reminder_cannot_be_tapped_at_a_request_boundary_before_its_show() {
+    let app = APP.replace(
+        "  view\n",
+        "  task first mount\n    after(5000, ask)\n  view\n",
+    );
+    let (_app, mut r) = boot_app(GRANTED, &app);
+    r.set_time(1_799_999_995_000.0, 0.0).unwrap();
+    r.extension_agent(r#"{"op":"prefer","permission":{"notifications":"granted"}}"#)
+        .unwrap()
+        .1
+        .unwrap();
+    r.act("later", vec![]).unwrap();
+    r.extension_agent(r#"{"op":"prefer","permission":{"notifications":"prompt"}}"#)
+        .unwrap()
+        .1
+        .unwrap();
+    let jump = r.advance_until_request(5000.0);
+    assert!(jump.stopped_on_request);
+    let entry = &state(&r)["notifications"][0];
+    assert_eq!(entry["delivered"], false);
+    assert!(tap(&mut r, entry["ref"].as_u64().unwrap(), None).contains("not delivered yet"));
+    r.advance(5000.0).unwrap();
+    assert_eq!(state(&r)["slots"]["arrived"], "stretch Stretch");
+    assert_eq!(state(&r)["notifications"][0]["delivered"], true);
 }

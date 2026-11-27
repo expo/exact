@@ -6,7 +6,7 @@
 // server's return route. Drive 8's origin rule is the runner's test
 // (contract/cli/tests/it/sign_in.rs) until a tool door produces one.
 //
-// usage: bun packages/sign-in/test/drives.mjs [web|ios|macos] [--only 1,2,…]
+// usage: bun packages/sign-in/test/drives.mjs [web|ios|macos|android] [--only 1,2,…]
 //   Builds nothing on Apple: build the fixture first (host/apple/build.mjs
 //   auth-fixture-apple, `--ios --sim <udid>` for a simulator). Starts the
 //   fixture server on 4331 with the fixture provider's key, and stops it;
@@ -18,7 +18,7 @@ import { join, resolve } from 'node:path';
 import { respond } from './idp.mjs';
 
 const root = resolve(import.meta.dir, '../../..');
-const argv = process.argv.slice(2), host = argv.find((a) => ['web', 'ios', 'macos'].includes(a)) ?? 'web';
+const argv = process.argv.slice(2), host = argv.find((a) => ['web', 'ios', 'macos', 'android'].includes(a)) ?? 'web';
 const only = argv.includes('--only') ? argv[argv.indexOf('--only') + 1].split(',').map(Number) : null;
 const { open } = await import(resolve(root, 'scripts/agent.mjs'));
 const ISSUER = 'http://127.0.0.1:4331';
@@ -53,17 +53,23 @@ const signedIn = (s, name) => until(s, async () => (await session(s)) === `Signe
 const audience = { web: { apple: 'com.exact.authfixture.web', google: 'fixture-web.apps.googleusercontent.com' },
   ios: { apple: 'com.exact.authfixture', google: 'fixture-ios.apps.googleusercontent.com' } };
 audience.macos = audience.ios;
+audience.android = { google: audience.web.google };
 
 await fetch(`${ISSUER}/fixture/reset`);
 let s;
-try { s = await open({ host, app: 'auth-fixture', size: host === 'web' ? [402, 778] : undefined,
+try { s = await open({ host, app: 'auth-fixture', reader: host === 'android' || undefined, env: { EXACT_AUTH_FIXTURE: ISSUER }, size: host === 'web' ? [402, 778] : undefined,
   storage: `sign-in-${Date.now().toString(36)}` }); }
 catch (e) { server.kill(); rmSync(dir, { recursive: true, force: true }); throw e; }
 const run = (n) => !only || only.includes(n);
-const appleHere = host !== 'macos';
+const appleHere = host === 'ios' || host === 'web';
 try {
   await s.clock('settle');
-  if (host !== 'web') {
+  if (host === 'android') {
+    const caps = await until(s, async () => (await s.state()).resources?.identities);
+    const google = caps?.providers?.google;
+    check(3, 'Android offers standalone Google in both modes', google?.active && google.passive && !google.withPublicKey, JSON.stringify(caps));
+    check(3, 'Android offers no Apple button', !caps?.providers?.apple?.active && !(await shown(s, 'apple-sign-in')));
+  } else if (host !== 'web') {
     const caps = (await s.state()).resources?.identities;
     check(3, 'default capabilities offer combined Apple/passkey requests on iOS and hide Google',
       caps?.providers?.google?.active === false && caps?.providers?.apple?.withPublicKey === (host === 'ios'),
@@ -138,7 +144,7 @@ try {
     } else {
       await until(s, async () => (await text(s, 'offered')) !== '');
       check(4, `on ${host} the passive request beside a passkey fails NotSupportedError, with no identity ticket`, (await text(s, 'offered')) === 'No sign-in sheet here' && !(await tickets(s)).some((t) => t.device.args.identity), `${await text(s, 'offered')} ${JSON.stringify(await tickets(s))}`);
-      check(4, 'and the app shows the buttons', (await shown(s, 'google-sign-in')) && (host === 'macos' || (await shown(s, 'apple-sign-in'))));
+      check(4, 'and the app shows the buttons', (await shown(s, 'google-sign-in')) && (!appleHere || (await shown(s, 'apple-sign-in'))));
     }
   }
   if (run(5)) {

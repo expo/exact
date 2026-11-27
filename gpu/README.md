@@ -37,6 +37,29 @@ and optionally `EXACT_AGENT_WINDOW_TAP` to a launch button's test ID.
 `EXACT_AGENT_WINDOW_UNPACED=1` removes pacing to measure rendering capacity.
 These switches require a bounded development run and are stripped in production.
 
+## Colour inputs
+
+A Contract surface argument `color("surface.board")` binds straight linear-sRGB
+(D65) RGBA. Read it with `exact_gpu::json::color(&inputs[0], "fill")?`. All four
+components are `f32`. RGB retains out-of-gamut and extended values. Alpha ranges
+from zero to one. Keep the `ColorTarget` passed to `Surface::color_target`.
+Use `target.fragment(rgba)` as a fragment shader's RGBA output with replacement
+blending, or `target.clear(rgba)` as a render pass's clear colour. Both account
+for the attachment's primaries, transfer and alpha mode, including the hardware
+encode on an sRGB view. You can cache either value in `bind`. A changed format,
+colour space or alpha mode delivers the new target and rebinds colour inputs.
+A private straight linear-sRGB working texture takes the original input directly.
+
+Leave `opaque()` false for transparency. If the target offers only opaque
+presentation, the helper writes the straight colour at full alpha. Use a
+transparent canvas over a token-painted view where the compositor supports it.
+
+To run the pixel test, create an app with `bun scripts/exact.mjs new target/board`
+and copy `gpu/tests/board/.` into `target/board/`. Use the
+[GPU module manifest](../docs/recipes/gpu-module.md) with the crate name `board-gpu`. From that app, run
+`bun exact.mjs test macos board.test.contract` or `bun exact.mjs test web board.test.contract`.
+The board also draws a half-alpha Display P3 swatch and a literal clear over white.
+
 ## Android initialization
 
 `dlopen` runs no `JNI_OnLoad`, so a module that calls into Java exports the
@@ -85,6 +108,22 @@ HDR keeps D12b's encoded extended-sRGB output, including values above 1.
 
 `apps/caltrain/gpu` is a complete GPU module; the
 [GPU module recipe](../docs/recipes/gpu-module.md) shows a minimal surface.
+
+## Asynchronous surface wakes
+
+A resting surface whose `render` returned `false` receives no further frames until inputs
+or host state change. To request a redraw from a background thread (or a timer/worker on
+the web), implement `Surface::set_waker(&mut self, waker: SurfaceWaker)` (called once at
+surface creation, before any other callback) and call `waker.wake()` after publishing the
+new state (LLP 1009 D12). Multiple wakes before the next render coalesce into one host
+notification; wakes raised during `render` re-arm the next frame; wakes after surface
+destruction or module unload are silent no-ops. Under a seekable agent clock, wakes stay
+latched and settle deterministically on the next clock advance instead of running wall-clock
+frames.
+
+Native hosts register their coalescing callback through the optional C ABI symbol
+`gpu_on_wake(Option<extern "C" fn()>)`, passing `None` before unload to clear and drain any
+in-flight wake. On the web, `SurfaceWaker::wake` notifies `globalThis.exact.gpu.wake()`.
 
 ## Dynamic buffer offsets
 

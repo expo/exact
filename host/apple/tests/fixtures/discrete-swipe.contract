@@ -1,0 +1,16 @@
+component App
+  state swipes = 0
+  state way = "down"
+  action swiped
+    swipes = swipes + 1
+  action turn
+    way = (way == "down" ? "up" : "sideways")
+  view
+    column width="100%" height=600
+      column testId="bar" swipe=swiped swipe-flick=way height=120
+        textarea testId="field" value="One line" field-sizing="content" font-size=17
+      column inert=true height=40
+        box testId="inside-inert" swipe=swiped swipe-flick="up" height=40
+      text `${swipes}` testId="swipes"
+      button testId="turn" press=turn
+        text "Turn"

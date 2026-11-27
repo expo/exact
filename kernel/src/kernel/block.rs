@@ -25,7 +25,7 @@
 //! exactly as before.
 //!
 //! The kernel implies one block itself: the viewport, for each box in
-//! HTML's top layer (a popover; `Kernel::imply_blocks`), fitting its
+//! HTML's top layer that the host measures (`Kernel::imply_blocks`), fitting its
 //! content as the UA sheet's `fit-content` does. A host's block for the
 //! same box wins, and taking it back leaves the viewport.
 
@@ -168,6 +168,36 @@ fn bar_slots(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|e| (untaken[e] - clear[e]).max(0.0))
 }
 
+/// Where a region bar of `held`'s root lies on each edge (LLP 1123 D12,
+/// "Region"), in Taffy patch 81's terms: how far in from the root's edge its
+/// slot begins, less than 0 where UIKit's bar layout region lies in the band
+/// the host clears, and how far in from the two edges beside it the slot
+/// runs, as its host reported the region on the owner's view less the
+/// clearance `clear` there. On the bottom of a root that clears the
+/// keyboard the slot rests on the deeper of the region and the keyboard's
+/// top, the region's sides kept, since the owner view's region does not
+/// follow the keyboard (D7). `None` on an edge with no region, and for a
+/// root that is no owner or has no bars.
+fn region_slots(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [Option<[f32; 3]>; 4] {
+    let regions = arena.observations.bars.regions.get(&held.slot);
+    let Some(regions) =
+        regions.filter(|_| is_owner(arena, held) && super::bar::has_bars(arena, held.slot))
+    else {
+        return [None; 4];
+    };
+    let cover = super::keyboard::cover(arena, held.slot);
+    std::array::from_fn(|e| {
+        regions[e].map(|r| {
+            let (a, b) = if e % 2 == 0 { (3, 1) } else { (0, 2) };
+            [
+                r.distance.max(cover[e]) - clear[e],
+                r.sides[0] - clear[a],
+                r.sides[1] - clear[b],
+            ]
+        })
+    })
+}
+
 /// [`cleared`] with the edges its root takes of the container region taken,
 /// where `taking`, or none of them.
 fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
@@ -182,7 +212,14 @@ fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
     let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
     let cover = super::keyboard::cover(arena, held.slot);
     match reservation::reserved(arena, held.slot) {
-        Some(r) => r.inside_covered(band, cover),
+        // Its additional insets as UIKit applied them where its host wrote and measured them, which a
+        // child controller's floor can hold short of a negative one, as the incoming band does (D11)
+        Some(mut r) => {
+            if let Some(effect) = arena.observations.root_effects.get(&held.slot) {
+                r.added = *effect;
+            }
+            r.inside_covered(band, cover)
+        }
         None => std::array::from_fn(|e| band[e].max(cover[e])),
     }
 }
@@ -236,6 +273,8 @@ pub(crate) struct Blocks(
     Vec<(u32, [f32; 4])>,
     /// The owners in `.1`, for a lookup that finds no owner at once.
     crate::sorted::SlotSet,
+    /// The window's aspect-fit guide a host fits the first root to (LLP 1123 D16, `root_fit.rs`).
+    super::root_fit::RootFits,
 );
 
 /// One node's block: the one in force, the host's or else the one the
@@ -263,6 +302,9 @@ pub(crate) struct Held {
     /// How far past its content root's edge its bars' slots began when it
     /// was last laid out (`bar_slots`).
     slots: [f32; 4],
+    /// Where its region bars' slots lay on each edge when it was last laid
+    /// out (`region_slots`).
+    regions: [Option<[f32; 3]>; 4],
     /// Its content root's width and height where its host fixes them, as
     /// they were when it was last laid out: what container units below read
     /// (`owner::container_at`, LLP 1123 D16).
@@ -273,6 +315,13 @@ pub(crate) struct Held {
 }
 
 impl Blocks {
+    pub(crate) fn root_fits(&self) -> &super::root_fit::RootFits {
+        &self.3
+    }
+    pub(crate) fn root_fits_mut(&mut self) -> &mut super::root_fit::RootFits {
+        &mut self.3
+    }
+
     /// The block `slot` has, its host's or the kernel's.
     pub(crate) fn get(&self, slot: u32) -> Option<HostBlock> {
         self.held(slot).map(|b| b.block)
@@ -288,6 +337,11 @@ impl Blocks {
     /// takes.
     pub(crate) fn bar_slots(&self, slot: u32) -> [f32; 4] {
         self.held(slot).map_or([0.0; 4], |b| b.slots)
+    }
+
+    /// Where `slot`'s region bars' slots lay when it was last laid out (`region_slots`).
+    pub(crate) fn region_slots(&self, slot: u32) -> [Option<[f32; 3]>; 4] {
+        self.held(slot).map_or([None; 4], |b| b.regions)
     }
 
     /// Whether `slot`'s bars' slots would begin elsewhere than at its last
@@ -412,6 +466,7 @@ impl Blocks {
                 shown: BlockShown::InStack,
                 cleared: [0.0; 4],
                 slots: [0.0; 4],
+                regions: [None; 4],
                 content: [None; 2],
                 read_off: Default::default(),
             }),
@@ -424,7 +479,8 @@ impl Blocks {
 /// host replaced whole, which hides every block in it (a tab not yet built,
 /// LLP 1075.003 §9.12); under a box a bar replaced with no block its host
 /// gave on the way down to `slot`, `slot`'s own included, since the bar shows
-/// such a block in a view of its own; or, with `authored`, under a box
+/// such a block in a view of its own; under a box a bar keeps the room of,
+/// which shows nothing it holds; or, with `authored`, under a box
 /// authored `display: none`. `itself`: `slot`'s own cover counts too.
 fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool {
     let mut given = false;
@@ -435,6 +491,7 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
             match arena.cover(s) {
                 Some(super::HostCover::Whole) => return true,
                 Some(super::HostCover::Bar) if !given => return true,
+                Some(super::HostCover::Room(_)) if above => return true,
                 _ => {}
             }
         }
@@ -445,6 +502,14 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
         at = arena.parent(s);
     }
     false
+}
+
+pub(crate) fn closed_dialog(arena: &NodeArena, slot: u32) -> bool {
+    // A root takes no block: measuring it lays it out in its offer
+    let measured_root = arena.is_root(slot) && arena.alert_state.measured_dialogs.contains(slot);
+    !measured_root
+        && !arena.blocks.holds(slot)
+        && arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
 }
 
 /// Whether an ancestor of `slot` is `display: none`, as authored or as a box
@@ -474,7 +539,10 @@ pub(crate) fn publication_start(arena: &mut NodeArena, root: u32) -> (bool, bool
         hidden_above(arena, root) || arena.cover(root).is_some_and(super::HostCover::replaces);
     let whole = arena.flags(root).has(NodeFlags::ATTACHED);
     let Some(held) = arena.blocks.held_mut(root) else {
-        return (false, false, (0.0, 0.0));
+        // A root the window's aspect-fit guide places starts at the guide's origin (LLP 1123 D16)
+        let key = arena.key(root);
+        let (origin, moved) = arena.blocks.root_fits_mut().publish(key);
+        return (false, moved, origin);
     };
     let was = std::mem::replace(&mut held.hidden, hidden);
     let [top, _, _, left] = held.cleared;
@@ -504,7 +572,12 @@ pub(crate) fn apply(
     block: Option<HostBlock>,
     s: &mut taffy::style::Style,
 ) {
-    let Some(block) = block else { return };
+    let Some(block) = block else {
+        if closed_dialog(arena, slot) {
+            s.display = taffy::Display::None;
+        }
+        return;
+    };
     if replaced_above(arena, slot) {
         s.display = taffy::style::Display::None;
         return;
@@ -592,7 +665,7 @@ fn cyclic(block: HostBlock, s: &mut taffy::style::Style) {
     let cyclic = |d: taffy::Dimension| {
         let raw = d.into_raw();
         raw.tag() == CompactLength::PERCENT_TAG
-            || (raw.is_calc() && calc_has_percent(raw.calc_value()))
+            || (raw.has_calc() && calc_has_percent(raw.calc_value()))
     };
     let clear =
         |size: &mut taffy::Dimension, min: &mut taffy::Dimension, max: &mut taffy::Dimension| {
@@ -649,8 +722,11 @@ impl Kernel {
                 Some("a root is laid out in its offer")
             } else if self.arena.in_paragraph(slot) {
                 Some("an inline run or image has no box of its own")
-            } else if self.region.is_some() && !self.arena.top_layer_slots.contains(slot) {
-                Some("only a top-layer block while a content region is registered")
+            } else if self.region.is_some()
+                && !self.arena.top_layer_slots.contains(slot)
+                && self.arena.props(slot).str(crate::PropId::SemanticTag) != Some("dialog")
+            {
+                Some("only a top-layer or dialog block while a content region is registered")
             } else {
                 None
             };
@@ -663,6 +739,7 @@ impl Kernel {
         // Measure the readers under a box that gains or gives back a block again, which
         // changes the band they observe; a reader elsewhere that this moves has a frame
         // that moved
+        let was_owner = owns(&self.arena, slot);
         let placed = self.arena.blocks.given(slot).is_some() != block.is_some();
         if placed {
             self.arena.observations.moved(slot);
@@ -681,7 +758,14 @@ impl Kernel {
         // Derive the owner segments' readers below a box whose host starts or stops placing
         // it while its implied block stands
         if placed && before.is_some() && self.arena.blocks.get(slot).is_some() {
-            self.segments_moved(slot);
+            if was_owner != owns(&self.arena, slot) {
+                // A native sheet can take over a measured dialog at the same size.
+                self.restyle_block(slot);
+                self.resize_content_root(slot);
+                self.targets_moved(slot);
+            } else {
+                self.segments_moved(slot);
+            }
         }
         Ok(())
     }
@@ -718,7 +802,8 @@ impl Kernel {
     /// to be another, and each block root to be styled again.
     fn implied_changes(&self) -> (Vec<(u32, Option<HostBlock>)>, Vec<u32>) {
         let arena = &self.arena;
-        if arena.top_layer_slots.is_empty() && !arena.blocks.any() {
+        let dialogs = &arena.alert_state.measured_dialogs;
+        if arena.top_layer_slots.is_empty() && dialogs.is_empty() && !arena.blocks.any() {
             return (Vec::new(), Vec::new());
         }
         let (env, lifted) = (arena.env(), &arena.top_layer_slots);
@@ -728,15 +813,40 @@ impl Kernel {
             width: BlockAxis::Fit(width),
             height: BlockAxis::Fit(height),
         });
+        // A terminal or an intrinsic measurement can leave one viewport axis
+        // indefinite. On that axis the dialog sizes to its content.
+        let dialog_axis = |length| {
+            if length > 0. {
+                BlockAxis::Fit(length)
+            } else {
+                BlockAxis::Content(0.)
+            }
+        };
+        let dialog_block = HostBlock {
+            tactic: Default::default(),
+            width: dialog_axis(width),
+            height: dialog_axis(height),
+        };
         let mut slots = arena.blocks.implied_slots();
         slots.extend(lifted.iter().filter(|s| arena.blocks.implied(*s).is_none()));
+        slots.extend(
+            dialogs
+                .iter()
+                .filter(|s| !lifted.contains(*s) && arena.blocks.implied(*s).is_none()),
+        );
         let wants: Vec<_> = slots
             .into_iter()
             .map(|slot| {
                 let boxed = !arena.is_root(slot)
                     && !arena.in_paragraph(slot)
                     && arena.cover(slot) != Some(super::HostCover::Whole);
-                (slot, viewport.filter(|_| lifted.contains(slot) && boxed))
+                let wanted = if arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
+                {
+                    (boxed && dialogs.contains(slot)).then_some(dialog_block)
+                } else {
+                    viewport.filter(|_| boxed && lifted.contains(slot))
+                };
+                (slot, wanted)
             })
             .filter(|&(slot, want)| arena.blocks.implied(slot) != want)
             .collect();
@@ -762,6 +872,18 @@ impl Kernel {
     fn resize_content_root(&mut self, slot: u32) {
         let sized = super::readers::container_readers(&self.arena, slot);
         self.restyle_readers(&sized);
+        // Resolve the relative rows in container units again, which are resolved apart from
+        // the others (`txn::relative`)
+        let mut queued = false;
+        for &s in &sized {
+            queued |= super::owner::queue_contained(&mut self.arena, s);
+        }
+        if queued {
+            let mut unmirrored = crate::layout::Unmirrored;
+            let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+            let mut receipt = crate::CommitReceipt::default();
+            crate::txn::relative::resolve(&mut self.arena, layout, &mut Vec::new(), &mut receipt);
+        }
     }
 
     /// Whether the host shows `view`, a block it gave, as a navigation bar's
@@ -808,7 +930,7 @@ impl Kernel {
 
     /// `slot`'s block root styled again, as its block or what is above it
     /// now says.
-    fn restyle_block(&mut self, slot: u32) {
+    pub(super) fn restyle_block(&mut self, slot: u32) {
         let buried = replaced_above(&self.arena, slot);
         if let Some(held) = self.arena.blocks.held_mut(slot) {
             held.buried = buried;
@@ -1040,10 +1162,12 @@ impl Kernel {
     fn clear_block(&mut self, i: usize, clear: [f32; 4]) -> (u32, Offer) {
         let content = fixed_lengths(&self.arena, &self.arena.blocks.0[i], clear);
         let slots = bar_slots(&self.arena, &self.arena.blocks.0[i], clear);
+        let regions = region_slots(&self.arena, &self.arena.blocks.0[i], clear);
         let held = &mut self.arena.blocks.0[i];
         let (slot, inner) = (held.slot, held.block.less(clear));
         let was = std::mem::replace(&mut held.cleared, clear);
         let slotted = std::mem::replace(&mut held.slots, slots) != slots;
+        let slotted = (std::mem::replace(&mut held.regions, regions) != regions) || slotted;
         // Derive the container readers again where the content root's fixed lengths
         // moved, or where one was derived against others since the last layout
         let moved = std::mem::replace(&mut held.content, content) != content;

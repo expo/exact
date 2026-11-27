@@ -832,3 +832,92 @@ fn active_translate_refuses_a_third_axis() {
         );
     }
 }
+
+#[test]
+fn state_folds_preserve_per_arm_written_provenance() {
+    use exact_kernel::style::roles::role;
+    use exact_kernel::{Color, ColorValue, StyleMask};
+    let mut r = booted(
+        r##"style Muted
+  color = "#888888"
+style Plain
+  opacity = 0.8
+component App
+  state off = false
+  state muted = false
+  action flip_off
+    off = !off
+  action flip_muted
+    muted = !muted
+  view
+    column
+      list appearance="auto" disabled=off testId="list"
+        :disabled
+          background-color = "#ff0000"
+        section
+          row
+            text "Item"
+      link href="/next" disabled=off testId="link"
+        :disabled
+          color = "#888888"
+        image "symbol:star" testId="sym"
+        text "Next"
+      link href="/next" class=(muted ? Muted : Plain) disabled=off testId="combo"
+        :disabled
+          color = "#000000"
+        text "Combo"
+"##,
+    );
+    let red = ColorValue::Fixed(Color::rgba(255, 0, 0, 255));
+    let link_color = ColorValue::Role(role("LinkText").unwrap());
+    let muted_color = ColorValue::Fixed(Color::rgba(0x88, 0x88, 0x88, 255));
+    let black = ColorValue::Fixed(Color::rgba(0, 0, 0, 255));
+
+    // Grouped list ground (`-exact-grouped-ground`) stays unwritten when
+    // enabled, while `:disabled background-color="#ff0000"` arrives written.
+    // Link `LinkText` stays unwritten when enabled, while `:disabled color`
+    // arrives written and sets `symbol_color_said()`.
+    for off in [false, true, false] {
+        let k = r.kernel();
+        let list = k.node_by_key(k.find_by_test_id("list")[0]).unwrap();
+        assert!(list.style.mask.has(StyleId::BackgroundColor));
+        assert_eq!(list.style.written.has(StyleId::BackgroundColor), off);
+        if off {
+            assert_eq!(list.style.background_color, Some(red));
+        } else {
+            assert_ne!(list.style.background_color, Some(red));
+        }
+        let link = k.node_by_key(k.find_by_test_id("link")[0]).unwrap();
+        let sym = k.node_by_key(k.find_by_test_id("sym")[0]).unwrap();
+        assert_eq!(
+            link.computed_style(StyleMask::of(StyleId::TextColor))
+                .text_color,
+            if off { muted_color } else { link_color }
+        );
+        assert_eq!(link.style.written.has(StyleId::TextColor), off);
+        assert_eq!(sym.symbol_color_said(), off);
+        r.act("flip_off", vec![]).unwrap();
+    }
+    // Restore `off = false` after 3 flips.
+    r.act("flip_off", vec![]).unwrap();
+
+    // Combined `class=(muted ? Muted : Plain)` + `:disabled` over implied `LinkText`.
+    let combo = |r: &Runner<Source>| {
+        let k = r.kernel();
+        let node = k.node_by_key(k.find_by_test_id("combo")[0]).unwrap();
+        (
+            node.computed_style(StyleMask::of(StyleId::TextColor))
+                .text_color,
+            node.style.written.has(StyleId::TextColor),
+        )
+    };
+    assert_eq!(combo(&r), (link_color, false));
+    r.act("flip_muted", vec![]).unwrap();
+    assert_eq!(combo(&r), (muted_color, true));
+    r.act("flip_off", vec![]).unwrap();
+    assert_eq!(combo(&r), (black, true));
+    r.act("flip_muted", vec![]).unwrap();
+    assert_eq!(combo(&r), (black, true));
+    r.act("flip_off", vec![]).unwrap();
+    assert_eq!(combo(&r), (link_color, false));
+}

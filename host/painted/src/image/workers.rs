@@ -129,10 +129,6 @@ pub(super) struct Backend {
     budget_notice: Mutex<Option<(u64, u64, u64)>>,
     wake_read: Mutex<UnixStream>,
     wake_write: Mutex<UnixStream>,
-    /// The device scale each SVG picture was asked at, by source and
-    /// pixels: with the key's pixels it gives the CSS size the scene
-    /// resolves at (LLP 1011.001 D3), which the key does not carry.
-    scales: Mutex<BTreeMap<(u64, exact_raster::PixelSize), f32>>,
     /// SVG pictures with text, resolved on a worker and waiting for the
     /// paint thread ([`Backend::finish_pictures`]).
     pictures: Mutex<Vec<svg_picture::Pending>>,
@@ -171,7 +167,6 @@ impl Backend {
             budget_notice: Mutex::new(None),
             wake_read: Mutex::new(wake_read),
             wake_write: Mutex::new(wake_write),
-            scales: Mutex::new(BTreeMap::new()),
             pictures: Mutex::new(Vec::new()),
             #[cfg(test)]
             hook: Mutex::new(None),
@@ -386,14 +381,6 @@ impl Backend {
         self.requests.lock().unwrap().insert(id);
         Ok(id)
     }
-    /// The device scale an SVG picture of `source` at `pixels` is asked at.
-    pub fn note_scale(&self, source: u64, pixels: exact_raster::PixelSize, scale: f32) {
-        let mut scales = self.scales.lock().unwrap();
-        if scales.len() >= 4 * (SUBSCRIPTIONS + COLD_ENTRIES) {
-            scales.clear();
-        }
-        scales.insert((source, pixels), scale);
-    }
     /// Paint the SVG pictures waiting for the paint thread with `text`,
     /// completing their permits as a worker completes a raster's.
     pub fn finish_pictures(&self, text: &crate::text::Shared) {
@@ -570,13 +557,7 @@ impl Backend {
                 // The parse and the scene precede the charge: the picture is
                 // allocated by the painter, after it (as `charge` precedes
                 // a raster's output).
-                let scale = self
-                    .scales
-                    .lock()
-                    .unwrap()
-                    .get(&(key.source, key.pixels))
-                    .copied()
-                    .unwrap_or(1.0);
+                let scale = svg_picture::scale_from_crop(key.crop);
                 let mut text = Vec::with_capacity(bytes as usize);
                 input
                     .read_to_end(&mut text)
@@ -738,6 +719,8 @@ impl Workers {
                     .spawn(move || {
                         #[cfg(target_os = "android")]
                         crate::android::background_priority();
+                        #[cfg(windows)]
+                        let _wic = super::jpeg_decode::Worker::enter();
                         owner.run()
                     })
                     .expect("PNG worker");

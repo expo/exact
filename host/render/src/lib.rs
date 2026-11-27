@@ -368,7 +368,7 @@ pub(crate) fn render_with_faults_at<D: DataSource + 'static, F: Fn() -> D>(
         None
     };
     let (checkpoint, settled, clocked) = (page.checkpoint.clone(), page.settled, page.clocked);
-    let mut drew = page.runner.store().entropy_draws() > 0;
+    let mut drew = ambient_tainted(&mut page.runner);
     retire(page, data);
     // @ref LLP 1048.000 D6 — the document is the checkpoint's projection,
     // from a runner booted from the page's checkpoint with a fresh source,
@@ -399,8 +399,8 @@ pub(crate) fn render_with_faults_at<D: DataSource + 'static, F: Fn() -> D>(
             booted
                 .build_every_tab()
                 .map_err(|e| format!("boot from the checkpoint: {e:?}"))?;
-            // An open stream is asked again at boot, and its source may draw
-            drew |= booted.store().entropy_draws() > 0;
+            // An open stream is asked again at boot, and its source may draw or read the ambient clock
+            drew |= ambient_tainted(&mut booted);
             (
                 project_for(ids)(&booted).map_err(|e| e.to_string())?,
                 booted.handlers(),
@@ -586,6 +586,13 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     })
 }
 
+/// Whether a render drew randomness or read the ambient clock (including module-level taint,
+/// LLP 1195.000 D2.4): such a page is neither shared across readers nor emitted by `render=build`.
+pub(crate) fn ambient_tainted<D: DataSource>(runner: &mut Runner<D>) -> bool {
+    let (clock, entropy) = runner.data().ambient_taint("");
+    runner.store().entropy_draws() > 0 || runner.store().clock_reads() > 0 || clock || entropy
+}
+
 /// A settled render's runner, done with: its realm kept warm
 /// (`EXACT_RENDER_REALMS=warm`, a render that settled and drew nothing,
 /// since its module may hold a draw, which is the device's: LLP 1069.005
@@ -600,7 +607,7 @@ pub(crate) fn retire<D: DataSource + 'static, F: Fn() -> D>(page: Settling<D>, d
     if warm_realms()
         && runner.faults().is_empty()
         && !matches!(settled, Settled::Deadline)
-        && runner.store().entropy_draws() == 0
+        && !ambient_tainted(&mut runner)
     {
         let used = std::mem::replace(runner.data(), Anonymous::new(data()));
         REALMS.with(|p| p.borrow_mut().push(Box::new(used)));

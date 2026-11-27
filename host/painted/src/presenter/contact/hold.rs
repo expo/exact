@@ -3,7 +3,7 @@ use super::HeldKind;
 use exact_motion::{HoldStart, Value, VelocityTracker};
 
 pub(in crate::presenter) struct Hold {
-    pub(in crate::presenter) primary: HoldStart,
+    pub(in crate::presenter) primary: Option<HoldStart>,
     pub(in crate::presenter) velocity: VelocityTracker,
     pub(in crate::presenter) kind: HeldKind,
     /// The newest sample's input time (ms) and the input's travel then, for
@@ -13,6 +13,11 @@ pub(in crate::presenter) struct Hold {
     pub(in crate::presenter) lifting: bool,
 }
 impl Hold {
+    /// All gestures except a shared list own a motion property at recognition.
+    pub(in crate::presenter) fn motion(&self) -> HoldStart {
+        self.primary.expect("gesture has taken its motion property")
+    }
+
     /// Record the held `value` at `at_ms`, the input's own time, which the
     /// release velocity reads (LLP 1057.001 §3), after `input` of travel. A
     /// lift where the input already was, soon after, is no sample
@@ -30,5 +35,58 @@ impl Hold {
     pub(in crate::presenter) fn release_velocity(&self) -> Value {
         self.sampled
             .map_or(Value::ZERO, |(at, _)| self.velocity.estimate(at / 1000.))
+    }
+}
+
+impl<D: super::DataSource> super::Presenter<D> {
+    pub(in crate::presenter) fn pending_arrange(
+        &self,
+    ) -> Option<(exact_runner::ReorderBinding, (f32, f32))> {
+        let c = self.contact.as_ref()?;
+        if self.contact_has_gesture() || c.retained.is_some() || c.canvas.is_some() {
+            return None;
+        }
+        c.candidate
+            .into_iter()
+            .chain(c.rest.iter().copied())
+            .find_map(|candidate| {
+                let super::Candidate::Arrange(binding) = candidate else {
+                    return None;
+                };
+                (self.input_live(binding.handle)
+                    && self.host.runner().reorder_binding(binding.handle) == Some(binding))
+                .then_some((binding, c.origin))
+            })
+    }
+
+    pub(in crate::presenter) fn lift_arrange(
+        &mut self,
+        binding: exact_runner::ReorderBinding,
+        now: f64,
+    ) -> bool {
+        let Some(mut contact) = self.contact.take() else {
+            return false;
+        };
+        match self.begin_arrange(binding, now) {
+            Ok(Some(held)) => {
+                contact.hold = Some(held);
+                contact.origin = contact.position;
+                contact.candidate = Some(super::Candidate::Arrange(binding));
+                contact.rest.clear();
+                if let Some(key) = contact.feedback.take() {
+                    self.press_feedback(key, super::Edge::Cancel, now);
+                }
+                self.clear_pending_sheet_drag();
+                self.contact = Some(contact);
+                true
+            }
+            result => {
+                if let Err(error) = result {
+                    self.host.log(error);
+                }
+                self.contact = Some(contact);
+                false
+            }
+        }
     }
 }

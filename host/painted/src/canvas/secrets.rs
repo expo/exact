@@ -50,6 +50,11 @@ pub unsafe fn attach(env: *mut JNIEnv) {
     }
 }
 
+/// Whether the Android reader APK's Keystore JNI bridge is attached in this process.
+pub(crate) fn is_attached() -> bool {
+    READER.get().is_some()
+}
+
 /// The reader's Keystore, asked synchronously.
 pub(crate) fn crypt(op: u32, request: &str, value: &str) -> Result<String, String> {
     let reader = READER

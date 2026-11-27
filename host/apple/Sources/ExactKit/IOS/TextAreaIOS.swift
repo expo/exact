@@ -196,6 +196,29 @@ package final class TextArea: UITextView {
     }
 
     weak var owner: NodeView?
+    /// Whether the text fits its box, as a browser's textarea scrolls only
+    /// text that overflows: its laid-out height and vertical inset, within
+    /// half a device pixel of the box, which absorbs the arithmetic between
+    /// the kernel's layout and TextKit's. UIKit's content size rounds up to a
+    /// whole point (one line of 17-point text filling a 20.287-point field
+    /// measures 21), so it cannot tell.
+    var fits: Bool {
+        // The usage reaches the empty line a trailing newline leaves for the
+        // caret, as the kernel measures it (LLP 1008); so does TextKit 1's used
+        // rect, after a fallback, once the glyphs are laid out (it lays out none)
+        let text = textLayoutManager.map { $0.usageBoundsForTextContainer.height } ?? {
+            layoutManager.ensureLayout(for: textContainer)
+            return layoutManager.usedRect(for: textContainer).height
+        }()
+        return text + textContainerInset.top + textContainerInset.bottom <= bounds.height + 0.5 / max(1, traitCollection.displayScale)
+    }
+    /// A person drags only text that overflows: UIKit would scroll a fitting
+    /// field by the fraction its content size rounds up, and the drag would
+    /// be the field's and no ancestor's
+    package override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        if gesture === panGestureRecognizer, fits { return false }
+        return super.gestureRecognizerShouldBegin(gesture)
+    }
     /// The hardware key whose handlers ran in `pressesBegan`: UIKit's own
     /// newline or deletion for it does not run them again (`TextField.heard`).
     var heard: String?
@@ -436,6 +459,22 @@ package final class TextArea: UITextView {
         typingAttributes.merge(attributes) { _, authored in authored }
     }
     var placeholder = "" { didSet { setNeedsDisplay() } }
+    /// The size layout last saw (`layoutSubviews`).
+    private var lastLayoutSize = CGSize.zero
+    // What `draw` paints (the placeholder, the decorations' lines) is laid
+    // out across the view's size, so a new size draws it again: under the
+    // view's `scaleToFill` its old picture would be stretched to the new
+    // bounds, a placeholder squeezed sideways as a field narrows (a docked
+    // composer, the keys put away as the app leaves). Checked after layout,
+    // which a new size reaches however it is set (`frame`, `bounds`, the
+    // layer), not in the `bounds` setter, which a new `frame` does not call;
+    // not `.redraw`, which also draws again at every scroll offset.
+    package override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.size != lastLayoutSize else { return }
+        lastLayoutSize = bounds.size
+        if decorations?.drawsLines == true || (!placeholder.isEmpty && !hasText) { setNeedsDisplay() }
+    }
     /// The authored `::placeholder` colour (LLP 1104 D3); nil, UIKit's.
     package var placeholderColor: UIColor?
     // A scroll view's own drawing does not move with its content: the
@@ -632,10 +671,13 @@ extension NodeView {
         if isNativeTextControl {
             area.frame = bounds
             if let r = kernelContentBox {
-                // Layout's inset less what the drawn box lost to the pixel
-                // grid, so the text keeps layout's width (`PixelGridIOS.swift`).
-                area.textContainerInset = UIEdgeInsets(top: r.minY, left: r.minX, bottom: max(0, layoutBounds.height - r.maxY) + bounds.height - layoutBounds.height,
-                                                       right: max(0, layoutBounds.width - r.maxX) + bounds.width - layoutBounds.width)
+                // Layout's inset less what the drawn box lost to the pixel grid, so the text keeps
+                // layout's width (`PixelGridIOS.swift`), and past what reach draws the box beyond its
+                // laid-out frame, its bounds' origin, so reach never moves the text (LLP 1123 D15)
+                let o = bounds.origin
+                area.textContainerInset = UIEdgeInsets(top: r.minY - o.y, left: r.minX - o.x,
+                                                       bottom: max(0, layoutBounds.height - r.maxY) + bounds.height - layoutBounds.height + o.y,
+                                                       right: max(0, layoutBounds.width - r.maxX) + bounds.width - layoutBounds.width + o.x)
             }
         } else { area.frame = contentBox() }
         layoutResizeGrip()
@@ -646,9 +688,11 @@ extension NodeView {
     /// shows changes nothing, so a composition and its selection stand. A
     /// different one is held while text is marked, the last one written,
     /// and applied when the composition ends (`FieldComposition.swift`).
-    func writeValue(_ value: String, into f: UITextView) {
+    func writeValue(_ value: String, into f: UITextView, heldFilter: Bool? = nil) {
+        let filtered = heldFilter ?? (presenter?.fieldSelections.inputSource == id && fieldIsTextEntry)
         if (f.text ?? "").utf16.elementsEqual(value.utf16) { pendingValue = nil; return }
-        if f.markedTextRange != nil { pendingValue = value; return }
+        if f.markedTextRange != nil { pendingFiltered = filtered; pendingValue = value; return }
+        let direction = filtered ? presenter?.fieldSelections.current(self).direction : nil
         pendingValue = nil
         toldText = nil
         guard let edit = minimalTextEdit(from: f.text ?? "", to: value) else { return }
@@ -661,7 +705,8 @@ extension NodeView {
         } else {
             f.textStorage.replaceCharacters(in: edit.range, with: NSAttributedString(string: edit.text, attributes: f.typingAttributes))
         }
-        f.selectedRange = carrySelection(selection, through: edit)
+        f.selectedRange = carrySelection(selection, through: edit, filtered: filtered)
+        presenter?.fieldSelections.carried(self, direction: direction)
         (f as? TextArea)?.markup?.bookmark = f.selectedRange
         restyleMarkup()
     }
@@ -699,7 +744,7 @@ extension NodeView {
         if let editor = (textView as? TextArea)?.markup, editor.applying || editor.styling { return }
         textView.setNeedsDisplay()
         if !disabled { typedText(textView.text ?? "") }
-        if textView.markedTextRange == nil, let held = pendingValue { writeValue(held, into: textView) }
+        if textView.markedTextRange == nil, let held = pendingValue { writeValue(held, into: textView, heldFilter: pendingFiltered) }
         configureMarkup()
         restyleMarkup()
         applyBaseDirection(to: textView) // an undo brings back the attributes of the text it restores

@@ -71,9 +71,9 @@ public final class AssetResolver {
 
     /// An asset's bytes. Content chooses names (a frame's `src`, a guest page's request), so one that is no asset's, valid
     /// or not, is absent and refuses nothing; an asset that fails to read refuses the generation.
-    package func bytes(_ name: String) -> Data? {
+    package func bytes(_ name: String, cacheBytes: Bool = true) -> Data? {
         guard Self.validPath(name) else { return nil }
-        do { return try delivery(name) } catch { refuse(error.localizedDescription); return nil }
+        do { return try delivery(name, cacheBytes: cacheBytes) } catch { refuse(error.localizedDescription); return nil }
     }
 
     private func refuse(_ why: String) {
@@ -89,7 +89,7 @@ public final class AssetResolver {
     /// Safe on any thread. The bytes are read outside the lock, from a file or
     /// the provider, so a read that blocks (a texture a GPU canvas reads off the
     /// main thread, a file a privacy check holds) holds up no other lookup.
-    package func delivery(_ name: String) throws -> Data? {
+    package func delivery(_ name: String, cacheBytes: Bool = true) throws -> Data? {
         let source: Source
         do {
             lock.lock(); defer { lock.unlock() }
@@ -108,7 +108,7 @@ public final class AssetResolver {
         case .provider(let read):
             let bytes: Data?
             do { bytes = try read(name) } catch { refuse(error.localizedDescription); return nil }
-            if let bytes, !name.hasSuffix(".tex") { lock.lock(); cache[name] = bytes; lock.unlock() }
+            if let bytes, cacheBytes, !name.hasSuffix(".tex") { lock.lock(); cache[name] = bytes; lock.unlock() }
             return bytes
         case .file(let file, let embedded):
             do { return try Data(contentsOf: file) }
@@ -122,14 +122,14 @@ public final class AssetResolver {
         return error.code == .fileReadNoSuchFile || posix == .EISDIR || posix == .ENOTDIR
     }
 
-    package func url(_ name: String, maximumBytes: Int? = nil) -> URL? {
+    package func url(_ name: String, maximumBytes: Int? = nil, cacheBytes: Bool = true) -> URL? {
         do {
             lock.lock(); defer { lock.unlock() }
             guard isComplete else { return embeddedURL(name) }
             if let url = files[name] { return url }
         }
         // Read outside the lock, as `bytes` does; materialize under it.
-        guard let bytes = bytes(name) else { return nil }
+        guard let bytes = bytes(name, cacheBytes: cacheBytes) else { return nil }
         if let maximumBytes, bytes.count > maximumBytes { return nil }
         lock.lock(); defer { lock.unlock() }
         if let url = files[name] { return url } // another thread materialized it meanwhile
@@ -152,7 +152,7 @@ public final class AssetResolver {
     /// generation and the file is there; a complete generation has none.
     package func bundledURL(_ name: String) -> URL? {
         lock.lock(); defer { lock.unlock() }
-        guard !isComplete, let url = embeddedURL(name), FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard !isComplete, let url = embeddedURL(name) else { return nil }
         return url
     }
 
@@ -183,7 +183,9 @@ public final class AssetResolver {
     private func embeddedURL(_ name: String) -> URL? {
         guard Self.validPath(name) else { return nil }
         let url = base.appendingPathComponent(name).standardizedFileURL.resolvingSymlinksInPath()
-        return url.path.hasPrefix(base.path + "/") ? url : nil
+        guard url.path.hasPrefix(base.path + "/") else { return nil }
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && !isDir.boolValue ? url : nil
     }
 }
 

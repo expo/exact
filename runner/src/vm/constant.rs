@@ -40,7 +40,7 @@ pub fn eval_constant(
         store_dependent_resources: (&[]).into(),
     };
     let (result, (read, accounting)) =
-        eval_machine_main::<true, _>(code, &env, &[], &mut Scratch::default(), |run| {
+        eval_machine_main::<true, _>(code, &env, &[], &mut Scratch::default(), None, |run| {
             (
                 run.refused_read.clone(),
                 Accounting {
@@ -80,7 +80,8 @@ pub(super) fn read(plan: &Plan, ins: &Instruction) -> Option<String> {
             if !f.localized()
                 && !matches!(
                     f,
-                    Stdlib::PerformanceNow
+                    Stdlib::FormatShortcut
+                        | Stdlib::PerformanceNow
                         | Stdlib::T
                         | Stdlib::Frame
                         | Stdlib::RangeFrame

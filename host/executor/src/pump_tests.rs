@@ -5,7 +5,7 @@ use crate::pump::Pump;
 fn a_bounded_pump_keeps_the_ready_lanes_alternating() {
     let (core, _fixture, woke) = setup();
     for ticket in 0..3 {
-        core.again(ticket).unwrap();
+        core.again(ticket, RequestClass::Local).unwrap();
         core.run(
             job(
                 10 + ticket,

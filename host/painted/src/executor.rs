@@ -135,7 +135,7 @@ impl Executor {
     /// Called only after the runner has no retained ordered admission refusals.
     /// Admits the ordered requests held behind them; returns any of those
     /// refused at a limit, for the host to record on their tickets.
-    pub fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
+    pub fn resume_ordered(&self) -> Vec<(u64, String)> {
         self.core.resume_ordered()
     }
     /// Let go of the work for tickets the runner no longer holds.
@@ -154,11 +154,11 @@ impl Executor {
     /// Settle a re-ask (`Dispatch::Again`) in its ordered place, with no
     /// work (LLP 1041 §8.4, amended 2026-10-09); kept pending while the
     /// window is full. An error is terminal, for the host to record.
-    pub fn again(&self, request: &RequestOut) -> Result<(), &'static str> {
-        self.core.again(request.ticket)
+    pub fn again(&self, request: &RequestOut) -> Result<(), String> {
+        self.core.again(request.ticket, request.class)
     }
     /// Admit work, or return a refusal without an overflow queue.
-    pub fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), &'static str> {
+    pub fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), String> {
         self.core.run_owned(request, work)
     }
     /// Acknowledge a coalesced wake, including turns used by refusal settlement.

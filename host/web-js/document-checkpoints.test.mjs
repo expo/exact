@@ -251,3 +251,39 @@ export async function answer(name: string, args: unknown[]) {
     expect(requests).toBe(8);
   } finally { backend.stop(true); rmSync(dir, {recursive: true, force: true}); }
 }, 180_000);
+
+test('checkpoint replay credits each captured press once', async () => {
+  const checkpoint = readFileSync(resolve(root, 'host/web-js/page-checkpoint.js'), 'utf8');
+  const modules = {
+    '/page-checkpoint.js': checkpoint,
+    '/web/faults.js': 'export const checkpointFaults = () => [];',
+    '/mount.js': 'export const documents = d => { globalThis.replay = () => d.early(() => {})(); };',
+    '/navigation.js': 'export const clickFromInput = (target, input) => credits.push(input);',
+    '/clock.js': 'export const clock = {}, agentMode = () => false;',
+    '/route-pattern.js': 'export const canonical = s => s;',
+    '/rt.js': 'export const say = () => {};',
+  };
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response('<button data-exact-on="press">Press</button>', { headers: { 'content-type': 'text/html' } });
+    return new Response(modules[path], { status: modules[path] ? 200 : 404, headers: { 'content-type': 'text/javascript' } });
+  } });
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      await import('/page-checkpoint.js');
+      const taps = [];
+      globalThis.exact = { taps: () => taps };
+      globalThis.credits = [];
+      document.querySelector('button').onclick = event => {
+        const tap = { type: 'click', target: event.currentTarget, event };
+        taps.push(tap, { ...tap });
+      };
+    });
+    await page.getByText('Press').click();
+    await page.getByText('Press').click();
+    expect(await page.evaluate(() => { replay(); return credits; })).toEqual([true, false, true, false]);
+  } finally { await browser.close(); server.stop(true); }
+});

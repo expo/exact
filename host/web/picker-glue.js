@@ -172,11 +172,15 @@ globalThis.exact.picker = function install(host) {
         size.width = bitmap.width; size.height = bitmap.height; bitmap.close();
       } else if (file.type.startsWith('video/')) {
         const video = document.createElement('video'), url = URL.createObjectURL(file);
-        video.preload = 'metadata'; video.muted = true;
-        await new Promise((resolve, reject) => { video.onloadedmetadata = resolve; video.onerror = reject; video.src = url; });
-        size.width = video.videoWidth; size.height = video.videoHeight;
-        if (Number.isFinite(video.duration)) size.duration = video.duration;
-        URL.revokeObjectURL(url);
+        try {
+          video.preload = 'metadata'; video.muted = true;
+          await new Promise((resolve, reject) => { video.onloadedmetadata = resolve; video.onerror = reject; video.src = url; });
+          size.width = video.videoWidth; size.height = video.videoHeight;
+          if (Number.isFinite(video.duration)) size.duration = video.duration;
+        } finally {
+          video.removeAttribute?.('src');
+          URL.revokeObjectURL(url);
+        }
       }
     } catch { /* delivered without the size fields (D3) */ }
     return size;
@@ -220,7 +224,12 @@ globalThis.exact.picker = function install(host) {
       }
       try {
         const handle = await chosen, w = await handle.createWritable();
-        await w.write(bytes); await w.close();
+        try {
+          await w.write(bytes); await w.close();
+        } catch (e) {
+          try { await w.abort?.(); } catch {}
+          throw e;
+        }
         saved(dispatch, r.view, handle.name);
       } catch (e) { unsaved(dispatch, r.view, e?.name === 'AbortError' ? 'saveFile: cancelled' : `saveFile: refused: ${e?.name ?? e}`); }
     },

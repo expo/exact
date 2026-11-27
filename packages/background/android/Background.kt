@@ -108,7 +108,10 @@ class BackgroundModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    override fun resumed() = context.changed("background.backgroundSyncStatus")
+    override fun resumed() {
+        context.changed("background.backgroundSyncStatus")
+        fire()
+    }
 
     private fun error(code: String) = JSONObject().put("error", code)
 
@@ -138,8 +141,9 @@ class BackgroundModule(context: ExtensionContext) : ExactExtension(context) {
 
     // Registrations
 
-    // Persist epoch times: the session clock starts over on each launch.
-    private fun now() = epochAtZero + context.now()
+    // Persist epoch times: outside the agent read live wall time so sleep-pausing
+    // monotonic clocks do not lag behind WorkManager deadlines.
+    private fun now() = if (context.agent) epochAtZero + context.now() else System.currentTimeMillis().toDouble()
 
     private fun read() {
         val kept = try { JSONObject(prefs.getString("tags", "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
@@ -231,7 +235,7 @@ class BackgroundModule(context: ExtensionContext) : ExactExtension(context) {
         when {
             r == null -> done(true)
             "$kind $tag" in raised -> done(true)
-            kind == "sync" && (r.notBefore ?: 0.0) > now() -> done(true)
+            kind == "sync" && (r.notBefore ?: 0.0) > now() -> { enqueue(kind, tag, r); done(true) }
             else -> { context.log("background: WorkManager ran $kind $tag"); raise(kind, tag, done) }
         }
     }

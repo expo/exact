@@ -1,23 +1,31 @@
 //! Neutral top-layer defaults, and the Mac's menu inset; the host admits and
 //! opens the retained subtree.
 use super::*;
-use crate::{generated::metric, style::metrics, Dimension, StyleValue};
+use crate::{
+    generated::metric,
+    style::{metrics, BoxShadow, BoxShadows, Color, ColorValue, Vec2},
+    Dimension, StyleValue,
+};
 use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct State {
     pub prefixes: SlotSet,
+    /// Dialogs whose host needs a viewport box before presenting them.
+    pub measured_dialogs: SlotSet,
     /// Popovers a shown source opened as choosers (`set_popover_source_visible`).
     pub choosers: SlotSet,
 }
 
 impl State {
     pub fn clear(&mut self) {
+        self.measured_dialogs.clear();
         self.prefixes.clear();
         self.choosers.clear();
     }
 
     pub fn remove(&mut self, slot: u32) {
+        self.measured_dialogs.remove(slot);
         self.prefixes.remove(slot);
         self.choosers.remove(slot);
     }
@@ -41,6 +49,24 @@ fn metric_row(s: &mut StyleProps, id: StyleId, metric: usize) {
     let n = metrics::length_in(metric, metrics::Column::Neutral, 16., 16.).unwrap();
     s.set_dynamic(id, &StyleValue::Number(n as f64))
         .expect("alert metric");
+}
+fn drop_shadow(s: &mut StyleProps, y: usize, blur: usize, alpha: usize) {
+    let px = |m| metrics::length_in(m, metrics::Column::Neutral, 16., 16.).unwrap();
+    let crate::MetricValue::Number(alpha) = crate::generated::METRICS[alpha].neutral() else {
+        unreachable!()
+    };
+    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+    // Construct the typed shadow directly instead of invoking the optionally
+    // linked CSS shadow parser, which is absent in production wasm builds that
+    // author no `box-shadow`.
+    s.box_shadow = BoxShadows(vec![BoxShadow {
+        color: ColorValue::Fixed(Color::rgba(0, 0, 0, a)),
+        offset: Vec2 { x: 0.0, y: px(y) },
+        blur: px(blur),
+        spread: 0.0,
+        inset: false,
+    }]);
+    s.mask.set(StyleId::BoxShadow);
 }
 static ALERT: LazyLock<StyleProps> = LazyLock::new(|| {
     let mut s = rows(&[
@@ -74,23 +100,12 @@ static ALERT: LazyLock<StyleProps> = LazyLock::new(|| {
     }
     metric_row(&mut s, StyleId::RowGap, metric::ALERT_GAP);
     metric_row(&mut s, StyleId::ColumnGap, metric::ALERT_ACTION_GAP);
-    let px = |m| metrics::length_in(m, metrics::Column::Neutral, 16., 16.).unwrap();
-    let alpha = match crate::generated::METRICS[metric::MODAL_SHADOW_ALPHA].neutral() {
-        crate::MetricValue::Number(n) => n,
-        _ => unreachable!(),
-    };
-    s.set_dynamic(
-        StyleId::BoxShadow,
-        &StyleValue::Text(
-            format!(
-                "0 {}px {}px rgb(0 0 0 / {alpha})",
-                px(metric::MODAL_SHADOW_Y),
-                px(metric::MODAL_SHADOW_BLUR)
-            )
-            .into(),
-        ),
-    )
-    .unwrap();
+    drop_shadow(
+        &mut s,
+        metric::MODAL_SHADOW_Y,
+        metric::MODAL_SHADOW_BLUR,
+        metric::MODAL_SHADOW_ALPHA,
+    );
     s
 });
 fn surface(s: &mut StyleProps, y: usize, blur: usize, alpha: usize) {
@@ -102,15 +117,7 @@ fn surface(s: &mut StyleProps, y: usize, blur: usize, alpha: usize) {
     ] {
         metric_row(s, id, metric::SURFACE_RADIUS);
     }
-    let px = |m| metrics::length_in(m, metrics::Column::Neutral, 16., 16.).unwrap();
-    let crate::MetricValue::Number(alpha) = crate::generated::METRICS[alpha].neutral() else {
-        unreachable!()
-    };
-    s.set_dynamic(
-        StyleId::BoxShadow,
-        &StyleValue::Text(format!("0 {}px {}px rgb(0 0 0 / {alpha})", px(y), px(blur)).into()),
-    )
-    .unwrap();
+    drop_shadow(s, y, blur, alpha);
 }
 static POPOVER: LazyLock<StyleProps> = LazyLock::new(|| {
     rows(&[
@@ -509,5 +516,41 @@ impl NodeArena {
         if !own.has(StyleId::MaxHeight) {
             s.max_size.height = ceiling.into();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alert_default_shadows_match_css_grammar_without_parsing() {
+        let check = |s: &StyleProps, y: usize, blur: usize, alpha: usize| {
+            let px = |m| metrics::length_in(m, metrics::Column::Neutral, 16., 16.).unwrap();
+            let crate::MetricValue::Number(a) = crate::generated::METRICS[alpha].neutral() else {
+                unreachable!()
+            };
+            let css = format!("0 {}px {}px rgb(0 0 0 / {a})", px(y), px(blur));
+            assert!(s.mask.has(StyleId::BoxShadow));
+            assert_eq!(s.box_shadow, BoxShadows::check(&css).unwrap());
+        };
+        check(
+            &ALERT,
+            metric::MODAL_SHADOW_Y,
+            metric::MODAL_SHADOW_BLUR,
+            metric::MODAL_SHADOW_ALPHA,
+        );
+        check(
+            &RAISED,
+            metric::RAISED_SHADOW_Y,
+            metric::RAISED_SHADOW_BLUR,
+            metric::RAISED_SHADOW_ALPHA,
+        );
+        check(
+            &DIALOG,
+            metric::MODAL_SHADOW_Y,
+            metric::MODAL_SHADOW_BLUR,
+            metric::MODAL_SHADOW_ALPHA,
+        );
     }
 }

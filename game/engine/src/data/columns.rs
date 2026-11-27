@@ -22,6 +22,7 @@ const NONE: u8 = 10;
 const SOME: u8 = 11;
 const BULK: u8 = 12; // + BulkKind
 const BOOL: u8 = 16;
+const MAX_DEPTH: usize = 256;
 
 fn var(out: &mut Vec<u8>, mut n: u64) {
     while n >= 128 {
@@ -433,8 +434,9 @@ impl<'a> Cursor<'a> {
                     .collect::<Result<Vec<_>, _>>()?;
                 let mut ids = self.runs(UNSIGNED, n, r)?;
                 for id in &mut ids {
-                    *id = *table
-                        .get(*id as usize)
+                    *id = *usize::try_from(*id)
+                        .ok()
+                        .and_then(|i| table.get(i))
                         .ok_or_else(|| self.err("dictionary index out of range"))?;
                 }
                 Ok(ids)
@@ -467,6 +469,33 @@ impl<'a> Cursor<'a> {
     }
 }
 
+enum ShapeFrame {
+    Seq(u64),
+    Struct { value: bool },
+    One,
+}
+fn finish_shape_value(stack: &mut Vec<ShapeFrame>) {
+    loop {
+        match stack.last_mut() {
+            Some(ShapeFrame::One) => {
+                stack.pop();
+            }
+            Some(ShapeFrame::Seq(n)) => {
+                *n -= 1;
+                if *n == 0 {
+                    stack.pop();
+                } else {
+                    break;
+                }
+            }
+            Some(ShapeFrame::Struct { value }) => {
+                *value = false;
+                break;
+            }
+            None => break,
+        }
+    }
+}
 // Scalar slots a shape carries, in walk order, checked once per shape.
 fn slots(shape: &[u8], names: usize) -> Result<(Vec<u8>, usize), DataError> {
     let mut c = Cursor {
@@ -474,27 +503,80 @@ fn slots(shape: &[u8], names: usize) -> Result<(Vec<u8>, usize), DataError> {
         pos: 0,
     };
     let (mut kinds, mut blobs) = (Vec::new(), 0);
+    let mut stack = Vec::new();
     while c.pos < shape.len() {
-        match c.byte()? {
-            END | STRUCT | NONE | SOME => {}
-            FIELD => {
-                if c.var()? >= names as u64 {
-                    return Err(c.err("unknown name index"));
+        if matches!(stack.last(), Some(ShapeFrame::Struct { value: false })) {
+            match c.byte()? {
+                END => {
+                    stack.pop();
+                    finish_shape_value(&mut stack);
                 }
+                FIELD => {
+                    if c.var()? >= names as u64 {
+                        return Err(c.err("unknown name index"));
+                    }
+                    if let Some(ShapeFrame::Struct { value }) = stack.last_mut() {
+                        *value = true;
+                    }
+                }
+                _ => return Err(c.err("expected a field")),
+            }
+            continue;
+        }
+        match c.byte()? {
+            t @ (UNSIGNED | SIGNED | F32 | F64 | BOOL) => {
+                kinds.push(t);
+                finish_shape_value(&mut stack);
+            }
+            STRING | 12..=15 => {
+                blobs += 1;
+                finish_shape_value(&mut stack);
+            }
+            NONE => {
+                if stack.len() >= MAX_DEPTH {
+                    return Err(c.err("nesting exceeds 256"));
+                }
+                finish_shape_value(&mut stack);
+            }
+            SOME => {
+                if stack.len() >= MAX_DEPTH {
+                    return Err(c.err("nesting exceeds 256"));
+                }
+                stack.push(ShapeFrame::One);
+            }
+            STRUCT => {
+                if stack.len() >= MAX_DEPTH {
+                    return Err(c.err("nesting exceeds 256"));
+                }
+                stack.push(ShapeFrame::Struct { value: false });
             }
             SEQ => {
-                c.var()?;
+                if stack.len() >= MAX_DEPTH {
+                    return Err(c.err("nesting exceeds 256"));
+                }
+                let n = c.var()?;
+                if n == 0 {
+                    finish_shape_value(&mut stack);
+                } else {
+                    stack.push(ShapeFrame::Seq(n));
+                }
             }
             VARIANT => {
+                if stack.len() >= MAX_DEPTH {
+                    return Err(c.err("nesting exceeds 256"));
+                }
                 c.var()?;
                 if c.var()? >= names as u64 {
                     return Err(c.err("unknown name index"));
                 }
+                stack.push(ShapeFrame::One);
             }
-            t @ (UNSIGNED | SIGNED | F32 | F64 | BOOL) => kinds.push(t),
-            STRING | 12..=15 => blobs += 1,
+            END | FIELD => return Err(c.err("unexpected struct token")),
             _ => return Err(c.err("unknown shape token")),
         }
+    }
+    if !stack.is_empty() {
+        return Err(c.err("unclosed shape"));
     }
     Ok((kinds, blobs))
 }
@@ -567,8 +649,9 @@ impl<'a> Rows<'a> {
         }
         let mut counts = vec![0usize; shapes.len()];
         for &s in &row_shapes {
-            *counts
-                .get_mut(s as usize)
+            *usize::try_from(s)
+                .ok()
+                .and_then(|i| counts.get_mut(i))
                 .ok_or_else(|| c.err("unknown shape"))? += 1;
         }
         let mut groups = Vec::with_capacity(shapes.len());
@@ -600,8 +683,9 @@ impl<'a> Rows<'a> {
                             .map_err(super::limits::allocation)?;
                         for &id in &ids {
                             out.push(
-                                *column
-                                    .get(id as usize)
+                                *usize::try_from(id)
+                                    .ok()
+                                    .and_then(|i| column.get(i))
                                     .ok_or_else(|| c.err("row index out of range"))?,
                             );
                         }
@@ -641,7 +725,8 @@ impl<'a> Rows<'a> {
         outer: &mut dyn Reader,
         read: impl FnOnce(&mut dyn Reader) -> Result<T, DataError>,
     ) -> Result<T, DataError> {
-        let id = self.row_shapes[self.next] as usize;
+        let id = usize::try_from(self.row_shapes[self.next])
+            .map_err(|_| DataError::new("unknown shape"))?;
         self.next += 1;
         let mut replay = Replay {
             c: Cursor {
@@ -680,7 +765,7 @@ struct Replay<'r, 'a> {
     frames: &'r mut Vec<Frame>,
     outer: &'r mut dyn Reader,
 }
-impl Replay<'_, '_> {
+impl<'r, 'a> Replay<'r, 'a> {
     fn peek(&self) -> Option<u8> {
         self.c.bytes.get(self.c.pos).copied()
     }
@@ -691,21 +776,35 @@ impl Replay<'_, '_> {
             Err(self.c.err(what))
         }
     }
+    fn push(&mut self, frame: Frame) -> Result<(), DataError> {
+        if self.frames.len() >= MAX_DEPTH {
+            return Err(self.c.err("nesting exceeds 256"));
+        }
+        self.frames.push(frame);
+        Ok(())
+    }
     fn scalar(&mut self) -> u64 {
         let v = self.group.nums[self.num][self.group.row];
         self.num += 1;
         v
     }
-    fn blob(&mut self) -> &[u8] {
+    fn blob(&mut self) -> &'a [u8] {
         let v = self.group.blobs[self.blob][self.group.row];
         self.blob += 1;
         v
     }
     fn name(&mut self) -> Result<String, DataError> {
-        let i = self.c.var()? as usize;
-        let name = self.names[i];
+        let i = usize::try_from(self.c.var()?).map_err(|_| self.c.err("unknown name index"))?;
+        let name = *self
+            .names
+            .get(i)
+            .ok_or_else(|| self.c.err("unknown name index"))?;
         self.outer.claim(name.len())?;
-        Ok(name.into())
+        let mut out = String::new();
+        out.try_reserve_exact(name.len())
+            .map_err(super::limits::allocation)?;
+        out.push_str(name);
+        Ok(out)
     }
 }
 impl Reader for Replay<'_, '_> {
@@ -750,17 +849,18 @@ impl Reader for Replay<'_, '_> {
         if b.len() > MAX_LOAD_STRING {
             return Err(DataError::new("string exceeds load limit"));
         }
-        let s = std::str::from_utf8(b)
-            .map_err(|_| DataError::new("invalid UTF-8"))?
-            .to_owned();
+        let s = std::str::from_utf8(b).map_err(|_| DataError::new("invalid UTF-8"))?;
         self.outer.claim(s.len())?;
-        Ok(s)
+        let mut out = String::new();
+        out.try_reserve_exact(s.len())
+            .map_err(super::limits::allocation)?;
+        out.push_str(s);
+        Ok(out)
     }
     fn begin_seq(&mut self) -> Result<(), DataError> {
         self.expect(SEQ, "expected a sequence")?;
         let n = self.c.var()?;
-        self.frames.push(Frame::Seq(n));
-        Ok(())
+        self.push(Frame::Seq(n))
     }
     fn item(&mut self) -> Result<bool, DataError> {
         match self.frames.last_mut() {
@@ -777,8 +877,7 @@ impl Reader for Replay<'_, '_> {
     }
     fn begin_struct(&mut self) -> Result<(), DataError> {
         self.expect(STRUCT, "expected a record")?;
-        self.frames.push(Frame::Struct);
-        Ok(())
+        self.push(Frame::Struct)
     }
     fn field(&mut self) -> Result<Option<String>, DataError> {
         if !matches!(self.frames.last(), Some(Frame::Struct)) {
@@ -797,7 +896,7 @@ impl Reader for Replay<'_, '_> {
         self.expect(VARIANT, "expected an enum")?;
         self.c.var()?;
         let name = self.name()?;
-        self.frames.push(Frame::Variant);
+        self.push(Frame::Variant)?;
         Ok(name)
     }
     fn end_variant(&mut self) -> Result<(), DataError> {
@@ -812,7 +911,7 @@ impl Reader for Replay<'_, '_> {
             SOME => true,
             _ => return Err(self.c.err("expected an option")),
         };
-        self.frames.push(Frame::Option);
+        self.push(Frame::Option)?;
         Ok(some)
     }
     fn end_option(&mut self) -> Result<(), DataError> {
@@ -1089,5 +1188,69 @@ mod tests {
             Rows::decode(&bytes, 63, false, &mut outer).is_err(),
             "row limit"
         );
+    }
+    #[test]
+    fn deep_shape_nesting_refuses_cleanly() {
+        let mut shape = vec![STRUCT, FIELD, 0];
+        shape.extend(std::iter::repeat_n(SOME, 100_000));
+        shape.push(NONE);
+        shape.push(END);
+        // 0 index runs, 1 name ("x"), 1 shape, 1 row, group mode 0 (no scalars/blobs).
+        let mut bytes = vec![0, 1, 1, b'x', 1];
+        var(&mut bytes, shape.len() as u64);
+        bytes.extend_from_slice(&shape);
+        bytes.extend([1, 0]);
+        let mut outer = bin::Decoder::new(&[]);
+        let err = Rows::decode(&bytes, 1, false, &mut outer).err().unwrap();
+        assert!(err.to_string().contains("nesting"), "{err}");
+    }
+    #[test]
+    fn large_u64_indices_refuse_without_truncation() {
+        let huge = 1u64 << 32;
+        // (a) Mode-1 column dictionary index 1 << 32.
+        let mut dict_col = vec![0, 0, 1, 1, UNSIGNED, 1, 0, 1, 1, 0];
+        var(&mut dict_col, 1 << 1 | 1); // 1 repeated index
+        var(&mut dict_col, huge);
+        let mut outer = bin::Decoder::new(&[]);
+        assert!(Rows::decode(&dict_col, 1, false, &mut outer).is_err());
+
+        // (b) row_shapes index 1 << 32 when shapes.len() > 1.
+        let mut bad_shape = vec![0, 0, 2, 1, UNSIGNED, 1, BOOL, 1, 0];
+        var(&mut bad_shape, 1 << 1 | 1);
+        var(&mut bad_shape, huge);
+        bad_shape.extend([0, 0]);
+        let mut outer = bin::Decoder::new(&[]);
+        assert!(Rows::decode(&bad_shape, 1, false, &mut outer).is_err());
+
+        // (c) Mode-1 row-dictionary index 1 << 32.
+        let mut bad_row_dict = vec![0, 0, 1, 1, UNSIGNED, 1, 1, 1, 0, 3, 0, 0];
+        var(&mut bad_row_dict, 1 << 1 | 1);
+        var(&mut bad_row_dict, huge);
+        let mut outer = bin::Decoder::new(&[]);
+        assert!(Rows::decode(&bad_row_dict, 1, false, &mut outer).is_err());
+    }
+    #[test]
+    fn rle_repeated_string_claims_budget_before_allocation() {
+        let text = "a".repeat(4096);
+        let mut columns = Columns::default();
+        for _ in 0..4 {
+            columns.row(|w| text.write(w));
+        }
+        let bytes = columns.finish();
+        assert!(bytes.len() < 5000, "RLE should store the blob once");
+        let mut outer = bin::Decoder::new(&[]);
+        let mut decoded = Rows::decode(&bytes, 4, false, &mut outer).unwrap().1;
+        // Leave enough budget for one 4096-byte string, not two.
+        outer
+            .claim(super::super::limits::MAX_LOAD_BYTES - 5000)
+            .unwrap();
+        let first = decoded
+            .read(&mut outer, |r| r.string())
+            .expect("first row fits in remaining budget");
+        assert_eq!(first.len(), 4096);
+        let err = decoded
+            .read(&mut outer, |r| r.string())
+            .expect_err("second row must be rejected by budget");
+        assert!(err.to_string().contains("budget"), "{err}");
     }
 }

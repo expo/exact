@@ -183,6 +183,8 @@ impl<D: DataSource> Presenter<D> {
         // A clamp is the list's own (its range shrank under it): the reader stands where
         // it put it, and its revision stands too.
         self.reader.rebased(view, before, after);
+        self.rebase_wheel_snap(view, before, after);
+        self.snap_layout.clamped(view, before, after);
         // It moved the input offset under any pending position too: that position's change is
         // from the clamped offset now, or a reader's next move would carry it again.
         self.advance_pending_base(view, (after.0 - before.0, after.1 - before.1));
@@ -276,9 +278,12 @@ impl<D: DataSource> Presenter<D> {
     pub(crate) fn publish_scroll(&mut self) {
         self.restore_scroll_anchors();
         self.arm_scroll_anchors();
+        // Where a claimed scroller's content is, its displacement (LLP 1123 D14); its scroll events keep its CSS offset
+        let displaced = self.displaced_scroll(&self.scroll);
+        let shown = displaced.as_ref().unwrap_or(&self.scroll);
         let runner = self.host.runner_mut();
         runner.scrolled(None, f64::from(self.page.0), f64::from(self.page.1));
-        for (id, (left, top)) in &self.scroll {
+        for (id, (left, top)) in shown {
             runner.scrolled(Some(*id), f64::from(*left), f64::from(*top));
         }
         self.place_split();

@@ -53,6 +53,8 @@ class SoundOutputTest {
 
     private class Backend : SoundBackend {
         var opens = 0
+        var resumes = 0
+        var pauses = 0
         var broken: Set<Int> = emptySet()
         var closes = 0
         var room = true
@@ -63,8 +65,14 @@ class SoundOutputTest {
         override fun open(files: Array<String>, policy: SoundPolicy, decoded: BooleanArray): Long {
             opens++
             decoded.indices.forEach { decoded[it] = it !in broken }
-            return 1
+            return opens.toLong()
         }
+        override fun resume(handle: Long, files: Array<String>, policy: SoundPolicy, decoded: BooleanArray): Boolean {
+            resumes++
+            decoded.indices.forEach { decoded[it] = it !in broken }
+            return true
+        }
+        override fun pause(handle: Long) { pauses++ }
         override fun op(handle: Long, op: JSONObject): Boolean {
             if (!room) return false
             ops += op
@@ -74,6 +82,8 @@ class SoundOutputTest {
         override fun close(handle: Long) { closes++ }
     }
 
+    private val direct = java.util.concurrent.Executor { it.run() }
+
     private fun batch(ops: String, reset: Boolean = false) = JSONObject("""{"files":["assets/hit.wav"],"reset":$reset,"ops":[$ops]}""")
     private fun play(id: Int, at: Double = 100.0) = """{"kind":1,"id":$id,"sound":0,"at":$at,"gain":0.5,"rate":1.5,"pan":-0.25}"""
 
@@ -81,7 +91,7 @@ class SoundOutputTest {
         val backend = Backend().apply { broken = setOf(1) }
         var at = 100.0
         var state = JSONObject()
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { at }, direct)
         fun cues(reset: Boolean = false) = batch(play(1) + "," + play(2).replace("\"sound\":0", "\"sound\":1"), reset)
             .put("files", org.json.JSONArray(listOf("assets/hit.wav", "assets/broken.wav")))
             .put("submitted", at)
@@ -104,48 +114,60 @@ class SoundOutputTest {
             assertEquals(1, backend.opens)
             assertEquals(1, failures().size)
             output.apply(cues(true))
+            assertEquals(2, backend.opens)
             assertEquals(2, failures().size)
             output.foreground(false)
+            assertEquals(1, backend.pauses)
             output.foreground(true)
             output.apply(cues().put("ops", org.json.JSONArray("[${play(3, at)}]")))
-            assertEquals(3, backend.opens)
+            assertEquals(2, backend.opens)
+            assertEquals(1, backend.resumes)
             assertEquals(2, failures().size)
             assertEquals("running", state.getString("state"))
         } finally { output.destroy() }
     }
 
-    @Test fun cancellingAFutureVoiceClosesTheIdleStreamAndReleasesFocus() {
+    @Test fun cancellingAFutureVoicePausesTheIdleStreamReleasesFocusAndKeepsPcmCache() {
         val backend = Backend()
         var at = 100.0
         var state = JSONObject()
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, { state = JSONObject(it) }, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, { state = JSONObject(it) }, { at }, direct)
         try {
             output.apply(batch(play(1, 3700.0)))
             val request = manager.lastAudioFocusRequest.audioFocusRequest
             at += 1.0
             output.apply(batch(""))
-            assertEquals(0, backend.closes) // A waiting voice still owns a mixer slot.
+            assertEquals(0, backend.pauses) // A waiting voice still owns a mixer slot.
             output.apply(batch("""{"kind":2,"id":1,"at":3700.0}"""))
             backend.live = 0.0
             backend.queued = 1.0
             at += 1.0
             output.apply(batch(""))
-            assertEquals(0, backend.closes)
+            assertEquals(0, backend.pauses)
             backend.queued = 0.0
             output.apply(batch(""))
             at += 0.1
             shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50))
-            assertEquals(1, backend.closes)
+            assertEquals(1, backend.pauses)
+            assertEquals(0, backend.closes)
             assertEquals("stopped", state.getString("state"))
             assertSame(request, manager.lastAbandonedAudioFocusRequest)
+            // Resuming reuses the cached arm without calling open again; reroot frees the cache.
+            output.apply(batch(play(2, at + 1)))
+            assertEquals(1, backend.opens)
+            assertEquals(1, backend.resumes)
+            output.reroot()
+            assertEquals(1, backend.closes)
+            output.apply(batch(play(3, at + 2)))
+            assertEquals(2, backend.opens)
         } finally { output.destroy() }
     }
 
     @Test fun releasingOnPermanentLossDoesNotRetakeFocusForRemainingSpeech() {
         val backend = Backend()
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { 100.0 })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { 100.0 }, direct)
         val heard = ArrayList<String>()
         var speech: AudioClaim? = null
         var other: AudioClaim? = null
@@ -158,7 +180,7 @@ class SoundOutputTest {
             val first = manager.lastAudioFocusRequest.audioFocusRequest
             manager.lastAudioFocusRequest.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
             shadowOf(android.os.Looper.getMainLooper()).idle()
-            assertEquals(1, backend.closes)
+            assertEquals(1, backend.pauses)
             assertEquals(listOf("focus"), heard)
             assertSame(first, manager.lastAudioFocusRequest.audioFocusRequest)
             speech!!.release()
@@ -173,7 +195,7 @@ class SoundOutputTest {
     @Test fun theFirstPlayLoadsAndBackpressurePreservesPlaysAndStopsInOrder() {
         val backend = Backend()
         var state = JSONObject()
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { 100.0 })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { 100.0 }, direct)
         try {
             output.apply(batch("", true))
             assertEquals(0, backend.opens)
@@ -193,29 +215,31 @@ class SoundOutputTest {
         } finally { output.destroy() }
     }
 
-    @Test fun backgroundAndNoisyDiscardPendingVoicesAndTheNextPlayReopens() {
+    @Test fun backgroundAndNoisyDiscardPendingVoicesAndTheNextPlayResumes() {
         val backend = Backend()
         var at = 100.0
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, {}, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, {}, { at }, direct)
         try {
             output.apply(batch(play(1)))
             output.foreground(false)
-            assertEquals(1, backend.closes)
+            assertEquals(1, backend.pauses)
             output.apply(batch(play(2, 101.0)))
             assertEquals(1, backend.ops.size)
             at = 102.0
             output.foreground(true)
             output.apply(batch(play(3, 101.0)))
-            assertEquals(1, backend.opens)
+            assertEquals(0, backend.resumes)
             output.apply(batch(play(3, 104.0)).put("submitted", 101.0))
-            assertEquals(1, backend.opens)
+            assertEquals(0, backend.resumes)
             output.apply(batch(play(4, 102.0)))
-            assertEquals(2, backend.opens)
+            assertEquals(1, backend.opens)
+            assertEquals(1, backend.resumes)
             context.sendBroadcast(Intent(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
             shadowOf(android.os.Looper.getMainLooper()).idle()
-            assertEquals(2, backend.closes)
+            assertEquals(2, backend.pauses)
             at = 103.0
             output.apply(batch(play(5, 103.0)))
+            assertEquals(2, backend.resumes)
             assertEquals(listOf(1, 4, 5), backend.ops.map { it.getInt("id") })
         } finally { output.destroy() }
     }
@@ -223,21 +247,21 @@ class SoundOutputTest {
     @Test fun aTransientInterruptionKeepsFocusOnlyUntilItReturnsAndTheNextPlayClaimsAgain() {
         val backend = Backend()
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { 100.0 })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { 100.0 }, direct)
         try {
             output.apply(batch(play(1)))
             val first = manager.lastAudioFocusRequest.audioFocusRequest
             val listener = manager.lastAudioFocusRequest.listener
             listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
             shadowOf(android.os.Looper.getMainLooper()).idle()
-            assertEquals(1, backend.closes)
+            assertEquals(1, backend.pauses)
             output.apply(batch(play(2)))
-            assertEquals(1, backend.opens)
+            assertEquals(0, backend.resumes)
             listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
             shadowOf(android.os.Looper.getMainLooper()).idle()
             assertSame(first, manager.lastAbandonedAudioFocusRequest)
             output.apply(batch(play(3)))
-            assertEquals(2, backend.opens)
+            assertEquals(1, backend.resumes)
             assertNotSame(first, manager.lastAudioFocusRequest.audioFocusRequest)
         } finally { output.destroy() }
     }
@@ -246,7 +270,7 @@ class SoundOutputTest {
         val backend = Backend()
         var at = 100.0
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { at }, direct)
         try {
             output.apply(batch(play(1)))
             val oldListener = manager.lastAudioFocusRequest.listener
@@ -260,8 +284,9 @@ class SoundOutputTest {
             output.apply(batch(play(3, at)).put("submitted", at))
             shadowOf(android.os.Looper.getMainLooper()).idle()
             output.apply(batch(play(4, at + 1)).put("submitted", at))
-            assertEquals(2, backend.opens)
-            assertEquals(1, backend.closes)
+            assertEquals(1, backend.opens)
+            assertEquals(1, backend.resumes)
+            assertEquals(1, backend.pauses)
             assertEquals(listOf(1, 3, 4), backend.ops.map { it.getInt("id") })
         } finally { output.destroy() }
     }
@@ -273,7 +298,7 @@ class SoundOutputTest {
                 context.applicationInfo.flags = if (debug) flags or android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
                     else flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE.inv()
                 org.robolectric.shadows.ShadowLog.clear()
-                val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), Backend(), {}, { 100.0 })
+                val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), Backend(), {}, { 100.0 }, direct)
                 try {
                     output.apply(batch(play(1)).put("submitted", 100.0))
                     output.foreground(false)
@@ -294,7 +319,7 @@ class SoundOutputTest {
         var state = JSONObject()
         val manager = context.getSystemService(AudioManager::class.java)
         manager.ringerMode = AudioManager.RINGER_MODE_SILENT
-        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("ambient"), backend, { state = JSONObject(it) }, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("ambient"), backend, { state = JSONObject(it) }, { at }, direct)
         try {
             output.apply(batch(play(1)))
             assertEquals(0, backend.opens)
@@ -312,5 +337,42 @@ class SoundOutputTest {
             output.apply(batch(play(4, at)))
             assertEquals(2, backend.opens)
         } finally { output.destroy() }
+    }
+
+    @Test fun asyncOpenQueuesHitsAndCancelsCleanlyOnBackgroundOrDestroy() {
+        val backend = Backend()
+        val tasks = ArrayDeque<Runnable>()
+        var at = 100.0
+        var state = JSONObject()
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { at }) { tasks.addLast(it) }
+        try {
+            output.apply(batch(play(1, 100.0)))
+            assertEquals("opening", state.getString("state"))
+            assertEquals(0, backend.opens)
+            // A second hit while opening queues behind the first without starting a second open.
+            output.apply(batch(play(2, 100.5)))
+            assertEquals(1, tasks.size)
+            // Complete the async open: both queued hits drain in order.
+            tasks.removeFirst().run()
+            assertEquals(1, backend.opens)
+            assertEquals("running", state.getString("state"))
+            assertEquals(listOf(1, 2), backend.ops.map { it.getInt("id") })
+            // Pause on background, start an async resume, then destroy before resume finishes: late handle closes cleanly.
+            output.foreground(false)
+            while (tasks.isNotEmpty()) tasks.removeFirst().run()
+            assertEquals(1, backend.pauses)
+            at = 105.0
+            output.foreground(true)
+            output.apply(batch(play(3, 105.0)))
+            assertEquals("opening", state.getString("state"))
+            assertEquals(1, tasks.size)
+            output.destroy()
+            // Drain both the stale resume and the destroy close.
+            while (tasks.isNotEmpty()) tasks.removeFirst().run()
+            assertEquals("stale hit never plays after destroy", listOf(1, 2), backend.ops.map { it.getInt("id") })
+            assertTrue("native arm freed", backend.closes >= 1)
+        } finally {
+            while (tasks.isNotEmpty()) tasks.removeFirst().run()
+        }
     }
 }

@@ -200,16 +200,19 @@ export const gated = () => {
  * (`xctest:ios:<Class>`); null when it runs whole. */
 export function covers(name, selection) {
   if (name === 'default-test') return (selection?.defaultCargo ?? []).map(n => `cargo:${n}`);
+  if (name === 'other-glue') {
+    const args = selection?.extra?.find(([n]) => n === name)?.[2];
+    return args?.filter(a => a.startsWith('./')).map(a => `bun:${a.slice(2)}`) ?? null;
+  }
+  if (name === 'game-vocab') return ['bun:game/vocab.test.mjs'];
+  if (name === 'web-ax-test') return WEB_AX.map(f => `bun:${f.slice(2)}`);
+  if (name.startsWith('cargo:')) return [name];
   if (!selection || selection.full) return null;
   if (name === 'test' || name === 'lane') return selection.cargo.map(n => `cargo:${n}`);
   if (name === 'ios') return selection.iosOnly?.map(c => `xctest:ios:${c}`) ?? null;
   if (name === 'macos') {
     const args = selection.extra?.find(([n]) => n === name)?.[2], at = args?.indexOf('--only') ?? -1;
     return at >= 0 ? args[at + 1].split(',').map(c => `xctest:macos:${c}`) : null;
-  }
-  if (name === 'other-glue') {
-    const args = selection.extra?.find(([n]) => n === name)?.[2];
-    return args?.filter(a => a.startsWith('./')).map(a => `bun:${a.slice(2)}`) ?? null;
   }
   if (name === 'glue') return selection.glue.map(f => `bun:${f.slice(2)}`);
   if (name.startsWith('conform')) return selection.conform.map(a => `conform:${a}`);
@@ -437,7 +440,7 @@ export function owners(name, log, found) {
     const xctest = /^(?:ios|macos): ExactKitTests\.(\w+) \w+ failed$/.exec(f)?.[1];
     if (xctest) own(f, `xctest:${name}:${xctest}`);
   }
-  if (!['glue', 'other-glue'].includes(name)) return out;
+  if (!['glue', 'other-glue', 'game-vocab', 'web-ax-test'].includes(name)) return out;
   let file = null;
   for (const line of log.split('\n')) {
     const header = /^(?:\.\/)?(\S+\.test\.\w+):$/.exec(line);
@@ -497,8 +500,10 @@ export function failures(name, log, status) {
   }
   // A bun step that selected no test passed on nothing (`-t` matching none exits 0).
   if (bun && /matched 0 tests|had no matches|^Ran 0 tests/m.test(log)) found.add(`${name}: ran no tests`);
-  // difftest: a case that diverged (on the JS target too), failed an expectation or was refused.
-  for (const m of log.matchAll(/^(DIVERGE|DIVERGE-JS|ERROR-JS|EXPECT|EMIT|SCRIPT|REFUSED) (.+?)(?: at line \d+)?:/gm)) found.add(`${name}: ${m[1]} ${m[2]}`);
+  // difftest: a case that diverged (on the JS target too), failed an expectation, emit, expansion, structure, accounting, undecoded, or refusal.
+  for (const m of log.matchAll(/^(DIVERGE|DIVERGE-JS|ERROR-JS|EXPECT|EMIT|SCRIPT|REFUSED|ACCOUNTING|UNDECODED|EXPAND|STRUCTURE) (.+?)(?: at line \d+)?:/gm)) found.add(`${name}: ${m[1]} ${m[2]}`);
+  for (const m of log.matchAll(/^OPCODES ([^:\n]+?)(?::|$)/gm)) found.add(`${name}: OPCODES ${m[1].trim()}`);
+  for (const m of log.matchAll(/^SKIPPED (.+?): emit:/gm)) found.add(`${name}: EMIT ${m[1]}`);
   // difftest apps: an app embedding that is not what the compiler makes of the app now.
   for (const m of log.matchAll(/^STALE \S*?(semantics\/Apps\/\S+?):/gm)) found.add(`${name}: STALE ${m[1]}`);
   // difftest types: the two checkers disagreed on a program or a mutant.
@@ -596,14 +601,14 @@ async function checkAt(sha, since, { base, full, selection: given, only, probe, 
     const part = covers(name, selection);
     result.checks[name] = { ...ran, status: r.status, seconds, load, ...(r.hung ? { hung: true } : {}), ...(r.notRun ? { notRun: r.notRun } : {}), ...(part ? { covers: part } : {}) };
     if (r.notRun) console.log(`${sha.slice(0, 8)} ${name}: not run: ${r.notRun}`);
-    const outcome = outcomeOf(r.status, r.hung);
-    if (gated?.fp) store.record(name, gated.fp, outcome, { sha });
+    const rawOutcome = outcomeOf(r.status, r.hung);
     // A check that could not run here found nothing.
-    if (outcome !== 'unavailable') {
-      const found = failures(name, log, r.status);
+    const found = rawOutcome !== 'unavailable' ? failures(name, log, r.status) : [];
+    if (found.length) {
       result.failures.push(...found);
       for (const [f, ids] of Object.entries(owners(name, log, found))) result.owners[f] = [...new Set([...(result.owners[f] ?? []), ...ids])];
     }
+    if (gated?.fp) store.record(name, gated.fp, gatedOutcome(r.status, r.hung, found), { sha });
     if (r.hung) {
       const slow = [...new Set([...log.matchAll(/^test (\S+) has been running for over 60 seconds/gm)].map(m => m[1]))];
       result.failures.push(...(slow.length ? slow.map(t => `${name}: ${t} hung`) : [`${name}: hung past ${HANG_MS / 60000} min`]));
@@ -614,15 +619,31 @@ async function checkAt(sha, since, { base, full, selection: given, only, probe, 
   return result;
 }
 
-/** Unavailable steps cannot qualify the daily full run (LLP 1172.010 E13). */
+/** A gated check that exited 0 while logging failures cannot be cached as a pass. */
+export const gatedOutcome = (status, hung, found) => {
+  const outcome = outcomeOf(status, hung);
+  return outcome === 'pass' && found.length > 0 ? 'fail' : outcome;
+};
+
+/** Optional checks that exit 77 when their tools are not installed on this host. */
+const HOST_OPTIONAL = new Set(['vm-extract']);
+const hostUnavailable = (name, check) => check.status === 77 && (Boolean(check.notRun) || HOST_OPTIONAL.has(name));
+/** Unavailable steps cannot qualify cross-platform full coverage (LLP 1172.010 E13). */
 export const fullCoverage = result => result.full && !Object.values(result.checks).some(c => c.status === 77);
+/** Daily-sweep scheduling ignores checks structurally inapplicable to this host (other OS workers or absent optional tools). */
+export const hostFullCoverage = result => result.full && !Object.entries(result.checks).some(([n, c]) => c.status === 77 && !hostUnavailable(n, c));
+export const shouldRunFull = (state, { tier = TIER, force = false, now = Date.now() } = {}) =>
+  tier === 1 && (!state.last || force || !(now - Date.parse(state.fullAt ?? 0) < FULL_EVERY_MS));
+export const nextFullState = (result, now = new Date().toISOString()) =>
+  hostFullCoverage(result) ? { fullAt: now, fullSha: result.sha } : {};
 
 function file(result, fresh, since, lastFull) {
   const short = result.sha.slice(0, 8);
   const timing = Object.entries(result.checks).map(([n, c]) => c.notRun ? `${n} not run: ${c.notRun}` : c.skipped ? `${n} skipped (${c.skipped})` : `${n} ${c.seconds.toFixed(0)} s (exit ${c.status}, load ${c.load.toFixed(0)})`).join(' · ');
   const what = since ? `while checking ${since.slice(0, 8)}..${short}` : `at baseline ${short}`;
   // A suite left out since the last full run may have broken in any commit since.
-  const full = fullCoverage(result) && lastFull ? [`This run checked every suite, as the lane does at least daily: one the selection had left out (scripts/affected.mjs) may have failed since ${lastFull.slice(0, 8)}, the last such run.`, ''] : [];
+  const unrun = Object.entries(result.checks).filter(([, c]) => c.status === 77).map(([n, c]) => c.notRun ? `${n} (${c.notRun})` : `${n} (unavailable)`);
+  const full = hostFullCoverage(result) && lastFull ? [`This run checked every suite${unrun.length ? ` available on this host (not run here: ${unrun.join(', ')})` : ''}, as the lane does at least daily: one the selection had left out (scripts/affected.mjs) may have failed since ${lastFull.slice(0, 8)}, the last such run.`, ''] : [];
   const body = [`The tier ${TIER} async lane found ${fresh.length} failure(s) ${what}:`, '',
     ...fresh.map(f => {
       const a = result.attribution?.[f];
@@ -709,7 +730,7 @@ async function once(state) {
   const pending = state.last
     ? git(['rev-list', '--first-parent', '--reverse', `${state.last}..${tip}`]).split('\n').filter(Boolean)
     : [tip];
-  const full = TIER === 1 && (!state.last || process.argv.includes('--full') || !(Date.now() - Date.parse(state.fullAt ?? 0) < FULL_EVERY_MS));
+  const full = shouldRunFull(state, { force: process.argv.includes('--full') });
   if (!pending.length && !full) return;
   const since = state.last, result = await check(tip, since, { base: since, full });
   retainSkippedFailures(state.failures ?? [], result, state.owners ?? {});
@@ -725,8 +746,7 @@ async function once(state) {
   checkout(tip);
   const unpublished = publish(noteOf(result, TIER));
   if (unpublished) console.log(`${tip.slice(0, 8)}: the note was not published: ${unpublished}`);
-  Object.assign(state, { last: tip, failures: result.failures, owners: result.owners },
-    fullCoverage(result) ? { fullAt: new Date().toISOString(), fullSha: tip } : {});
+  Object.assign(state, { last: tip, failures: result.failures, owners: result.owners }, nextFullState(result));
   writeFileSync(STATE, JSON.stringify(state, null, 2));
 }
 

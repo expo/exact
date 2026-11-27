@@ -4,15 +4,16 @@
 //! reads ask the page through one import, `exact_geometry.read`, which
 //! `host/web/geometry-glue.js` answers from the live DOM within the call;
 //! `elementFromPoint` (LLP 1094 D10) asks `exact_geometry.point` for the
-//! view hit, and the runner names it by its nearest `id`.
-//! Until that piece has loaded (after first paint), every read answers
-//! `unavailable`.
+//! view hit, and the runner names it by its nearest `id`. `exactGeometry`
+//! (LLP 1123 D6) asks `exact_geometry.fact` for a view's drawn box in the
+//! space it names. Until that piece has loaded (after first paint), every
+//! read answers `unavailable`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
 use exact_kernel::{Kernel, ViewId};
-use exact_runner::geometry::{GeometryAnswer, GeometryLinks, Scrolled};
+use exact_runner::geometry::{GeometryAnswer, GeometryLinks, PageBox, PageSpace, Scrolled};
 
 /// The page's answers, for [`exact_runner::RunnerLinks::geometry`].
 pub static PAGE: GeometryLinks = GeometryLinks::new(
@@ -23,7 +24,59 @@ pub static PAGE: GeometryLinks = GeometryLinks::new(
     page_shown,
 )
 .with_range_frame(page_range_frame)
-.with_scroll_metrics(page_scroll_metrics);
+.with_scroll_metrics(page_scroll_metrics)
+.with_page_box(page_box);
+
+/// `fact`'s spaces: the document's, the viewport's, a node's border box's.
+const OWNER: u32 = 0;
+const WINDOW: u32 = 1;
+const NODE: u32 = 2;
+
+/// Bit of `fact`'s reply: the frame was placed in the space asked.
+const FRAMED: u32 = 4;
+
+/// A view's drawn box for `exactGeometry`: its size, and its frame in
+/// `space` where the reply says it is placed there.
+fn page_box(view: ViewId, space: PageSpace) -> Option<PageBox> {
+    let (space, node) = match space {
+        PageSpace::Owner => (OWNER, 0),
+        PageSpace::Window => (WINDOW, 0),
+        PageSpace::Node(node) => (NODE, node.map_or(0, |n| n + 1)),
+    };
+    let mut out = [0.0f64; 4];
+    let flags = fact(view, space, node, &mut out);
+    page_reply(flags, out)
+}
+
+/// The page's reply to `fact` as a box: its size always, its frame where
+/// placed; nothing without the answered bit or with a bad number.
+fn page_reply(flags: u32, [x, y, width, height]: [f64; 4]) -> Option<PageBox> {
+    let finite = [x, y, width, height].iter().all(|v| v.is_finite());
+    if flags & ANSWERED == 0 || !finite || width < 0.0 || height < 0.0 {
+        return None;
+    }
+    Some(PageBox {
+        size: [width, height],
+        frame: (flags & FRAMED != 0).then_some([x, y, width, height]),
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn fact(view: ViewId, space: u32, node: u32, out: &mut [f64; 4]) -> u32 {
+    #[link(wasm_import_module = "exact_geometry")]
+    extern "C" {
+        fn fact(view: u32, space: u32, node: u32, out: *mut f64) -> u32;
+    }
+    // SAFETY: the page writes at most four f64s into this owned, aligned
+    // buffer and calls nothing back into the module.
+    unsafe { fact(view, space, node, out.as_mut_ptr()) }
+}
+
+/// Off the web there is no page to ask: a reply without the answered bit.
+#[cfg(not(target_arch = "wasm32"))]
+fn fact(_: ViewId, _: u32, _: u32, _: &mut [f64; 4]) -> u32 {
+    0
+}
 
 #[cfg(target_arch = "wasm32")]
 fn page_scroll_metrics(_: &Kernel, _: &Scrolled, view: ViewId) -> Option<[f64; 6]> {
@@ -189,5 +242,22 @@ mod tests {
         let a = answer(ANSWERED | PROVISIONAL, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!((a.x, a.y, a.width, a.height), (1.0, 2.0, 3.0, 4.0));
         assert!(a.provisional && !a.unavailable);
+    }
+
+    #[test]
+    fn a_fact_reply_is_its_size_and_its_frame_only_where_placed() {
+        assert_eq!(page_reply(0, [1.0, 2.0, 3.0, 4.0]), None);
+        assert_eq!(page_reply(ANSWERED, [1.0, 2.0, -3.0, 4.0]), None);
+        assert_eq!(
+            page_reply(ANSWERED | FRAMED, [1.0, f64::INFINITY, 3.0, 4.0]),
+            None
+        );
+        let placed = page_reply(ANSWERED | FRAMED, [1.0, 2.0, 3.0, 4.0]).unwrap();
+        assert_eq!(placed.size, [3.0, 4.0]);
+        assert_eq!(placed.frame, Some([1.0, 2.0, 3.0, 4.0]));
+        assert_eq!(
+            page_reply(ANSWERED, [0.0, 0.0, 3.0, 4.0]).unwrap().frame,
+            None
+        );
     }
 }

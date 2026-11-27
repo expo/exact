@@ -19,7 +19,7 @@ extension NodeView {
             if let face = row.face, face.fits, !face.raster { return true }
             // Text, and at most one image: the item's title and its image.
             let content = row.childNodes
-            let images = content.filter { $0.kind == "image" && $0.container.heldSubviews.isEmpty }
+            let images = content.filter { $0.kind == "image" && $0.childNodes.isEmpty }
             return images.count <= 1 && content.allSatisfy { textOnly($0) || images.contains($0) }
         }
         return rows.contains { !$0.isMenuSection || !$0.menuRows.isEmpty } && rows.allSatisfy { row in
@@ -33,7 +33,7 @@ extension NodeView {
     /// popover written inside it; a section's less what titles it (a child
     /// its `aria-labelledby` names, which the web draws as written).
     var menuRows: [NodeView] {
-        let titles = isMenuSection ? Set(props["accessibilityLabelledBy"]?.split(separator: " ").map(String.init) ?? []) : []
+        let titles = isMenuSection ? Set(Self.idRefs(props["accessibilityLabelledBy"] ?? "")) : []
         return childNodes
             .filter { $0.props["contextPreview"] != "true" && $0.props["popover"] == nil && !titles.contains($0.props["id"] ?? "") }
     }
@@ -49,4 +49,35 @@ extension NodeView {
     /// A section's title: the text its `aria-labelledby` names, else its
     /// `aria-label`; nil where it has neither.
     var menuSectionTitle: String? { authoredLabel }
+}
+
+extension MenuHost {
+    /// A menu item shows a native button's face. In a custom row, two stacked
+    /// texts supply its title and subtitle, even when the button is bare in place.
+    func label(of row: NodeView) -> (title: String, subtitle: String?) {
+        if row.isNativeButton {
+            let face = row.face
+            return (face?.shown ?? "", face?.subtitle)
+        }
+        let kids = row.childNodes.filter { $0.props["accessibilityElementsHidden"] != "true" }
+        let texts = kids.filter { $0.kind == "text" }, images = kids.filter { $0.kind == "image" }
+        guard row.isButton, texts.count == 2, images.count <= 1, texts.count + images.count == kids.count,
+              Self.stacks(row, texts) else { return (title(of: row), nil) }
+        let subtitle = title(of: texts[1])
+        return (title(of: texts[0]), subtitle.isEmpty ? nil : subtitle)
+    }
+
+    /// Whether `row` lays `texts` one under the other, as its style says (a
+    /// closed menu's rows are not laid out): block texts in a block box, or
+    /// the texts of a flex column, whose face places its image at the `top`
+    /// or `bottom` (the kernel's `press_face`). A text positioned out of the
+    /// flow (a count at the row's corner) is in neither.
+    private static func stacks(_ row: NodeView, _ texts: [NodeView]) -> Bool {
+        guard texts.allSatisfy({ !["absolute", "fixed"].contains($0.layoutPosition) }) else { return false }
+        switch row.style["display"]?.string ?? "block" {
+        case "block": return texts.allSatisfy { ($0.style["display"]?.string ?? "block") == "block" }
+        case "flex": return ["top", "bottom"].contains(row.face?.placement ?? "")
+        default: return false
+        }
+    }
 }

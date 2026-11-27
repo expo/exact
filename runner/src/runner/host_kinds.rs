@@ -115,6 +115,37 @@ impl ScrollDrag {
 }
 
 impl Event {
+    /// Decode the scroll event: `left,top,scrollWidth,scrollHeight,
+    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative,
+    /// then a zoomable container's zoom, above 0; a scroller that does not
+    /// zoom leaves it out.
+    pub fn scroll_payload(payload: &str) -> Option<Self> {
+        let (payload, zoom) = match payload.matches(',').count() {
+            6 => {
+                let (rest, zoom) = payload.rsplit_once(',')?;
+                (rest, exact_num::parse_f64(zoom).ok()?)
+            }
+            _ => (payload, 1.0),
+        };
+        let [left, top, width, height, client_width, client_height] =
+            super::event::tuple::<6>(payload)?;
+        ([left, top].iter().all(|v| v.is_finite())
+            && [width, height, client_width, client_height]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0)
+            && zoom.is_finite()
+            && zoom > 0.0)
+            .then_some(Self::Scroll(super::ScrollEvent {
+                left,
+                top,
+                width,
+                height,
+                client_width,
+                client_height,
+                zoom,
+            }))
+    }
+
     /// Decode ABI kind 6 (`key`), 43 (`keyup`) or 44 (`keycapture`),
     /// 10 (contextmenu, its point when it has one), 13
     /// (scroll), 19 (media), 20 (pan), 21 (select), 28 (panrelease, LLP
@@ -128,8 +159,9 @@ impl Event {
     /// `0|1,ratio`), 46 and 47 (focusin, focusout), 50 (toggle, oldState,newState)
     /// 51 (scrollend, none), 52 (field selectionchange), 53/54
     /// (beforeinput/input metadata), 60 (historyswipe), 61 (swipeleft,
-    /// none), or 62 and 63 (a scroll drag's start, none, and its release,
-    /// `ScrollDrag`) from its UTF-8 payload.
+    /// none), 62 and 63 (a scroll drag's start, none, and its release,
+    /// `ScrollDrag`), or 66 (swipe, none; 64 is the Apple host's look
+    /// states, which reach no runner event) from its UTF-8 payload.
     pub fn of_host_kind(kind: u32, payload: &str) -> Result<Event, &'static str> {
         match kind {
             // A key's down (6), up (43) or capture (44, #140): the chord, then its code,
@@ -171,6 +203,17 @@ impl Event {
             63 => ScrollDrag::parse(payload)
                 .map(Event::Scrolldragend)
                 .ok_or("invalid scroll drag"),
+            // The platform's discrete swipe (LLP 1057.001 §8.2).
+            66 => Ok(Event::Swipe),
+            67 | 68 => {
+                let [s, x, y] = super::event::tuple(payload).ok_or("invalid pinch")?;
+                let event = if kind == 67 {
+                    Event::Pinch(s, x, y)
+                } else {
+                    Event::PinchRelease(s, x, y)
+                };
+                event.invalid_payload().map_or(Ok(event), Err)
+            }
             37 => super::WheelEvent::parse(payload)
                 .map(Event::Wheel)
                 .ok_or("invalid wheel event"),
@@ -529,6 +572,7 @@ mod tests {
             );
         }
         assert_eq!(Event::of_host_kind(61, ""), Ok(Event::Swipeleft));
+        assert_eq!(Event::of_host_kind(66, ""), Ok(Event::Swipe));
         assert_eq!(Event::of_host_kind(62, ""), Ok(Event::Scrolldragstart));
         assert_eq!(
             Event::of_host_kind(63, "0.5,-2.25"),

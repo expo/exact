@@ -25,7 +25,8 @@
 //! one `var()` naming a token is that token, as a row reads it once the
 //! component is expanded or the call made. Any other argument is left as
 //! written, since it may be text; where it reaches a style row, a `var()` in
-//! it naming no token is refused there ([`carried`]).
+//! it naming no token is refused there ([`carried`]), and one only its
+//! fallback answers is warned at the argument ([`carried_undeclared`]).
 
 use crate::{tags, LowerError};
 use contract_syntax::{Attr, DesignSource, Expr, File, Node, Span, TemplatePart, ThemeDecl};
@@ -50,6 +51,11 @@ pub struct Tokens {
     runtime: std::collections::BTreeSet<String>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static TOKEN_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Tokens {
     /// The tokens of the app's design (`app.forma`'s text), its packages'
     /// designs and an inline `theme`.
@@ -58,6 +64,8 @@ impl Tokens {
         packages: &[DesignSource],
         theme: Option<&ThemeDecl>,
     ) -> Tokens {
+        #[cfg(test)]
+        TOKEN_BUILDS.set(TOKEN_BUILDS.get() + 1);
         let (own, parsed) = match design {
             Some(text) => match forma::parse(text) {
                 Ok(d) => (Some(d), true),
@@ -170,6 +178,18 @@ fn view_names(tree_nodes: &[Node], declared_names: &mut std::collections::BTreeS
     }
 }
 
+/// Each attribute `view`'s elements write, added to `out`.
+fn view_attrs<'a>(tree_nodes: &'a [Node], element_attrs: &mut Vec<&'a Attr>) {
+    for n in Node::walk(tree_nodes) {
+        if let Node::Element {
+            attrs: own_attrs, ..
+        } = n
+        {
+            element_attrs.extend(own_attrs);
+        }
+    }
+}
+
 /// Each custom property `list` declares, after its `--`, added to `out`.
 fn author_names(list: &[Attr], out: &mut std::collections::BTreeSet<String>) {
     for a in list {
@@ -233,32 +253,49 @@ pub fn rewrite(file: &mut File, tokens: &Tokens) -> Rewritten {
     out
 }
 
-/// An app's design as [`Tokens::of`] reads it: `app.forma`'s text, its
-/// packages' designs and an inline `theme`; and the runtime custom
-/// properties its nodes declare.
-type Noted = (
-    Option<String>,
-    Vec<DesignSource>,
-    Option<ThemeDecl>,
-    std::collections::BTreeSet<String>,
-);
-
-thread_local! {
-    /// The design a `var()` may name while the app's styles are lowered,
-    /// read into [`Tokens`] only when a row needs them ([`carried`]).
-    static DESIGN: std::cell::RefCell<Option<Noted>> = const { std::cell::RefCell::new(None) };
+/// The design and runtime declarations visible to the expanded rows of one lowering.
+pub(crate) struct FileTokens<'a> {
+    file: &'a File,
+    tokens: std::cell::OnceCell<Tokens>,
+    own: std::cell::OnceCell<std::collections::BTreeSet<Span>>,
 }
 
-/// Note `file`'s design for the rows [`carried`] checks, as lowering starts.
-pub(crate) fn note(file: &File) {
-    let design = file.design.as_ref().map(|d| d.text.clone());
-    let noted = (
-        design,
-        file.package_designs.clone(),
-        file.theme.clone(),
-        declared_properties(file),
-    );
-    DESIGN.with(|d| *d.borrow_mut() = Some(noted));
+impl<'a> FileTokens<'a> {
+    pub(crate) fn new(file: &'a File) -> Self {
+        Self {
+            file,
+            tokens: std::cell::OnceCell::new(),
+            own: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Where each literal of a style row the file's views write is, which
+    /// [`rewrite`] has read: a literal an expanded row holds elsewhere is a
+    /// component's argument.
+    fn own_literals(&self) -> &std::collections::BTreeSet<Span> {
+        self.own.get_or_init(|| {
+            let mut attrs = Vec::new();
+            for c in self.file.components.iter().chain(&self.file.members) {
+                view_attrs(&c.view, &mut attrs);
+            }
+            let literal = |e: &&Expr| matches!(e, Expr::Str(..) | Expr::Template(..));
+            (attrs.into_iter())
+                .filter(|a| tags::style(&a.name))
+                .flat_map(|a| a.value.walk().filter(literal).map(Expr::span))
+                .collect()
+        })
+    }
+
+    fn get(&self) -> &Tokens {
+        self.tokens.get_or_init(|| {
+            Tokens::of(
+                self.file.design.as_ref().map(|d| d.text.as_str()),
+                &self.file.package_designs,
+                self.file.theme.as_ref(),
+            )
+            .with_runtime([self.file])
+        })
+    }
 }
 
 /// A style row's `var()` that reached it through a component's argument,
@@ -266,7 +303,40 @@ pub(crate) fn note(file: &File) {
 /// token: one the row cannot read is refused as the loader refuses it in a
 /// row. A `var()` among other words of an argument, naming a token, is left
 /// for the row's own check.
-pub(crate) fn carried(a: &Attr) -> Result<(), LowerError> {
+pub(crate) fn carried(a: &Attr, file: &FileTokens<'_>) -> Result<(), LowerError> {
+    match read_in_row(a, file) {
+        Some((_, Some((why, literal, span)))) => Err(refusal(a, why, &literal, span, file.get())),
+        _ => Ok(()),
+    }
+}
+
+/// Each `var()` of a name nothing declares that a component's argument
+/// carries to one of `attrs`' rows reading it at run time, which its fallback
+/// always answers (LLP 1123 D5), added to `out`. [`rewrite`] warns of one
+/// written in the row itself; an argument it leaves, since the argument may
+/// be text, is warned of here, at the argument, once a row reads it.
+pub(crate) fn carried_undeclared(
+    attrs: &[Attr],
+    file: &FileTokens<'_>,
+    out: &mut Vec<(Span, Undeclared)>,
+) {
+    for a in attrs {
+        let Some((found, None)) = read_in_row(a, file) else {
+            continue;
+        };
+        // A literal no row of the source writes came from the use site
+        let own = file.own_literals();
+        for (span, call) in found.undeclared {
+            if !own.contains(&span) && !out.iter().any(|(s, c)| *s == span && *c == call) {
+                out.push((span, call));
+            }
+        }
+    }
+}
+
+/// How `a`'s row reads its value's `var()`s once expanded, and its first
+/// refusal; `None` when it is no style row or names no `var()`.
+fn read_in_row(a: &Attr, file: &FileTokens<'_>) -> Option<(Rewritten, Refused)> {
     fn mentions(e: &Expr) -> bool {
         let named = |s: &str| {
             s.as_bytes()
@@ -287,25 +357,17 @@ pub(crate) fn carried(a: &Attr) -> Result<(), LowerError> {
         }
     }
     if !tags::style(&a.name) || !mentions(&a.value) {
-        return Ok(());
+        return None;
     }
-    let Some((design, packages, theme, runtime)) = DESIGN.with(|d| d.borrow().clone()) else {
-        return Ok(());
-    };
-    let mut tokens = Tokens::of(design.as_deref(), &packages, theme.as_ref());
-    tokens.runtime = runtime;
     let (mut out, mut refused) = (Rewritten::default(), None);
     value(
         &mut a.value.clone(),
-        &tokens,
+        file.get(),
         row_mode(a),
         &mut out,
         &mut refused,
     );
-    match refused {
-        Some((why, literal, span)) => Err(refusal(a, why, &literal, span, &tokens)),
-        None => Ok(()),
-    }
+    Some((out, refused))
 }
 
 /// The one warning for every fallback [`rewrite`] dropped, at the first.
@@ -1018,6 +1080,76 @@ fn kind_words(kind: forma::Kind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carried_rows_share_only_the_current_lowerings_tokens() {
+        let gap = r#""var(--gap)""#;
+        let row = r#""var(--space.row)""#;
+        for (token, property, first, second, builds, valid) in [
+            ("space.row", "gap", "8", "8", 0, true),
+            ("space.row", "gap", gap, gap, 1, true),
+            ("space.row", "gap", row, row, 1, true),
+            ("other", "gap", gap, row, 1, false),
+            ("space.row", "other", row, gap, 1, false),
+            ("space.row", "gap", row, gap, 1, true),
+        ] {
+            let source = format!("component App\n  view\n    column --{property}=\"8px\"\n      text \"a\" width={first}\n      text \"b\" width={second}\n");
+            let mut file = contract_syntax::parse(&source).unwrap();
+            file.design = Some(DesignSource {
+                path: "app.forma".into(),
+                home: "app.forma".into(),
+                text: format!("forma t\n\ntheme\n  {token} = 10px\n"),
+                source_id: 1,
+                bindable: false,
+                package: None,
+                root: None,
+            });
+            let checked = contract_types::check(&file, tags::style).unwrap();
+            let analysis = contract_analyze::check(&checked).unwrap();
+            TOKEN_BUILDS.set(0);
+            let result = crate::lower(&checked, &analysis, None);
+            assert_eq!(
+                result.err().map(|e| e.id),
+                (!valid).then_some("forma-unknown-token")
+            );
+            assert_eq!(TOKEN_BUILDS.get(), builds);
+        }
+    }
+
+    #[test]
+    fn a_carried_refusal_keeps_its_span_across_another_package_merge() {
+        let package = |token: &str, source_id| File {
+            package_designs: vec![DesignSource {
+                path: "cards.forma".into(),
+                home: "@demo/cards/cards.forma".into(),
+                text: format!("forma cards\n\ntheme\n  cards.{token} = 10px\n"),
+                source_id,
+                bindable: false,
+                package: Some("@demo/cards".into()),
+                root: None,
+            }],
+            ..Default::default()
+        };
+        let outer = package("other", 5);
+        let inner = package("gap", 9);
+        let outer = FileTokens::new(&outer);
+        let span = Span {
+            source_id: 3,
+            ..Span::point(7, 8)
+        };
+        let attr = Attr {
+            name: "width".into(),
+            value: Expr::Str("var(--cards.gap)".into(), span),
+            span,
+            written: true,
+        };
+        let before = carried(&attr, &outer).unwrap_err();
+        assert!(carried(&attr, &FileTokens::new(&inner)).is_ok());
+        let after = carried(&attr, &outer).unwrap_err();
+        assert_eq!((after.id, &after.message), (before.id, &before.message));
+        assert_eq!(before.span, span);
+        assert_eq!(after.span, span);
+    }
 
     fn tokens(names: &[&str]) -> Tokens {
         Tokens {

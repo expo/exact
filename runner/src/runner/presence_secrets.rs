@@ -464,13 +464,26 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
     }
 
     /// A long native call that is a store's presence call: answered here.
-    fn presence_call(&self, r: &mut Runner<D>, body: &[u8]) -> Option<Dispatch> {
+    fn presence_call(
+        &self,
+        r: &mut Runner<D>,
+        body: &[u8],
+        grants: Option<&str>,
+    ) -> Option<Dispatch> {
         let (op, name, reason) = presence_body(body)?;
         let at = (r.presence.requests.iter()).position(|(_, b)| b == body);
         let ticket = at.map(|i| r.presence.requests.remove(i).0);
         let now = |a: Json| Some(Dispatch::Run(Work::Now(Box::new(move || response(&a)))));
         let fail = |code: &str, message: String| json!({ "error": code, "message": message });
-        let Some(presence) = r.store.presence_of(&name).cloned() else {
+        let presence = match grants {
+            Some(scope) => {
+                let effective = r.effective_grants(Some(scope));
+                r.store
+                    .with_grants(&effective, |store| store.presence_of(&name).cloned())
+            }
+            None => r.store.presence_of(&name).cloned(),
+        };
+        let Some(presence) = presence else {
             return now(fail(
                 "NotSupportedError",
                 format!("{name} is not a secret.keep name with a presence policy"),
@@ -679,6 +692,48 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
             ),
         };
         r.presence_checked(id, checked);
+    }
+
+    /// Each call whose request is no longer wanted (the app aborted it, or
+    /// let it go) leaves the backend's queue, unanswered. A check the agent
+    /// or a later bind would make is withdrawn and ends as cancelled, so the
+    /// name is not held for an answer no one will give; one the platform is
+    /// making ends when the platform answers.
+    fn presence_let_go(&self, r: &mut Runner<D>) {
+        let gone: Vec<u64> = (r.presence.calls.iter())
+            .filter(|(_, c)| c.ticket.is_some_and(|t| !r.holds(t)))
+            .map(|(id, _)| *id)
+            .collect();
+        for &id in &gone {
+            let p = &mut r.presence;
+            let Some(call) = p.calls.remove(&id) else {
+                continue;
+            };
+            let holds: Vec<u64> = (p.holds.iter())
+                .filter(|(_, c, _)| *c == id)
+                .map(|(h, _, _)| *h)
+                .collect();
+            p.holds.retain(|(_, c, _)| *c != id);
+            let unasked = p.asks.iter().any(|a| a.id == id) || p.waiting.contains(&id);
+            p.asks.retain(|a| a.id != id);
+            p.waiting.retain(|w| *w != id);
+            if let Some(backend) = p.backend.as_mut() {
+                backend.cancel(id);
+                if unasked || !holds.is_empty() {
+                    let why = "the call was let go".to_owned();
+                    backend.checked(id, Checked::Failed("SYSTEM_CANCEL".into(), why));
+                }
+            }
+            for hold in holds {
+                r.retire_hold(hold);
+            }
+            r.log(format!("store {} {}: let go", call.op, call.name));
+            let done = Done::Failed("AbortError".into(), "the call was let go".into());
+            Pending::complete(&call.slot, response(&answer(&done)));
+        }
+        if !gone.is_empty() {
+            r.pump_presence();
+        }
     }
 
     /// The store adopts the backend's occupancy, at the start of a commit:

@@ -134,19 +134,23 @@ pub(crate) fn control(
     }
     // An author's: the grouped sheet sizes a row's switch by the platform's
     // metric (LLP 1115.002 D6), which is the compiler's row and not theirs.
+    // A segmented control, a tablist or a radiogroup, takes a size too (LLP
+    // 1069.011.001 D8).
+    let segmented = attrs.iter().any(|a| {
+        a.name == "role"
+            && matches!(&a.value, Expr::Str(v, _) if v == "tablist" || v == "radiogroup")
+    });
     if let Some(a) = attrs.iter().find(|a| {
         a.written
-            && matches!(
-                a.name.as_str(),
-                "-exact-control-size" | "-exact-corner-style"
-            )
+            && (a.name == "-exact-corner-style" || (a.name == "-exact-control-size" && !segmented))
     }) {
+        let owners = match a.name.as_str() {
+            "-exact-control-size" => "a native button, `button appearance=\"auto\"`, or a segmented control, `role=\"tablist\"` or `role=\"radiogroup\"`",
+            _ => "a native button: `button appearance=\"auto\"`",
+        };
         return err(
             "lower-button-style-attr",
-            format!(
-                "`{}` belongs to a native button: `button appearance=\"auto\"`",
-                a.name
-            ),
+            format!("`{}` belongs to {owners}", a.name),
             a.span,
         );
     }
@@ -590,9 +594,8 @@ pub(crate) fn native_tag() -> Tag {
 
 /// What makes a place one a native button may not be (LLP 1069.011.000
 /// D9), for the children of the element being lowered; `None` when it adds
-/// nothing. `menu_row` is whether that element is a popover's direct child —
-/// a menu row, which may be a native button but whose own children are not
-/// rows (a host makes a menu item of a popover's direct children only).
+/// nothing. A menu row may itself be a native button. Its children form the
+/// item's face.
 pub(crate) fn button_context(
     tag: &str,
     control: Option<&str>,
@@ -610,17 +613,18 @@ pub(crate) fn button_context(
         return Some("a custom `button`");
     }
     if menu_row {
-        return Some("a menu row (a native button can be a popover's direct child, not below one)");
+        return Some("a menu row (put the button directly in the popover or its section)");
     }
     None
 }
 
 /// The style rows a native button's box may carry (LLP 1069.011 D6): where it
-/// sits and how big it is, whether it shows (`display` is checked to be its
-/// own `flex` or `none`), its opacity and transforms, its clip, its accent,
-/// and `outline: none`, which takes the platform's focus ring off (LLP 1104
-/// D6). Its semantic content rows are LLP 1069.011.001 D2–D9, D14–D17;
-/// chrome and arbitrary inner layout remain the platform's to draw.
+/// sits and how big it is, and the layout transition that moves it there (LLP
+/// 1063), whether it shows (`display` is checked to be its own `flex` or
+/// `none`), its opacity and transforms, its clip, its accent, and `outline:
+/// none`, which takes the platform's focus ring off (LLP 1104 D6). Its semantic
+/// content rows are LLP 1069.011.001 D2–D9, D14–D17; chrome and arbitrary inner
+/// layout remain the platform's to draw.
 const NATIVE_ROWS: &[StyleId] = &[
     StyleId::ControlSize,
     StyleId::ControlCornerStyle,
@@ -684,6 +688,7 @@ const NATIVE_ROWS: &[StyleId] = &[
     StyleId::OutlineStyle,
     StyleId::Appearance,
     StyleId::Transition,
+    StyleId::LayoutTransition,
     StyleId::Animation,
     StyleId::ExitAnimation,
     StyleId::PressScale,
@@ -816,6 +821,18 @@ impl Lowerer<'_> {
             .collect();
         let lowered = lower(self);
         self.guards = held;
+        lowered
+    }
+
+    /// `under_bindings` for a `for`'s body, where a route's own child is a row (`NavPlace::repeat`).
+    pub(crate) fn under_repeat<T>(
+        &mut self,
+        bindings: Binds<'_>,
+        lower: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let place = self.nav_place.repeat();
+        let lowered = self.under_bindings(bindings, lower);
+        self.nav_place = place;
         lowered
     }
 

@@ -22,6 +22,7 @@
   "agent": {
     "screens": "ScreenInViewport[]"
   },
+  "shapeImports": { "@exact/window-management": ["ScreenDetailed"] },
   "shapes": {
     "ScreenInViewport": {
       "left": "number",
@@ -43,7 +44,8 @@
       "width": "number",
       "height": "number",
       "type": "string",
-      "screen": "ScreenInViewport"
+      "screen": "ScreenInViewport",
+      "frame": "option<DOMRect>"
     },
     "ScreenCaptures": {
       "captures": "ScreenCapture[]"
@@ -51,6 +53,18 @@
     "ScreenRecordingStatus": {
       "available": "bool",
       "state": "enum<granted|prompt|denied>"
+    },
+    "CaptureWindowApp": {
+      "name": "string",
+      "bundleId": "option<string>",
+      "processName": "option<string>",
+      "pid": "number"
+    },
+    "CaptureWindow": {
+      "handle": "string",
+      "title": "string",
+      "frame": "DOMRect",
+      "app": "CaptureWindowApp"
     }
   },
   "names": [
@@ -64,9 +78,55 @@
           "directory": true
         },
         "type": "option<string>",
-        "quality": "option<number>"
+        "quality": "option<number>",
+        "screen": "option<ScreenDetailed>",
+        "rect": "option<DOMRect>",
+        "window": "option<string>",
+        "cursor": "option<enum<always|never>>"
       },
       "answers": "ScreenCaptures",
+      "substitute": {
+        "from": "window-management.getScreenDetails",
+        "unsupported": [
+          "ios",
+          "android",
+          "tvos",
+          "watchos",
+          "visionos",
+          "terminal"
+        ]
+      },
+      "grants": [
+        "device.screen-recording"
+      ]
+    },
+    {
+      "send": "getWindowAtPoint",
+      "origin": "app",
+      "options": {
+        "x": "number",
+        "y": "number"
+      },
+      "answers": "CaptureWindow",
+      "substitute": {
+        "from": "window-management.getScreenDetails",
+        "unsupported": [
+          "ios",
+          "android",
+          "tvos",
+          "watchos",
+          "visionos",
+          "terminal"
+        ]
+      },
+      "grants": [
+        "device.screen-recording"
+      ]
+    },
+    {
+      "send": "getFrontmostWindow",
+      "origin": "app",
+      "answers": "CaptureWindow",
       "substitute": {
         "from": "window-management.getScreenDetails",
         "unsupported": [

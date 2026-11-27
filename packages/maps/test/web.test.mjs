@@ -26,6 +26,26 @@ for (const [longitude, zoom, dx, dy, expected] of [
   });
 }
 
+// A marker across 180° from the centre is drawn on the world copy beside it, not a world away.
+for (const [longitude, marker, zoom, expected] of [
+  [179.9, -179.9, 8, 200 + 0.2 / 360 * 256 * 2 ** 8],
+  [-179.9, 179.9, 8, 200 - 0.2 / 360 * 256 * 2 ** 8],
+  [179.9, 179.9, 8, 200],
+  [179, -179, 1, 200 + 2 / 360 * 256 * 2],
+]) {
+  test(`a marker at longitude ${marker} is drawn at x ${expected.toFixed(1)} on a 400-pixel map centred on ${longitude} at zoom ${zoom}`, () => {
+    // A fake element whose first child, the pin's svg and its path, is itself.
+    const element = () => { const e = { dataset: {}, style: {}, setAttribute() {}, append() {} }; e.firstChild = e; return e; };
+    const map = Object.assign(Object.create(roster['exact-map'].view.prototype), {
+      centre: [0, longitude], zoom, maxZoom: 19, plain: true, size: { w: 400, h: 400 }, images: new Map(), selected: '',
+      markers: [{ id: 'pin', latitude: 0, longitude: marker }],
+      map: { ownerDocument: { createElement: element } }, tiles: { append() {} }, layer: { replaceChildren() {} },
+    });
+    map.draw();
+    expect(Number.parseFloat(map.parts.get('pin').style.left)).toBeCloseTo(expected, 6);
+  });
+}
+
 async function mapPage(browser, options = {}) {
   const page = await browser.newPage({ viewport: { width: 600, height: 600 }, ...options });
   await page.setContent('<div id="map" style="position:absolute;left:100px;top:100px;width:400px;height:400px"></div>');

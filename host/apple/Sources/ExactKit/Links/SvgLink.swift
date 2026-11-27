@@ -32,6 +32,8 @@ package protocol SvgScenes: AnyObject {
     func target(_ id: UInt32, at point: CGPoint) -> UInt32?
     /// `id`'s view is gone.
     func forget(_ id: UInt32)
+    /// Every scene goes across a session restart, keeping the session's font resolver.
+    func reset()
 }
 
 /// What the core asks of SVG documents: an `image`'s file or an icon's.

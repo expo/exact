@@ -1,7 +1,7 @@
 # A left swipe past the knee, one short of it, and a right swipe the
-# left-only row does not take; then the row that takes both, each way.
+# left-only row does not take; then the right-only row, each way.
 drag left-row -150 0 250
 drag left-row -30 0 300
 drag left-row 150 0 250
-drag both-row -150 0 250
-drag both-row 150 0 250
+drag right-row -150 0 250
+drag right-row 150 0 250

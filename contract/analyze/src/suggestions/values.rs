@@ -1,5 +1,5 @@
 use contract_syntax::{
-    BinOp, Component, Expr, File, FnDecl, Node, PropertyValue as V, Stmt, TypeExpr, UnOp,
+    BinOp, Binding, Component, Expr, File, FnDecl, Node, PropertyValue as V, Stmt, TypeExpr, UnOp,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -123,16 +123,35 @@ struct Write {
     unchanged: bool,
 }
 
+const MAX_EVAL_STEPS: usize = 4096;
+const MAX_EVAL_DEPTH: usize = 128;
+
+struct Budget {
+    steps: usize,
+    depth: usize,
+}
+
+impl Budget {
+    fn new() -> Self {
+        Self {
+            steps: MAX_EVAL_STEPS,
+            depth: 0,
+        }
+    }
+}
+
 pub(super) struct Facts<'a> {
     root: &'a Component,
     fns: &'a [FnDecl],
     slots: Env,
+    derives: Env,
     params: BTreeMap<String, Env>,
     writes: Vec<Write>,
 }
 
 impl<'a> Facts<'a> {
     pub(super) fn new(root: &'a Component, file: &'a File) -> Self {
+        let derive_order = derive_order(&root.derives);
         let mut facts = Self {
             root,
             fns: &file.fns,
@@ -146,6 +165,7 @@ impl<'a> Facts<'a> {
                         .map(|m| (m.name.clone(), Value::Unknown)),
                 )
                 .collect(),
+            derives: Env::new(),
             params: root
                 .actions
                 .iter()
@@ -162,6 +182,12 @@ impl<'a> Facts<'a> {
             writes: Vec::new(),
         };
         loop {
+            facts.derives.clear();
+            for &i in &derive_order {
+                let d = &root.derives[i];
+                let value = facts.expr(&d.expr, &Env::new());
+                facts.derives.insert(d.name.clone(), value);
+            }
             let mut slots = facts.slots.clone();
             let mut params = facts.params.clone();
             for s in &root.states {
@@ -244,57 +270,66 @@ impl<'a> Facts<'a> {
     }
 
     fn expr(&self, e: &Expr, env: &Env) -> Value {
-        self.eval(e, env, &mut BTreeSet::new())
+        let mut budget = Budget::new();
+        self.eval(e, env, &mut BTreeSet::new(), &mut budget)
     }
 
-    fn eval(&self, e: &Expr, env: &Env, seen: &mut BTreeSet<String>) -> Value {
+    fn eval(&self, e: &Expr, env: &Env, seen: &mut BTreeSet<String>, budget: &mut Budget) -> Value {
+        if budget.steps == 0 || budget.depth >= MAX_EVAL_DEPTH {
+            return Value::Unknown;
+        }
+        budget.steps -= 1;
+        budget.depth += 1;
+        let result = self.eval_inner(e, env, seen, budget);
+        budget.depth -= 1;
+        result
+    }
+
+    fn eval_inner(
+        &self,
+        e: &Expr,
+        env: &Env,
+        seen: &mut BTreeSet<String>,
+        budget: &mut Budget,
+    ) -> Value {
         match e {
             Expr::Number(n, _) if n.is_finite() => Value::literal(V::Number(*n)),
             Expr::Str(s, _) => Value::literal(V::String(s.clone())),
             Expr::Bool(b, _) => Value::literal(V::Bool(*b)),
             Expr::None(_) => Value::literal(V::None),
             Expr::Some(_, _) => Value::literal(V::Some),
-            Expr::Typed(e, ty, _) => self.eval(e, env, seen).typed(Some(ty)),
-            Expr::NamedArg(_, e, _) => self.eval(e, env, seen),
-            Expr::Ident(name, _) => {
-                if let Some(v) = env.get(name).or_else(|| self.slots.get(name)) {
-                    return v.clone();
-                }
-                let key = format!("derive:{name}");
-                if !seen.insert(key.clone()) {
-                    return Value::Unknown;
-                }
-                let result = self
-                    .root
-                    .derives
-                    .iter()
-                    .find(|d| d.name == *name)
-                    .map_or(Value::Unknown, |d| self.eval(&d.expr, &Env::new(), seen));
-                seen.remove(&key);
-                result
-            }
-            Expr::Ternary(_, a, b, _) => self.eval(a, env, seen).join(&self.eval(b, env, seen)),
+            Expr::Typed(e, ty, _) => self.eval(e, env, seen, budget).typed(Some(ty)),
+            Expr::NamedArg(_, e, _) => self.eval(e, env, seen, budget),
+            Expr::Ident(name, _) => env
+                .get(name)
+                .or_else(|| self.slots.get(name))
+                .or_else(|| self.derives.get(name))
+                .cloned()
+                .unwrap_or(Value::Unknown),
+            Expr::Ternary(_, a, b, _) => self
+                .eval(a, env, seen, budget)
+                .join(&self.eval(b, env, seen, budget)),
             Expr::Match {
                 var, some, none, ..
             } => {
                 let mut inner = env.clone();
                 inner.insert(var.clone(), Value::Unknown);
-                self.eval(some, &inner, seen)
-                    .join(&self.eval(none, env, seen))
+                self.eval(some, &inner, seen, budget)
+                    .join(&self.eval(none, env, seen, budget))
             }
             Expr::Let {
                 name, value, body, ..
             } => {
                 let mut inner = env.clone();
-                inner.insert(name.clone(), self.eval(value, env, seen));
-                self.eval(body, &inner, seen)
+                inner.insert(name.clone(), self.eval(value, env, seen, budget));
+                self.eval(body, &inner, seen, budget)
             }
-            Expr::List(items, _) => Value::List(Box::new(
-                items
-                    .iter()
-                    .fold(Value::Bottom, |v, e| v.join(&self.eval(e, env, seen))),
-            )),
-            Expr::Unary(UnOp::Neg, e, _) => match self.eval(e, env, seen) {
+            Expr::List(items, _) => {
+                Value::List(Box::new(items.iter().fold(Value::Bottom, |v, e| {
+                    v.join(&self.eval(e, env, seen, budget))
+                })))
+            }
+            Expr::Unary(UnOp::Neg, e, _) => match self.eval(e, env, seen, budget) {
                 Value::Literals(vs) if vs.iter().all(|v| matches!(v, V::Number(_))) => {
                     Value::Literals(
                         vs.into_iter()
@@ -325,8 +360,8 @@ impl<'a> Facts<'a> {
                 ) {
                     return booleans();
                 }
-                let av = self.eval(a, env, seen);
-                let bv = self.eval(b, env, seen);
+                let av = self.eval(a, env, seen, budget);
+                let bv = self.eval(b, env, seen, budget);
                 if av == Value::Bottom || bv == Value::Bottom {
                     return Value::Bottom;
                 }
@@ -343,7 +378,10 @@ impl<'a> Facts<'a> {
             }
             Expr::Call(name, args, _) => {
                 if let Some(f) = self.fns.iter().find(|f| f.name == *name) {
-                    let values: Vec<_> = args.iter().map(|e| self.eval(e, env, seen)).collect();
+                    let values: Vec<_> = args
+                        .iter()
+                        .map(|e| self.eval(e, env, seen, budget))
+                        .collect();
                     let key = format!("fn:{name}");
                     if !seen.insert(key.clone()) {
                         return Value::Unknown;
@@ -359,25 +397,25 @@ impl<'a> Facts<'a> {
                             )
                         })
                         .collect();
-                    let result = self.eval(&f.body, &inner, seen);
+                    let result = self.eval(&f.body, &inner, seen, budget);
                     seen.remove(&key);
                     return result;
                 }
                 match (name.as_str(), args.as_slice()) {
-                    ("floor" | "round" | "ceil", [e]) => match self.eval(e, env, seen) {
+                    ("floor" | "round" | "ceil", [e]) => match self.eval(e, env, seen, budget) {
                         Value::Bottom => Value::Bottom,
                         v if v.finite() => Value::Whole,
                         _ => Value::Unknown,
                     },
                     ("performanceNow", []) => Value::Finite,
-                    ("length", [e]) => match self.eval(e, env, seen) {
+                    ("length", [e]) => match self.eval(e, env, seen, budget) {
                         Value::Bottom => Value::Bottom,
                         v if v.text() || matches!(v, Value::List(_)) => Value::Whole,
                         _ => Value::Unknown,
                     },
                     ("min" | "max", [a, b]) => {
-                        let a = self.eval(a, env, seen);
-                        let b = self.eval(b, env, seen);
+                        let a = self.eval(a, env, seen, budget);
+                        let b = self.eval(b, env, seen, budget);
                         if a == Value::Bottom || b == Value::Bottom {
                             Value::Bottom
                         } else if a.whole() && b.whole() {
@@ -501,6 +539,91 @@ impl<'a> Facts<'a> {
             }
         }
     }
+}
+
+/// Dependency-first order over `derives` using an explicit stack so long
+/// linear chains never exhaust native stack space.
+fn derive_order(derives: &[Binding]) -> Vec<usize> {
+    fn free_reads<'a>(
+        e: &'a Expr,
+        index: &BTreeMap<&str, usize>,
+        bound: &mut Vec<&'a str>,
+        out: &mut Vec<usize>,
+    ) {
+        match e {
+            Expr::Ident(name, _) => {
+                if !bound.contains(&name.as_str()) {
+                    if let Some(&dep) = index.get(name.as_str()) {
+                        out.push(dep);
+                    }
+                }
+            }
+            Expr::Match {
+                subject,
+                var,
+                some,
+                none,
+                ..
+            } => {
+                free_reads(subject, index, bound, out);
+                bound.push(var.as_str());
+                free_reads(some, index, bound, out);
+                bound.pop();
+                free_reads(none, index, bound, out);
+            }
+            Expr::Let {
+                name, value, body, ..
+            } => {
+                free_reads(value, index, bound, out);
+                bound.push(name.as_str());
+                free_reads(body, index, bound, out);
+                bound.pop();
+            }
+            Expr::Arrow { params, body, .. } => {
+                let mark = bound.len();
+                bound.extend(params.iter().map(String::as_str));
+                free_reads(body, index, bound, out);
+                bound.truncate(mark);
+            }
+            _ => e
+                .operands()
+                .for_each(|child| free_reads(child, index, bound, out)),
+        }
+    }
+    let index: BTreeMap<&str, usize> = derives
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (d.name.as_str(), i))
+        .collect();
+    let reads: Vec<Vec<usize>> = derives
+        .iter()
+        .map(|d| {
+            let mut deps = Vec::new();
+            free_reads(&d.expr, &index, &mut Vec::new(), &mut deps);
+            deps
+        })
+        .collect();
+    let mut seen = vec![false; derives.len()];
+    let mut order = Vec::with_capacity(derives.len());
+    for start in 0..derives.len() {
+        if std::mem::replace(&mut seen[start], true) {
+            continue;
+        }
+        let mut stack = vec![(start, 0usize)];
+        while let Some((node, next)) = stack.last_mut() {
+            if let Some(&dep) = reads[*node].get(*next) {
+                *next += 1;
+                if !std::mem::replace(&mut seen[dep], true) {
+                    stack.push((dep, 0));
+                }
+            } else {
+                let node = *node;
+                stack.pop();
+                order.push(node);
+            }
+        }
+    }
+    order
 }
 
 fn booleans() -> Value {

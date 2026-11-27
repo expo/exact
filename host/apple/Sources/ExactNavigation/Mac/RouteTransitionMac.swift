@@ -50,9 +50,10 @@ final class RouteTransitions {
         if let kept {
             let pop = before.count == after.count + 1 && before.starts(with: after)
             if pop { exiting = kept.id }
-            play(pop ? kept.exit : nil, on: presenter.leaving[kept.id]?.view) { [weak self] _ in
+            play(pop ? kept.exit : nil, on: presenter.leaving[kept.id]?.view) { [weak self] alone in
                 if self?.exiting == kept.id { self?.exiting = nil }
                 _ = self?.presenter.endExit(kept.id)
+                if alone { self?.presenter.navigationHost.resync() }
             }
         }
         let route = stack.indices.contains(at) ? stack[at] : nil
@@ -81,6 +82,25 @@ final class RouteTransitions {
         }
         layer.add(part.animation(about: CGPoint(x: view.bounds.midX, y: view.bounds.midY)), forKey: Self.key)
         CATransaction.commit()
+    }
+
+    /// Cancel any playing or pending route transition and release any kept exiting view.
+    func reset() {
+        generation &+= 1
+        if let playing {
+            self.playing = nil
+            playing.view.layer?.removeAnimation(forKey: Self.key)
+        }
+        if let id = exiting {
+            exiting = nil
+            _ = presenter.endExit(id)
+        }
+        if let kept = leaving {
+            leaving = nil
+            _ = presenter.endExit(kept.id)
+        }
+        held = nil
+        top = nil
     }
 
     /// End the playing part at its end (D6).

@@ -124,12 +124,13 @@ fn first(text: Option<&str>, basis: f32) -> Option<f32> {
     Length::parse(word).map(|l| l.resolve(basis))
 }
 
-/// CSS `white-space: normal` for SVG text: runs of white space become one
-/// space; the chunk's edges are trimmed by the caller.
+/// CSS `white-space: normal` for SVG text: runs of spaces, tabs and line ends
+/// become one space, and other spaces (no-break, ideographic) are text (CSS
+/// Text 3 §4.1.1). The chunk's edges are trimmed by the caller.
 fn collapse(text: &str, trailing_space: &mut bool) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
-        if c.is_whitespace() {
+        if matches!(c, ' ' | '\t' | '\n' | '\r') {
             if !*trailing_space {
                 out.push(' ');
                 *trailing_space = true;

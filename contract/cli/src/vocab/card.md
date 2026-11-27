@@ -24,6 +24,7 @@ concat: xs.concat(ys) -> T[]
 filter: xs.filter(x => bool) -> T[]
 flat: xs.flat() -> T[]
 first: first(xs) -> option<T>
+formatShortcut: formatShortcut(chord) -> string  (⇧⌘O or Ctrl+Shift+O; empty on server)
 formatDate: formatDate(msOrDayKey, offset, "medium"|"month-year"|"month-day"|"iso") -> string
 formatDay: formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
 formatDecimal: (cents to "12.34"; literal digits)
@@ -65,7 +66,7 @@ scroll | scrollTop scrollZoom navigationScroll keyboardDismissMode | scroll scro
 dialog | closedby | cancel close
 
 ## rules
-- An event's payload follows captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; none for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
+- After captured arguments, fields, selects and dates pass text. Checkboxes and switches pass bools. Ranges pass numbers. `press` and `submit` pass none. `change=set(i.id)` calls `set(id, payload)`.
 
 ```contract
 component App
@@ -153,7 +154,7 @@ main
     text "Over" color="-exact-system-red"
 ```
 ### reading and writing data
-app.ts's `loadItems`, `addItem` answer exactly their shape; a refusal is a reply (`ok: false`), not a throw. `then act` after `refreshes` clears the field on ok; `pending(added)` stops a second send, `parallel` runs both.
+app.ts's `loadItems`, `addItem` match their shape; refusals reply (`ok: false`), never throw. `then act` after `refreshes` runs on ok; `pending(added)` guards resends, `parallel` runs both.
 ```contract
 shape Reply
   ok: bool
@@ -176,7 +177,7 @@ action log
   days = days.concat([formatDate(at, time.utcOffset, "iso")])
 ```
 ### a test, and verify
-Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
+Fresh store per test; `reload` keeps it. `clock data` lands replies, `clock settle` ends motion. `bun exact.mjs verify` checks ends and relaunches (`verify ios` last; keep receipt and `--shots <dir>`).
 ```contract-test
 test "a pick survives a relaunch"
   tap "pick"
@@ -185,7 +186,7 @@ test "a pick survives a relaunch"
   expect text "n" == "1"
 ```
 ### composing a screen
-One focal point. Emphasis is a part, not paint on a `button`; the main action is `buttonStyle="filled"`. Search: `input type="search"` in the `header`, live. A form is a grouped list (`grouped-form`); no rows, an `EmptyState`, its `button` indented under it.
+One focal point. Use parts, a filled button and live header search. See `grouped-form`. Nest buttons under `EmptyState`.
 ```contract
 use SummaryCard from "exact:content"
 column gap=16 padding=16

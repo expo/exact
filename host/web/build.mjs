@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { factoryTags } from '../../scripts/launch-modules.mjs';
 import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from './crawl.mjs';
 import { warmGameInputs, warmGameEnvironment, publishWarmGame } from '../web-js/module.mjs';
 import { generatedInputFiles } from '../../game/inputs.mjs';
@@ -25,7 +26,7 @@ import { generatedInputFiles } from '../../game/inputs.mjs';
 // Developer builds bake development trust; EXACT_UPDATE_TRUST=production
 // requires signing keys, and the deploy verb always selects production.
 import { grantOrigins } from './navigation/grant-origins.js';
-import { buildHostGlue, bundleModuleGlue, modulePrelude } from '../web-js/glue.mjs';
+import { buildHostGlue, bundleModuleGlue, modulePrelude, writeFalse } from '../web-js/glue.mjs';
 import { gateAgent } from '../web-js/agent-gate.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -38,7 +39,8 @@ import { sourceProvenance, writeInstallPages } from '../../scripts/install-page.
 import { sealEnvelope } from '../../scripts/deploy-signing.mjs';
 import { compilerWarnings, oneScheme, webInputDigests, webInputPresent } from '../../scripts/agent-launch.mjs';
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
-import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
+import { webPackageBinding, webPackageEntries } from '../../js/bake/src/package-config.mjs';
+import { builtSettings, productionManifestImports, recordSourceInputs, resolutionCandidates } from '../../js/bake/src/__exact_env.mjs';
 import { authoredWebBake, webRendererHost, packageGpuDir, packageGpuInputs, packageGpuManifest, rustDataOf } from '../../scripts/app-shells.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
@@ -51,7 +53,7 @@ import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { BINARYEN_DOWNLOAD, optimizeWasm, placeholderImports, splitStages, stripWasm, Unsplittable, unsplitReason } from './stages.mjs';
 import { interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from './look.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
-import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
+import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, planViewTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
 import { writeLinkFiles } from './association.mjs';
 import { cargoInputPaths, compilerPaths, rustBindingInputs } from '../../scripts/cargo-dep-info.mjs';
@@ -244,8 +246,8 @@ function sourcesBuilt(app, dist, atStart) {
   return now === atStart ? now : null;
 }
 
-function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt, settings) {
-  const next = webSourceRoots(app, js, render);
+function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt, settings, extraFiles = []) {
+  const next = [...webSourceRoots(app, js, render), ...extraFiles.map(file => ({ file }))];
   inputRoots.splice(0, inputRoots.length, ...next);
   const current = webInputDigests(app, js, next, settings.sourceInputs);
   // An input the build no longer reads is dropped; one removed while it built, or no longer a file it reads, keeps what
@@ -266,6 +268,52 @@ function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt, settin
  * `exactDelivery()`'s version, build number and `production` (the binary's resolved trust), as the page does. */
 export function versionFile(embedded) {
   return JSON.stringify({ version: embedded.version, buildNumber: embedded.buildNumber, production: embedded.trust === 'production' }) + '\n';
+}
+
+/** Stage the wasm page's package factories as lazy ES modules. Only the host adapter imports the page's host services. */
+export async function buildPackageViews(appDir, placed, provided, stage, production) {
+  const rows = placed.filter(({ tag }) => !provided.includes(tag));
+  if (!rows.length) return null;
+  const extensions = Object.fromEntries(rows.map(row => [row.extension, row.package]));
+  const views = Object.fromEntries(rows.map(row => [row.tag, [row.extension, row.displayed, row.binds.split(/\s+/).filter(Boolean), null, row.package]]));
+  const entries = webPackageEntries(appDir, extensions, production, console.warn);
+  const gen = realpathSync(mkdtempSync(resolve(stage, '.views-')));
+  try {
+    const loaders = [], probes = new Set();
+    for (const [ext, code] of entries) {
+      const name = `ext-${ext}.js`;
+      writeFileSync(resolve(gen, name), code);
+      loaders.push(`[${JSON.stringify(ext)}]: () => import(${JSON.stringify('./' + name)})`);
+    }
+    const runtime = resolve(SDK_ROOT, 'host/web/wasm/package-views.js');
+    const entry = resolve(gen, 'views.js');
+    writeFileSync(entry, `import { packageHost } from ${JSON.stringify(runtime)};
+globalThis.exact.wasmViewHost = (session, options) => packageHost(${JSON.stringify(views)}, {${loaders.join(',')}}, session, options, ${!production});
+`);
+    const { rolldown } = await import('rolldown');
+    const { bundleOptions } = await import('../../js/bake/src/typescript.mjs');
+    const bundle = await rolldown({ ...bundleOptions, input: entry, plugins: [{
+      name: 'wasm-package-host',
+      load: production ? productionManifestImports(appDir) : undefined,
+      async resolveId(source, importer, options) {
+        if (importer === runtime && ['../native-glue.js', '../storage-environment.js', '../storage-fs.js', '../navigation.js'].includes(source))
+          return { id: source, external: true };
+        if (importer === resolve(SDK_ROOT, 'host/web-js/views.js') && source === './wakelock-glue.js')
+          return { id: '../wakelock-glue.js', external: true };
+        if (!importer || within(gen, importer)) return null;
+        const result = await this.resolve(source, importer, { ...options, skipSelf: true });
+        for (const path of resolutionCandidates(source, importer, result?.id, result?.packageJsonPath)) probes.add(path);
+        return result;
+      },
+    }] });
+    try {
+      await bundle.write({ dir: resolve(stage, 'packages'), format: 'es', entryFileNames: 'views.js', chunkFileNames: '[name]-[hash].js', minify: true });
+      const files = (await bundle.watchFiles).filter(file => !within(gen, file));
+      recordSourceInputs(gen, 'resolution', [...probes, ...files]);
+      const { reads } = JSON.parse(readFileSync(resolve(gen, '__exact_inputs.json'), 'utf8'));
+      return { owners: Object.fromEntries(rows.map(row => [row.tag, row.package])), extensions, production, reads, files, binding: webPackageBinding(entries) };
+    } finally { await bundle.close(); }
+  } finally { rmSync(gen, { recursive: true, force: true }); }
 }
 
 async function main() {
@@ -525,13 +573,17 @@ copyShaders(app, resolve(stage, 'shaders'));
 // The neutral sheet follows the browser resets (LLP 1115.000 D4 part B; look.mjs).
 writeFileSync(resolve(stage, 'index.html'), withInterfaceStyle(withLook(readFileSync(resolve(root, 'host/web/index.html'), 'utf8')), interfaceStyle(app.manifest)));
 const production = buildEnv.EXACT_UPDATE_TRUST === 'production';
+const webModules = app.modulesFor('web');
+const provided = webModules.web ? factoryTags(await import(webModules.web)) : [];
 const hostDir = resolve(stage, '.host');
-function copyHostFiles(group) {
+function copyHostFiles(group, only) {
   for (const [name, source] of Object.entries(webHostFiles(group))) {
+    if (only && name !== only) continue;
     if (!name.endsWith('.js')) { copyFileSync(resolve(root, source), resolve(stage, name)); continue; }
     // The module realm's prelude is joined from its scripts here: the module group is copied without the host glue's build.
-    const code = name === 'module-prelude.js' ? modulePrelude(root)
+    let code = name === 'module-prelude.js' ? modulePrelude(root)
       : readFileSync(source.startsWith('target/web-host/') ? resolve(hostDir, name) : resolve(root, source), 'utf8');
+    if (name === 'native-glue.js' && !packageViews) code = writeFalse(code, name, ['PACKAGE_LIFETIME']);
     // Production ships executable code, without source comments and long
     // local names. Keep exports and property names intact across modules.
     const module = !['module-prelude.js', 'module-binary.js', 'audio-session.js'].includes(name);
@@ -540,18 +592,6 @@ function copyHostFiles(group) {
     writeFileSync(resolve(stage, name), result.code);
   }
 }
-if (!bakeOnly) {
-  await buildHostGlue(root, { production, out: hostDir });
-  copyHostFiles('base');
-  rmSync(hostDir, { recursive: true });
-}
-if (!bakeOnly && !production) copyHostFiles('development');
-// These app-independent modules use the same input-checked products as the JS
-// target, so a gameplay edit does not rerun Cargo and wasm-opt for either leaf.
-if (!bakeOnly) await Promise.all([
-  [buildEditor, 'markup-editor.wasm'], [buildFlow, 'textflow.wasm'],
-].map(async ([build, name]) => copyFileSync(await build({keepFresh:true}), resolve(stage, name))));
-
 // The plan and its pointer card (LLP 1023 D1/D2): extract the exact bytes
 // baked into the produced, optimized wasm. Compiling app.contract a second
 // time here could pair app.wasm with a later source revision. A native client
@@ -566,7 +606,7 @@ else {
 wasm = readFileSync(out);
 const unbooted = () => { throw new Error('app logic ran while extracting baked bytes'); };
 const compiled = new WebAssembly.Module(wasm);
-const instance = await WebAssembly.instantiate(compiled, { ...placeholderImports(compiled, unbooted), exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { scroll_metrics: unbooted, range: unbooted, read: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
+const instance = await WebAssembly.instantiate(compiled, { ...placeholderImports(compiled, unbooted), exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { scroll_metrics: unbooted, range: unbooted, read: unbooted, fact: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
 exports = instance.exports;
 if (typeof exports.exact_plan !== 'function' || typeof exports.exact_out !== 'function' || !(exports.memory instanceof WebAssembly.Memory)) {
   throw new Error('the web wasm does not export exact_plan, exact_out, and memory');
@@ -576,6 +616,20 @@ const planPtr = exports.exact_out();
 planBytes = Buffer.from(new Uint8Array(exports.memory.buffer, planPtr, planLen));
 }
 if (planBytes.length < 36 || planBytes.subarray(0, 4).toString() !== 'EXPL') throw new Error('the web wasm returned an invalid baked plan');
+const packageViews = !bakeOnly && Object.keys(buildReceipt.graph.extensions).length
+  ? await buildPackageViews(app.dir, planViewTable(planBytes), provided, stage, production) : null;
+if (!bakeOnly) {
+  await buildHostGlue(root, { production, packageViews: packageViews?.owners, out: hostDir });
+  copyHostFiles('base');
+  rmSync(hostDir, { recursive: true });
+}
+if (!bakeOnly && !production) copyHostFiles('development');
+// These app-independent modules use the same input-checked products as the JS
+// target, so a gameplay edit does not rerun Cargo and wasm-opt for either leaf.
+if (!bakeOnly) await Promise.all([
+  [buildEditor, 'markup-editor.wasm'], [buildFlow, 'textflow.wasm'],
+].map(async ([build, name]) => copyFileSync(await build({keepFresh:true}), resolve(stage, name))));
+
 writeFileSync(planOut, planBytes);
 // A development build's source map for that plan, for the agent driver only
 // (LLP 1012.001.000 D6), as the JS target writes it: the bake's, and only
@@ -619,6 +673,9 @@ if (!bakeOnly) {
 // Storage is an app capability, including apps whose only logic is Rust.
 if (pairedModule || /^\s*(?:fs\.|sqlite\.)/m.test(bakedReceipt.inputs.grantCeiling ?? '')) {
   copyHostFiles('storage');
+} else if (packageViews) {
+  // A package can write its own scratch directory without a filesystem grant (LLP 1133.008 D8).
+  copyHostFiles('storage', 'storage-fs.js');
 }
 copyStaticTreeIfPresent(resolve(buildEnv.EXACT_BAKE_OUTPUT, 'web-wasm32-unknown-unknown.entries/plans'), resolve(stage, 'plans'));
 copyStaticTreeIfPresent(resolve(buildEnv.EXACT_BAKE_OUTPUT, 'web-wasm32-unknown-unknown.entries/activities'), resolve(stage, 'activities'));
@@ -676,7 +733,7 @@ function minifyCss(css) {
 }
 // The app's module artifact answers `native.later` on the page too (LLP
 // 1067 D5): the glue finds it by the meta tag below.
-const pageNative = app.modules.web;
+const pageNative = webModules.web;
 writeFileSync(resolve(stage, 'index.html'), readFileSync(resolve(stage, 'index.html'), 'utf8')
   .replace(/<style>([\s\S]*?)<\/style>/, (_, css) => `<style>${minifyCss(css)}${launchBackground(app.manifest)}</style>`)
   .replace('<html lang="en">', `<html lang="${escapeHtml(webManifest.lang)}">`)
@@ -801,25 +858,27 @@ if (gpu.built) {
 // app has modules (the GPU gate): its web executor under `modules/`, fetched
 // after first paint by the host's adapter.
 let moduleNote = 'no native modules';
-if (app.modules.tags.length || app.modules.web) {
+if (webModules.tags.length || webModules.web || packageViews) {
   const release = buildEnv.EXACT_UPDATE_TRUST === 'production';
-  let provided = [];
-  if (app.modules.web) {
-    copyStaticTreeIfPresent(dirname(app.modules.web), resolve(stage, 'modules'));
-    provided = Object.keys((await import(app.modules.web)).roster ?? {});
+  if (webModules.web) {
+    copyStaticTreeIfPresent(dirname(webModules.web), resolve(stage, 'modules'));
   }
-  checkModuleRoster(app, provided, 'web', release);
+  checkModuleRoster(webModules.tags, provided, 'web', release);
   copyHostFiles('native');
-  moduleNote = `modules/ (${provided.join(', ') || 'none'}), on demand`;
+  const rosters = [];
+  if (webModules.tags.length || webModules.web) rosters.push(`modules/ (${provided.join(', ') || 'none'})`);
+  if (packageViews) rosters.push(`package views (${Object.keys(packageViews.extensions).join(', ')})`);
+  moduleNote = `${rosters.join(', ')}, on demand`;
 }
 // Written last inside the private stage. Dev startup trusts a dist only when
 // this marker and the public plan card agree, so a partial/corrupt directory
 // can never be mistaken for a completed build of the requested app.
-completeWebInputs(app, false, render[1] ?? 'rust', inputRoots, inputs, inputsAt, builtSettings(stage));
+completeWebInputs(app, false, render[1] ?? 'rust', inputRoots, inputs, inputsAt, builtSettings(stage), packageViews?.files);
 writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({
   exactBuild: 1, app: { id: app.id, name: app.displayName }, manifestSha256: appManifestDigest(app),
   files: await publicFileCards(stage).finally(closeFilesystemReader),
   // Content digests of what this build read: a staleness check compares bytes, not times.
+  ...(packageViews ? { packageViews } : {}),
   inputs, inputsAt, inputRoots, sources: sourcesBuilt(app, dist, sources),
   // Each setting its module inlined (LLP 1153 D4), from the paired module's receipt, as a JS build's marker says them.
   ...builtSettings(stage),

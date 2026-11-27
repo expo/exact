@@ -18,8 +18,9 @@ const WELL_KNOWN: [&str; 7] = [
     "screenshots",
 ];
 
-/// `startIn=`: at most one, a string, and a literal one of [`WELL_KNOWN`].
-fn start_in(
+/// Each option takes one string. A literal `startIn` must name a well-known folder.
+fn string_option(
+    option: &str,
     code: &'static str,
     name: &str,
     args: &[Expr],
@@ -27,25 +28,25 @@ fn start_in(
     shapes: &Shapes,
 ) -> Result<(), TypeError> {
     let mut given = args.iter().filter_map(|a| match a {
-        Expr::NamedArg(n, value, at) if n == "startIn" => Some((value.as_ref(), *at)),
+        Expr::NamedArg(n, value, at) if n == option => Some((value.as_ref(), *at)),
         _ => None,
     });
     let Some((value, _)) = given.next() else {
         return Ok(());
     };
     if let Some((_, at)) = given.next() {
-        return err(code, "`startIn=` is given twice", at);
+        return err(code, format!("`{option}=` is given twice"), at);
     }
     let t = infer(value, scope, shapes)?;
     if Ty::String.unify(&t).is_none() {
         return err(
             code,
-            format!("`{name}`'s `startIn=` is a string, not `{t}`"),
+            format!("`{name}`'s `{option}=` is a string, not `{t}`"),
             value.span(),
         );
     }
     if let Expr::Str(folder, at) = value {
-        if !WELL_KNOWN.contains(&folder.as_str()) {
+        if option == "startIn" && !WELL_KNOWN.contains(&folder.as_str()) {
             return err(
                 code,
                 format!(
@@ -61,7 +62,7 @@ fn start_in(
 
 /// The three pickers' positional arguments: an element id, then `multiple`
 /// (a bool) for `showOpenFilePicker` or `suggestedName` (a string) for
-/// `showSaveFilePicker`; then, named, `startIn`.
+/// `showSaveFilePicker`; then, named, `startIn` and `apple.message`.
 pub(super) fn picker_args(
     name: &str,
     args: &[Expr],
@@ -83,7 +84,7 @@ pub(super) fn picker_args(
     let wrong = |at| {
         err(
             "type-file-picker-argument",
-            format!("`{name}` takes `{usage}`, and `startIn=`"),
+            format!("`{name}` takes `{usage}`, with optional `startIn=` and `apple.message=`"),
             at,
         )
     };
@@ -96,12 +97,19 @@ pub(super) fn picker_args(
         Some((_, true)) => 2,
         _ => 1,
     };
-    let stray = args
-        .iter()
-        .any(|a| matches!(a, Expr::NamedArg(n, ..) if n != "startIn"));
+    for arg in args {
+        if let Expr::NamedArg(n, _, at) = arg {
+            if !matches!(n.as_str(), "startIn" | "apple.message") {
+                return err(
+                    "type-file-picker-argument",
+                    format!("`{name}` does not take `{n}=`. Its named arguments are `startIn=` and `apple.message=`"),
+                    *at,
+                );
+            }
+        }
+    }
     if positional.len() < least
         || positional.len() > most
-        || stray
         || matches!(args.first(), Some(Expr::NamedArg(..)))
     {
         return wrong(span);
@@ -117,7 +125,17 @@ pub(super) fn picker_args(
             return wrong(arg.span());
         }
     }
-    start_in("type-file-picker-argument", name, args, scope, shapes)
+    for option in ["startIn", "apple.message"] {
+        string_option(
+            option,
+            "type-file-picker-argument",
+            name,
+            args,
+            scope,
+            shapes,
+        )?;
+    }
+    Ok(())
 }
 
 /// `saveFile(id, from, suggestedName)` (LLP 1069.010 D3): three strings,
@@ -172,5 +190,12 @@ pub(super) fn save_file_args(
             );
         }
     }
-    start_in("type-save-file-argument", "saveFile", args, scope, shapes)
+    string_option(
+        "startIn",
+        "type-save-file-argument",
+        "saveFile",
+        args,
+        scope,
+        shapes,
+    )
 }

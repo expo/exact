@@ -99,7 +99,7 @@ impl NodeArena {
 
 impl NodeArena {
     /// Mark the colours its styles hold: the shared table's, which every
-    /// node's style is one of, and the control and document styles.
+    /// node's style is one of, and the control, document and state look styles.
     pub(crate) fn wide_colors(&mut self, m: &mut crate::style::wide::WideMark) {
         use crate::style::wide::Colors;
         self.shared.wide_colors(m);
@@ -107,6 +107,11 @@ impl NodeArena {
             control.colors(m);
         }
         self.document_style.colors(m);
+        for entries in self.looks.values() {
+            for (_, patch) in entries.iter() {
+                patch.colors(m);
+            }
+        }
     }
 
     /// The same, visiting every style (for a clone, once).
@@ -117,5 +122,10 @@ impl NodeArena {
             control.colors(m);
         }
         self.document_style.colors(m);
+        for entries in self.looks.values() {
+            for (_, patch) in entries.iter() {
+                patch.colors(m);
+            }
+        }
     }
 }

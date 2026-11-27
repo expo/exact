@@ -85,6 +85,12 @@ extension NodeView {
         return viewTint ?? ThemeRoles.color("AccentColor", in: self)
         #endif
     }
+    /// Resolved extended-sRGB tint channels for a tint-referencing gradient row,
+    /// or nil when the row does not reference the view's tint.
+    func gradientTintKey(for value: BatchValue?) -> [[Double]]? {
+        guard value?.namesTint == true else { return nil }
+        return SystemColor.tintPair(gradientTint ?? SystemColor.appTint, extended: true)
+    }
     /// `background-attachment: fixed` (LLP 1066 D7).
     var gradientFixed: Bool { style["background_attachment"]?.string == "fixed" }
 

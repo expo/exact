@@ -23,7 +23,8 @@ class ScrollingTest {
         val scrollers = Scrolling::class.java.getDeclaredField("scrollers").apply { isAccessible = true }
         val indicate = Scrolling::class.java.getDeclaredMethod("indicate", Scrolling.Scroller::class.java).apply { isAccessible = true }
         fun scroller() = (scrollers.get(scrolling) as Map<*, *>)[1] as Scrolling.Scroller
-        fun told(flags: Int) = scrolling.told(intArrayOf(1f.toBits(), 1, flags, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits()))
+        fun told(flags: Int, minX: Float = 0f, maxX: Float = 500f, maxY: Float = 500f) =
+            scrolling.told(intArrayOf(1f.toBits(), 1, flags, 0, 0, 0, 0, 0, maxX.toBits(), maxY.toBits(), minX.toBits()))
         fun down() {
             val e = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 100f, 100f, 0)
             scrolling.touch(e); e.recycle()
@@ -95,6 +96,43 @@ class ScrollingTest {
             assertEquals("the statement's policy survives an older hit reply", newPolicy != 0, f.scroller().barless)
             assertEquals(newPolicy == 0, f.scroller().bar?.parent != null)
         }
+    }
+
+    /** LLP 1123 D14: a claimed scroller's statement carries its claim's record. At 2 pixels a point, 100 points down
+     * under a top reach of 40 and inset of 100, its content is painted 60 short of its offset, at 80 pixels, which is
+     * where the reader places its rows, so they do not move as it takes them; its reached port is the record's; and the
+     * scroller stated after it is read past the record. */
+    @Test fun aClaimedScrollersRecordPlacesItsRowsAndPort() {
+        val f = Fixture(2)
+        val claimed = 2 or 4 or Scrolling.CLAIMED_FLAG
+        f.scrolling.told(intArrayOf(2f.toBits(),
+            1, claimed, 0, 0, 100f.toBits(), 0, 80f.toBits(), 0, 900f.toBits(), 0, 0, (-60f).toBits(), 0, 0, 400f.toBits(), 800f.toBits(),
+            2, 2, 0, 0, 30f.toBits(), 0, 60f.toBits(), 0, 500f.toBits(), 0))
+        val s = f.scroller()
+        s.own = true
+        assertEquals(0f, f.scrolling.shift(1)!!, 0f)
+        assertEquals(-60f, s.claimY, 0f)
+        assertEquals(android.graphics.RectF(0f, 0f, 400f, 800f), s.port)
+        val other = (f.scrollers.get(f.scrolling) as Map<*, *>)[2] as Scrolling.Scroller
+        assertEquals(30f, other.pointsY, 0f)
+        assertEquals(0f, other.claimY, 0f)
+        // Stated again without its claim, it is placed at its offset
+        f.scrolling.told(intArrayOf(2f.toBits(), 1, 2 or 4, 0, 0, 100f.toBits(), 0, 200f.toBits(), 0, 900f.toBits(), 0))
+        assertEquals(0f, f.scrolling.shift(1)!!, 0f)
+        assertEquals(0f, s.claimY, 0f)
+    }
+
+    @Test fun aLayoutSnapAndItsRecordingArriveInTheSameStatement() {
+        val f = Fixture(1)
+        f.told(1)
+        val s = f.scroller()
+        s.own = true
+        s.pendX = 3f
+        // The second landscape page moves to 411 points when the new range ends at 822.
+        f.scrolling.told(intArrayOf(2f.toBits(), 1, 1, 1, 411f.toBits(), 0, 822f.toBits(), 0, 822f.toBits(), 0, 0))
+        assertEquals(822f, s.at(true), 0f)
+        assertEquals(s.drawnX, s.at(true), 0f)
+        assertEquals(1644f, s.end(true), 0f)
     }
 
     @Test fun aTouchsAnswerTellsEachScrollersSnap() {
@@ -182,7 +220,7 @@ class ScrollingTest {
         }
         val mode get() = field("mode").getInt(f.scrolling)
         fun snap(v: Float) = Scrolling::class.java.getDeclaredMethod("snap", Float::class.java).apply { isAccessible = true }
-            .invoke(f.scrolling, v) as Boolean
+            .invoke(f.scrolling, v) as Float?
         /** The list's areas around the projection, at [positions]. */
         fun answer(vararg positions: Float) {
             val b = { v: Float -> v.toBits() }
@@ -192,7 +230,7 @@ class ScrollingTest {
 
     @Test fun aProximityListFlungPastItsToldAreasAsksForThoseAroundTheProjection() {
         val r = ListRelease(mandatory = false)
-        assertFalse("nothing told is near: the fling is the platform's", r.snap(8000f))
+        assertNull("nothing told is near: the fling is the platform's", r.snap(8000f))
         val projected = r.asked!!.first
         assertTrue(projected > 1000f)
         // The fling that release starts is under way when the answer comes: one near its projection takes it.
@@ -202,11 +240,19 @@ class ScrollingTest {
         assertEquals((projected + 40f - r.at).toInt().toFloat(), fling.finalX.toFloat(), 1f)
     }
 
+    @Test fun aReleaseNamesItsSnapAreaEvenWhenTheNewRangeEndsBeforeIt() {
+        val r = ListRelease(mandatory = true)
+        r.s.maxX = 500f
+        assertEquals(600f, r.snap(8000f)!!, 0f)
+        val fling = r.field("fling").get(r.f.scrolling) as android.widget.OverScroller
+        assertEquals(200, fling.finalX)
+    }
+
     @Test fun anAnswerForAListTheAppScrolledSinceIsDropped() {
         val r = ListRelease(mandatory = true)
-        assertTrue(r.snap(8000f))
+        assertNotNull(r.snap(8000f))
         // The app scrolls the list (a new revision): the settle ends, and the late answer moves nothing.
-        r.f.scrolling.told(intArrayOf(1f.toBits(), 1, 1, 1, 0, 0, 0, 0, 100000f.toBits(), 500f.toBits()))
+        r.f.scrolling.told(intArrayOf(1f.toBits(), 1, 1, 1, 0, 0, 0, 0, 100000f.toBits(), 500f.toBits(), 0))
         assertEquals(0, r.mode)
         r.answer(r.asked!!.first)
         assertEquals("idle", 0, r.mode)
@@ -229,5 +275,38 @@ class ScrollingTest {
         assertTrue("the catch takes the touch", f.scrolling.touch(e)); e.recycle()
         assertEquals("dragging", 3, field("mode").getInt(f.scrolling))
         assertEquals("the next flick counts from where it was caught", 450f, field("dragFrom").getFloat(f.scrolling), 0f)
+    }
+
+    @Test fun rtlNegativeHorizontalOverflowSnapsAndPositionsScrollbar() {
+        val f = Fixture(1)
+        f.told(1, minX = -400f, maxX = 0f, maxY = 0f)
+        f.down()
+        f.under(f.reply(0))
+        val s = f.scroller()
+        assertEquals(-400f, s.minX, 0f)
+        assertEquals(0f, s.maxX, 0f)
+        val field = { name: String -> Scrolling::class.java.getDeclaredField(name).apply { isAccessible = true } }
+        val snap = Scrolling::class.java.getDeclaredMethod("snap", Float::class.java).apply { isAccessible = true }
+        field("active").set(f.scrolling, listOf(s))
+        field("sideways").setBoolean(f.scrolling, true)
+        field("mode").setInt(f.scrolling, Scrolling.DRAGGING)
+        // Starting at 0 (right edge), indicator thumb sits at the right end (400 in 600 range).
+        f.indicate()
+        val bar = requireNotNull(s.bar)
+        assertEquals(600, bar.rangeX)
+        assertEquals(400, bar.atX)
+        // Negative RTL offset maps leftward inside the scrollbar range.
+        s.nowX = -120f
+        f.indicate()
+        assertEquals(280, bar.atX)
+        // Flinging leftward from 0 snaps into negative RTL snap points (does not bail at at <= 0).
+        s.nowX = 0f; s.pendX = 0f
+        s.snapMandatory = true; s.snapPort[0] = 200f
+        s.snaps[0] = floatArrayOf(-400f, -400f, -200f, -200f, 0f, 0f)
+        s.stops[0] = BooleanArray(3)
+        field("dragFrom").setFloat(f.scrolling, 0f)
+        val target = snap.invoke(f.scrolling, -2000f) as Float?
+        assertNotNull("RTL negative fling must snap", target)
+        assertTrue("target is negative: $target", target!! < 0f)
     }
 }

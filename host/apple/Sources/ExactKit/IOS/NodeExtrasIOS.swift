@@ -128,6 +128,12 @@ final class NodeExtras {
     /// Where a swipe's first finger landed, in the window (its shouldBegin's edge rule).
     var swipeDownX: CGFloat?
     var swipeHold: SwipeHold?
+    /// Its `swipe`'s recognizer (`DiscreteSwipeIOS.swift`).
+    var discreteSwipe: UISwipeGestureRecognizer?
+    #if os(iOS)
+    var reportingPinch: ReportingPinch?
+    var reportingIndirectPinch: ReportingIndirectPinch?
+    #endif
     var heightRecognizer: UIPanGestureRecognizer?
     var heightHold: DragInput?
     var contextTransform = CGAffineTransform.identity
@@ -160,6 +166,7 @@ final class NodeExtras {
     var stepper: FieldStepper?
     #endif
     var toldText: String?
+    var pendingFiltered = false
     var pendingValue: String?
     /// A native field in a grouped list's row (`isCellField`).
     var fieldInCell = false
@@ -215,12 +222,13 @@ final class NodeExtras {
     /// A `scrollZoom` written and not yet applied (`ScrollZoomIOS.swift`).
     var pendingZoom: Double?
     var pendingScrollTransfer = false
-    /// A collapsing title's scroller (LLP 1075.003 Stage 3): its expanded
-    /// title's inset, where `scrollTop` 0 rests; 0 for every other scroller.
+    var afterScrollAnimation: (() -> CGPoint?)?
+    var lastScrollAsk: UInt64 = 0
     package var controlRide: CGFloat = 0
+    /// A scroller under a route's bar (LLP 1075.003 Stage 3): the inset where
+    /// `scrollTop` 0 lays its content out, with a large title open, as it last
+    /// rested at its top; 0 for every other scroller.
     package var scrollOrigin: CGFloat = 0
-    /// …and the smallest inset it has had: its title collapsed.
-    package var scrollCollapsed: CGFloat = 0
     /// What the style last said of the scroll view's indicators and deceleration.
     weak var nativeScrollView: UIScrollView?
     weak var nativeScrollDelegate: (any UIScrollViewDelegate)?
@@ -232,7 +240,8 @@ final class NodeExtras {
     /// The part of the band its scroll view's `contentInset` holds (LLP 1131 D2).
     package var bandInset = UIEdgeInsets.zero
     /// How far D13's reach outsets its scroll view past its box on each edge, as the kernel's
-    /// terms give it (LLP 1123 D13); D14's writer holds the insets that go with it.
+    /// terms give it (LLP 1123 D13); D14's writer holds the insets that go with it. Until the kernel
+    /// gives one, the side reach the host gives it (`setSideReach`), whose insets are `sideInset`.
     var reach = UIEdgeInsets.zero
     /// Whether the kernel has given its reach (`setReach`), zero included: until then a grouped list reaches by its own
     /// rule (`GroupedListView.sideReach`).
@@ -244,6 +253,7 @@ final class NodeExtras {
     weak var bandOver: NodeView?
     var navigationPaint = NavigationPaintRole.sibling
     var edgeInteraction: AnyObject?
+    var scrollportHolder: ScrollportHolder?
     var scrollWritten: String?
     /// A hatched node whose hatch undoes its own additions: its row may be
     /// reused (LLP 1075.003.000.000 §8).
@@ -365,6 +375,7 @@ extension NodeView {
     var swipeDownX: CGFloat? { get { extras?.swipeDownX } set { if newValue != nil || extras != nil { more.swipeDownX = newValue } } }
     var swipeArmed: Bool { get { extras?.swipeArmed ?? false } set { if newValue || extras != nil { more.swipeArmed = newValue } } }
     var swipeHold: SwipeHold? { get { extras?.swipeHold } set { if newValue != nil || extras != nil { more.swipeHold = newValue } } }
+    var discreteSwipe: UISwipeGestureRecognizer? { get { extras?.discreteSwipe } set { if newValue != nil || extras != nil { more.discreteSwipe = newValue } } }
     package var heightRecognizer: UIPanGestureRecognizer? { get { extras?.heightRecognizer } set { if newValue != nil || extras != nil { more.heightRecognizer = newValue } } }
     package var heightHold: DragInput? { get { extras?.heightHold } set { if newValue != nil || extras != nil { more.heightHold = newValue } } }
     package var reorderPan: UIPanGestureRecognizer? { get { extras?.reorderPan } set { if newValue != nil || extras != nil { more.reorderPan = newValue } } }
@@ -408,6 +419,7 @@ extension NodeView {
     var selectionField: UITextField? { headerField ?? field }
     /// The editor's text as the app was last told it; nil once the app has set the value since (`FieldComposition.swift`).
     var toldText: String? { get { extras?.toldText } set { if newValue != nil || extras != nil { more.toldText = newValue } } }
+    var pendingFiltered: Bool { get { extras?.pendingFiltered ?? false } set { if newValue || extras != nil { more.pendingFiltered = newValue } } }
     /// A `value` that arrived while text was marked, applied when the composition ends.
     var pendingValue: String? { get { extras?.pendingValue } set { if newValue != nil || extras != nil { more.pendingValue = newValue } } }
     package var video: (any VideoPlaying)? { get { extras?.video } set { if newValue != nil || extras != nil { more.video = newValue } } }
@@ -515,7 +527,18 @@ extension NodeView {
 extension NodeView {
     package var controlRide: CGFloat { get { extras?.controlRide ?? 0 } set { if newValue != 0 || extras != nil { more.controlRide = newValue } } }
     package var scrollOrigin: CGFloat { get { extras?.scrollOrigin ?? 0 } set { if newValue != 0 || extras != nil { more.scrollOrigin = newValue } } }
-    package var scrollCollapsed: CGFloat { get { extras?.scrollCollapsed ?? 0 } set { if newValue != 0 || extras != nil { more.scrollCollapsed = newValue } } }
+    /// Asked when UIKit's scroll animation on its scroller ends (`scrollViewDidEndScrollingAnimation`), once: where
+    /// the scroll goes on to, or nil where it ends. A drag, a reveal or another write drops it.
+    package var afterScrollAnimation: (() -> CGPoint?)? { get { extras?.afterScrollAnimation } set { if newValue != nil || extras != nil { more.afterScrollAnimation = newValue } } }
+    /// When the app last asked its scroller to move, on the presenter's count (`scrollAskCount`): a `scrollTop` or
+    /// `scrollLeft` write, or a `scrollIntoView` of something inside it. A host default that would move it gives way
+    /// to an ask made after the press it answers began (LLP 1070.000 §2.6).
+    package var lastScrollAsk: UInt64 { extras?.lastScrollAsk ?? 0 }
+    func askedToScroll() {
+        guard let presenter else { return }
+        presenter.scrollAskCount &+= 1
+        more.lastScrollAsk = presenter.scrollAskCount
+    }
     var scrollWritten: String? { get { extras?.scrollWritten } set { if newValue != nil || extras != nil { more.scrollWritten = newValue } } }
     package var hatchReusable: Bool { get { extras?.hatchReusable ?? false } set { if newValue || extras != nil { more.hatchReusable = newValue } } }
     package var navigationPaint: NavigationPaintRole { get { extras?.navigationPaint ?? .sibling } set { if newValue != .sibling || extras != nil { more.navigationPaint = newValue } } }
@@ -531,12 +554,19 @@ extension NodeView {
     }
     /// Its page band (`NodeExtras.pageBand`), zero for most.
     package var pageBand: UIEdgeInsets { extras?.pageBand ?? .zero }
-    /// Its reach (`NodeExtras.reach`), zero until activation applies the kernel's.
+    /// Its reach (`NodeExtras.reach`).
     package var reach: UIEdgeInsets { extras?.reach ?? .zero }
     /// Its extension (`setExtension`), nil while its picture is not mirrored.
     package var boxExtension: BoxExtension? { extras?.boxExtension }
     /// Whether the kernel has given its reach (`NodeExtras.reachGiven`).
     package var reachGiven: Bool { extras?.reachGiven ?? false }
+    /// Whether it reaches past its top or bottom.
+    var reachesDown: Bool { reach.top > 0 || reach.bottom > 0 }
+    /// A scroll view that comes or goes reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13).
+    func forgetReach() {
+        guard let extras, pageBand != .zero || bandInset != .zero || reach != .zero || reachGiven else { return }
+        (extras.pageBand, extras.bandInset, extras.reach, extras.reachGiven) = (.zero, .zero, .zero, false)
+    }
     /// How far its scroll view lies past its box on each edge: its page band's top and bottom, or
     /// its reach, whichever is larger, the page band reaching no side.
     package var scrollOutset: UIEdgeInsets {
@@ -545,14 +575,15 @@ extension NodeView {
     }
     /// The part of each of `sv`'s insets it draws its content through (LLP 1123 D13, LLP 1130 D3): with reach, the smaller
     /// of how far it lies past its box (`scrollOutset`) and its inset less native content room (`scrollPortInsets`), never
-    /// below zero; with none, the page band, which counts whole as it lands, while the inset holding it may still lag. A
-    /// windowed list counts it as port and as padding before its first row and after its last, and the rest of the inset
-    /// narrows its port.
+    /// below zero; on a top and bottom with none, the page band, which counts whole as it lands, while the inset holding
+    /// it may still lag. A windowed list counts it as port and as padding before its first row and after its last, and the
+    /// rest of the inset narrows its port.
     package func scrollDrawnThrough(_ sv: UIScrollView) -> UIEdgeInsets {
         guard reach != .zero else { return pageBand }
         let o = scrollOutset, a = scrollPortInsets(sv)
         let t = { (o: CGFloat, a: CGFloat) in max(0, min(o, a)) }
-        return UIEdgeInsets(top: t(o.top, a.top), left: t(o.left, a.left), bottom: t(o.bottom, a.bottom), right: t(o.right, a.right))
+        return UIEdgeInsets(top: reachesDown ? t(o.top, a.top) : pageBand.top, left: t(o.left, a.left),
+                            bottom: reachesDown ? t(o.bottom, a.bottom) : pageBand.bottom, right: t(o.right, a.right))
     }
     /// The outset a scroll event counts into CSS's scroll position: all of it but what the scroll view's own layout
     /// consumes of a side reach (`BandConsumer`), across which its content stays put, as a grouped list's cards do.
@@ -566,13 +597,15 @@ extension NodeView {
         return o
     }
     /// Where CSS's `scrollLeft` 0 is in UIKit's offsets: past the scroller's left inset when UIKit
-    /// insets it, or past native content room, as `scrollTopInset` is for `scrollTop`.
+    /// insets it, or past native content room and its side reach, as `scrollTopInset` is for `scrollTop`.
     package func scrollLeftInset(_ sv: UIScrollView) -> CGFloat {
-        sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : extras?.nativeScrollContentInsets.left ?? 0
+        sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : (extras?.nativeScrollContentInsets.left ?? 0) + sideInset.left
     }
     package var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: NodeView? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
+    /// The view holding its bars on its scrollport, over its scroll view (`ScrollportBars`, LLP 1123 D12).
+    package var scrollportHolder: ScrollportHolder? { get { extras?.scrollportHolder } set { if newValue != nil || extras != nil { more.scrollportHolder = newValue } } }
     /// Whether a touch at `point` can reach this box's children. Overflow
     /// that is not visible clips them at the padding edge (CSS Overflow 3
     /// §3), so a touch on the border is the box's own, as a browser hit-tests
@@ -647,7 +680,7 @@ extension NodeView {
     /// sheet is UIKit's glass (LLP 1141.001 D3).
     package var groundIsSheets: Bool {
         #if os(iOS)
-        guard props["navigationPresentation"] == "modal", !wrote("background_color"),
+        guard NavigationRules.sheetLike(props["navigationPresentation"]), !wrote("background_color"),
               case .object(let o)? = style["background_color"] else { return false }
         return o["sys"]?.string == "systemBackgroundColor"
         #else

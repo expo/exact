@@ -195,11 +195,24 @@ final class TabsIOSTests: XCTestCase {
         let session = try fixture("EXACT_SEARCH_TABS_PLAN")
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         XCTAssertEqual(tabs.mode, .tabSidebar)
+        let search = try node(session, "tab-find")
+        let agent = Agent(session: session)
+        waitFor("UIKit presents the pinned search tab") {
+            guard case .success(let view)? = agent.tabItem(search), let model = tabs.tabs.first(where: { $0 is UISearchTab }),
+                  let frame = model.frame(in: tabs.view), !frame.isEmpty else { return false }
+            return view.convert(view.bounds, to: tabs.view) == frame
+        }
         tabs.sidebar.isHidden = false
         let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first as? RouteController)
         until("the route clears the sidebar") { route.view.safeAreaInsets.left > 100 }
         let text = try node(session, "text-home")
+        let start = try node(session, "bar-start-home"), end = try node(session, "bar-end-home")
         let sidebar = route.view.safeAreaInsets.left
+        until("the start reads the sidebar width") { abs(start.bounds.width - sidebar) < 1 && end.bounds.width == 0 }
+        let farColumn = UIView(frame: CGRect(x: tabs.view.bounds.midX, y: 0, width: 100, height: 100))
+        route.view.addSubview(farColumn)
+        XCTAssertEqual(tabs.barInsets(beside: farColumn), .zero)
+        farColumn.removeFromSuperview()
         until("its content is laid out beside the sidebar") { text.convert(text.bounds, to: nil).minX >= sidebar }
         XCTAssertTrue(try node(session, "tabs").isHidden, "the sidebar takes the authored tablist's place")
         let footer = try node(session, "sidebar-footer"), account = try node(session, "account")
@@ -211,6 +224,7 @@ final class TabsIOSTests: XCTestCase {
         let hit = try XCTUnwrap(window?.hitTest(center, with: nil))
         XCTAssertTrue(hit === account || hit.isDescendant(of: account), "Account at \(center), footer \(accessory.bounds), button \(account.bounds), hit \(type(of: hit))")
         tabs.sidebar.isHidden = true
+        until("both sides read zero with the sidebar hidden") { start.bounds.width == 0 && end.bounds.width == 0 }
         until("hidden, the content takes the width back") { text.convert(text.bounds, to: nil).minX < sidebar }
         tabs.sidebar.isHidden = false
         try tapNode(session, "account")
@@ -221,6 +235,102 @@ final class TabsIOSTests: XCTestCase {
         until("the app-drawn bar returns the footer to its parent") { tabs.sidebar.bottomBarView == nil && footer.superview === home }
         try tapNode(session, "account")
         until("Account selects Saved from the page") { self.topRoute(session) == "route-saved" }
+    }
+
+    func testAnIndependentSafeAreaCanBeWiderThanTheIPadSidebar() throws {
+        guard #available(iOS 18.0, *), UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("the iPad tab sidebar needs iOS 18") }
+        turned = true
+        turn(.landscapeRight)
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        tabs.sidebar.isHidden = false
+        let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first?.view)
+        let start = try node(session, "bar-start-home")
+        until("UIKit reserves the sidebar") { route.safeAreaInsets.left > 100 }
+        let sidebar = route.safeAreaInsets.left
+        tabs.additionalSafeAreaInsets.left = sidebar + 20
+        until("the sidebar keeps its width when the tab controller’s safe area is wider") {
+            route.safeAreaInsets.left > sidebar * 2 && abs(start.bounds.width - sidebar) < 1
+        }
+    }
+
+    func testAClippedHorizontalTabBarHasNoInlineInset() throws {
+        guard #available(iOS 27.1, *), UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the Duo’s rail needs iOS 27.1") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController), bar = tabs.tabBar
+        let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first?.view)
+        let parent = try XCTUnwrap(bar.superview), root = try XCTUnwrap(tabs.viewIfLoaded)
+        let bounds = bar.bounds, center = bar.center
+        defer { bar.bounds = bounds; bar.center = center }
+        bar.bounds.size = CGSize(width: 360, height: 49)
+        for x in [root.bounds.minX - 340, root.bounds.maxX - 20] {
+            let frame = CGRect(x: x, y: root.bounds.maxY - 49, width: 360, height: 49)
+            bar.center = root.convert(CGPoint(x: frame.midX, y: frame.midY), to: parent)
+            XCTAssertEqual(bar.convert(bar.bounds, to: root).intersection(root.bounds).width, 20, accuracy: 0.5)
+            XCTAssertEqual(tabs.barInsets(beside: route), .zero, "horizontal tab bar at \(frame)")
+        }
+
+        guard bar.traitCollection.placesVerticalBar else { return }
+        let right = root.convert(center, from: parent).x > root.bounds.midX
+        let x = right ? root.bounds.maxX - 20 : root.bounds.minX - bounds.width + 20
+        let rail = CGRect(x: x, y: root.bounds.minY, width: bounds.width, height: 200)
+        bar.bounds.size = rail.size
+        bar.center = root.convert(CGPoint(x: rail.midX, y: rail.midY), to: parent)
+        XCTAssertEqual(tabs.barInsets(beside: route), UIEdgeInsets(top: 0, left: right ? 0 : 20, bottom: 0, right: right ? 20 : 0))
+        let below = UIView(frame: route.convert(CGRect(x: root.bounds.minX, y: rail.maxY, width: root.bounds.width, height: 100), from: root))
+        route.addSubview(below)
+        XCTAssertEqual(tabs.barInsets(beside: below), .zero)
+
+        let edge = right ? tabs.contentLayoutGuide.layoutFrame.maxX : tabs.contentLayoutGuide.layoutFrame.minX
+        let middle = CGPoint(x: edge + (right ? 1 : -1) * (bounds.width / 2 - 12), y: root.bounds.midY)
+        bar.center = root.convert(middle, to: parent)
+        let insets = tabs.barInsets(beside: route)
+        XCTAssertEqual(right ? insets.right : insets.left, bounds.width, accuracy: 0.5)
+
+        let clip = UIView(frame: route.convert(CGRect(x: root.bounds.midX - 100, y: 0, width: 80, height: root.bounds.height), from: root))
+        clip.clipsToBounds = true
+        route.addSubview(clip)
+        let pane = UIView(frame: clip.convert(route.bounds, from: route))
+        clip.addSubview(pane)
+        XCTAssertEqual(tabs.barInsets(beside: pane), .zero)
+    }
+
+    func testTheDuoRailReportsItsSideOnAPushedRoute() throws {
+        guard #available(iOS 27.1, *), UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the Duo’s rail needs iOS 27.1") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        guard tabs.tabBar.traitCollection.placesVerticalBar else { throw XCTSkip("this phone has no vertical rail") }
+        try tapNode(session, "open-detail")
+        until("the detail route is visible") { self.topRoute(session) == "route-detail" }
+        let start = try node(session, "bar-start-detail"), end = try node(session, "bar-end-detail")
+        let rail = tabs.tabBar.convert(tabs.tabBar.bounds, to: tabs.view)
+        XCTAssertNotNil(tabs.tabBar.window)
+        XCTAssertGreaterThan(rail.height, rail.width)
+        let right = rail.midX > tabs.view.bounds.midX
+        until("the route reads the visible rail’s width on its side") {
+            abs(start.bounds.width - (right ? 0 : rail.width)) < 1 && abs(end.bounds.width - (right ? rail.width : 0)) < 1
+        }
+
+        let split = UIArrangementViewController()
+        split.updateArrangement(UISplitArrangement().axes(.horizontal))
+        XCTAssertTrue(session.presenter.arrangements.set(try node(session, "arranged-detail").id, controller: split))
+        let first = (try node(session, "first-pane-start"), try node(session, "first-pane-end"))
+        let second = (try node(session, "second-pane-start"), try node(session, "second-pane-end"))
+        let primary = try XCTUnwrap(split.viewController(for: .primary)?.view)
+        let secondary = try XCTUnwrap(split.viewController(for: .secondary)?.view)
+        // UIKit collapses to one pane on the cover display.
+        until("the visible pane at the end reads the rail and a pane beside it reads zero") {
+            self.window?.layoutIfNeeded()
+            let visible = [(primary, first), (secondary, second)].filter { pane, _ in
+                pane.window != nil && !pane.bounds.isEmpty && sequence(first: pane, next: { $0.superview }).allSatisfy { !$0.isHidden }
+            }.sorted { $0.0.convert($0.0.bounds, to: tabs.view).midX < $1.0.convert($1.0.bounds, to: tabs.view).midX }
+            guard !visible.isEmpty else { return false }
+            return visible.enumerated().allSatisfy { index, entry in
+                let (start, end) = entry.1
+                return abs(start.bounds.width - (!right && index == 0 ? rail.width : 0)) < 1
+                    && abs(end.bounds.width - (right && index == visible.count - 1 ? rail.width : 0)) < 1
+            }
+        }
     }
 
     func testThePhonesTabBarHidesTheSidebarFooterAndReturnsItsControls() throws {
@@ -253,6 +363,51 @@ final class TabsIOSTests: XCTestCase {
         until("UIKit's label again") { search.title == platform.title }
         XCTAssertEqual(search.image, platform.image, "UIKit's symbol again")
         if #available(iOS 26.0, *) { until("no field, no activation") { !search.automaticallyActivatesSearch } }
+    }
+
+    func testTouchingEachTabsLayoutCenterSelectsIt() throws {
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "UIKit selects the tab at the reported center")
+        }
+        let session = try fixture("EXACT_MORE_TABS_PLAN"), agent = Agent(session: session)
+        let window = try XCTUnwrap(window), scene = try XCTUnwrap(window.windowScene)
+        let touch = try TouchRunner(self)
+        defer { touch.connection.cancel() }
+        let controller = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        let stacks = try XCTUnwrap(controller.viewControllers), items = try XCTUnwrap(controller.tabBar.items)
+        let names = ["home", "barless", "three", "four", "five", "six"]
+        guard stacks.count == names.count else { return XCTFail("expected a controller for each tab") }
+        XCTAssertGreaterThan(items.count, 1)
+        let tabs = try names.map { try node(session, "tab-" + $0) }
+        // Start with an unselected tab so a missed touch cannot pass.
+        for index in Array(names.indices.dropFirst()) + [0] {
+            let tab = tabs[index]
+            let detail = try XCTUnwrap(agent.layout(["id": Int(tab.id)])["node"] as? [String: Any])
+            let hidden = try XCTUnwrap((detail["visible"] as? [String: Any])?["hidden"] as? Bool)
+            let space = try XCTUnwrap(detail["space"] as? [String: Any])
+            let box = try XCTUnwrap(space["viewport"] as? [String: Double])
+            let width = try XCTUnwrap(box["w"]), height = try XCTUnwrap(box["h"])
+            if !items.contains(stacks[index].tabBarItem) {
+                XCTAssertTrue(hidden, names[index])
+                XCTAssertEqual(width, 0)
+                XCTAssertEqual(height, 0)
+                continue
+            }
+            XCTAssertFalse(hidden, names[index])
+            XCTAssertGreaterThanOrEqual(width, 20)
+            XCTAssertGreaterThanOrEqual(height, 20)
+            let center = CGPoint(x: try XCTUnwrap(box["x"]) + width / 2, y: try XCTUnwrap(box["y"]) + height / 2)
+            let point = window.convert(agent.windowPoint(center), to: scene.coordinateSpace)
+            let aim = agent.aim(["id": Int(tab.id), "aim": ["press": true]])
+            let named = try XCTUnwrap(aim["aim"] as? [String: Any], "\(aim)")
+            XCTAssertEqual(named["point"] as? [Double], [Agent.r2(point.x), Agent.r2(point.y)])
+            var request = try TouchRunner.aim(point, in: window)
+            request["op"] = "tap"
+            XCTAssertEqual(try touch.ask(request)["done"] as? Bool, true)
+            until("only the touched tab is selected") {
+                tabs.allSatisfy { ($0.props["accessibilitySelected"] == "true") == ($0 === tab) }
+            }
+        }
     }
 
     /// A tap the agent delivers asks the app's delegate as UIKit asks it on
@@ -421,6 +576,8 @@ final class TabsIOSTests: XCTestCase {
         let owner = try XCTUnwrap(navigation.primaryOwner)
         let begins = route.convert(route.bounds, to: holder).minX
         XCTAssertEqual(owner.additionalSafeAreaInsets.left, begins, accuracy: 0.5)
+        let clearance = ContributionsIOS.existing(on: owner)?.entries.filter { $0.identity.operation == .containerClearance }
+        XCTAssertEqual(clearance?.map(\.insets.left), [begins], "the container's ledger holds Exact's part")
         let nav = try XCTUnwrap(navigation.primaryNavigation)
         until("the bar's layout clears the column") { nav.navigationBar.safeAreaInsets.left >= begins - 0.5 }
         if case .edges(let edges)? = navigation.covers[route.id] { XCTAssertEqual(edges.left, 0, "no left cover on the route") }
@@ -462,6 +619,94 @@ private final class RecordingTabDelegate: NSObject, UITabBarControllerDelegate {
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         calls.append("shouldSelect controller")
         return true
+    }
+}
+
+final class FloatingTabIOSTests: XCTestCase {
+    func testFloatingTabsWithTheSameTitleHaveTheirOwnCells() throws {
+        guard #available(iOS 18.0, *), UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad tab list") }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "UIKit lays out its tab cells in a regular-width window")
+        }
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let session = ExactApp.shared.makeSession(label: "tab cells")
+        defer { session.destroy() }
+        let agent = Agent(session: session)
+        let animations = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(false)
+        defer { UIView.setAnimationsEnabled(animations) }
+        for count in [3, 6] {
+            let controller = UITabBarController()
+            let pages = (0..<count).map { _ -> UIViewController in
+                let page = UIViewController()
+                page.tabBarItem = UITabBarItem(title: "Shared", image: nil, tag: 0)
+                return page
+            }
+            if count == 3 {
+                controller.mode = .tabSidebar
+                controller.tabs = pages.enumerated().map { index, page in
+                    UITab(title: "Shared", image: nil, identifier: "panel-\(index)") { _ in page }
+                }
+            } else {
+                controller.viewControllers = pages
+                XCTAssertTrue(controller.tabs.isEmpty)
+            }
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            for sidebar in count == 3 ? [false, true] : [false] {
+                controller.sidebar.isHidden = !sidebar
+                window.layoutIfNeeded()
+                waitFor("UIKit presents all \(count) tabs in the requested bar") {
+                    guard let list = controller.shownTabBar as? UICollectionView else { return false }
+                    return list.visibleCells.count == count && (list.bounds.height > list.bounds.width) == sidebar
+                }
+                let list = try XCTUnwrap(controller.shownTabBar as? UICollectionView)
+                let sample = try XCTUnwrap(list.visibleCells.first)
+                let frame = sample.convert(sample.bounds, to: controller.view)
+                let layout = UICollectionViewFlowLayout()
+                layout.itemSize = frame.size
+                let other = UICollectionView(frame: frame, collectionViewLayout: layout)
+                other.isUserInteractionEnabled = false
+                other.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "unrelated")
+                let data = UICollectionViewDiffableDataSource<Int, Int>(collectionView: other) { list, path, _ in
+                    list.dequeueReusableCell(withReuseIdentifier: "unrelated", for: path)
+                }
+                var snapshot = NSDiffableDataSourceSnapshot<Int, Int>()
+                snapshot.appendSections([0])
+                snapshot.appendItems([0])
+                data.apply(snapshot, animatingDifferences: false)
+                controller.view.addSubview(other)
+                other.layoutIfNeeded()
+                XCTAssertEqual(other.visibleCells.first.map { $0.convert($0.bounds, to: controller.view) }, frame)
+                defer { other.removeFromSuperview(); withExtendedLifetime(data) {} }
+                var visited = Set<ObjectIdentifier>()
+                for (index, page) in pages.enumerated() {
+                    // Hosted XCTest loads accessibility. Make these cells as unidentifiable by
+                    // accessibility as the cold simulator's, even with the client attached.
+                    var pending: [UIView] = list.visibleCells
+                    while let view = pending.popLast() {
+                        view.isAccessibilityElement = false
+                        view.accessibilityIdentifier = nil
+                        view.accessibilityLabel = ""
+                        pending += view.subviews
+                    }
+                    let shown = try XCTUnwrap(controller.shownTabBar)
+                    XCTAssertTrue(shown === list)
+                    guard case .success(let view) = agent.presentedTabItem(page.tabBarItem, in: shown, controller: controller) else {
+                        return XCTFail("no cell for tab \(index)")
+                    }
+                    XCTAssertTrue(list.visibleCells.contains { $0 === view })
+                    if count == 6 {
+                        controller.selectedIndex = index
+                        window.layoutIfNeeded()
+                    }
+                    let model = count == 3 ? controller.tabs[index] : controller.selectedTab
+                    XCTAssertEqual(view.convert(view.bounds, to: list), model?.frame(in: list))
+                    XCTAssertTrue(visited.insert(ObjectIdentifier(view)).inserted)
+                }
+            }
+        }
     }
 }
 #endif

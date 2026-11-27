@@ -52,20 +52,27 @@ extension NodeView {
         // The superview's layer holds the perspective (`applyPerspective`);
         // AppKit attaches it as the superlayer only once the window draws,
         // and a superview with no layer (a root) holds none.
-        guard let own, superview != nil else { return nil }
+        guard let own, let sup = superview else { return nil }
         func anchor(_ l: CALayer) -> CATransform3D {
             let b = l.bounds
             return CATransform3DMakeTranslation(b.minX + b.width * l.anchorPoint.x, b.minY + b.height * l.anchorPoint.y, 0)
         }
+        #if os(iOS) || os(tvOS)
         var m = CATransform3DConcat(CATransform3DInvert(anchor(own)), own.transform)
+        let position = own.position
+        #else
         // Where the anchor sits in the superview: on macOS from the frame,
         // AppKit's own geometry, since the layer's position is in its
         // superlayer's space, which is not the superview's until a layerless
-        // superview's subtree is attached and flipped.
-        #if os(iOS) || os(tvOS)
-        let position = own.position
-        #else
-        let position = CGPoint(x: frame.minX + frame.width * own.anchorPoint.x, y: frame.minY + frame.height * own.anchorPoint.y)
+        // superview's subtree is attached and flipped. When this view and its
+        // superview have opposite vertical orientations, flip Y before the
+        // layer transform and place the anchor from the opposite vertical edge.
+        let flip = isFlipped != sup.isFlipped
+        var m = CATransform3DInvert(anchor(own))
+        if flip { m = CATransform3DConcat(m, CATransform3DMakeScale(1, -1, 1)) }
+        m = CATransform3DConcat(m, own.transform)
+        let py = flip ? frame.maxY - frame.height * own.anchorPoint.y : frame.minY + frame.height * own.anchorPoint.y
+        let position = CGPoint(x: frame.minX + frame.width * own.anchorPoint.x, y: py)
         #endif
         m = CATransform3DConcat(m, CATransform3DMakeTranslation(position.x, position.y, 0))
         if let holder = superview?.layer, !CATransform3DIsIdentity(holder.sublayerTransform) {
@@ -92,7 +99,11 @@ extension NodeView {
         guard style["backface_visibility"]?.string == "hidden", let h = h ?? plane else { return false }
         // The sign of the plane's orientation where it is in front of the
         // viewer (the map's Jacobian is det(h) / w³, and w > 0 there).
-        return h[0] * (h[4] * h[8] - h[5] * h[7]) - h[1] * (h[3] * h[8] - h[5] * h[6]) + h[2] * (h[3] * h[7] - h[4] * h[6]) < 0
+        let det = h[0] * (h[4] * h[8] - h[5] * h[7]) - h[1] * (h[3] * h[8] - h[5] * h[6]) + h[2] * (h[3] * h[7] - h[4] * h[6])
+        #if os(macOS)
+        if let sup = superview, isFlipped != sup.isFlipped { return det > 0 }
+        #endif
+        return det < 0
     }
 
     /// The point on the plane under `p`, or nil when that is behind the viewer.
@@ -168,10 +179,12 @@ extension NodeView {
         var turned: [NodeView] = []
         var v: NSView? = self
         while let n = v, n !== top {
-            if let node = n as? NodeView, node.plane != nil { turned.append(node) }
+            if let node = n as? NodeView {
+                if node !== self, let g = node.glassGeometry, g.a <= 0 || g.d <= 0 { return NSPoint(x: -1e9, y: -1e9) }
+                if node.plane != nil { turned.append(node) }
+            }
             v = n.superview
         }
-        guard !turned.isEmpty else { return convert(p, from: top) }
         var p = p, at = top
         for node in turned.reversed() {
             guard let sup = node.superview, let h = node.plane else { continue }
@@ -179,13 +192,18 @@ extension NodeView {
             p = NodeView.onPlane(sup.convert(p, from: at), h) ?? NSPoint(x: -1e9, y: -1e9)
             at = node
         }
-        return convert(p, from: at)
+        let local = convert(p, from: at)
+        if let g = glassGeometry {
+            guard g.a > 0, g.d > 0 else { return NSPoint(x: -1e9, y: -1e9) }
+            return local.applying(g.inverted())
+        }
+        return local
     }
 
     /// `p` in this node's coordinates in `top`'s (the window's when nil):
     /// `descend` the other way.
     func ascend(_ p: NSPoint, to top: NSView?) -> NSPoint {
-        var p = p, v: NSView = self
+        var p = glassGeometry.map { p.applying($0) } ?? p, v: NSView = self
         while v !== top, let sup = v.superview {
             p = (v as? NodeView)?.plane.map { NodeView.map($0, p) } ?? v.convert(p, to: sup)
             v = sup
@@ -193,10 +211,19 @@ extension NodeView {
         return v === top ? p : top?.convert(p, from: v) ?? v.convert(p, to: nil)
     }
 
+    /// Whether this box has a non-identity layer plane without allocating its
+    /// homography matrix (`plane`).
+    private var hasPlane: Bool {
+        superview != nil && placement == nil && !placementHidden && !CATransform3DIsIdentity(layer?.transform ?? CATransform3DIdentity)
+    }
+
     /// Whether this node or one above it is drawn off its frame.
     var drawnOffFrame: Bool {
         var v: NSView? = self
-        while let n = v { if (n as? NodeView)?.plane != nil { return true }; v = n.superview }
+        while let n = v {
+            if let node = n as? NodeView, node.hasPlane || node.glassGeometry.map({ $0 != .identity }) == true { return true }
+            v = n.superview
+        }
         return false
     }
 }
@@ -243,7 +270,16 @@ extension NodeView {
         #if os(iOS) || os(tvOS)
         placement != nil || placementHidden
         #else
-        placement != nil || placementHidden || plane != nil
+        placement != nil || placementHidden || hasPlane || glassGeometry.map { $0 != .identity } == true
+        #endif
+    }
+
+    /// Whether this view's own geometry transforms points off `parentOrigin + frame.origin`.
+    private var transformsLocally: Bool {
+        #if os(iOS) || os(tvOS)
+        return carriesDrawnPoints || !transform.isIdentity || standsInSpace || !CATransform3DIsIdentity(layer.transform)
+        #else
+        return carriesDrawnPoints
         #endif
     }
 
@@ -293,19 +329,31 @@ extension NodeView {
             #endif
             reach = reach.union(parent.convert(original, to: document))
         }
-        // A canvas placement or an AppKit layer transform needs the drawn corners.
-        // Else the platform can convert the whole rectangle in one call.
+        // A canvas placement or a transform needs corner conversion; untransformed
+        // direct children accumulate their document origin by frame offset without
+        // walking the view hierarchy per node.
         #if os(iOS) || os(tvOS)
-        var below: [(NodeView, Bool, AxisClip?)] = [(self, placedAncestor != nil, nil)]
+        let rootCarried = placedAncestor != nil || transformsLocally
+        let matchFlip = true
         #else
-        var below: [(NodeView, Bool, AxisClip?)] = [(self, placedAncestor != nil || drawnOffFrame, nil)]
+        let rootCarried = placedAncestor != nil || drawnOffFrame
+        let matchFlip = document.isFlipped
         #endif
-        while let (child, carried, clip) = below.popLast() {
+        let rootOrigin: CGPoint? = !rootCarried ? translationOrigin(in: document) : nil
+        var below: [(NodeView, Bool, AxisClip?, CGPoint?)] = [(self, rootCarried, nil, rootOrigin)]
+        while let (child, carried, clip, knownOrigin) = below.popLast() {
             guard child.style["display"]?.string != "none", child.props["semanticTag"] != "dialog",
                   child.props["popover"] == nil else { continue }
             guard child.scale.x != 0, child.scale.y != 0 else { continue }
             if child.bounds.width > 0, child.bounds.height > 0 {
-                let raw = carried ? child.drawnRect(child.bounds, in: document) : child.convert(child.bounds, to: document)
+                let raw: CGRect
+                if carried {
+                    raw = child.drawnRect(child.bounds, in: document)
+                } else if let origin = knownOrigin {
+                    raw = CGRect(origin: origin, size: child.bounds.size)
+                } else {
+                    raw = child.convert(child.bounds, to: document)
+                }
                 if raw.origin.x.isFinite, raw.origin.y.isFinite, raw.width.isFinite, raw.height.isFinite,
                    let box = clip == nil ? raw : clip!.apply(raw) {
                     reach = reach.union(box)
@@ -338,8 +386,58 @@ extension NodeView {
                 reach = reach.union(box)
             }
             #endif
-            below.append(contentsOf: child.childNodes.map { ($0, carried || $0.carriesDrawnPoints, childClip) })
+            let fastOrigin: CGPoint? = (!carried && child.container === child && child.semanticTag != "tr") ? knownOrigin : nil
+            for next in child.childNodes {
+                let nextCarried = carried || next.transformsLocally
+                let nextOrigin: CGPoint?
+                if !nextCarried, let base = fastOrigin, Self.isTranslationStep(next, matchingFlip: matchFlip) {
+                    nextOrigin = CGPoint(x: base.x + next.frame.origin.x, y: base.y + next.frame.origin.y)
+                } else {
+                    nextOrigin = nil
+                }
+                below.append((next, nextCarried, childClip, nextOrigin))
+            }
         }
         return reach
+    }
+
+    /// Whether `view` maps coordinates into its superview purely by translating
+    /// by `frame.origin` (unit scale, zero rotation, zero bounds origin, no
+    /// layer or sublayer transform, and matching `isFlipped` on macOS).
+    private static func isTranslationStep(_ view: PlatformView, matchingFlip: Bool) -> Bool {
+        guard view.bounds.origin == .zero, view.bounds.size == view.frame.size else { return false }
+        #if os(macOS)
+        guard view.isFlipped == matchingFlip, view.frameRotation == 0, view.boundsRotation == 0 else { return false }
+        if let layer = view.layer, !CATransform3DIsIdentity(layer.transform) || !CATransform3DIsIdentity(layer.sublayerTransform) { return false }
+        #else
+        guard view.transform == .identity,
+              CATransform3DIsIdentity(view.layer.transform),
+              CATransform3DIsIdentity(view.layer.sublayerTransform) else { return false }
+        #endif
+        return true
+    }
+
+    /// Exact origin of `self` in `document` when every view from `self` up to
+    /// `document` is translation-only; nil if any ancestor scales, rotates,
+    /// flips, offsets its bounds origin, or transforms its layers.
+    private func translationOrigin(in document: PlatformView) -> CGPoint? {
+        #if os(macOS)
+        let matchFlip = document.isFlipped
+        guard document.bounds.origin == .zero, document.bounds.size == document.frame.size,
+              document.boundsRotation == 0 else { return nil }
+        if let layer = document.layer, !CATransform3DIsIdentity(layer.sublayerTransform) { return nil }
+        #else
+        let matchFlip = true
+        guard document.bounds.origin == .zero, CATransform3DIsIdentity(document.layer.sublayerTransform) else { return nil }
+        #endif
+        var x: CGFloat = 0, y: CGFloat = 0
+        var cur: PlatformView = self
+        while cur !== document {
+            guard Self.isTranslationStep(cur, matchingFlip: matchFlip), let up = cur.superview else { return nil }
+            x += cur.frame.origin.x
+            y += cur.frame.origin.y
+            cur = up
+        }
+        return CGPoint(x: x, y: y)
     }
 }

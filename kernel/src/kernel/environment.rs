@@ -249,10 +249,11 @@ impl Kernel {
             .all
             .iter()
             .filter(|&slot| {
-                self.arena.style(slot).relative.iter().any(|(_, unit, _)| {
-                    matches!(unit, crate::style::relative::Unit::Viewport(u)
-                        if u.basis(self.arena.env()) != u.basis(&env))
-                })
+                self.arena
+                    .style(slot)
+                    .relative
+                    .iter_specs()
+                    .any(|(_, spec)| spec.reads_viewport_change(self.arena.env(), &env))
             })
             .collect();
         // Host border and cell rules can change plain px lengths too.

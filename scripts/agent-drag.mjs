@@ -82,7 +82,10 @@ export async function duringOp(s, op) {
   if (word === 'tree') return args[1] === '--ax' ? s.tree(args[2], { ax: true }) : s.tree(args[1], args[2] === 'under' ? args[3] : undefined);
   if (word === 'layout') return s.layout(...layoutArgs(args.slice(1)));
   // Mid-gesture, as it stands: no settle (LLP 1116.003 D8 settles a screenshot otherwise).
-  if (word === 'screenshot') return s.screenshot(args[1] ?? 'screenshot.png', args[3] === 'save' ? args[2] : args[2] === 'window', args[3], true);
+  if (word === 'screenshot') {
+    if (args[2] === 'display' && args[3] !== 'save') return s.screenshot(args[1] ?? 'screenshot.png', true, 'display', true);
+    return s.screenshot(args[1] ?? 'screenshot.png', args[3] === 'save' ? args[2] : args[2] === 'window', args[3], true);
+  }
   return s.state(args[1], args[2] === 'under' ? args[3] : undefined, args[2] === 'pose', args[2] === 'busy', {
     ...(args.includes('from') ? { from: Number(args[args.indexOf('from') + 1]) } : {}),
     ...(args.includes('limit') ? { limit: Number(args[args.indexOf('limit') + 1]) } : {}),
@@ -212,17 +215,22 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const start = from ? [b.x + from[0], b.y + from[1]] : [b.x + b.w / 2, b.y + b.h / 2], end = [start[0] + dx, start[1] + dy];
   const inside = ([x, y]) => x >= 0 && y >= 0 && x <= vp.w && y <= vp.h;
+  // A swipe's flick (`swipeDrag`, LLP 1057.001 §8.3) is one real stroke from inside its target, never the scroll view's own
+  const after = scrolled ? ' after the view scrolled in' : '';
+  if (opts.flick && !(start[0] >= b.x && start[1] >= b.y && start[0] < b.x + b.w && start[1] < b.y + b.h)) throw new Error(`swipe: its start (${start}) is outside the target's ${b.w} × ${b.h} box at (${b.x}, ${b.y})${after}`);
   // Android's reader owns scrolling; Presenter.pointer_* cannot hold its scroll contact.
   // Use the reader's deterministic scroll samples, and report that delivery explicitly.
-  if (host === 'android' && carrier.reader && ['ScrollView', 'List'].includes(b.type) && !mouse) {
+  let liftAt;
+  if (host === 'android' && carrier.reader && (press || dx || dy || ['ScrollView', 'List'].includes(b.type)) && !mouse) {
     if (!inside(start)) throw new Error(`drag: start (${start}) leaves the viewport (${vp.w} × ${vp.h})`);
-    const req = { op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, from: start };
-    const owner = await carrier.ask({ ...req, probe: true });
+    const req = { op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: dx || dy ? over : 0, from: start, ...(hold ? { hold } : {}) };
+    const owner = await carrier.ask({ ...req, probe: true, ...(press ? { press } : {}) });
     if (owner.error) throw new Error(`drag: ${owner.error}`);
+    liftAt = owner.liftAt;
     if (owner.scrollDrag !== 'presenter') {
       if (owner.scrollDrag !== 'reader') throw new Error('drag: Android reader did not identify the scroll owner');
-      if (during.length || press || hold || opts.path || modifiers) throw new Error('drag: Android reader scroll samples do not hold a native touch; press, hold, during, path and modifiers need native input');
-      const r = await carrier.ask(req);
+      if (during.length || (press && !owner.reorderGrip) || opts.path || modifiers) throw new Error('drag: Android reader scroll samples do not hold a native touch; press, during, path and modifiers need native input');
+      const r = await carrier.ask(press ? { ...req, press } : req);
       if (r.error || r.delivery === 'unsupported') throw new Error(`drag: ${r.error ?? r.reason ?? 'unsupported'}`);
       return noted(await s.landed({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...still(r, target), ...await reorderNotes(s, mark)]);
     }
@@ -241,6 +249,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
 
   if (into && !endpoint(end)) throw new Error(`drag: end (${end}) leaves the screen above its bottom safe area`);
   if (vp && !(inside(start) && endpoint(end))) {
+    if (opts.flick) throw new Error(`swipe: the flick from (${start}) to (${end}) leaves the viewport (${vp.w} × ${vp.h})${after}; start it farther in with at, where the target leaves room for the stroke`);
     // A scroller dragged further than the viewport reaches scrolls the whole way (euxy FRICTION 14). On iOS it is the
     // scroll view's own drag, which a viewport does not bound, under real touches too: a held real stroke scrolls less
     // than its length (a 300-point one scrolled Reflow 214) and an unheld one flings, so real strokes would not scroll
@@ -319,7 +328,18 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     // press and hold seek the virtual clock (platformer R7). `virtual` tells
     // web and macOS to skip the wall sleep; Linux already seeks and reports `clock`.
     const seek = timing !== 'platform' ? { virtual: true } : {};
-    if (press) await phase('hold', { ms: press, ...seek });
+    if (liftAt !== undefined) {
+      const still = Math.min(press, liftAt), travel = liftAt - still;
+      if (still) await phase('hold', { ms: still, ...seek });
+      if (travel) {
+        const leg = legs[0], part = travel / over;
+        await phase('move', { dx: dx * part, dy: dy * part, ms: travel });
+        leg.dx -= dx * part; leg.dy -= dy * part; leg.over -= travel;
+      }
+      const lifted = await carrier.ask({ op: 'tap', phase: 'reorderHold' });
+      if (lifted.error) throw new Error(`drag: ${lifted.error}`);
+      if (press > still) await phase('hold', { ms: press - still, ...seek });
+    } else if (press) await phase('hold', { ms: press, ...seek });
     // Each leg (`then`) moves on from where the one before ended, runs its ops there, and holds.
     for (const leg of legs) {
       if (leg.dx || leg.dy) await phase('move', { dx: leg.dx, dy: leg.dy, ms: leg.over });

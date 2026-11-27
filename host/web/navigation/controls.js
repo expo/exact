@@ -47,6 +47,36 @@ export function settleRadios(el, bound) {
     }
   }
 }
+// DOM selection offsets count the line endings the widget actually displays.
+export function fieldText(el, text) {
+  if (el.localName === "textarea" || el.exactMarkup) return text.replace(/\r\n?/g, "\n");
+  if (el.localName === "input" && /^(text|search|password|url|tel|email)$/.test(el.type)) {
+    text = text.replace(/[\r\n]/g, "");
+    if (el.type === "url" || el.type === "email") return text.replace(/^[\t\f ]+|[\t\f ]+$/g, "");
+  }
+  return text;
+}
+// Both web targets use the field's post-edit selection, in UTF-16 offsets (LLP 1102 §3.16).
+export function replaceFieldText(el, value, filtered = true) {
+  const markup = el.exactMarkup ?? el.$markup;
+  if (markup) return markup.setValue(value, filtered);
+  const old = el.value;
+  if (el.ownerDocument?.activeElement !== el || !filtered && old === "" ||
+      el.localName !== "textarea" && !(el.localName === "input" && /^(text|search|password|tel|url)$/.test(el.type))) {
+    el.value = value;
+    return;
+  }
+  const start = el.selectionStart, end = el.selectionEnd;
+  let prefix = 0, suffix = 0;
+  const limit = Math.min(old.length, value.length);
+  while (prefix < limit && old[prefix] === value[prefix]) prefix++;
+  while (suffix < limit - prefix && old[old.length - suffix - 1] === value[value.length - suffix - 1]) suffix++;
+  const oldEnd = old.length - suffix, newEnd = value.length - suffix;
+  const carry = p => p <= prefix ? p : p < oldEnd ? (filtered ? Math.min(p, newEnd) : newEnd) : newEnd + p - oldEnd;
+  const direction = el.selectionDirection;
+  el.setRangeText(value.slice(prefix, newEnd), prefix, oldEnd, "preserve");
+  el.setSelectionRange(carry(start), carry(end), direction);
+}
 export function setFieldSelection(el, args, log) {
   const [id, start, end, direction] = args ?? [];
   if (!el) {

@@ -1,6 +1,6 @@
-// What a lift carries (LLP 1094.000 D3, D4): the node's admitted
-// `dataTransferFiles`, `dataTransferUrl` and `dataTransferText`, read when
-// the lift begins. No file is read or opened then: each file's load handler
+// What a lift carries (LLP 1094.000 D3, D4, D14): the node's admitted
+// `dataTransferFiles` with their `dataTransferNames`, `dataTransferUrl` and
+// `dataTransferText`, read when the lift begins. No file is read or opened then: each file's load handler
 // reads its own when a destination asks.
 #if os(iOS)
 import ExactCore
@@ -23,12 +23,12 @@ enum DragItems {
     /// `items` reads it, which UIKit lifts nothing without.
     static func name(of node: NodeView) -> String? {
         if let text = node.props["dataTransferText"], !text.isEmpty { return text }
-        if let first = (node.props["dataTransferFiles"] ?? "").split(separator: "\n").first { return (String(first) as NSString).lastPathComponent }
+        if let first = DragFiles.files(of: node).first { return first.name }
         return url(of: node)?.absoluteString
     }
 
-    /// One item per file, its type read from its extension and its name the
-    /// file's own, then `url` and `text` each an item of its own: a
+    /// One item per file, its type read from its own extension and its
+    /// suggested name the one it is offered under, then `url` and `text` each an item of its own: a
     /// destination usually takes one of an item's representations, so on a
     /// file's item they would be hidden behind it. With no file one item carries
     /// `url` and then `text`, since a provider lists its higher-fidelity
@@ -38,18 +38,17 @@ enum DragItems {
     /// journal as it arrives.
     /// Each `app:/` file is opened when a destination asks, through `open`.
     static func items(of node: NodeView, in session: ExactSession?, open: @escaping DragFiles.Opener = DragFiles.open) -> [UIDragItem] {
-        let files = (node.props["dataTransferFiles"] ?? "").split(separator: "\n").map(String.init)
+        let files = DragFiles.files(of: node)
         let url = url(of: node)
         let text = node.props["dataTransferText"].flatMap { $0.isEmpty ? nil : $0 }
         let journal = DragFiles.Journal(session: session)
         let scratch = Scratch()
-        var providers = files.map { entry in
+        var providers = files.map { entry, name in
             let provider = NSItemProvider()
-            let name = (entry as NSString).lastPathComponent
             provider.suggestedName = name
-            let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
+            let type = UTType(filenameExtension: (entry as NSString).pathExtension) ?? .data
             provider.registerFileRepresentation(forTypeIdentifier: type.identifier, fileOptions: [], visibility: .all,
-                                                loadHandler: entry.hasPrefix("app:/") ? appFile(entry, scratch, journal, open: open) : shipped(entry, session?.app.resolver, journal))
+                                                loadHandler: entry.hasPrefix("app:/") ? appFile(entry, name, scratch, journal, open: open) : shipped(entry, session?.app.resolver, journal))
             return provider
         }
         let words = ([url.map { $0 as NSURL }, text.map { $0 as NSString }] as [NSItemProviderWriting?]).compactMap { $0 }
@@ -94,13 +93,14 @@ enum DragItems {
 
     /// An `app:/` file, opened when a destination asks (`open`) and placed
     /// on the drags' copy queue (`DragFiles.copies`) in a folder of its own
-    /// in `scratch` (`DragFiles.place`), the descriptor closed before the
-    /// file is answered. A copy that fails takes its folder with it.
-    static func appFile(_ entry: String, _ scratch: Scratch, _ journal: DragFiles.Journal, open: @escaping DragFiles.Opener = DragFiles.open) -> Load {
+    /// in `scratch` (`DragFiles.place`) under the name it is offered under,
+    /// the descriptor closed before the file is answered. A copy that fails
+    /// takes its folder with it.
+    static func appFile(_ entry: String, _ name: String, _ scratch: Scratch, _ journal: DragFiles.Journal, open: @escaping DragFiles.Opener = DragFiles.open) -> Load {
         { completion in
             DragFiles.copies.addOperation {
                 let folder = scratch.directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-                let url = folder.appendingPathComponent((entry as NSString).lastPathComponent)
+                let url = folder.appendingPathComponent(name)
                 do {
                     let fd = try open(entry, journal).get()
                     let placed = Result {

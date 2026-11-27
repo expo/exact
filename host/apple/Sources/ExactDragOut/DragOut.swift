@@ -166,8 +166,30 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     // MARK: UIDragInteractionDelegate
 
     func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: UIDragSession) -> [UIDragItem] {
-        guard let node = lifted(by: interaction, at: session) else { return [] }
+        guard let node = lifted(by: interaction, at: session) ?? asked(by: interaction) else { return [] }
         return DragItems.items(of: node, in: presenter?.session)
+    }
+
+    /// A tap on another node that could lift, while a drag is under way,
+    /// adds that node's items to it (D4, "Adding to a drag"): checked as a
+    /// lift is, and none from a node whose items the drag already carries.
+    func dragInteraction(_ interaction: UIDragInteraction, itemsForAddingTo session: UIDragSession, withTouchAt point: CGPoint) -> [UIDragItem] {
+        guard let view = interaction.view, let window = view.window,
+              let node = lifted(by: interaction, atWindowPoint: view.convert(point, to: window)) else { return [] }
+        let carried = session.items.contains { item in
+            (item.localObject as? DragItems.Lifted).map { $0.id == node.id && $0.incarnation == node.incarnation } ?? false
+        }
+        return carried ? [] : DragItems.items(of: node, in: presenter?.session)
+    }
+
+    /// The node from whose view UIKit shows a context menu (D4). A request for
+    /// its items then is the menu's, Ask Siri's (WWDC26 session 278) or a drag of
+    /// the menu's preview, with no touch on the node, so it is answered as a
+    /// hand-built delegate answers any.
+    private func asked(by interaction: UIDragInteraction) -> NodeView? {
+        guard let presenter, let id = interactions.first(where: { $0.value === interaction })?.key, let node = presenter.views[id],
+              interaction.view === node, Self.lifts(node), presenter.menus.showsContextMenu(of: node) else { return nil }
+        return node
     }
 
     /// The node `interaction` lifts at `session`'s touch: where the touch
@@ -177,10 +199,16 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     /// node must still be the same one, in the same incarnation and window,
     /// holding the same interaction, after it.
     private func lifted(by interaction: UIDragInteraction, at session: UIDragSession) -> NodeView? {
+        guard let window = interaction.view?.window else { return nil }
+        return lifted(by: interaction, atWindowPoint: session.location(in: window))
+    }
+
+    /// The node `interaction` lifts at `point` in its window, as `lifted(by:at:)` reads a session's touch.
+    private func lifted(by interaction: UIDragInteraction, atWindowPoint point: CGPoint) -> NodeView? {
         guard let presenter, let id = interactions.first(where: { $0.value === interaction })?.key, let node = presenter.views[id],
-              let window = node.window else { return nil }
+              let window = node.window, interaction.view?.window === window else { return nil }
         let incarnation = node.incarnation
-        guard let hit = window.hitTest(session.location(in: window), with: nil), presenter.views[id] === node, node.incarnation == incarnation,
+        guard let hit = window.hitTest(point, with: nil), presenter.views[id] === node, node.incarnation == incarnation,
               node.window === window,
               interactions[id] === interaction, interaction.view === node,
               Self.lifts(node), hit.isDescendant(of: node), !Self.keepsContact(node, from: hit, in: presenter) else { return nil }
@@ -188,26 +216,40 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     }
 
     func dragInteraction(_ interaction: UIDragInteraction, previewForLifting item: UIDragItem, session: UIDragSession) -> UITargetedDragPreview? {
-        interaction.view.flatMap(Self.preview(of:))
+        guard let node = carried(by: item), interaction.view === node else { return nil }
+        return Self.preview(of: node)
     }
 
     /// Back to where the node is now; nil, which fades the item in place,
     /// when its view has gone or is another node's.
     func dragInteraction(_ interaction: UIDragInteraction, previewForCancelling item: UIDragItem, withDefault defaultPreview: UITargetedDragPreview) -> UITargetedDragPreview? {
+        carried(by: item).flatMap(Self.preview(of:))
+    }
+
+    /// The node whose data `item` carries, while its view is still that node's: nil once the view has gone or been lent
+    /// to another node, whose preview would not be the item's.
+    private func carried(by item: UIDragItem) -> NodeView? {
         guard let lifted = item.localObject as? DragItems.Lifted, let view = lifted.view, presenter?.views[lifted.id] === view,
               view.incarnation == lifted.incarnation else { return nil }
-        return Self.preview(of: view)
+        return view
     }
 
     /// The node itself, over the controller's view, so a strip that clips does
     /// not cut the lift, on its own layer fill, which UIKit's lifted copy
-    /// leaves out: the context menu's preview of a node (`LiftTarget`), which
-    /// a node with both lifts once (D4).
-    static func preview(of view: UIView) -> UITargetedDragPreview? {
-        guard !view.isHidden, let target = LiftTarget.target(view) else { return nil }
+    /// leaves out, or as its clip path shapes it (`LiftTarget.clipLift`): the
+    /// context menu's preview of a node, which a node with both lifts once
+    /// (D4).
+    static func preview(of view: NodeView) -> UITargetedDragPreview? {
+        guard !view.isHidden else { return nil }
         let parameters = UIDragPreviewParameters()
-        parameters.visiblePath = LiftTarget.rounded(view)
-        parameters.backgroundColor = view.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear
+        if let lift = LiftTarget.clipLift(view) {
+            parameters.visiblePath = lift.outline
+            parameters.backgroundColor = lift.ground
+        } else {
+            parameters.visiblePath = LiftTarget.rounded(view)
+            parameters.backgroundColor = view.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear
+        }
+        guard let target = LiftTarget.target(view, around: parameters.visiblePath?.bounds) else { return nil }
         return UITargetedDragPreview(view: view, parameters: parameters, target: target)
     }
 

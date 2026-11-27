@@ -15,6 +15,11 @@ public enum ExactDragOut {
 
 final class DragOutHost: DragOutCapability {
     func mouseDrag(_ presenter: Presenter) -> MouseRecognizer { MouseDragOut(presenter) }
+    /// A first click's drag (D5): one a press on `node` arms with no other
+    /// candidate of the chain on the way (`source(from:in:alone:)`).
+    func arms(_ node: NodeView, in presenter: Presenter) -> Bool {
+        !ExactEnv.agentMode && MouseDragOut.source(from: node, in: presenter, alone: true) != nil
+    }
 }
 
 /// Armed on a down at the innermost draggable node the press reaches
@@ -40,6 +45,13 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
     /// whether or not the node is still there.
     private weak var sessionWindow: NSWindow?
     private var origin = CGPoint.zero
+    /// Whether the down was a first click the drag takes alone, in a window
+    /// that was not key: the drag then keeps the window where it was (D5).
+    private(set) var fromBackground = false
+    func armFromBackground(_ node: NodeView, event: NSEvent) {
+        arm(node, event: event)
+        fromBackground = armed != nil
+    }
     /// AppKit's session, begun from the node; a test's stand-in records it,
     /// since a session follows the hardware mouse.
     var begin: (NodeView, [NSDraggingItem], NSEvent, NSDraggingSource) -> Void = { $0.beginDraggingSession(with: $1, event: $2, source: $3) }
@@ -52,6 +64,7 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         guard !ExactEnv.agentMode, let presenter, node.window?.windowNumber == event.windowNumber else { return }
         armed = Self.source(from: node, in: presenter)
         carried = armed.map(Self.carried) ?? []
+        fromBackground = false
         down = node
         downWindow = node.window
         origin = event.locationInWindow
@@ -77,6 +90,8 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         }
         let items = DragItemsMac.items(of: armed, in: presenter.session)
         guard !items.isEmpty else { self.armed = nil; return false }
+        // A drag from a window that was not key leaves it where it was, and the app inactive (D5)
+        if fromBackground { NSApp.preventWindowOrdering() }
         began(in: downWindow)
         // AppKit tracks the mouse from here; the session's end resets this.
         begin(armed, items, event, self)
@@ -99,8 +114,11 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
     /// The node a down on `node` drags: the innermost draggable one that
     /// carries something on the way up, found through the presenter's index,
     /// unless a node that hears `press` or edits text, or a disabled or inert
-    /// one, comes first.
-    static func source(from node: NodeView, in presenter: Presenter) -> NodeView? {
+    /// one, comes first. `alone` also asks that no node on the way, the
+    /// source included, hears a pan or a swipe, reorders, or is a transform
+    /// or a height handle, any of which rule 4 may rank first (D5's first
+    /// click); it reads the nodes and arms nothing.
+    static func source(from node: NodeView, in presenter: Presenter, alone: Bool = false) -> NodeView? {
         let draggable = presenter.carrying("draggable").filter { v in v.props["draggable"] == "true" && carried(v).contains { !($0 ?? "").isEmpty } }
         guard draggable.contains(where: { node.isDescendant(of: $0) }) else { return nil }
         let sources = Set(draggable.map(ObjectIdentifier.init))
@@ -109,6 +127,8 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         while let view = at {
             if let found = nodes[ObjectIdentifier(view)] {
                 if found.disabled || found.inert { return nil }
+                if alone, !found.handlers.isDisjoint(with: ["pan", "panrelease", "swipeleft", "swiperight"])
+                    || !(found.props["reorderFor"] ?? "").isEmpty || presenter.drags.handles(found.id) { return nil }
                 if sources.contains(ObjectIdentifier(view)) { return found }
                 if found.handlers.contains("press") || found.field != nil || found.textArea != nil { return nil }
             }
@@ -119,7 +139,7 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
 
     /// What `node` carries, as its props say it.
     static func carried(_ node: NodeView) -> [String?] {
-        ["dataTransferFiles", "dataTransferUrl", "dataTransferText"].map { node.props[$0] }
+        ["dataTransferFiles", "dataTransferNames", "dataTransferUrl", "dataTransferText"].map { node.props[$0] }
     }
 
     // MARK: NSDraggingSource

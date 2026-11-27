@@ -31,13 +31,21 @@ fn a_list_drag_raises_its_sheet_before_the_list_scrolls() {
     let (_, before) = p.top_sheet().unwrap();
     let y = before.1 + SHEET_HANDLE + 60.;
     let rows = id(&p, "rows");
+    let row = p.hit(200., y).unwrap();
+    let probe =
+        serde_json::json!({"id":row,"scrollDrag":[0,-100],"from":[200,y],"ms":200,"probe":true});
+    let reply: serde_json::Value =
+        serde_json::from_str(&p.agent_scroll_drag(&probe).unwrap()).unwrap();
+    assert_eq!(reply["scrollDrag"], "presenter");
     let under = p.scrollers_at(200., y);
     assert!(under.chain.iter().any(|s| s.id == rows && s.axes.1));
     let t = p.host().now();
     p.pointer_down(200., y, t).unwrap();
     p.pointer_move(200., y - 100., t + 50.).unwrap();
     assert!(p.stage_follows_finger(), "a list drag must raise the sheet");
-    assert!(near(p.top_sheet().unwrap().1 .1, before.1 - 100.));
+    // The list shares the drag: the sheet takes what lies past its
+    // 8-point slop, the crossing event's part of it included.
+    assert!(near(p.top_sheet().unwrap().1 .1, before.1 - 92.));
     p.pointer_up(200., y - 120., t + 60.).unwrap();
     after(&mut p, 1000.);
     assert!(near(p.top_sheet().unwrap().1 .1, STATUS));

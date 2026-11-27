@@ -523,3 +523,60 @@ fn a_file_reached_only_through_a_refused_cycle_is_not_written() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn same_name_across_namespaces_orders_symbols_and_collisions_deterministically() {
+    let dir = temp_dir("namespace-order");
+    let write = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
+    write(
+        "ui.contract",
+        "style Badge\n  color=\"red\"\ncomponent Badge\n  view\n    text \"b\"\n",
+    );
+    write(
+        "app.contract",
+        "use Badge from \"./ui.contract\"\ncomponent App\n  view\n    column class=Badge\n      Badge()\n",
+    );
+    let root = dir.join("app.contract");
+    for _ in 0..20 {
+        let json: serde_json::Value =
+            serde_json::from_str(&contract::symbols_json(&root, None).unwrap()).unwrap();
+        let defs = json["definitions"].as_array().unwrap();
+        let kinds: Vec<&str> = json["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["line"] == 1)
+            .map(|r| {
+                let to = r["to"].as_u64().unwrap() as usize;
+                defs[to]["kind"].as_str().unwrap()
+            })
+            .collect();
+        assert_eq!(kinds, ["component", "style"]);
+    }
+    // Shadowing both namespaces always reports `component` first.
+    write(
+        "app.contract",
+        "use Badge from \"./ui.contract\"\nstyle Badge\n  color=\"blue\"\ncomponent Badge\n  view\n    text \"local\"\ncomponent App\n  view\n    Badge()\n",
+    );
+    for _ in 0..20 {
+        let err = contract::compile_path(&root).unwrap_err();
+        assert_eq!(err.id, "contract-use-shadows");
+        assert!(err.message.contains("component"), "{err}");
+    }
+    // Two-file duplicate across both namespaces always blames `./a.contract` (`component`).
+    write("a.contract", "component Badge\n  view\n    text \"a\"\n");
+    write("b.contract", "style Badge\n  color=\"green\"\n");
+    write(
+        "app.contract",
+        "use Badge from \"./a.contract\"\nuse Badge from \"./b.contract\"\nuse Badge from \"./ui.contract\"\ncomponent App\n  view\n    Badge()\n",
+    );
+    for _ in 0..20 {
+        let err = contract::compile_path(&root).unwrap_err();
+        assert_eq!(err.id, "contract-use-duplicate");
+        assert!(
+            err.message.contains("component") && err.message.contains("a.contract"),
+            "{err}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

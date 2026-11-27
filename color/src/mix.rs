@@ -246,15 +246,32 @@ fn polar([l, a, b]: [f64; 3]) -> [f64; 3] {
     [l, libm::sqrt(a * a + b * b), h]
 }
 
-fn rgb_to_hsl([r, g, b]: [f64; 3]) -> [f64; 3] {
-    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+fn rgb_to_hsl(rgb: [f64; 3]) -> [f64; 3] {
+    let (max, min) = (
+        rgb[0].max(rgb[1]).max(rgb[2]),
+        rgb[0].min(rgb[1]).min(rgb[2]),
+    );
     let (l, d) = ((max + min) / 2.0, max - min);
     let s = if d == 0.0 || l == 0.0 || l == 1.0 {
         0.0
     } else {
         d / (1.0 - (2.0 * l - 1.0).abs())
     };
-    let h = if d == 0.0 {
+    let h = rgb_hue(rgb);
+    // A lightness outside 0 to 1 gives a negative saturation: the opposite
+    // hue with a positive one is the same colour (CSS Color 4 §7.2's sample
+    // code, csswg-drafts#9222).
+    if s < 0.0 {
+        return [(h + 180.0).rem_euclid(360.0), -s * 100.0, l * 100.0];
+    }
+    [h, s * 100.0, l * 100.0]
+}
+
+/// The hue of sRGB components, in degrees; 0 for a gray.
+fn rgb_hue([r, g, b]: [f64; 3]) -> f64 {
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let d = max - min;
+    if d == 0.0 {
         0.0
     } else if max == r {
         60.0 * ((g - b) / d).rem_euclid(6.0)
@@ -262,12 +279,11 @@ fn rgb_to_hsl([r, g, b]: [f64; 3]) -> [f64; 3] {
         60.0 * ((b - r) / d + 2.0)
     } else {
         60.0 * ((r - g) / d + 4.0)
-    };
-    [h, s * 100.0, l * 100.0]
+    }
 }
 
 fn rgb_to_hwb(rgb: [f64; 3]) -> [f64; 3] {
-    let h = rgb_to_hsl(rgb)[0];
+    let h = rgb_hue(rgb);
     let (w, bl) = (
         rgb[0].min(rgb[1]).min(rgb[2]),
         1.0 - rgb[0].max(rgb[1]).max(rgb[2]),

@@ -13,8 +13,12 @@
 //! `aria-modal` view (gallery F22); never Enter or Space while the focus is
 //! a control those keys activate (onboarding F27); a text field keeps its
 //! typing, where only a Control or Meta chord, or Escape, is a shortcut.
+//! A key that types no Latin letter (Russian, Greek) also takes the chord
+//! of the key the US layout puts where it is ([`physical_key`]), as the
+//! web's `physicalKey` and the Mac's ASCII-capable layout do.
 use super::*;
 use exact_runner::KeyModifiers;
+use swash::text::{Codepoint as _, Script};
 
 /// The named keys a chord may end in (input-glue's `shortcutKeys`), beside a
 /// single character and F1–F35.
@@ -35,10 +39,80 @@ const NAMED: [&str; 14] = [
     "PageDown",
 ];
 
+/// The physical keys beside the letters whose US-layout characters
+/// [`physical_key`] answers, and those characters without and with Shift
+/// (input-glue's `usCodes`).
+const US_CODES: [&str; 21] = [
+    "Backquote",
+    "Digit1",
+    "Digit2",
+    "Digit3",
+    "Digit4",
+    "Digit5",
+    "Digit6",
+    "Digit7",
+    "Digit8",
+    "Digit9",
+    "Digit0",
+    "Minus",
+    "Equal",
+    "BracketLeft",
+    "BracketRight",
+    "Backslash",
+    "Semicolon",
+    "Quote",
+    "Comma",
+    "Period",
+    "Slash",
+];
+const US_PLAIN: [&str; 21] = [
+    "`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "[", "]", "\\", ";", "'", ",",
+    ".", "/",
+];
+const US_SHIFTED: [&str; 21] = [
+    "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "{", "}", "|", ":", "\"", "<",
+    ">", "?",
+];
+const LETTERS: [&str; 26] = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
+    "t", "u", "v", "w", "x", "y", "z",
+];
+
+/// A shortcut's key when `name` is one character outside ASCII and the
+/// Latin script (Russian's с on `KeyC`, Greek, ㅠ on `KeyB` under Korean
+/// 2-Set) and Alt is not held: what its physical key `code` types on a US
+/// layout, with Shift, as input-glue's `physicalKey` answers it. A Latin
+/// character is the key wherever it is (AZERTY, Dvorak, German's ö), so no
+/// chord fires twice.
+pub(crate) fn physical_key(name: &str, code: &str, held: KeyModifiers) -> Option<&'static str> {
+    let mut chars = name.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return None;
+    };
+    if held.alt || c.is_ascii() || c.script() == Script::Latin {
+        return None;
+    }
+    if let Some(&[letter]) = code.strip_prefix("Key").map(str::as_bytes) {
+        return letter
+            .is_ascii_uppercase()
+            .then(|| LETTERS[usize::from(letter - b'A')]);
+    }
+    let at = US_CODES.iter().position(|&c| c == code)?;
+    Some(if held.shift {
+        US_SHIFTED[at]
+    } else {
+        US_PLAIN[at]
+    })
+}
+
 /// Whether one chord as ARIA spells it (`Meta+Shift+K`, `Control+Plus`,
 /// `Meta++`, `F13`) is the key `name` (`KeyboardEvent.key`) with exactly the
 /// modifiers `held`: the key compared without case, as input-glue does.
 pub(crate) fn chord_matches(chord: &str, name: &str, held: KeyModifiers) -> bool {
+    let Some(chord) = exact_plan::shortcut::resolve(chord, "Control") else {
+        return false;
+    };
+    let chord = chord.as_ref();
     let mut parts: Vec<&str> = chord.split('+').collect();
     let key = if chord == "+" {
         parts.clear();
@@ -76,24 +150,36 @@ pub(crate) fn chord_matches(chord: &str, name: &str, held: KeyModifiers) -> bool
 }
 
 impl<D: DataSource> Presenter<D> {
-    /// The button whose declared chord takes the key `name` with the
-    /// modifiers held now, pressed (a repeat is not a press): true when one
-    /// took it, and the key goes no further.
-    pub(crate) fn shortcut(&mut self, name: &str, repeat: bool, now_ms: f64) -> bool {
+    /// The button whose declared chord takes the key `name`, or the one
+    /// [`physical_key`] names at `code`, with the modifiers held now, pressed
+    /// (a repeat is not a press): true when one took it, and the key goes no
+    /// further.
+    pub(crate) fn shortcut(&mut self, name: &str, code: &str, repeat: bool, now_ms: f64) -> bool {
         let held = self.modifiers();
         let kernel = self.host.kernel();
         let focus = self.focus.and_then(|id| kernel.node(id));
-        let editing = focus.is_some_and(|n| {
-            n.node_type == NodeType::TextInput
-                || matches!(
-                    n.props.str(PropId::AccessibilityRole),
-                    Some("textbox" | "searchbox" | "combobox")
-                )
-        });
-        if editing && name != "Escape" && !held.meta && !held.ctrl {
-            return false;
+        if name != "Escape" && !held.meta && !held.ctrl {
+            let editing = std::iter::successors(focus, |n| n.parent.and_then(|id| kernel.node(id)))
+                .any(|n| {
+                    let field = match n.node_type {
+                        NodeType::TextInput => true,
+                        NodeType::Control => !matches!(
+                            n.props.str(PropId::Type),
+                            Some("button" | "select" | "progress")
+                        ),
+                        _ => false,
+                    };
+                    (field && n.props.semantic_element().is_none())
+                        || matches!(
+                            n.props.str(PropId::AccessibilityRole),
+                            Some("textbox" | "searchbox" | "combobox")
+                        )
+                });
+            if editing {
+                return false;
+            }
         }
-        let declared = self.shortcut_buttons(name);
+        let declared = self.shortcut_buttons(name, code);
         // Shown: a box, not hidden or inert by its route or an ancestor.
         let Some(button) = declared.into_iter().find(|&id| {
             self.host.route_visibility(id) == (false, false)
@@ -113,21 +199,23 @@ impl<D: DataSource> Presenter<D> {
         true
     }
 
-    /// The buttons that declare a chord taking the key `name` with the
-    /// modifiers held now, in tree order: within the frontmost shown
-    /// `aria-modal` view and what an alert allows, and for a plain Enter or
-    /// Space only the focused one, whose own activation it is.
-    pub(super) fn shortcut_buttons(&mut self, name: &str) -> Vec<ViewId> {
+    /// The buttons that declare a chord taking the key `name`, or the one
+    /// [`physical_key`] names at `code`, with the modifiers held now, in tree
+    /// order: within the frontmost shown `aria-modal` view and what an alert
+    /// allows, and for a plain Enter or Space only the focused one, whose
+    /// own activation it is.
+    pub(super) fn shortcut_buttons(&mut self, name: &str, code: &str) -> Vec<ViewId> {
         let held = self.modifiers();
+        let physical = physical_key(name, code, held);
         let kernel = self.host.kernel();
         let plain = !(held.meta || held.ctrl || held.alt || held.shift);
         let activates = plain
             && matches!(name, "Enter" | " ")
             && self.focus.is_some_and(|id| {
                 kernel.node(id).is_some_and(|n| {
-                    exact_kernel::ControlKind::of(n.node_type, n.props)
-                        == Some(exact_kernel::ControlKind::Button)
-                        || n.props.str(PropId::AccessibilityRole) == Some("button")
+                    n.is_button_element()
+                        || (n.props.link().is_some()
+                            && (n.node_type == NodeType::Pressable || n.is_inline_run()))
                 }) || self
                     .host
                     .runner()
@@ -151,13 +239,12 @@ impl<D: DataSource> Presenter<D> {
                     n.props
                         .str(PropId::AccessibilityKeyShortcuts)
                         .is_some_and(|chords| {
-                            chords
-                                .split_whitespace()
-                                .any(|c| chord_matches(c, name, held))
+                            chords.split_whitespace().any(|c| {
+                                chord_matches(c, name, held)
+                                    || physical.is_some_and(|p| chord_matches(c, p, held))
+                            })
                         })
-                        && (exact_kernel::ControlKind::of(n.node_type, n.props)
-                            == Some(exact_kernel::ControlKind::Button)
-                            || n.props.str(PropId::AccessibilityRole) == Some("button"))
+                        && n.is_button_element()
                 })
             })
             .filter(|&id| !(activates && self.focus != Some(id)))
@@ -174,6 +261,17 @@ impl<D: DataSource> Presenter<D> {
                 })
             })
             .collect()
+    }
+
+    /// `name`, or in a Control or Meta chord the key [`physical_key`] names
+    /// at `code`: the key an editing chord is, so Control+C copies on a
+    /// Russian layout as it does in Windows' own fields and a browser's.
+    pub(super) fn chord_key<'a>(&self, name: &'a str, code: &str) -> &'a str {
+        let held = self.modifiers();
+        (held.ctrl || held.meta)
+            .then(|| physical_key(name, code, held))
+            .flatten()
+            .unwrap_or(name)
     }
 
     /// Press `button` as its shortcut does: a control's assistive down and
@@ -203,7 +301,7 @@ impl<D: DataSource> Presenter<D> {
 
 #[cfg(test)]
 mod tests {
-    use super::chord_matches;
+    use super::{chord_matches, physical_key};
     use exact_runner::KeyModifiers;
 
     fn held(meta: bool, ctrl: bool, alt: bool, shift: bool) -> KeyModifiers {
@@ -251,5 +349,37 @@ mod tests {
         assert!(chord_matches("Space", " ", none));
         assert!(!chord_matches("Hyper+K", "k", none));
         assert!(!chord_matches("Volume", "Volume", none));
+    }
+
+    #[test]
+    fn a_key_that_types_no_latin_letter_is_also_its_us_key() {
+        let none = held(false, false, false, false);
+        let control = held(false, true, false, false);
+        let shift = held(false, false, false, true);
+        // Russian, Greek and Korean 2-Set letters, with and without Shift.
+        assert_eq!(physical_key("с", "KeyC", control), Some("c"));
+        assert_eq!(
+            physical_key("С", "KeyC", held(false, true, false, true)),
+            Some("c")
+        );
+        assert_eq!(physical_key("ψ", "KeyC", none), Some("c"));
+        assert_eq!(physical_key("ㅠ", "KeyB", none), Some("b"));
+        // Russian's punctuation keys: Ж and ж where the US layout has : and ;.
+        assert_eq!(physical_key("ж", "Semicolon", none), Some(";"));
+        assert_eq!(physical_key("Ж", "Semicolon", shift), Some(":"));
+        assert_eq!(physical_key("Э", "Quote", shift), Some("\""));
+        // A Latin letter is the key wherever it is: AZERTY's a on KeyQ,
+        // German's ö on Semicolon, AZERTY's é on Digit2.
+        assert_eq!(physical_key("a", "KeyQ", control), None);
+        assert_eq!(physical_key("ö", "Semicolon", control), None);
+        assert_eq!(physical_key("é", "Digit2", none), None);
+        // Alt's characters stay their own, and so do keys off the US rows.
+        assert_eq!(
+            physical_key("с", "KeyC", held(false, true, true, false)),
+            None
+        );
+        assert_eq!(physical_key("с", "Numpad1", control), None);
+        assert_eq!(physical_key("сс", "KeyC", control), None);
+        assert_eq!(physical_key("Enter", "Enter", control), None);
     }
 }

@@ -12,6 +12,7 @@ use super::{DataSource, Runner, RunnerError, Target};
 use crate::held::Held;
 use crate::vm::{self, Env, Trap};
 use exact_plan::Value;
+use std::collections::HashMap;
 
 /// One element's request.
 #[derive(Clone)]
@@ -48,6 +49,7 @@ pub(super) struct PageAnswer {
 #[derive(Clone)]
 pub(super) struct PageAnswers {
     answers: Vec<PageAnswer>,
+    by_path: HashMap<String, Vec<usize>>,
     /// The answer after the last one taken.
     next: usize,
     /// Which answers an element took.
@@ -61,12 +63,23 @@ pub(super) struct PageAnswers {
 impl PageAnswers {
     pub(super) fn new(answers: Vec<PageAnswer>, store_revision: u64) -> PageAnswers {
         let taken = vec![false; answers.len()];
+        let mut by_path = HashMap::<_, Vec<_>>::new();
+        for (at, answer) in answers.iter().enumerate() {
+            if let Some(path) = &answer.path {
+                by_path.entry(path.clone()).or_default().push(at);
+            }
+        }
         PageAnswers {
             answers,
+            by_path,
             next: 0,
             taken,
             store_revision,
         }
+    }
+
+    pub(super) fn has_path(&self, path: &str) -> bool {
+        self.by_path.contains_key(path)
     }
 
     /// An answer at `args`, the one of the instance at `path` for an
@@ -79,12 +92,20 @@ impl PageAnswers {
     /// during the render. An element the list moved is found by a scan; one
     /// the render did not answer costs a scan that finds nothing.
     fn take(&mut self, path: Option<&str>, args: &[Value]) -> Option<&PageAnswer> {
-        let count = self.answers.len();
-        let at = (0..count)
-            .map(|step| (self.next + step) % count)
-            .find(|&at| {
-                self.answers[at].path.as_deref() == path && self.answers[at].args == args
-            })?;
+        let at = if let Some(path) = path {
+            let candidates = self.by_path.get(path)?;
+            let next = candidates.partition_point(|&at| at < self.next);
+            candidates[next..]
+                .iter()
+                .chain(&candidates[..next])
+                .copied()
+                .find(|&at| self.answers[at].args == args)
+        } else {
+            let count = self.answers.len();
+            (0..count)
+                .map(|step| (self.next + step) % count)
+                .find(|&at| self.answers[at].path.is_none() && self.answers[at].args == args)
+        }?;
         self.next = at + 1;
         self.taken[at] = true;
         Some(&self.answers[at])

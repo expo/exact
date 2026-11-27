@@ -90,7 +90,7 @@ fn the_bounded_feeds_text_run_lowers_with_seven_arms_and_ten_rows() {
         .max()
         .unwrap();
     let item = js[head + 4..].split(',').next().unwrap();
-    assert!(js[at..].starts_with(&format!("Pc(e17,()=>(v=>v===\"code\"?0:v===\"bold\"?1:v===\"mention\"?2:v===\"italic\"?3:v===\"link\"?4:v===\"tag\"?5:6)({item}()[2])")), "{}", &js[at..at + 200]);
+    assert!(js[at..].starts_with(&format!("Pc(v0,()=>(v=>v===\"code\"?0:v===\"bold\"?1:v===\"mention\"?2:v===\"italic\"?3:v===\"link\"?4:v===\"tag\"?5:6)({item}()[2])")), "{}", &js[at..at + 200]);
     assert!(js[at..].contains("[\"font-family\",\"font-size\",\"--exact-style-font-weight\",\"line-height\",\"background-color\",\"font-weight\",\"--exact-said-font-weight\",\"font-style\",\"color\",\"text-decoration-line\"]"), "{js}");
 }
 
@@ -467,4 +467,55 @@ fn names_are_padded_and_revert_layer_is_a_token() {
 fn a_none_and_a_blank_arm_lower() {
     let js = lowered("text \"x\" font-weight=(s == \"a\" ? none : 700) font-family=(s == \"b\" ? \"\" : \"serif\")");
     assert!(js.contains("[[null,4],[700,\"\"],[700,4]]"), "{js}");
+}
+
+/// @ref LLP 1123 D17 — a node whose rows the classes hold, not its inline style, is marked for the safe-area executor
+/// where they let an axis scroll or read an observation: an arm set that writes `overflow-y`, a static scroller and a
+/// static reader each, a node with neither not at all, and a static reader with scrolling arms both.
+#[test]
+fn class_held_scrollers_and_readers_are_marked_for_the_safe_area_executor() {
+    let (arm, why) = refusals("column overflow-y=(s == \"a\" ? \"auto\" : \"visible\")");
+    assert!(why.is_empty(), "{why:?}");
+    let arm = arm.js;
+    assert!(
+        arm.contains("setAttribute(\"data-exact-safe-area\",\"scroller\")"),
+        "{arm}"
+    );
+    let (scroller, _) = refusals("column overflow-y=\"auto\"");
+    assert!(
+        scroller.js.contains("data-exact-safe-area") && scroller.js.contains("scroller"),
+        "{}",
+        scroller.js
+    );
+    let (reader, _) = refusals("column padding-top=\"var(--exact-safe-area-inset-top)\"");
+    assert!(
+        reader.js.contains("data-exact-safe-area") && reader.js.contains("reader"),
+        "{}",
+        reader.js
+    );
+    let (plain, _) = refusals("column padding-top=\"8px\"");
+    assert!(!plain.js.contains("data-exact-safe-area"), "{}", plain.js);
+    // A static reader whose arms switch `overflow-y`: the arms' one write keeps the class's `reader`
+    let (both, why) = refusals(
+        "column padding-top=\"var(--exact-safe-area-inset-top)\" overflow-y=(s == \"a\" ? \"auto\" : \"visible\")",
+    );
+    assert!(why.is_empty(), "{why:?}");
+    assert!(
+        both.js
+            .contains("setAttribute(\"data-exact-safe-area\",\"reader scroller\")"),
+        "{}",
+        both.js
+    );
+}
+
+#[test]
+fn safe_area_marks_read_the_style_text() {
+    use crate::safe_area::{reads, scrolls};
+    assert!(
+        scrolls("overflow-y:auto;height:10px")
+            && scrolls("overflow:hidden scroll")
+            && scrolls("overflow-x:hidden")
+    );
+    assert!(!scrolls("overflow:clip") && !scrolls("overflow:visible") && !scrolls("color:red"));
+    assert!(reads("padding-top:var(--exact-keyboard-inset-bottom,0px)") && !reads("color:red"));
 }

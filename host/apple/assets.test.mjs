@@ -4,12 +4,42 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writ
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { appleAssets, appleAssetCatalogInventory, appleAssetsKey, appleRefusals, composerFallback, rasterIconAssets, iosAssets, iosExecutableRefusal, launchScreen, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
+import { fileURLToPath } from 'node:url';
+import { appleAssets, appleAssetCatalogInventory, appleAssetsKey, appleRefusals, composerFallback, rasterIconAssets, iosAssets, iosExecutableRefusal, launchImageInventory, launchScreen, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
 import { pngPixels } from './image.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 import { alternateIcons } from '../../scripts/app-icons.mjs';
 import { resolveVariant } from '../../scripts/variants.mjs';
 import { useXcode } from './devices.mjs';
+
+test.skipIf(process.platform !== 'darwin')('the launch imageset selects a dark picture at each scale', () => {
+  useXcode();
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-dark-launch-'));
+  try {
+    const app = { dir, name: 'Fixture', manifest: { host: { ios: { launchImage: { src: 'icon.png', width: 40 } } } } };
+    writeFileSync(resolve(dir, 'icon.png'), encodePng({ width: 120, height: 120, data: new Uint8Array(120 * 120 * 4).fill(255) }));
+    const again = resolve(dir, 'Fixture.app'); mkdirSync(again);
+    const image = iosAssets(app, again, true).UILaunchScreen.UIImageName;
+    const darkFile = resolve(dir, 'night.png');
+    const setNight = (height) => writeFileSync(darkFile, encodePng({ width: 120, height, data: new Uint8Array(120 * height * 4).fill(128) }));
+    setNight(60);
+    const variant = { ...app, manifest: { ...app.manifest, host: { ios: { launchImage: { src: 'icon.png', width: 40, color_scheme_dark: { src: 'night.png' } } } } } };
+    const both = iosAssets(variant, again, true);
+    assert.notEqual(both.UILaunchScreen.UIImageName, image);
+    assert.equal(both.ExactLaunchImageSource, undefined, 'a two-appearance catalog cannot decode the app’s explicit day PNG');
+    const car = spawnSync('xcrun', ['assetutil', '--info', resolve(again, 'Assets.car')], { encoding: 'utf8' });
+    assert.equal(car.status, 0, car.stderr);
+    const slots = JSON.parse(car.stdout).filter(a => a.Name === both.UILaunchScreen.UIImageName);
+    for (const scale of [1, 2, 3]) {
+      assert.ok(slots.some(a => a.Scale === scale && a.PixelWidth === scale * 40 && a.PixelHeight === scale * 20 && a.Appearance === 'UIAppearanceDark'));
+      assert.ok(slots.some(a => a.Scale === scale && a.PixelWidth === scale * 40 && a.PixelHeight === scale * 40 && !a.Appearance));
+    }
+    const previous = launchImageInventory(variant);
+    setNight(90);
+    assert.throws(() => iosAssets(variant, again, true, { expectedLaunchImage: previous }), /launch image changed after the bake/);
+    assert.notEqual(iosAssets(variant, again, true).UILaunchScreen.UIImageName, both.UILaunchScreen.UIImageName);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60000);
 
 test.skipIf(process.platform !== 'darwin')('SVG icon catalogs include independent vector renditions and invalidate on an edit', () => {
   useXcode();
@@ -158,7 +188,7 @@ test.skipIf(process.platform !== 'darwin')('alternate icons are the declared ros
     square('assets/paper.png', [240, 235, 220, 255]);
     square('assets/paper-dark.png', [40, 40, 40, 255]);
     square('assets/paper-glyph.png', [0, 0, 0, 255], true);
-    cpSync(new URL('../../scripts/fixtures/Primary.icon', import.meta.url).pathname, resolve(dir, 'art/Night.icon'), { recursive: true });
+    cpSync(fileURLToPath(new URL('../../scripts/fixtures/Primary.icon', import.meta.url)), resolve(dir, 'art/Night.icon'), { recursive: true });
     const catalog = resolve(dir, 'modules/apple/Assets.xcassets');
     const set = (name) => {
       mkdirSync(resolve(catalog, `${name}.appiconset`), { recursive: true });
@@ -201,7 +231,7 @@ test.skipIf(process.platform !== 'darwin')("a variant's Icon Composer project is
   useXcode();
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-variant-icon-'));
   try {
-    for (const name of ['Base', 'Dev']) cpSync(new URL('../../scripts/fixtures/Primary.icon', import.meta.url).pathname, resolve(dir, `art/${name}.icon`), { recursive: true });
+    for (const name of ['Base', 'Dev']) cpSync(fileURLToPath(new URL('../../scripts/fixtures/Primary.icon', import.meta.url)), resolve(dir, `art/${name}.icon`), { recursive: true });
     const manifest = {
       app: { id: 'com.example.v', name: 'V' }, host: { ios: { icon: 'art/Base.icon' }, macos: { icon: 'art/Base.icon' } },
       variants: { dev: { idSuffix: '.dev', name: 'V Dev', host: { ios: { icon: 'art/Dev.icon' }, macos: { icon: 'art/Dev.icon' } } } },

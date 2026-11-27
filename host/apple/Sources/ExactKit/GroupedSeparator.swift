@@ -49,6 +49,11 @@ extension NodeView {
         refreshGroupedSeparator()
     }
 
+    /// Removes any grouped separator sublayer (e.g. when recycling a pooled view).
+    func removeGroupedSeparator() {
+        separatorLayer?.removeFromSuperlayer()
+    }
+
     /// Whether the separator is drawn: the Mac's split hides those beside a
     /// painted list's selected row (SplitMac.swift `mark`).
     package func hideGroupedSeparator(_ hidden: Bool) {

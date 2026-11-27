@@ -13,8 +13,9 @@ use super::{failed, Shared};
 use exact_runner::{FailureKind, Message, Outcome, ProcessOp};
 use ibex2::stdlib::abort::AbortController;
 use serde_json::json;
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -241,15 +242,17 @@ impl<'a> Supervisor<'a> {
             };
             self.ctl.begin(n, self.spec.pipes[0]);
             let spawned = json!({ "pid": child.pid(), "restarts": restarts, "incarnation": n, "ran": self.ran.words() });
+            // Sample the start time before delivering `spawn` so a caller that
+            // advances the agent clock on `spawn` cannot shift `at` steps later.
+            let started = self.clock.now();
             // Let go before its first event landed: the incarnation starts
             // by releasing its group, which then runs to its close.
             let gone = !deliver(self.shared, self.ticket, event("spawn", spawned), false);
-            let began = self.clock.now();
-            let (ended, ready) = self.incarnation(n, child, gone);
+            let (ended, ready) = self.incarnation(n, child, gone, started);
             self.ctl.end();
             // A child that became ready, or ran long enough, failed alone:
             // its restart waits only the delay again.
-            if ready || self.clock.now() - began >= STEADY_MS {
+            if ready || self.clock.now() - started >= STEADY_MS {
                 consecutive = 0;
             }
             let close = json!({ "code": ended.code, "signal": ended.signal, "drained": ended.drained, "incarnation": n });
@@ -309,8 +312,13 @@ impl<'a> Supervisor<'a> {
     }
 
     /// One incarnation, to its close: how it ended, and whether it became ready.
-    fn incarnation(&mut self, n: u32, mut child: Box<dyn Child>, gone: bool) -> (Ended, bool) {
-        let started = self.clock.now();
+    fn incarnation(
+        &mut self,
+        n: u32,
+        mut child: Box<dyn Child>,
+        gone: bool,
+        started: f64,
+    ) -> (Ended, bool) {
         let utf8 = self.spec.utf8;
         let (mut out, mut err) = (Utf8::default(), Utf8::default());
         let mut exit: Option<(Option<i64>, Option<String>, f64)> = None;
@@ -333,10 +341,66 @@ impl<'a> Supervisor<'a> {
         // holds what was sent and not yet taken here, so it falls only by
         // what the child consumed.
         let mut held = 0u64;
+        let mut incoming = VecDeque::new();
         if gone {
             self.release(&mut child, &mut escalate, &mut pending);
         }
         loop {
+            // Drain every already-queued input before running steps at `now`,
+            // so ops accepted by `core.socket()` before `clock.advance()` take
+            // effect before steps due at `now` and stale ticks never outrun them.
+            loop {
+                match self.rx.try_recv() {
+                    Ok(input) => incoming.push_back(input),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        if !self.released {
+                            incoming.push_back(Input::Release);
+                        }
+                        break;
+                    }
+                }
+            }
+            for input in incoming.drain(..) {
+                match input {
+                    Input::Tick => {}
+                    Input::Release => self.release(&mut child, &mut escalate, &mut pending),
+                    Input::Op(m, _) if m != n => {}
+                    Input::Op(_, ProcessOp::Write { data, drain }) => {
+                        // Counted, not read back: the child may take the bytes,
+                        // or drop them once its stdin is closed, before a look.
+                        held += data.len() as u64;
+                        child.write(data);
+                        owed |= drain;
+                    }
+                    Input::Op(_, ProcessOp::End) => child.end(),
+                    Input::Op(_, ProcessOp::Kill(signal)) => {
+                        pending.extend(child.signal(&signal));
+                        sent.push(signal);
+                    }
+                    Input::Child(m, seen) if m == n => pending.push(seen),
+                    Input::Child(..) => {}
+                    Input::Probe(m, ok) if m == n => {
+                        probing = false;
+                        if ok && !ready && !self.released {
+                            ready = true;
+                            deliver(
+                                self.shared,
+                                self.ticket,
+                                event("ready", json!({ "incarnation": n })),
+                                false,
+                            );
+                        } else {
+                            probe_at = self
+                                .spec
+                                .ready
+                                .as_ref()
+                                .map(|r| self.clock.now() + r.interval);
+                        }
+                    }
+                    Input::Probe(..) => {}
+                }
+            }
             let now = self.clock.now();
             if !self.released && child.due().is_some() {
                 pending.extend(child.run(now - started));
@@ -484,6 +548,17 @@ impl<'a> Supervisor<'a> {
             .into_iter()
             .flatten()
             .reduce(f64::min);
+            match self.rx.try_recv() {
+                Ok(input) => {
+                    incoming.push_back(input);
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) if !self.released => {
+                    incoming.push_back(Input::Release);
+                    continue;
+                }
+                _ => {}
+            }
             self.clock.wait_for(self.waiter, deadline);
             let mut wait = self.clock.timeout(deadline);
             if closed {
@@ -491,48 +566,14 @@ impl<'a> Supervisor<'a> {
                 // end sends no input, so look at it again in short steps.
                 wait = wait.min(GROUP_POLL);
             }
-            let input = match self.rx.recv_timeout(wait) {
-                Ok(input) => input,
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => Input::Release,
-            };
-            match input {
-                Input::Tick => {}
-                Input::Release => self.release(&mut child, &mut escalate, &mut pending),
-                Input::Op(m, _) if m != n => {}
-                Input::Op(_, ProcessOp::Write { data, drain }) => {
-                    // Counted, not read back: the child may take the bytes,
-                    // or drop them once its stdin is closed, before a look.
-                    held += data.len() as u64;
-                    child.write(data);
-                    owed |= drain;
-                }
-                Input::Op(_, ProcessOp::End) => child.end(),
-                Input::Op(_, ProcessOp::Kill(signal)) => {
-                    pending.extend(child.signal(&signal));
-                    sent.push(signal);
-                }
-                Input::Child(m, seen) if m == n => pending.push(seen),
-                Input::Child(..) => {}
-                Input::Probe(m, ok) if m == n => {
-                    probing = false;
-                    if ok && !ready && !self.released {
-                        ready = true;
-                        deliver(
-                            self.shared,
-                            self.ticket,
-                            event("ready", json!({ "incarnation": n })),
-                            false,
-                        );
-                    } else {
-                        probe_at = self
-                            .spec
-                            .ready
-                            .as_ref()
-                            .map(|r| self.clock.now() + r.interval);
+            match self.rx.recv_timeout(wait) {
+                Ok(input) => incoming.push_back(input),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    if !self.released {
+                        incoming.push_back(Input::Release);
                     }
                 }
-                Input::Probe(..) => {}
             }
         }
         // The decoders' remainders go before `close`.

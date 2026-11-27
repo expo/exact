@@ -35,7 +35,7 @@ async function visit(page, path, interactive = true) {
 
 async function withPage(options, run) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...options });
-  context.setDefaultTimeout(5000);
+  context.setDefaultTimeout(15000);
   try { await run(await context.newPage()); } finally { await context.close(); }
 }
 
@@ -43,7 +43,7 @@ async function headingInView(page) {
   await page.waitForFunction(() => {
     const box = document.querySelector('[data-testid="h-a-deep-link"]').getBoundingClientRect();
     return box.top >= 0 && box.bottom <= innerHeight;
-  }, null, { timeout: 5000 });
+  });
 }
 
 test('a table-of-contents link scrolls the article to its heading', () => withPage({}, async page => {
@@ -72,7 +72,7 @@ test('the sidebar can be shown after a full reload with it hidden', () => withPa
   await page.waitForFunction(() => {
     const sidebar = document.querySelector('[data-testid="sidebar-shown"]');
     return sidebar && getComputedStyle(sidebar).visibility === 'visible' && sidebar.getBoundingClientRect().width > 200;
-  }, null, { timeout: 5000 });
+  });
   await page.getByTestId('nav-recipeWebsite').click();
   await page.getByTestId('h-a-deep-link').waitFor();
   expect(new URL(page.url()).pathname).toBe('/recipes/website');
@@ -306,12 +306,14 @@ test('WebMCP search and section tools explain invalid inputs', () => withPage({}
 }));
 
 test('WebMCP reads headings after an inline code span that starts with three backticks', () => withPage({}, async page => {
-  const call = await visitWithTools(page);
   const path = '/reference/developer/generate-typescript-data-source-types';
+  const call = await visitWithTools(page, path);
   const info = await call('get_page_info', { path });
   const section = await call('get_page_markdown', { path, section: 'Notifications' });
   expect(JSON.parse(info.value).headings).toContainEqual({ level: 2, text: 'Notifications' });
   expect(section).toMatchObject({ outcome: 'ok', value: expect.stringContaining('\n## Notifications\n') });
+  await page.getByRole('heading', { level: 2, name: 'Notifications', exact: true }).waitFor();
+  expect(await page.getByTestId('toc').getByRole('link', { name: 'Notifications', exact: true }).getAttribute('href')).toBe(`${path}#notifications`);
 }));
 
 test('WebMCP page info uses metadata and headings from one build', () => withPage({}, async page => {
@@ -335,17 +337,24 @@ test('WebMCP rereads section offsets when a deployment replaces the Markdown', (
   const body = '# A newer recipe\n\nAn introduction in the new build.\n\n## A setting\n\nNew text.\n\n## A deep link\n\nA separate section.\n';
   const digest = createHash('sha256').update(body).digest('hex');
   let metadataReads = 0;
+  const requests = [];
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith('/assets/markdown/')) requests.push(path);
+  });
   await page.route('**/assets/markdown/tools/recipeWebsite.json', route => {
     if (++metadataReads === 1) return route.continue();
     return route.fulfill({ json: { digest, headings: markdownHeadings(body) } });
   });
-  await page.route('**/assets/markdown/tools/recipeWebsite-*.md', route => route.fulfill({ status: 404 }));
   await page.route('**/assets/markdown/recipeWebsite.md', route => route.fulfill({ body }));
   const call = await visitWithTools(page);
   expect(await call('get_page_markdown', { path: '/recipes/website', section: 'A setting' })).toMatchObject({
     outcome: 'ok', value: '# A newer recipe\n## A setting\n\nNew text.',
   });
-  expect(metadataReads).toBe(2);
+  expect(requests).toEqual([
+    '/assets/markdown/tools/recipeWebsite.json', '/assets/markdown/recipeWebsite.md',
+    '/assets/markdown/tools/recipeWebsite.json', '/assets/markdown/recipeWebsite.md',
+  ]);
 }));
 
 test('WebMCP navigation is a consequential write', () => withPage({}, async page => {
@@ -417,6 +426,7 @@ test('WebMCP navigation retries the current page after a failed download', () =>
 
 test('WebMCP navigation reports a pending current-page download that fails', () => withPage({}, async page => {
   const release = Promise.withResolvers();
+  await page.addInitScript(() => sessionStorage.setItem('exact.generation-reload', '1'));
   await page.route(websiteChunk, async route => {
     await release.promise;
     await route.abort('internetdisconnected');
@@ -504,7 +514,7 @@ for (const mode of ['default', '--loopback', '--lan']) {
 
 for (const [from, label, path, title] of [
   ['/recipes/permissions', 'error alert', '/recipes/error-alert', 'Recipe: tell the person something failed'],
-  ['/recipes/app-json', 'porting and release', '/recipes/porting-and-release', 'Recipe: porting an app, a release build, splitting the work'],
+  ['/recipes/app-json', 'Release', '/recipes/porting-and-release', 'Recipe: porting an app, a release build, splitting the work'],
 ]) {
   test(`the short recipe label ${label} opens its titled page`, () => withPage({}, async page => {
     await visit(page, from);

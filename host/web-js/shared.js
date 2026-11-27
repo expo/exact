@@ -128,7 +128,7 @@ function routeChanges(before, after) {
     let change = null;
     if (was.length && now.length === was.length + 1 && was.every((r, i) => now[i] === r)) change = { owner: now.at(-1), beneath: was.at(-1), which: 'new' };
     else if (now.length && was.length === now.length + 1 && now.every((r, i) => was[i] === r)) change = { owner: was.at(-1), beneath: now.at(-1), which: 'old' };
-    if (!change || change.owner.getAttribute('navigationPresentation') === 'modal' || change.owner.getAttribute('navigationSource')) continue;
+    if (!change || ['modal', 'popover'].includes(change.owner.getAttribute('navigationPresentation')) || change.owner.getAttribute('navigationSource')) continue;
     out.push({ ...change, css: part(change.owner, change.which) });
   }
   return out;

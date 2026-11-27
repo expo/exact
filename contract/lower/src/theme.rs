@@ -228,7 +228,6 @@ impl Lowerer<'_> {
         bindable: bool,
         asset_root: Option<&std::path::Path>,
     ) -> exact_kernel::style::theme::ThemeScope {
-        crate::var_tokens::note(file);
         crate::icons::clear(asset_root);
         ROLES.with(|r| r.borrow_mut().clear());
         crate::control_roles::note_accent(None);
@@ -1193,4 +1192,24 @@ pub(crate) fn token_error(a: &Attr, rows: &[exact_kernel::StyleId], e: LowerErro
         _ => return e,
     };
     LowerError { id, message, span }
+}
+
+/// @ref LLP 1121 D7, D12 — whether an app can name a design token outside its
+/// views, so its plan keeps every token (or its design's `exports`) for the
+/// bindings: the one test for "an app with generated bindings". It has a
+/// data module (an `app.ts` or a Rust data crate beside it, or a source of
+/// the seam it reads, not one the runner answers) or a native module (a
+/// custom element its views show, or modules or hatches its `app.json`
+/// declares). The driver finds what is on disk (`DesignSource::bindable`).
+pub fn names_tokens_outside_views(
+    file: &contract_syntax::File,
+    root: &contract_types::ComponentTypes,
+) -> bool {
+    file.design.as_ref().is_some_and(|d| d.bindable)
+        || file.package_designs.iter().any(|d| d.bindable)
+        || root
+            .sources
+            .keys()
+            .any(|s| !exact_plan::runner_owned_source(s))
+        || !crate::native::module_tags(file).is_empty()
 }

@@ -37,7 +37,7 @@ chromeTest('every web reader of the agent parameter asks the one question, guard
   // agent-gate.mjs `gateAgent`), so that their AGENT_ADMITTED is written false; a source the build copies raw, the compiler
   // embeds or a package holds ships as written, so a reader goes here only once a release gates it, and any other
   // source may not read the parameter at all
-  const readers = ['host/web-js/clock.js', 'host/web-js/facts.js', 'host/web/canvas2d-glue.js', 'host/web/document-glue.js',
+  const readers = ['host/web-js/clock.js', 'host/web-js/facts.js', 'host/web-js/ts-fetch.js', 'host/web/canvas2d-glue.js', 'host/web/document-glue.js',
     'host/web/faults.js', 'host/web/glue.js', 'host/web/navigation/environment.js', 'host/web/navigation/routes.js', 'host/web/storage-environment.js'];
   // The sources whose held scripts run in development alone, unguarded: the client dev.mjs injects and what the
   // conformance driver and the agent's drivers (`scripts/`) evaluate in a page they drive

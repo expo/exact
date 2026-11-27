@@ -27,6 +27,10 @@ internal interface FrameHost {
     fun rendererGone(view: WebView, crashed: Boolean)
     /** The navigation reporter of the kept partitioned frame showing [view] now, or null. */
     fun browser(view: WebView): FrameBrowser?
+    /** The live unpartitioned message bridge target showing [view] now, or null. */
+    fun messageTarget(view: WebView): FrameMessageTarget?
+    /** The live media-grant target showing [view] now, or null. */
+    fun mediaGrantTarget(view: WebView): FrameMediaGrantTarget?
 }
 
 /** One element's `load`, sent only while that element and its event binding are still the frame's. */
@@ -54,6 +58,8 @@ internal class FrameClient(
         WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         FrameDocuments(view, ::reportLoad)
     } else null
+    // Bidirectional `postMessage` bridge: never in a partitioned frame (LLP 1020.002 D1; LLP 1156.008.001 B1).
+    private val bridge = if (!partitioned) FrameBridge(view, host) else null
     private val loading = HashSet<Page>()
     private var recovery: Navigation? = null
     private var starting: FrameLoad? = null
@@ -65,6 +71,10 @@ internal class FrameClient(
     var readyToLend = false
         private set
 
+    fun postMessage(text: String) {
+        bridge?.postMessage(text)
+    }
+
     fun requestLoad(silently: Boolean) {
         readyToLend = false
         recoveryPending = false
@@ -72,6 +82,7 @@ internal class FrameClient(
         // The old callbacks can be queued even after WebView has committed the recovery page.
         recoveryRequested = silently || (!hasNavigationListener && recoveryRequested && view.originalUrl != null)
         if (!recoveryRequested) documents?.observeFromStart()
+        bridge?.prepareForLoad()
     }
 
     fun beginCleanup(): String {
@@ -80,6 +91,7 @@ internal class FrameClient(
         recoveryPending = false
         loading.clear()
         documents?.reset()
+        bridge?.reset()
         recoveryRequested = false
         starting = null
         finishing = null
@@ -94,6 +106,7 @@ internal class FrameClient(
 
     override fun onNavigationStarted(navigation: Navigation) {
         host.browser(view)?.started(navigation)
+        if (!navigation.isSameDocument) bridge?.onDocumentCommitted()
         if (recoveryRequested && !navigation.wasInitiatedByPage() && !navigation.isSameDocument) {
             recoveryRequested = false
             recovery = navigation
@@ -122,7 +135,10 @@ internal class FrameClient(
 
     override fun onPageLoadEvent(page: Page) {
         // `load`, then `navigatesuccess`, as on Apple.
-        if (loading.remove(page)) reportLoad()
+        if (loading.remove(page)) {
+            bridge?.ensureInjected()
+            reportLoad()
+        }
         host.browser(view)?.loaded(page)
     }
 
@@ -131,6 +147,7 @@ internal class FrameClient(
     }
 
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+        if (cleanupUrl == null && host.shows(view)) bridge?.onDocumentCommitted()
         if (hasNavigationListener || cleanupUrl != null || !host.shows(view)) return
         starting = FrameLoad(url, recoveryRequested)
         recoveryRequested = false
@@ -180,6 +197,7 @@ internal class FrameClient(
             fragmentFinish = null
             return
         }
+        bridge?.ensureInjected()
         // Check readiness because an aborted navigation can finish with the pending document's URL.
         val page = finishing?.takeIf { it.url == url && starting?.url != url } ?: return
         if (page.failed) return

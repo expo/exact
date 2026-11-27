@@ -1,11 +1,13 @@
 import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers, track } from "../glue.js";
-import { send, applyBatch } from "./commit.js";
-import { navigation, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
+import { send, applyBatch, settleGeometry } from "./commit.js";
+import { navigation, shortcutKeyboard, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, orientationCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
 import { WINDOW_STATE } from "../navigation/store.js";
 import { startClock } from "./flow.js";
 import { forgetList } from "./views.js";
 import { engagement } from "../engagement.js";
+import { loadOnce } from '../load-once.js';
+
 // A trap leaves the module as it stopped (a Rust borrow held, a batch half
 // applied), so every later call traps again. The first one stops the page's
 // calls: the clock ends, a later call throws `ModuleStopped` without entering
@@ -62,16 +64,22 @@ function stopModule(error) {
 }
 addEventListener("error", (e) => e.error instanceof ModuleStopped && e.preventDefault());
 addEventListener("unhandledrejection", (e) => e.reason instanceof ModuleStopped && e.preventDefault());
+export function loadGeometry() {
+  return loadOnce(host, 'geometryLoading', () => new Promise(resolve => requestAnimationFrame(resolve))
+    .then(() => loadAfterPaint('./geometry-glue.js', 'geometry'))
+    .then(create => { host.geometry = create(root); settleGeometry(); }), error => console.error('exact: geometry:', error));
+}
+function geometry() {
+  if (!host.geometry) loadGeometry();
+  return host.geometry;
+}
 export async function loadRust() {
   if (host.rustLoader) {
     return;
   }
-  host.rustLoading ??= loadAfterPaint("./rust-glue.js", "createRustRuntime").then((create) => {
+  loadOnce(host, "rustLoading", () => loadAfterPaint("./rust-glue.js", "createRustRuntime").then((create) => {
     host.rustLoader = create(() => host.memory);
-  }).catch((error) => {
-    host.rustLoading = null;
-    throw error;
-  });
+  }));
   await host.rustLoading;
 }
 // LLP 1019 D5: FontFace loading is part of host boot. The DOM remains empty until every local face loaded, or 100 ms elapsed. At the barrier, install
@@ -292,7 +300,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   // The date and place the boot's first settle reads (LLP 1027.000.000).
   if (host.wasm.exact_set_launch) {
     const [epoch, offset] = reportTime(now());
-    host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()));
+    host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()), shortcutKeyboard());
   }
   const kept = keeps ? focus.keep(ask({ op: "tree" }), Number(document.activeElement?.closest?.("[data-view]")?.dataset.view)) : undefined;
   reportColors();
@@ -318,6 +326,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     payload.set(bytes);
     payload.set(launch, bytes.length);
     host.wasm.exact_set_update?.(updateCode());
+    host.wasm.exact_set_orientation?.(orientationCode());
     host.wasm.exact_set_screen_reader(pageFacts.screenReaderCode());
     len = host.wasm.exact_boot_plan(bytes.length, innerWidth, innerHeight, launch.length, preferences() | foldBits());
   } else {
@@ -331,6 +340,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     // a drive's clock starts at zero (page.rs)
     new Uint8Array(host.memory.buffer, ptr, launch.length).set(launch);
     host.wasm.exact_set_update?.(updateCode());
+    host.wasm.exact_set_orientation?.(orientationCode());
     host.wasm.exact_set_screen_reader(pageFacts.screenReaderCode());
     len = host.wasm.exact_boot(innerWidth, innerHeight, launch.length, preferences() | foldBits());
   }
@@ -414,6 +424,11 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     el.exactResize?.();
     el.exactIntersect?.();
     el.exactPanRetire?.();
+  }
+  if (HAS_PACKAGE_VIEWS) {
+    host.packageViews?.dispose();
+    host.packageViews = null;
+    host.packageNative = null;
   }
   views.clear();
   messageFrames.clear();
@@ -551,20 +566,21 @@ export async function main() {
         }
         return 1;
       },
-      read: (op, view, out) => host.geometry?.read(op, views.get(view), new Float64Array(host.memory.buffer, out, 4)) ?? 0,
+      read: (op, view, out) => geometry()?.read(op, views.get(view), new Float64Array(host.memory.buffer, out, 4)) ?? 0,
+      fact: (view, space, node, out) => geometry()?.fact(views.get(view), space, node ? views.get(node - 1) : null, new Float64Array(host.memory.buffer, out, 4)) ?? 0,
       scroll_metrics: (view, out) => {
-        const values = host.geometry?.scrollMetrics(views.get(view));
+        const values = geometry()?.scrollMetrics(views.get(view));
         if (!values) return 0;
         new Float64Array(host.memory.buffer, out, 6).set(values);
         return 1;
       },
-      range: (view, start, end, out) => host.geometry?.range(views.get(view), start, end, new Float64Array(host.memory.buffer, out, 4)) ?? 0,
+      range: (view, start, end, out) => geometry()?.range(views.get(view), start, end, new Float64Array(host.memory.buffer, out, 4)) ?? 0,
       point: (x, y) => {
-        const el = host.geometry?.point(x, y)?.closest("[data-view]"), id = el && root.contains(el) ? Number(el.dataset.view) : NaN;
+        const el = geometry()?.point(x, y)?.closest("[data-view]"), id = el && root.contains(el) ? Number(el.dataset.view) : NaN;
         return views.get(id) === el ? id + 1 : 0;
       },
       points: (x, y, out, cap) => {
-        const hits = (host.geometry?.points(x, y) ?? []).flatMap((hit) => {
+        const hits = (geometry()?.points(x, y) ?? []).flatMap((hit) => {
           const el = hit.closest("[data-view]"), id = el && root.contains(el) ? Number(el.dataset.view) : NaN;
           return views.get(id) === el ? [id + 1] : [];
         });
@@ -608,9 +624,7 @@ export async function main() {
   }
   host.memory = host.wasm.memory;
   if (WebAssembly.Module.imports(compiled).some((i) => i.module === "exact_geometry")) {
-    host.geometryLoading = new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./geometry-glue.js", "geometry")).then((create) => {
-      host.geometry = create(root);
-    });
+    loadGeometry();
   }
   // an artifact whose actions read geometry imports it (LLP 1051.000 D4)
   globalThis.exact.compat = JSON.parse(readOut(host.wasm.exact_compat()));

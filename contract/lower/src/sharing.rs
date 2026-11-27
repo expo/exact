@@ -29,15 +29,20 @@ struct AdmissionAt<'a> {
     cached_depth: Option<usize>,
 }
 
+fn ancestors(parents: &[Option<u32>], instance: u32) -> impl Iterator<Item = u32> + '_ {
+    std::iter::successors(Some(instance), |&instance| {
+        parents.get(instance as usize).copied().flatten()
+    })
+}
+
 fn admitted_cut(site: AdmissionAt<'_>) -> Option<u32> {
     if site.active_depth >= MAX_SHARED_DEPTH || site.candidate_active {
         return None;
     }
-    let mut chain = vec![site.reader_instance];
-    while let Some(Some(parent)) = site.parents.get(*chain.last()? as usize) {
-        chain.push(*parent);
-    }
-    if !chain.contains(&site.candidate_instance) || site.reader_expr != site.candidate_expr {
+    if !ancestors(site.parents, site.reader_instance)
+        .any(|instance| instance == site.candidate_instance)
+        || site.reader_expr != site.candidate_expr
+    {
         return None;
     }
     // A `for` key has its item scope before its row arm exists. Arm distance
@@ -66,7 +71,7 @@ fn admitted_cut(site: AdmissionAt<'_>) -> Option<u32> {
 
 pub(super) struct Sharing {
     thunks: Vec<Thunk>,
-    by_span: BTreeMap<Span, Vec<usize>>,
+    by_span: BTreeMap<Span, BTreeMap<u32, Vec<usize>>>,
     rows: Vec<Option<(DerivesId, Ty, usize)>>,
     active: BTreeSet<usize>,
     body_depths: Vec<usize>,
@@ -80,16 +85,19 @@ pub(super) struct Sharing {
 impl Sharing {
     pub fn new(ex: &contract_syntax::Expanded) -> Self {
         let thunks = &ex.thunks;
-        let mut by_span = BTreeMap::<_, Vec<usize>>::new();
+        let mut by_span = BTreeMap::<_, BTreeMap<_, Vec<usize>>>::new();
         for (i, thunk) in thunks.iter().enumerate() {
-            let candidates = by_span.entry(thunk.expr.span()).or_default();
+            let candidates = by_span
+                .entry(thunk.expr.span())
+                .or_default()
+                .entry(thunk.instance)
+                .or_default();
             // Equivalent declarations in one instance are one body. Registering
             // each alias would let an active body call an equivalent sibling.
-            if !candidates.iter().any(|&j| {
-                thunks[j].instance == thunk.instance
-                    && thunks[j].owner == thunk.owner
-                    && thunks[j].expr == thunk.expr
-            }) {
+            if !candidates
+                .iter()
+                .any(|&j| thunks[j].owner == thunk.owner && thunks[j].expr == thunk.expr)
+            {
                 candidates.push(i);
             }
         }
@@ -145,45 +153,38 @@ impl Lowerer<'_> {
         e: &Expr,
         scope: &Scope,
     ) -> Result<Option<(DerivesId, Ty)>, LowerError> {
-        let Some(candidates) = self.sharing.by_span.get(&e.span()) else {
+        let Some(by_instance) = self.sharing.by_span.get(&e.span()) else {
             return Ok(None);
         };
-        let mut chain = vec![self.sharing.instance];
-        while let Some(Some(parent)) = self.sharing.parents.get(*chain.last().unwrap() as usize) {
-            chain.push(*parent);
-        }
-        let mut candidates = candidates.clone();
-        candidates.sort_by_key(|i| {
-            chain
-                .iter()
-                .position(|n| *n == self.sharing.thunks[*i].instance)
-                .unwrap_or(usize::MAX)
-        });
-        let found = candidates.into_iter().find_map(|i| {
-            let (owner, own_scope) = match self.sharing.thunks[i].owner {
-                Owner::Root | Owner::Instance => (None, self.sharing.root_scope.clone()),
-                Owner::Arm { tag, arm } => {
-                    let (id, scope) = self.arm_scopes.get(&(tag, arm))?;
-                    (Some(*id), scope.clone())
-                }
-            };
-            admitted_cut(AdmissionAt {
-                plan: self.b.plan(),
-                parents: &self.sharing.parents,
-                active_depth: self.sharing.active.len(),
-                candidate_active: self.sharing.active.contains(&i),
-                reader_instance: self.sharing.instance,
-                candidate_instance: self.sharing.thunks[i].instance,
-                reader_arm: self.sharing.arm,
-                owner_arm: owner,
-                reader_scope: scope,
-                owner_scope: &own_scope,
-                reader_expr: e,
-                candidate_expr: &self.sharing.thunks[i].expr,
-                cached_depth: None,
-            })?;
-            Some((i, owner, own_scope))
-        });
+        let found = ancestors(&self.sharing.parents, self.sharing.instance)
+            .filter_map(|i| by_instance.get(&i))
+            .flatten()
+            .copied()
+            .find_map(|i| {
+                let (owner, own_scope) = match self.sharing.thunks[i].owner {
+                    Owner::Root | Owner::Instance => (None, &self.sharing.root_scope),
+                    Owner::Arm { tag, arm } => {
+                        let (id, scope) = self.arm_scopes.get(&(tag, arm))?;
+                        (Some(*id), scope)
+                    }
+                };
+                admitted_cut(AdmissionAt {
+                    plan: self.b.plan(),
+                    parents: &self.sharing.parents,
+                    active_depth: self.sharing.active.len(),
+                    candidate_active: self.sharing.active.contains(&i),
+                    reader_instance: self.sharing.instance,
+                    candidate_instance: self.sharing.thunks[i].instance,
+                    reader_arm: self.sharing.arm,
+                    owner_arm: owner,
+                    reader_scope: scope,
+                    owner_scope: own_scope,
+                    reader_expr: e,
+                    candidate_expr: &self.sharing.thunks[i].expr,
+                    cached_depth: None,
+                })?;
+                Some((i, owner, own_scope))
+            });
         let Some((i, owner, own_scope)) = found else {
             return Ok(None);
         };
@@ -198,7 +199,7 @@ impl Lowerer<'_> {
                 reader_arm: self.sharing.arm,
                 owner_arm: owner,
                 reader_scope: scope,
-                owner_scope: &own_scope,
+                owner_scope: own_scope,
                 reader_expr: e,
                 candidate_expr: &self.sharing.thunks[i].expr,
                 cached_depth: Some(*depth),
@@ -212,6 +213,7 @@ impl Lowerer<'_> {
             }
             return Ok(Some((*row, ty.clone())));
         }
+        let own_scope = own_scope.clone();
         let thunk = self.sharing.thunks[i].clone();
         let (arm, instance) = (self.sharing.arm, self.sharing.instance);
         self.sharing.active.insert(i);
@@ -477,6 +479,52 @@ component Child
         assert!(opcodes(plan.code(plan.derives[key_only as usize].body))
             .iter()
             .any(|(op, _)| *op == Opcode::Call));
+    }
+
+    #[test]
+    fn sibling_instances_keep_their_own_values_through_nested_readers() {
+        let plan = lower(
+            r#"component App
+  state seed = 1
+  view
+    column
+      Branch(value=seed, label="first")
+      Branch(value=seed + 10, label="second")
+component Branch
+  props
+    value: number
+    label: string
+  derive score = value + 1
+  view
+    Group(score=score, label=label)
+component Group
+  props
+    score: number
+    label: string
+  view
+    for value in [label] key=value
+      Label(score=score, label=value)
+component Label
+  props
+    score: number
+    label: string
+  view
+    text `${score}` testId=label
+"#,
+        );
+        let runner = exact_runner::Runner::boot(
+            plan,
+            (),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        for (id, expected) in [("first", "2"), ("second", "12")] {
+            let key = runner.kernel().find_by_test_id(id)[0];
+            let node = runner.kernel().node_by_key(key).unwrap();
+            assert_eq!(node.props.str(exact_kernel::PropId::Text), Some(expected));
+        }
     }
 
     #[test]

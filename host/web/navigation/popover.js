@@ -74,14 +74,47 @@ function dialogCommand(event) {
   if (event.command === "show-modal" && closingDialogs.has(event.currentTarget)) clearDialogExit(event.currentTarget);
 }
 
+const authoredDialogObservers = new WeakMap();
+
+/** A `dialog` whose runtime `role` became `"alertdialog"` with non-alert children keeps its authored box rather than alert styling. */
+function markAuthoredAlertDialog(dialog) {
+  const authored = dialog.getAttribute("role") === "alertdialog"
+    && [...dialog.children].some((child) =>
+      child.localName !== "button"
+      && child.localName !== "input"
+      && !child.hasAttribute("data-exact-text")
+      && !child.hasAttribute("data-alertpart"));
+  dialog.toggleAttribute("data-exact-authored-dialog", authored);
+}
+
+function unwatchAuthoredAlertDialog(dialog) {
+  authoredDialogObservers.get(dialog)?.disconnect();
+  authoredDialogObservers.delete(dialog);
+  dialog.removeAttribute("data-exact-authored-dialog");
+}
+
+function watchAuthoredAlertDialog(dialog) {
+  markAuthoredAlertDialog(dialog);
+  if (authoredDialogObservers.has(dialog)) return;
+  const observer = new MutationObserver(() => {
+    if (dialog.open) markAuthoredAlertDialog(dialog);
+    else unwatchAuthoredAlertDialog(dialog);
+  });
+  observer.observe(dialog, { attributes: true, attributeFilter: ["role"], childList: true });
+  authoredDialogObservers.set(dialog, observer);
+  dialog.addEventListener("close", () => unwatchAuthoredAlertDialog(dialog), { once: true });
+}
+
 // A dialog stays in the top layer during its authored exit. Its native close then returns focus and fires the event.
 export function modalCommand(element, id, method, say) {
   if (element instanceof HTMLDialogElement) {
     if (method === "close") {
       if (!leaveDialog(element)) element.close();
     } else if (closingDialogs.has(element)) clearDialogExit(element);
-    else if (!element.open) element.showModal();
-    else say(`showModal "${id}" ignored: dialog is already open`);
+    else if (!element.open) {
+      watchAuthoredAlertDialog(element);
+      element.showModal();
+    } else say(`showModal "${id}" ignored: dialog is already open`);
   } else if (element?.popover != null && element.getAttribute("role") === "alertdialog") {
     if (method === "close") element.hidePopover();
     else if (!element.matches(":popover-open")) element.showPopover();
@@ -109,26 +142,37 @@ function insetAt(p, open) {
     if (p.style.getPropertyValue(`--exact-inset-${axis}`) !== v) {
       v ? p.style.setProperty(`--exact-inset-${axis}`, v) : p.style.removeProperty(`--exact-inset-${axis}`);
     }
-  }, has = (v) => !!v && v !== "auto", area = p.style.getPropertyValue("position-area");
+  }, has = (v) => !!v && v !== "auto", area = p.style.getPropertyValue("position-area"), hasArea = !!area && area !== "none";
   /* open, an anchored box's computed insets are where it was placed, so its author's are read from its own style; closed, the computed ones are what was written, the sheet's `inset: auto` among them */
   if (open) {
-    if (!p.exactInsetOn) {
+    if (!p.exactInsetOn && !p.exactInsetAuthor) {
       return;
     }
-    const { left, top, right, bottom } = p.style, on = !has(right) && !has(bottom) && (has(left) || has(top)) && !(area && area !== "none");
+    const { left, top, right, bottom } = p.style;
+    const edge = !hasArea && (has(right) || has(bottom) || (p.exactInsetAuthor && !p.exactInsetInline));
+    const on = !edge && !hasArea && (has(left) || has(top));
     set("x", on ? left || "auto" : "");
     set("y", on ? top || "auto" : "");
+    p.toggleAttribute("data-exact-inset-author", edge);
     return;
   }
   const { left, top, right, bottom } = getComputedStyle(p);
-  p.exactInsetOn = !(right !== "auto" || bottom !== "auto" || left === "auto" && top === "auto" || area && area !== "none");
+  const uaZero = left === "0px" && top === "0px" && right === "0px" && bottom === "0px"
+    && !has(p.style.left) && !has(p.style.top) && !has(p.style.right) && !has(p.style.bottom);
+  p.exactInsetAuthor = !uaZero && (right !== "auto" || bottom !== "auto") && !hasArea;
+  p.exactInsetInline = has(p.style.right) || has(p.style.bottom);
+  p.exactInsetOn = !p.exactInsetAuthor && !(left === "auto" && top === "auto") && !hasArea;
   set("x", p.exactInsetOn ? left : "");
   set("y", p.exactInsetOn ? top : "");
+  p.toggleAttribute("data-exact-inset-author", p.exactInsetAuthor);
   p.exactInset ??= (p.addEventListener("toggle", (t) => {
     if (t.newState === "closed") {
       p.exactInsetOn = false;
+      p.exactInsetAuthor = false;
+      p.exactInsetInline = false;
       set("x", "");
       set("y", "");
+      p.removeAttribute("data-exact-inset-author");
     }
   }), new MutationObserver(() => {
     if (p.matches(":popover-open")) {
@@ -152,9 +196,13 @@ export function placePopovers() {
   globalThis.document?.addEventListener?.("beforetoggle", (e) => {
     if (e.target.localName === "dialog") {
       if (e.newState === "open") {
+        watchAuthoredAlertDialog(e.target);
         e.target.addEventListener("cancel", requestDialogExit);
         e.target.addEventListener("command", dialogCommand);
-      } else if (closingDialogs.has(e.target)) clearDialogExit(e.target);
+      } else {
+        unwatchAuthoredAlertDialog(e.target);
+        if (closingDialogs.has(e.target)) clearDialogExit(e.target);
+      }
     }
     if (e.target.hasAttribute("popover") && e.newState === "open") {
       popoverSources.set(e.target, e.source ?? null);

@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { decodeProfile, xcodeRefusal } from './devices.mjs';
 import { appleCrossReport, CROSS_IOS_ROWS, distributionToolchain, ensureWatchSDK, installWatchSDK } from './sdk.mjs';
 import { iosTestRuns } from './xctest.mjs';
+import { appleCargo, cargoDiagnosticsCommand } from '../../scripts/cargo-check.mjs';
 
 test.skipIf(process.platform !== 'darwin')('certificate signing names its identity, bounds keychain waits and explains failures', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-signing-'));
@@ -187,6 +188,41 @@ test('Cargo subprocesses receive an executable xcrun with the current SDK config
   }
 }));
 
+test.skipIf(process.platform === 'win32')('Linux Apple Cargo resolves the LLVM override before the diagnostics relay changes directory', () => fixture(({ root, env }) => {
+  const metadata = resolve(root, 'swift-sdk.json'), sdk = JSON.parse(readFileSync(metadata, 'utf8'));
+  sdk.targetTriples['arm64-apple-ios'] = sdk.targetTriples['arm64-apple-ios-simulator'];
+  writeFileSync(metadata, JSON.stringify(sdk));
+  const tools = resolve(root, 'installed/tools with spaces');
+  mkdirSync(tools, { recursive: true });
+  mkdirSync(resolve(root, 'installed/version'));
+  symlinkSync('installed/version', resolve(root, 'active'));
+  const bin = `${relative(process.cwd(), root)}/active/../tools with spaces`;
+  const absolute = `${process.cwd()}/${bin}`;
+  for (const tool of ['llvm-lipo', 'llvm-strip']) {
+    writeFileSync(resolve(tools, tool), '#!/bin/sh\nprintf "%s\\n" "${0##*/}"\n', { mode: 0o755 });
+  }
+  writeFileSync(resolve(root, 'cargo'), '#!/bin/sh\nprintf "%s\\n" "$EXACT_APPLE_LLVM_BIN"\nexec "$EXACT_APPLE_LLVM_BIN/llvm-lipo"\n', { mode: 0o755 });
+  const options = { cwd: root, env: { ...env, PATH: `${root}:${process.env.PATH}`, EXACT_APPLE_LLVM_BIN: bin },
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] };
+  const prepare = args => appleCargo('cargo', args, options, 'linux');
+  for (const target of [['--target', 'aarch64-apple-ios'], ['--target=aarch64-apple-ios-sim']]) {
+    const args = ['build', ...target];
+    for (const command of [cargoDiagnosticsCommand(...prepare(args)), appleCommand('cargo', args, options, 'linux')]) {
+      const result = spawnSync(...command);
+      expect(result.status, result.error?.message).toBe(0);
+      expect(result.stdout).toBe(`${absolute}\nllvm-lipo\n`);
+    }
+  }
+  const strip = spawnSync(...appleCommand('strip', [], options, 'linux'));
+  expect(strip.status, strip.error?.message).toBe(0);
+  expect(strip.stdout).toBe('llvm-strip\n');
+  expect(options.env.EXACT_APPLE_LLVM_BIN).toBe(bin);
+  for (const target of [['--target', 'aarch64-apple-ios'], ['--target=aarch64-apple-ios-sim']]) {
+    const args = ['rustc', '--target', 'x86_64-unknown-linux-gnu', '--', ...target];
+    expect(prepare(args)).toEqual(['cargo', args, options]);
+  }
+}));
+
 test('portable IPA packaging retains the Payload root, executable modes and relative symlinks', () => {
   const root = mkdtempSync(resolve(tmpdir(), "exact IPA's "));
   try {
@@ -229,14 +265,14 @@ test('SDK discovery uses installed metadata and preserves paths containing space
 
 test('Linux setup names missing cross tools and uses the selected LLVM directory', () => fixture(({ env }) => {
   const calls = [], llvm = '/selected LLVM/bin';
-  const rows = appleCrossReport({ ...env, EXACT_APPLE_LLVM_BIN: llvm }, (command, args) => {
+  const rows = appleCrossReport({ ...env, EXACT_APPLE_LLVM_BIN: `${llvm}/` }, (command, args) => {
     calls.push(command); return spawnSync('/usr/bin/false', args, { encoding: 'utf8' });
   });
   expect(rows.map(row => row.name)).toEqual(CROSS_IOS_ROWS);
   expect(rows.every(row => !row.ok && row.fix)).toBe(true);
   expect(rows[0].have).toContain('no iphoneos compiler configuration');
-  expect(calls).toContain(resolve(llvm, 'llvm-lipo'));
-  expect(appleCommand('lipo', ['-archs', 'App'], { env: { EXACT_APPLE_LLVM_BIN: llvm } }, 'linux')[0]).toBe(resolve(llvm, 'llvm-lipo'));
+  expect(calls).toContain(`${llvm}/llvm-lipo`);
+  expect(appleCommand('lipo', ['-archs', 'App'], { env: { EXACT_APPLE_LLVM_BIN: llvm } }, 'linux')[0]).toBe(`${llvm}/llvm-lipo`);
 }));
 
 test.each([
@@ -500,7 +536,7 @@ async function iosRunsFixture(body) {
   }
 }
 
-for (const [prior, bootFails] of [['1', false], ['0', false], [null, false], ['1', true]]) test(`hosted accessibility preserves ${prior ?? 'an absent setting'} when simulator boot ${bootFails ? 'fails' : 'succeeds'}`, () => iosRunsFixture(async ({ root, options }) => {
+for (const [prior, bootFails, busy] of [['1', false], ['0', false], [null, false], ['1', true], [null, false, true]]) test(`hosted accessibility preserves ${prior ?? 'an absent setting'} when ${busy ? 'the display is busy during cleanup' : bootFails ? 'simulator boot fails' : 'simulator boot succeeds'}`, () => iosRunsFixture(async ({ root, options }) => {
   writeFileSync(resolve(options.pkg, 'tests/ExactKitTests/FixtureTests.swift'), `class FixtureTests: XCTestCase {
     func testHosted() { throw missing("accessibility", "UIKit") }
   }`);
@@ -518,7 +554,14 @@ for (const [prior, bootFails] of [['1', false], ['0', false], [null, false], ['1
     'esac',
   ].join('\n'));
   const bootFailure = new Error('simulator boot failed'), ran = [];
-  let reported;
+  let reported, lock;
+  if (busy) {
+    const touches = await import('./touches.mjs'), acquire = touches.withAccessibilityLock;
+    lock = spyOn(touches, 'withAccessibilityLock').mockImplementation((udid, fn) => {
+      if (ran.includes('hosted')) throw new Error('display busy');
+      return acquire(udid, fn);
+    });
+  }
   try {
     await iosTestRuns({ ...options, run: (command, args) => {
       if (args[1] === 'bootstatus') {
@@ -536,10 +579,11 @@ for (const [prior, bootFails] of [['1', false], ['0', false], [null, false], ['1
       } else if (args.includes('-only-testing:ExactKitTests/Canvas2DGpuStressTests')) ran.push('gpu');
     } });
   } catch (error) { reported = error; }
+  finally { lock?.mockRestore(); }
   expect(ran).toEqual(bootFails ? ['gpu'] : ['hosted', 'gpu']);
   expect(reported).toBe(bootFails ? bootFailure : undefined);
   expect(readFileSync(eventsFile, 'utf8').trim().split('\n').filter(Boolean))
-    .toEqual(bootFails ? [] : ['read', 'write', prior === null ? 'delete' : 'write']);
+    .toEqual(bootFails ? [] : prior === '1' ? ['read'] : ['read', 'write', prior === null ? 'delete' : 'write']);
   expect(existsSync(setting) ? readFileSync(setting, 'utf8').trim() : null).toBe(prior);
 }));
 

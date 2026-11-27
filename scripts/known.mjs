@@ -17,7 +17,7 @@
  *   bun scripts/known.mjs [--no-fetch] -- <command> [args…]
  *     e.g. bun scripts/known.mjs -- cargo test -p exact-runner --lib
  *          bun scripts/known.mjs -- bun host/apple/build.mjs --test --ios
- *   bun scripts/known.mjs [--no-fetch] --log <file> --kind cargo|xctest|bun
+ *   bun scripts/known.mjs [--no-fetch] --log <file> --kind cargo|xctest-ios|xctest-macos|bun
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -34,13 +34,17 @@ const git = (args, cwd = ROOT) => spawnSync('git', args, { cwd, encoding: 'utf8'
 
 /** A failure without its check's name: `ios: ExactKitTests.A b failed` and `local: ExactKitTests.A b failed` are one test. */
 export const identity = (failure) => failure.slice(failure.indexOf(': ') + 2);
+const checkNameOf = (failure) => failure.slice(0, failure.indexOf(': '));
+const normalizeKind = (kind) => kind === 'xctest' ? 'xctest-ios' : kind;
 
 /** The kind of test a check's command runs, which a local command of the same kind is compared with. */
 export function kindOf(command) {
-  if (/\bbuild\.mjs\b.*--test\b/.test(command)) return 'xctest';
+  if (/(?:^|[\s/])build\.mjs\b.*\s--test(?:\s|$)/.test(command)) {
+    return /(?:^|\s)--ios(?:\s|$)/.test(command) ? 'xctest-ios' : 'xctest-macos';
+  }
   // (The async lane runs a selection's Rust tests through `affected.mjs --cargo-tests`.)
-  if (/\bcargo\b.*\btest\b|\baffected\.mjs --cargo-tests\b/.test(command)) return 'cargo';
-  if (/\bbun\b.*\btest\b/.test(command)) return 'bun';
+  if (/(?:^|[\s;&|])cargo(?:\s+\+\S+)?\s+test(?:\s|$)|(?:^|[\s/])affected\.mjs\s+--cargo-tests(?:\s|$)/.test(command)) return 'cargo';
+  if (/(?:^|[\s;&|])bun\s+test(?:\s|$)/.test(command)) return 'bun';
   return null;
 }
 
@@ -88,12 +92,20 @@ export function mainNotes({ fetch = true, depth = 400, cwd = ROOT } = {}) {
 }
 
 /** The lane's check that runs tests of each kind, by whose name `owners` reads a failure's suites. */
-const LANE_CHECK = { cargo: 'test', bun: 'glue', xctest: 'ios' };
+const LANE_CHECK = { cargo: 'test', bun: 'glue', 'xctest-ios': 'ios', 'xctest-macos': 'macos' };
+/** Checks that cover an entire kind when `covers` is omitted; narrow checks match only via explicit `covers`. */
+const WHOLE_CHECKS = { cargo: ['test'], bun: ['glue'], 'xctest-ios': ['ios'], 'xctest-macos': ['macos'] };
+const PARTIAL_CHECKS = {
+  cargo: (name) => name === 'default-test' || name.startsWith('cargo:'),
+  bun: (name) => name === 'other-glue' || name === 'game-vocab' || name === 'web-ax-test',
+  'xctest-ios': () => false,
+  'xctest-macos': () => false,
+};
 
-/** The suites (async.mjs `owners`: `cargo:<package>`, `bun:<file>`, `xctest:ios:<Class>`) each of `local`'s failures of
- *  `kind` belongs to, where `log` says; none for a failure it does not say of. */
+/** The suites (async.mjs `owners`: `cargo:<package>`, `bun:<file>`, `xctest:ios:<Class>`, `xctest:macos:<Class>`) each
+ *  of `local`'s failures of `kind` belongs to, where `log` says; none for a failure it does not say of. */
 export function suitesOf(local, kind, log) {
-  const name = LANE_CHECK[kind], named = local.map((f) => `${name}: ${identity(f)}`), own = owners(name, log, named);
+  const name = LANE_CHECK[normalizeKind(kind)], named = local.map((f) => `${name}: ${identity(f)}`), own = owners(name, log, named);
   return Object.fromEntries(local.map((f, i) => [f, own[named[i]] ?? []]));
 }
 
@@ -103,17 +115,25 @@ export function suitesOf(local, kind, log) {
  *  earlier run (async.mjs `retainSkippedFailures`). Each row names the note it was sorted against (`sha`); `at` is the
  *  nearest of them. */
 export function classify(local, kind, history, suites = {}) {
+  const normalized = normalizeKind(kind);
+  const whole = WHOLE_CHECKS[normalized] ?? [], partial = PARTIAL_CHECKS[normalized] ?? (() => false);
+  const matchesKind = (name) => whole.includes(name) || partial(name);
   const notes = history.flatMap(({ sha, notes }) => notes.map((note) => ({ sha, note })));
-  const ran = (note, ids) => Object.values(note.checks).some((c) => !c.skipped && c.complete && kindOf(c.command) === kind
-    && (!c.covers || (ids.length > 0 && ids.every((id) => c.covers.includes(id)))));
+  const ran = (note, ids) => Object.entries(note.checks).some(([name, c]) => {
+    if (c.skipped || !c.complete) return false;
+    if (whole.includes(name)) return !c.covers || (ids.length > 0 && ids.every((id) => c.covers.includes(id)));
+    if (partial(name)) return Array.isArray(c.covers) && ids.length > 0 && ids.every((id) => c.covers.includes(id));
+    return false;
+  });
+  const failed = (note, id) => note.failures.some((f) => matchesKind(checkNameOf(f)) && identity(f) === id);
   let at = null;
   const rows = local.map((failure) => {
     const id = identity(failure), seen = notes.filter(({ note }) => ran(note, suites[failure] ?? []));
     if (!seen.length) return { failure, verdict: 'unknown' };
-    const recent = seen.slice(0, RATE_OVER), failedIn = recent.filter(({ note }) => note.failures.some((f) => identity(f) === id)).length;
+    const recent = seen.slice(0, RATE_OVER), failedIn = recent.filter(({ note }) => failed(note, id)).length;
     if (!at || notes.indexOf(seen[0]) < notes.indexOf(at)) at = seen[0];
     const row = { failure, sha: seen[0].sha };
-    return seen[0].note.failures.some((f) => identity(f) === id)
+    return failed(seen[0].note, id)
       ? { ...row, verdict: 'known', rate: `${failedIn} of its last ${recent.length} lane runs` }
       : { ...row, verdict: 'new', ...(failedIn ? { rate: `${failedIn} of the last ${recent.length} lane runs` } : {}) };
   });
@@ -154,9 +174,9 @@ if (import.meta.main) {
     }));
   } else if (opt('--log')) {
     log = readFileSync(opt('--log'), 'utf8'); status = 1; kind = opt('--kind');
-    if (!['cargo', 'xctest', 'bun'].includes(kind)) throw new Error('known --log <file>: name its --kind (cargo, xctest or bun)');
+    if (!['cargo', 'xctest', 'xctest-ios', 'xctest-macos', 'bun'].includes(kind)) throw new Error('known --log <file>: name its --kind (cargo, xctest-ios, xctest-macos or bun)');
   } else {
-    console.log('Usage: bun scripts/known.mjs [--no-fetch] -- <command> [args…] | --log <file> --kind cargo|xctest|bun');
+    console.log('Usage: bun scripts/known.mjs [--no-fetch] -- <command> [args…] | --log <file> --kind cargo|xctest-ios|xctest-macos|bun');
     process.exit(2);
   }
   const local = status === 0 ? [] : failures('local', log, status);

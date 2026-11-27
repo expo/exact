@@ -646,8 +646,8 @@ fn calculated_grid_tracks_lower_in_attributes_and_styles() {
 /// without the class (the tag's fixed `flex-direction`, `display`, an
 /// `hr`'s border), and a
 /// row the chosen style writes under another name (a shorthand beside a
-/// longhand) keeps its value. Compared on the rows set (not who wrote
-/// them) and on the layout.
+/// longhand) keeps its value. Compared on the rows set, who wrote them,
+/// and the layout.
 #[test]
 fn a_class_choice_is_the_class_it_chooses() {
     use exact_kernel::Offer;
@@ -699,8 +699,7 @@ fn a_class_choice_is_the_class_it_chooses() {
             let k = r.kernel();
             let seen = |id: &str| {
                 let n = k.node_by_key(k.find_by_test_id(id)[0]).unwrap();
-                let mut style = n.style.clone();
-                style.written = Default::default();
+                let style = n.style.clone();
                 let at = |c: exact_kernel::NodeRef| (c.frame.x - n.frame.x, c.frame.y - n.frame.y);
                 let children: Vec<_> = n.child_nodes().map(at).collect();
                 (style, (n.frame.width, n.frame.height), children)
@@ -795,4 +794,128 @@ component App
         .unwrap_err();
         assert_eq!(error.id, "lower-attr-value");
     }
+}
+
+#[test]
+fn conditional_classes_preserve_per_arm_written_provenance() {
+    use exact_kernel::style::roles::role;
+    use exact_kernel::{ColorValue, StyleId, StyleMask};
+    let src = r##"style Thick
+  border-top-width=4
+style Thin
+  opacity=0.5
+style Muted
+  color="#888888"
+style Plain
+  opacity=0.8
+component App
+  state thick = false
+  state muted = false
+  state to = "/next"
+  action flip_thick
+    thick = not thick
+  action flip_muted
+    muted = not muted
+  action flip_to
+    to = (to == "" ? "/next" : "")
+  view
+    column color="#336699"
+      hr testId="rule" class=(thick ? Thick : Thin)
+      link href="/next" testId="static-link" class=(muted ? Muted : Plain)
+        image "symbol:star" testId="static-sym"
+        text "Next"
+      link href=to testId="dyn-link" class=(muted ? Muted : Plain)
+        image "symbol:star" testId="dyn-sym"
+        text "Dynamic"
+"##;
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let link_color = ColorValue::Role(role("LinkText").unwrap());
+    let muted_color = ColorValue::Fixed(Color::rgba(0x88, 0x88, 0x88, 255));
+    let page_color = ColorValue::Fixed(Color::rgba(0x33, 0x66, 0x99, 255));
+
+    // `<hr>`: hairline fallback is unwritten; authored `4` is written.
+    for thick in [false, true, false] {
+        let k = r.kernel();
+        let rule = k.node_by_key(k.find_by_test_id("rule")[0]).unwrap();
+        assert!(rule.style.mask.has(StyleId::BorderWidthTop));
+        assert_eq!(rule.style.written.has(StyleId::BorderWidthTop), thick);
+        assert_eq!(rule.style.written.has(StyleId::Opacity), !thick);
+        if thick {
+            assert_eq!(rule.style.border_width_top, 4.0);
+        } else {
+            assert!(rule.style.border_width_top > 0.0 && rule.style.border_width_top < 4.0);
+        }
+        r.act("flip_thick", vec![]).unwrap();
+    }
+
+    // Static `<link>`: `LinkText` fallback is unwritten; `Muted` color is written.
+    for muted in [false, true, false] {
+        let k = r.kernel();
+        let link = k.node_by_key(k.find_by_test_id("static-link")[0]).unwrap();
+        let sym = k.node_by_key(k.find_by_test_id("static-sym")[0]).unwrap();
+        assert_eq!(
+            link.computed_style(StyleMask::of(StyleId::TextColor))
+                .text_color,
+            if muted { muted_color } else { link_color }
+        );
+        assert_eq!(link.style.written.has(StyleId::TextColor), muted);
+        assert_eq!(sym.symbol_color_said(), muted);
+        r.act("flip_muted", vec![]).unwrap();
+    }
+    // Bring `muted` back to false (loop ran 3 flips, so it is now true).
+    r.act("flip_muted", vec![]).unwrap();
+
+    // Dynamic `href=to` `<link>` layered under `class=(muted ? Muted : Plain)`:
+    // exercise every transition and verify `document_tree()` agrees.
+    let check_dyn =
+        |r: &mut Runner<Source>, want: ColorValue, written: bool, sym_said: bool, label: &str| {
+            let k = r.kernel();
+            let link = k.node_by_key(k.find_by_test_id("dyn-link")[0]).unwrap();
+            let sym = k.node_by_key(k.find_by_test_id("dyn-sym")[0]).unwrap();
+            let view_id = link.id;
+            assert_eq!(
+                link.computed_style(StyleMask::of(StyleId::TextColor))
+                    .text_color,
+                want,
+                "{label}"
+            );
+            assert_eq!(
+                link.style.written.has(StyleId::TextColor),
+                written,
+                "{label}"
+            );
+            assert_eq!(sym.symbol_color_said(), sym_said, "{label}");
+            let doc = r.document_tree().unwrap();
+            let doc_node = doc.node(view_id).unwrap();
+            assert_eq!(
+                doc_node.style.written.has(StyleId::TextColor),
+                written,
+                "doc {label}"
+            );
+        };
+    check_dyn(&mut r, link_color, false, false, "to=/next muted=false");
+    r.act("flip_to", vec![]).unwrap();
+    // With `href=""`, `dyn-link` has no `TextColor` of its own, so `dyn-sym`
+    // inherits the authored `color="#336699"` on the enclosing `column`.
+    check_dyn(&mut r, page_color, false, true, "to=empty muted=false");
+    r.act("flip_muted", vec![]).unwrap();
+    check_dyn(&mut r, muted_color, true, true, "to=empty muted=true");
+    r.act("flip_to", vec![]).unwrap();
+    check_dyn(&mut r, muted_color, true, true, "to=/next muted=true");
+    r.act("flip_muted", vec![]).unwrap();
+    check_dyn(
+        &mut r,
+        link_color,
+        false,
+        false,
+        "to=/next muted=false again",
+    );
 }

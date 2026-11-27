@@ -395,11 +395,11 @@ for (const browser of ['chrome', 'firefox', 'webkit']) {
       globalThis.exact = {clock:{now:0, epoch:0}, After:[], views:new Map()};
       exact.ready = import('/host/web-js/agent.js').then(({install}) => {
         install(exact);
-        globalThis.arm = () => {
+        globalThis.arm = (two = false) => {
           delete exact.gpu; delete exact.imageFrames;
-          moving.style.transition = 'none'; moving.style.opacity = '0'; getComputedStyle(moving).opacity;
-          moving.style.transition = 'opacity 1000ms linear'; getComputedStyle(moving).opacity;
-          moving.style.opacity = '1';
+          moving.style.transition = 'none'; moving.style.opacity = '0'; moving.style.translate = '0px 0px'; getComputedStyle(moving).opacity;
+          moving.style.transition = two ? 'opacity 1000ms linear, translate 1000ms linear' : 'opacity 1000ms linear'; getComputedStyle(moving).opacity;
+          moving.style.opacity = '1'; if (two) moving.style.translate = '10px 0px';
           return exact.agentSettled({op:'tags'});
         };
         document.getElementById('exact-root').dataset.bootMs = '0';
@@ -430,12 +430,13 @@ for (const browser of ['chrome', 'firefox', 'webkit']) {
         viewportSize: () => ({width:100, height:100}),
       }));
       for (const capture of captures) {
-        for (const film of [false, true]) {
-          await evaluate('arm()');
+        for (const [film, two, pat] of [[false, false, /held 1 finite animation at end.*over <ms> every <ms>/], [false, true, /held 2 finite animations at end.*over <ms> every <ms>/], [true, false, null]]) {
+          await evaluate(`arm(${two})`);
           assert.equal(await evaluate('moving.getAnimations()[0].currentTime'), 0);
-          await capture(resolve(dir, `${film}.png`), false, film);
+          const reply = await capture(resolve(dir, `${film}-${two}.png`), false, film);
           assert.equal(await evaluate('moving.getAnimations()[0].currentTime'), film ? 0 : 999.5);
           assert.equal(await evaluate('exact.clock.now'), 0);
+          if (pat) assert.match(reply.note ?? '', pat); else assert.equal(reply.note, undefined);
         }
         await evaluate(`arm().then(() => {
           let pending = false;

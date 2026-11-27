@@ -19,18 +19,35 @@ extension CanvasView {
 
 #if os(macOS)
 extension NSView {
-    /// Its subviews: the Mac adds no extension view to a box, as iOS does (LLP 1123 D13, `heldSubviews` on iOS).
-    package var heldSubviews: [NSView] { subviews }
+    /// Its subviews less its extension view, which the host adds behind a box's children and which no reader of what a
+    /// box holds counts (LLP 1123 D13, `ExtensionMac.swift`).
+    package var heldSubviews: [NSView] {
+        guard let mirror = NodeView.extensionStates.object(forKey: self)?.made?.view else { return subviews }
+        return subviews.filter { $0 !== mirror }
+    }
 }
 #endif
 
 extension NodeView {
     #if os(iOS) || os(tvOS)
     static let canvasOverlays = NSHashTable<PlainView>.weakObjects()
-    static let placedViews = NSHashTable<NodeView>.weakObjects()
     #else
     static let canvasOverlays = NSHashTable<FlippedView>.weakObjects()
     #endif
+
+    static let placedViews = NSHashTable<NodeView>(options: [.weakMemory, .objectPointerPersonality])
+
+    /// The node whose surface placement maps this subtree.
+    package var placedAncestor: NodeView? {
+        guard Self.placedViews.count > 0 else { return nil }
+        var view: CanvasView? = self
+        while let current = view {
+            if let node = current as? NodeView, node.placement != nil || node.placementHidden { return node }
+            if current.superview?.canvasOverlayOwner != nil { return nil }
+            view = current.superview
+        }
+        return nil
+    }
 
     /// The nearest canvas whose overlay holds this node. With no live
     /// overlays, text and input need no ancestor walk.

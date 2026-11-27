@@ -12,6 +12,9 @@ import { scrollPadding } from "./navigation.js";
 import { inactive } from "./document.js";
 import { rt as runtime } from './rt-link.js';
 import { sig, effect, scope, end, untracked, write, writeItem, owner, onEnd, viewId, Views, inflight, Before, After, rev, ticket, journal, Resources, Mutations, unadopted, adopting, adoptRow, settled, Refusal, Hosts, exitView, clock, eq, presentRows } from "./rt.js";
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 
 const BOOTSTRAP_ROWS = 16, ESTIMATED = 32, LEAD_SECONDS = 0.25, FAR_VIEWPORTS = 2, KEPT = 4096;
 // A port less than END_SLACK from a followed end already sent is at it: hosts round or floor offsets (start.rs `at_target`).
@@ -302,7 +305,7 @@ function collectionKey(value, unique) {
 /** Every mounted collection by its list's view id. */
 const Lists = new Map(), SelectionLists = new Map();
 let Selection;
-let Controller = null, Loading = null, Published = "";
+let Controller = null, Published = "";
 const Deferred = []; // [collection, targets]: an end edge waits for the first edge's requests (runner/collection.rs)
 
 const Held = new Set(); // collections whose edge waits for their covered route to show (runner/collection.rs `held_edges`)
@@ -676,7 +679,7 @@ class Collection {
     // The document may have painted before adoption; this is the row's live mount.
     if (served && w.hasAttribute("data-exact-await-view")) {
       for (const a of w.getAnimations({ subtree: true })) {
-        if (a.animationName !== undefined && (!a.timeline || a.timeline instanceof DocumentTimeline)
+        if (a.animationName !== undefined && a.timeline instanceof DocumentTimeline
           && a.effect?.target?.getAttribute("data-exact-animation-trigger") !== "none") a.currentTime = 0;
       }
     }
@@ -1217,7 +1220,7 @@ export function vl(el, subject, key, row, o) {
     const bodyChanged = first || !eq(inputs, previousInputs);
     previousInputs = inputs;
     untracked(() => { c.update(items, [idents, dups], bodyChanged); first = false; c.served = null; });
-  });
+  }).$listRows = true;
   load();
 }
 let jumps = null;
@@ -1316,11 +1319,11 @@ After.push(() => {
   remount(); release(); wake(); publish();
   Selection?.after();
 });
-function load() {
-  if (Loading || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
+export function load() {
+  if (loads.Loading || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
   runtime.collectionScrollPending = () => Controller?.scrollPending() ?? false;
   inflight.n++;
-  Loading = new Promise(r => requestAnimationFrame(() => r())).then(() => Promise.all([import("./collection-glue.js"), import("./list-selection.js"), import("./list-text.js")])).then(([{ collectionController }, , { listText, useRuntime }]) => {
+  loadOnce(loads, "Loading", () => new Promise(r => requestAnimationFrame(() => r())).then(() => Promise.all([import("./collection-glue.js"), import("./list-selection.js"), import("./list-text.js")])).then(([{ collectionController }, , { listText, useRuntime }]) => {
     useRuntime({ scope, end, untracked });
     Controller = collectionController({ root: document.getElementById("exact-root"), views: Views, report, agent: clock.agent, settled() {} });
     Selection = globalThis.exact.installListSelection({ root: document.getElementById("exact-root"), lists: SelectionLists,
@@ -1329,14 +1332,14 @@ function load() {
     Published = "";
     publish();
     Selection.after();
-  }).catch(e => console.error("exact: collections:", e)).finally(() => inflight.n--);
-  (globalThis.exact ??= {}).lists = { settle: () => Controller?.settle(), pending: () => Loading, fireOwedScrolls: async () => await Controller?.fireOwedScrolls() ?? { fired: false, owed: 0 }, owedScrolls: () => Controller?.owedScrolls() ?? 0, scrollsFired: () => Controller?.scrollsFired() ?? 0,
+  }), e => console.error("exact: collections:", e)).finally(() => inflight.n--);
+  (globalThis.exact ??= {}).lists = { settle: () => Controller?.settle(), pending: () => loads.Loading, fireOwedScrolls: async () => await Controller?.fireOwedScrolls() ?? { fired: false, owed: 0 }, owedScrolls: () => Controller?.owedScrolls() ?? 0, scrollsFired: () => Controller?.scrollsFired() ?? 0,
     into: (view, key, block = "start", inline = "nearest") => {
       for (const a of [block, inline]) if (!ALIGN.includes(a)) throw Object.assign(new Error(`no alignment ${a}: start, center, end or nearest`), { malformed: true });
       return intoView(`#${view}`, key, block, inline, null, view);
     }, intoView: intoViewState,
     // Arrange's preview, installed by reorder.js (the motion piece's chunk).
-    internals: { Collection, Lists, Views, find, minEpoch, settled, controller: () => Controller } };
+    internals: { Collection, SizeIndex, Lists, Views, viewId, noise, find, minEpoch, settled, controller: () => Controller } };
 }
 // A report from the browser half (runner/collection.rs `collection_feedback_filled`).
 function report(bytes, f, fill) {

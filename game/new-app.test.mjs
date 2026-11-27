@@ -311,7 +311,7 @@ test('the app\'s own verbs live in app.json, so update keeps them', () => {
     const seeded = exact('seed', 'web');
     assert.equal(seeded.status, 3, seeded.stderr);
     assert.deepEqual(JSON.parse(seeded.stdout), { cwd: realpathSync(dir), args: ['--quick', 'web'], app: realpathSync(dir), exact: realpathSync(sdk), exact2: realpathSync(sdk) });
-    assert.match(exact('nope').stderr, /Usage: bun exact\.mjs <web\|web-build\|[^>]*\|seed>/);
+    assert.match(exact('nope').stderr, /Usage: bun exact\.mjs <dev\|web\|web-build\|[^>]*\|seed>/);
     assert.deepEqual(JSON.parse(readFileSync(resolve(dir, '.exact/commands.jsonl'), 'utf8').trim().split('\n')[0]).verb, 'seed');
     // A built-in verb's name is the generated file's, and an empty command is no command.
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, commands: { test: ['bun', 'seed.mjs'] } }, null, 2));
@@ -338,7 +338,7 @@ test('status and web --ready are a game\'s verbs: an app offers neither, and its
     assert.doesNotMatch(exact(app, 'help').stdout, /^ {2}status /m);
     const status = exact(app, 'status');
     assert.equal(status.status, 2, status.stderr);
-    assert.match(status.stderr, /^Usage: bun exact\.mjs <web\|/);
+    assert.match(status.stderr, /^Usage: bun exact\.mjs <dev\|web\|/);
     const ready = exact(app, 'web', '--ready', '--timeout', '1');
     assert.deepEqual([ready.status, ready.stderr.trim()], [2, 'web --ready waits for a game\'s dev loop, which serves while it builds; an app\'s web prints its URL once it serves']);
     assert.ok(!existsSync(started), 'web --ready started the dev loop');
@@ -627,7 +627,7 @@ test('a new app and a new game get VS Code tasks over their own verbs, and updat
     assert.doesNotMatch(createApp(app, { update: true }), /tasks\.json/);
     assert.equal(readFileSync(tasksPath, 'utf8'), '{"version": "2.0.0", "tasks": []}\n');
     rmSync(resolve(app, '.vscode'), { recursive: true });
-    assert.match(createApp(app, { update: true }), /, \.vscode\/tasks\.json/);
+    assert.match(createApp(app, { update: true }), /[:,] \.vscode\/tasks\.json/);
     assert.ok(JSON.parse(readFileSync(tasksPath, 'utf8')).tasks.length > 0);
   } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 60_000); // Three offline Cargo resolutions.
@@ -740,7 +740,7 @@ test('a sibling app\'s generated workspace resolves every host dependency from e
     if (result.status !== 0) return assert.deepEqual(readFileSync(resolve(workspace, 'Cargo.lock')), readFileSync(resolve(root, 'Cargo.lock')));
     const packages = JSON.parse(result.stdout).packages;
     assert.deepEqual(packages.map(p => p.name).sort(), [`${basename(dir)}-apple`, `${basename(dir)}-linux`, `${basename(dir)}-web`]);
-    const paths = { 'ibex2-sqlite': 'vendor/ibex/crates/ibex2-sqlite', 'exact-logic': 'logic', 'exact-apple': 'host/apple', 'exact-apple-update': 'host/apple-update', 'exact-linux': 'host/linux', 'exact-painted': 'host/painted', 'exact-web': 'host/web', 'exact-web-capabilities': 'host/web-capabilities', 'exact-js': 'js', 'exact-js-web': 'js/web', 'exact-js-bake': 'js/bake' };
+    const paths = { 'ibex2-sqlite': 'vendor/ibex/crates/ibex2-sqlite', 'exact-logic': 'logic', 'exact-apple': 'host/apple', 'exact-apple-update': 'host/apple-update', 'exact-linux': 'host/linux', 'exact-linux-update': 'host/linux-update', 'exact-painted': 'host/painted', 'exact-web': 'host/web', 'exact-web-capabilities': 'host/web-capabilities', 'exact-js': 'js', 'exact-js-web': 'js/web', 'exact-js-bake': 'js/bake' };
     for (const pkg of packages) for (const dep of pkg.dependencies) {
       assert.equal(realpathSync(dep.path), realpathSync(resolve(root, paths[dep.name])), `${pkg.name}: ${dep.name}`);
     }

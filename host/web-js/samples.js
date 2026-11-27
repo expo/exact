@@ -96,7 +96,7 @@ export function samples(epochAt = t => t) {
     prefer(row, value) {
       if (row.sub.track !== true) return;
       const track = tracks.get(row.key) ?? tracks.set(row.key, []).get(row.key);
-      track.push([clock.now, value === "clear" ? null : value]);
+      track.push([clock.now, value]);
       if (track.length > 64) track.shift();
     },
     /** The substitute's answer to `reader` of sampled source `row` (§9). */

@@ -137,7 +137,7 @@ impl Collection {
         node: NodesId,
         view: ViewId,
         frames: &[Frame],
-        children: &mut Vec<Child>,
+        children: &mut Children,
     ) -> Result<Option<Box<Self>>, InstanceError> {
         let plan = u.env.plan;
         let descriptor = plan.node(node);

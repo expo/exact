@@ -231,8 +231,11 @@ fn times_are_written_as_glib_writes_them() {
     );
 }
 
+#[cfg(unix)]
 const PHASE: &str = "EXACT_LINUX_KEPT_PHASE";
+#[cfg(unix)]
 const ROOT: &str = "EXACT_LINUX_KEPT_ROOT";
+#[cfg(unix)]
 const APP: &str = "test.exact.kept";
 
 /// D3–D6 in a desktop session (the session check passed by calling past it),

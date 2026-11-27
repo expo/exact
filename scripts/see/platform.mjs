@@ -4,6 +4,7 @@ import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {spawnSync as appleSpawnSync} from '../../host/apple/toolchain.mjs';
+import {simulatorScreenshot} from '../../host/apple/devices.mjs';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
 export function command(program, args, timeout = 15000, run = spawnSync) {
@@ -47,7 +48,9 @@ export function platform({host, pid, session, helper}) {
     async tree() { return host === 'macos' ? mac('tree', String(pid)) : ios({op: 'tree', max: 5000}); },
     async capture(path, tree) {
       if (host === 'ios') {
-        command('xcrun', ['simctl', 'io', session.carrier.udid, 'screenshot', '--type=png', path]);
+        const screen = tree?.frame?.length >= 4 ? { w: tree.frame[2], h: tree.frame[3] } : undefined;
+        const shot = simulatorScreenshot(session.carrier.udid, path, { type: 'png', screen });
+        if (shot.status !== 0) throw new Error(`simctl io screenshot: ${(shot.stderr || '').trim().split('\n').pop() || 'failed'}`);
         return {path, source: 'simctl/window-server', region: 'display', frame: tree?.frame};
       }
       const windows = tree?.windows ?? [];

@@ -5,6 +5,7 @@ import { pointer, record } from './pointer.js';
 import { press } from './focus.js';
 import {
   settleRadios,
+  replaceFieldText,
   sourceField,
   textField,
   onSelection,
@@ -14,8 +15,9 @@ import {
   scrollDrag,
   contextAt,
   liveById,
+  isInputClick,
 } from './navigation.js';
-import { Owner, onEnd, Media, inflight, Sounds, Flushing, FocusQueue } from './rt.js';
+import { Owner, onEnd, Origin, Media, inflight, Sounds, Flushing, FocusQueue, commit, Writes, Finishes, deferForReplacement } from './rt.js';
 import { clock, advance } from './clock.js';
 import { Mutations } from './resources.js';
 import { start } from './mount.js';
@@ -31,6 +33,7 @@ export const OnHooks = {};
 export function on(e, kind, f, bind) {
   // The runner's dispatch_at fires what is due at the event's time first (a focus's `then` before the input); a refusal
   // still lets the event run.
+  let received;
   const ends = kind === 'close' || kind === 'scrollend',
     go = f,
     wall = !clock.agent,
@@ -53,13 +56,26 @@ export function on(e, kind, f, bind) {
     // A change action's receipt boundary yields (true): what is due after it runs before the event too.
     if (clock.timers.some(t => t.due <= to && !(wall && t.frame)) || Mutations.some(m => m.due <= to || m.next <= to))
       while (advance(to, wall) === true);
-    if (!ends || (e.isConnected && !own?.gone)) return run(...a);
+    if (ends && (!e.isConnected || own?.gone)) return;
+    const outer = Origin.input;
+    const event = received ?? KeyEvent ?? Propagating;
+    const activates = ['press', 'contextmenu', 'dblclick'].includes(kind)
+      || (kind === 'key' || kind === 'keycapture') && event?.key !== 'Escape'
+      || kind === 'pointerdown' && event?.pointerType === 'mouse'
+      || kind === 'pointerup' && event?.pointerType !== 'mouse';
+    Origin.input = activates && (event?.isTrusted || isInputClick(event)) || kind === 'submit' && KeyEvent?.isTrusted === true;
+    try { return run(...a); } finally { Origin.input = outer; }
   };
   // A queued dialog close (or a scroll's end a due task's removal outlived) can outlive its arm, even while an exit
   // animation keeps the element connected.
   const l = (t, g, capture = false) => {
-    e.addEventListener(t, g, capture);
-    if (ends) onEnd(() => e.removeEventListener(t, g, capture));
+    const listener = ev => {
+      const outer = received;
+      received = ev;
+      try { return g(ev); } finally { received = outer; }
+    };
+    e.addEventListener(t, listener, capture);
+    if (ends) onEnd(() => e.removeEventListener(t, listener, capture));
   };
   if (OnHooks.file && e.localName === 'input' && e.type === 'file' && OnHooks.file(e, kind, f)) return;
   // media.js: the glue's reports
@@ -121,6 +137,11 @@ export const onPress = (e, kind, f, l) => {
 // text (files.js: a picker's lines, which an input's value would flatten). A range's is a number (the events table). An
 // action taking one more parameter hears the `InputEvent` (x2apps codeedit #2, survey #2).
 export const onValue = (e, kind, f, l) => {
+  // A direct echo needs a finish callback only while an external rewrite is held.
+  if (kind === 'input' && e.$echo) {
+    const action = f;
+    e.$echo = check => { f = check ? (...args) => { if (action(...args)) check(); } : action; };
+  }
   return l(kind, ev => {
     if (ev instanceof CustomEvent) return f(ev.detail);
     const box = e.type === 'checkbox',
@@ -131,6 +152,36 @@ export const onValue = (e, kind, f, l) => {
     if (radio) settleRadios(e, r => r.$checked);
   });
 };
+// Check the reads before settlement can switch a conditional to another arm.
+export function filterInput(e, action) {
+  const run = (...args) => {
+    if (deferForReplacement(() => run(...args))) return true;
+    return commit(() => {
+      const first = Writes.length;
+      action(...args);
+      if (first === Writes.length || e.localName === 'input' && !/^(text|search|url|tel|email|password)$/.test(e.type)) return;
+      const { binding, show } = e.$field;
+      const assigned = new Set();
+      for (let i = first; i < Writes.length; i++) assigned.add(Writes[i][0]);
+      const seen = new Set(), pending = [binding];
+      while (pending.length) {
+        const node = pending.pop();
+        if (assigned.has(node)) {
+          e.$field.replace = replaceFieldText;
+          Finishes.push(ok => {
+            try { if (ok && !binding.gone) show(); }
+            finally { e.$field.replace = undefined; }
+          });
+          break;
+        }
+        if (seen.has(node) || node.resource) continue;
+        seen.add(node);
+        for (const source of node.src) pending.push(source);
+      }
+    }, 'action');
+  };
+  return run;
+}
 export const onBeforeInput = (e, kind, f, l) =>
   l(kind, ev => {
     const outer = KeyEvent;
@@ -255,7 +306,9 @@ export const onSubmit = (e, kind, f, l) => {
             run.done = true;
             e.removeEventListener('keydown', run, true);
             e.removeEventListener('beforeinput', run, true);
-            f();
+            const outer = KeyEvent;
+            KeyEvent = ev;
+            try { f(); } finally { KeyEvent = outer; }
           };
           e.addEventListener('keydown', run, true);
           if (ev.target.localName !== 'textarea' && !ev.target.isContentEditable)
@@ -425,26 +478,25 @@ export const onFileDrag = (e, kind, f, l) => {
 // autofocus; retired owners never dispatch teardown blur.
 export const onFocus = (e, kind, f, l) => {
   const own = Owner,
-    run = () => e.isConnected && !own?.gone && f();
+    run = () => (e.isConnected || !!e._exactEditor?.isConnected) && !own?.gone && f();
   return l(kind, () => (Flushing ? FocusQueue.push(run) : run()));
 };
 // the nearest handler hears the ClipboardEvent record, a paste's files minted `doc:` handles (files.js); the default (a
 // field's own paste) proceeds unless it calls preventDefault() (#125)
 export const onClipboard = (e, kind, f, l) => {
   if (kind === 'paste') OnHooks.pasteWarm?.();
-  return l(
-    kind,
-    atBody(e, kind, ev => {
-      ev.stopPropagation();
-      const outer = KeyEvent;
-      KeyEvent = ev;
-      try {
-        f([ev.clipboardData?.getData('text/plain') ?? '', kind === 'paste' ? (OnHooks.pasted?.(ev) ?? []) : []]);
-      } finally {
-        KeyEvent = outer;
-      }
-    }),
-  );
+  const handler = atBody(e, kind, ev => {
+    ev.stopPropagation();
+    const outer = KeyEvent;
+    KeyEvent = ev;
+    try {
+      f([ev.clipboardData?.getData('text/plain') ?? '', kind === 'paste' ? (OnHooks.pasted?.(ev) ?? []) : []]);
+    } finally {
+      KeyEvent = outer;
+    }
+  });
+  ((e._exactClipboard ??= {})[kind] ??= []).push(handler);
+  return l(kind, handler);
 };
 export const onToggle = (e, kind, f, l) => l(kind, ev => f([ev.oldState, ev.newState]));
 // a capture's `FrameCapture`, always the refusal (frame-navigation.js, LLP 1020.002 D7)

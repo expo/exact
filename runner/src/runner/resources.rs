@@ -15,6 +15,9 @@ pub(crate) struct ResourceRow {
     pub(super) store_reader: bool,
     /// Once randomness was drawn, even by a refused call, bake cannot keep an answer.
     pub(super) entropy_reader: bool,
+    /// Once the ambient clock was read, bake/carry cannot freeze the answer and
+    /// `set_time` re-asks it (LLP 1195.000 D2.2).
+    pub(super) clock_reader: bool,
     /// Its own ask read what the store holds (a secret, a file, a
     /// database), not only randomness.
     pub(super) contents_reader: bool,
@@ -86,23 +89,55 @@ impl<D: DataSource> Runner<D> {
         row.store_reader && (row.contents_reader || !row.reads_known)
     }
 
+    /// Push both elapsed `clock_ms` and launch `epoch_at_zero` onto the store
+    /// before calling into a data source (LLP 1195.000 D2.1).
+    pub(super) fn sync_store_clock(&mut self) {
+        self.store.set_clock_ms(self.now_ms);
+        self.store.set_epoch_at_zero(self.time.epoch_at_zero);
+    }
+
+    /// Effective `(clock, entropy)` taint for resource `i`, combining its own
+    /// runtime flags with its owning module's sticky ambient taint (LLP 1195.000 D2.5).
+    pub(super) fn resource_ambient_taint(&self, i: usize) -> (bool, bool) {
+        let row = &self.resources[i];
+        let source = self.plan.str(self.resource_row(i).source);
+        let (mod_clock, mod_entropy) = self.data.ambient_taint(source);
+        (
+            row.clock_reader || mod_clock,
+            row.entropy_reader || mod_entropy,
+        )
+    }
+
     /// What an ask of resource `i` read, from the store's counts before it:
-    /// any read makes it the device's, and one beyond its draws of
-    /// randomness a reader of what the store holds. Returns whether this ask
-    /// read what the store holds.
-    pub(super) fn note_reads(
-        &mut self,
-        i: usize,
-        reads_before: usize,
-        draws_before: usize,
-    ) -> bool {
+    /// any read makes it the device's, one beyond its draws of randomness a
+    /// reader of what the store holds, and an ambient clock read sets
+    /// `clock_reader` without making it a store-contents reader (LLP 1195.000 D2.2).
+    /// Returns whether this ask read what the store holds.
+    pub(super) fn note_reads(&mut self, i: usize, before: (usize, usize, usize)) -> bool {
+        let (reads_before, draws_before, clocks_before) = before;
         let reads = self.store.reads() - reads_before;
         let draws = self.store.entropy_draws() - draws_before;
+        let clocks = self.store.clock_reads() - clocks_before;
+        let first_clock = clocks > 0 && !self.resources[i].clock_reader;
         let row = &mut self.resources[i];
         row.store_reader |= reads > 0;
         row.entropy_reader |= draws > 0;
+        row.clock_reader |= clocks > 0;
         row.contents_reader |= reads > draws;
         row.reads_known = true;
+        if first_clock {
+            let source = self.plan.str(self.resource_row(i).source);
+            if !exact_plan::runner_owned_source(source) {
+                let name = self.plan.str(self.resource_row(i).name).to_string();
+                let warning = format!(
+                    "warning [ambient-clock] resource `{name}` read the ambient clock; its answer is excluded from bake and will not auto-refresh on elapsed time (use exactTime or every(...) for reactive time)"
+                );
+                self.log(warning.clone());
+                if !self.bake_warnings.contains(&warning) {
+                    self.bake_warnings.push(warning);
+                }
+            }
+        }
         reads > draws
     }
 
@@ -149,12 +184,19 @@ impl<D: DataSource> Runner<D> {
             .is_some_and(|i| self.resources[i].store_reader)
     }
 
-    /// Whether resource `name` drew secure randomness (LLP 1069.005 D2):
-    /// a device read whose value bake leaves out of the plan, so no random
-    /// value is shared by every install; the device asks it.
+    /// Whether resource `name` drew randomness directly or via module-sticky
+    /// `Math.random()` taint (LLP 1069.005 D2, LLP 1195.000 D2.5).
     pub fn resource_draws_entropy(&self, name: &str) -> bool {
         self.resource_rows()
             .position(|r| self.plan.str(r.name) == name)
-            .is_some_and(|i| self.resources[i].entropy_reader)
+            .is_some_and(|i| self.resource_ambient_taint(i).1)
+    }
+
+    /// Whether resource `name` read the ambient clock directly or via
+    /// module-sticky clock taint (LLP 1195.000 D2.2, D2.5).
+    pub fn resource_reads_clock(&self, name: &str) -> bool {
+        self.resource_rows()
+            .position(|r| self.plan.str(r.name) == name)
+            .is_some_and(|i| self.resource_ambient_taint(i).0)
     }
 }

@@ -1,0 +1,56 @@
+routes nav
+  tab home "/"
+    detail "/detail"
+    appDetail "/app-detail"
+    dialogDemo "/dialog"
+    sheet "/sheet"
+    appSheet "/app-sheet"
+  tab other "/other"
+
+component App
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  action pick(name: string)
+    nav = select(nav, name)
+  view
+    main navigationBack="back" navigationKey=`${top(nav).id}` navigate=open width="100%" height="100%"
+      for tab in nav.tabs key=tab.name
+        column role="tabpanel" id=`panel-${tab.name}` position="absolute" inset=0
+          for e in tab.stack key=e.id
+            Screen(e=e, back=back)
+      row role="tablist"
+        for tab in nav.tabs key=tab.name
+          button role="tab" aria-controls=`panel-${tab.name}` aria-selected=(tab.name == nav.tab) press=pick(tab.name) testId=`tab-${tab.name}`
+            text tab.name
+
+component Screen
+  props
+    e: Entry
+    back: action
+  view
+    column navigationKey=`${e.id}` navigationPresentation=((e.name == "sheet" or e.name == "appSheet") ? "modal" : "") position="absolute" inset=0 display="flex" flex-direction="column"
+      header
+        if e.name != "home" and e.name != "other"
+          button id="back" press=back
+            text ((e.name == "sheet" or e.name == "appSheet") ? "Close" : "Back")
+        text e.name role="heading" aria-level=2
+      if e.name == "home"
+        link href="/detail" testId="detail"
+          text "Detail"
+        link href="/sheet" testId="sheet"
+          text "Sheet"
+      else if e.name == "other"
+        probe-plain testId="plain" flex=1
+      else if e.name == "dialogDemo"
+        button commandfor="dialog" command="show-modal" testId="open-dialog"
+          text "Open dialog"
+        dialog id="dialog" aria-label="Dialog"
+          probe-table width=160 height=90 testId="dialog-table"
+          column id="choices" popover="manual" width=160 height=90
+            app-table width=160 height=90 testId="popover-table"
+      else if e.name == "appDetail" or e.name == "appSheet"
+        app-table testId="table" flex=1
+      else
+        probe-table testId="table" flex=1

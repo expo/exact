@@ -25,6 +25,18 @@ extension NodeView {
         return scale
     }
 
+    /// LLP 1123 D15: tell an iframe's guest how much of its web view lies in the unsafe area of its owner's view,
+    /// `owner`, as AppKit gives that view (`ScrollInsetsMac.band`), so WebKit keeps the page's fixed and sticky content
+    /// clear of the title bar, toolbar and band its reach draws it under, and the range that has moved through in the
+    /// owner's `configuration` (`OwnerUpdateMac.configuration`), which WebKit's small and large viewports take. Out of a
+    /// window, or out of `owner`, nothing is written. Activation calls it as reach and the band move (stage 5); tests
+    /// call it directly.
+    package func writeObscured(in owner: NSView, configuration: UInt64?) {
+        guard let web, web.window != nil, web.isDescendant(of: owner), let presenter else { return }
+        let b = ScrollInsetsMac.band(of: web, in: owner)
+        presenter.session?.webviews.obscure(self, top: b[0], left: b[3], bottom: b[2], right: b[1], configuration: configuration)
+    }
+
     /// The web view placed in the box: in a holder once the frame has been
     /// scaled (kept at scale 1 after, so the page is not moved between views
     /// again), else filling the box.

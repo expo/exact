@@ -7,6 +7,97 @@ use contract_types::{Scope, Ty};
 use exact_kernel::StyleId;
 use exact_motion::animation::LONGHANDS;
 
+/// Check literal references in the expanded view, where component arguments
+/// have their values. Computed names resolve against the mounted elements.
+pub(crate) fn action_targets(checked: &contract_types::Checked<'_>, out: &mut Vec<LowerError>) {
+    let checking = contract_checking::Checking::new(checked);
+    let view = checking.expanded();
+    if !view.walk().any(|node| {
+        node.element()
+            .is_some_and(|(_, _, attrs)| attrs.iter().any(|a| a.name == "aria-actions"))
+    }) {
+        return;
+    }
+    let mut refs = Vec::new();
+    let mut targets = std::collections::BTreeMap::new();
+    let branches =
+        view.structure()
+            .walk_regions_with((Vec::new(), false), |node, (arms, inline)| {
+                [false, true].map(|other| {
+                    let mut path = arms.clone();
+                    if node.is_choice() {
+                        path.push((node.site(), other));
+                    }
+                    Some((
+                        path,
+                        node.element()
+                            .map_or(*inline, |(tag, _, _)| crate::prose::text_container(tag)),
+                    ))
+                })
+            });
+    for (node, (arms, inline)) in branches {
+        let Some((tag, _, attrs)) = node.element() else {
+            continue;
+        };
+        let attr = |name: &str| attrs.iter().find(|a| a.name == name);
+        let id = attr("id").map(|a| &a.value);
+        if let Some(actions) = attr("aria-actions") {
+            if let Expr::Str(names, _) = &actions.value {
+                refs.push((names, id, actions.span, arms.clone()));
+            }
+        }
+        if let Some(Expr::Str(id, _)) = id {
+            let presses = attr("press").is_some()
+                || (matches!(tag, "link" | "button") || inline && crate::prose::phrasing(tag))
+                    && attr("href")
+                        .is_some_and(|a| !matches!(&a.value, Expr::Str(s, _) if s.is_empty()));
+            targets
+                .entry(id.as_str())
+                .or_insert_with(Vec::new)
+                .push((arms, presses));
+        }
+    }
+    for (names, own, span, arms) in refs {
+        for name in names.split_ascii_whitespace() {
+            let reason = if matches!(own, Some(Expr::Str(id, _)) if id == name) {
+                "names the element itself"
+            } else {
+                // Only opposite arms of the same choice exclude a target.
+                let mut mounted = targets
+                    .get(name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(path, _)| {
+                        arms.iter()
+                            .zip(path)
+                            .take_while(|(a, b)| a.0 == b.0)
+                            .all(|(a, b)| a.1 == b.1)
+                    })
+                    .peekable();
+                if mounted.peek().is_none() {
+                    "names no element in this view with that literal id"
+                // A conditional target may disappear. An unconditional earlier id wins.
+                } else if mounted
+                    .take_while(|(path, presses)| *presses || !arms.starts_with(path))
+                    .any(|(_, presses)| *presses)
+                {
+                    continue;
+                } else {
+                    "names an element with no press"
+                }
+            };
+            out.push(LowerError {
+                id: "lower-aria-action-target",
+                message: format!("`aria-actions` id `{name}` {reason}"),
+                span,
+            });
+            if out.len() >= MAX_REFUSALS {
+                return;
+            }
+        }
+    }
+}
+
 pub(crate) fn unknown_tag(tag: &str, span: Span) -> LowerError {
     let hint = tags::html_tag(tag)
         .or_else(|| svg::refused_tag(tag))
@@ -32,9 +123,10 @@ pub(crate) fn fragmentation(name: &str) -> Option<&'static str> {
     })
 }
 
-/// WAI-ARIA 1.2's states and properties: an unknown `aria-*` name is told
+/// WAI-ARIA 1.2 and the proposed aria-actions (w3c/aria#1805): an unknown `aria-*` name is told
 /// whether ARIA has it, and which of these Contract carries (`tags::attr`).
 const ARIA: &[&str] = &[
+    "aria-actions",
     "aria-activedescendant",
     "aria-atomic",
     "aria-autocomplete",
@@ -584,7 +676,10 @@ fn known_arms(v: &Expr, names: &Substituted, budget: &mut usize) -> Option<Expr>
 /// rows. The driver runs this when an earlier pass refused, so a misspelled
 /// tag or a bad colour is reported in the same run as a type error.
 pub fn lint(file: &File) -> Vec<LowerError> {
-    lint_components(file, |_| true, &Default::default())
+    let mut out = lint_components(file, |_| true, &Default::default());
+    // The written views' swipe rules, which lowering checks beside the anatomy (LLP 1057.001 §8)
+    out.extend(crate::handlers::swipe::judge_written(file));
+    out
 }
 
 /// A bad literal value (`color="notacolor"`) in a component of the root's
@@ -712,6 +807,8 @@ fn lint_components(
                             a.name != "class"
                                 && a.name != "delete"
                                 && a.name != "slot"
+                                // A swipe's selectors, which the written-view walk judges (LLP 1057.001 §8)
+                                && !(matches!(a.name.as_str(), "swipe-flick" | "swipe-follow") && !native::is_module_tag(tag))
                                 && a.name != crate::row_look::ROW_LOOK
                                 && !native::leftover(tag, a)
                                 && !native::declared(tag, a)

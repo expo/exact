@@ -2,8 +2,8 @@
 //! 1115.001 D13). Android's reader has one view, and what is in it is
 //! painted, so TalkBack sees nothing unless the reader's view answers for
 //! it: an `AccessibilityNodeProvider` whose virtual nodes are these
-//! (`host/android/canvas`, `Access.kt`). Desktop Linux has no shell that
-//! asks (LLP 1015 §7: no AT-SPI tree), and nothing here runs there.
+//! (`host/android/canvas`, `Access.kt`). The Windows and Wayland shells
+//! publish the same elements through AccessKit (LLP 1115.004 D11).
 //!
 //! **Nothing is built until the shell asks.** The tree is made in
 //! [`Presenter::reader_access`], which the reader calls only while an
@@ -23,8 +23,7 @@
 //! cells, and a description list its terms and descriptions; a live region
 //! is kept so that its change is spoken. Everything else is no node, and
 //! its children stand under the node above. What is hidden, inert,
-//! `aria-hidden`, under a route that
-//! does not show, or out of what its scrollers show is left out.
+//! `aria-hidden`, off route or outside its scrollport is left out.
 //!
 //! **Where the bars and the top layer are.** A header the top app bar
 //! replaced and the root `tablist` the navigation bar replaced are not in
@@ -45,6 +44,7 @@
 //! **A hosted text field** is the reader's own view (D8) and reports
 //! itself: its node here says only where it stands in the order and what
 //! its author named it.
+mod actions;
 mod menu;
 mod scroll;
 pub use scroll::NodeRange;
@@ -174,6 +174,10 @@ pub mod flag {
     pub const MODAL: i32 = 1 << 15;
     /// A held press lifts a drag out of the app (LLP 1094.000 D9).
     pub const DRAG: i32 = 1 << 16;
+    /// An authored tabindex makes the element a keyboard focus target.
+    pub const FOCUSABLE: i32 = 1 << 17;
+    /// An explicit `aria-live="off"` on this node or a transparent ancestor.
+    pub const LIVE_OFF: i32 = 1 << 18;
 }
 
 /// What changed of a node since the last statement.
@@ -251,6 +255,10 @@ pub struct Node {
     pub value: String,
     /// Its description (`aria-description`, `aria-describedby`).
     pub hint: String,
+    /// The authored owner, including when a grouped row lends its click to a switch.
+    pub action_owner: ViewId,
+    /// Actions on other elements, in authored order, with their accessible names.
+    pub actions: Vec<(ViewId, String)>,
 }
 
 /// What the presenter keeps of the tree its shell was told.
@@ -258,10 +266,12 @@ pub struct Node {
 pub(super) struct State {
     /// What the last tree was built from: nothing is built while it stands.
     key: Option<Key>,
-    /// The last tree told, which surface it was (0: the page), and its pane.
+    /// The last tree told, which surface it was (0: the page), its pane,
+    /// and the display scale its boxes were scaled to.
     nodes: Vec<Node>,
     host: u32,
     pane: (i32, String),
+    scale: u32,
     told: bool,
     /// The page's tree and its route while a surface's is the tree told:
     /// what a live region of the page came to say meanwhile is spoken when
@@ -283,6 +293,7 @@ struct Key {
     bars: u32,
     frame: [i32; 4],
     menu: Option<(ViewId, u32)>,
+    scale: u32,
 }
 
 fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -304,14 +315,9 @@ fn rowed(hash: u64) -> i32 {
     ROWED + ((hash ^ (hash >> 32)) % 0x3ff0_0000) as i32
 }
 
-/// A node's identity, which a platform keeps its place by: its view id,
-/// which the runner keeps for as long as the view lives, through every
-/// commit and scroll. Under a list's row (a node whose ancestor carries a
-/// `listItemKey`) the view is not the item's own: the row's views are
-/// given to another item when it scrolls away (LLP 1078), and a row that
-/// returns is built from others. So there it is a hash of the list's own
-/// identity, the row's item key, and the node's place in the row (its
-/// index among its siblings at each level down from the row).
+/// The accessibility id is the live view id outside a list. Under a recycled
+/// row it hashes the list’s identity, the item key and the child indices from
+/// the row to this view, so the same item keeps its id when it returns.
 pub fn identity(kernel: &Kernel, view: ViewId) -> i32 {
     let mut path: Vec<u32> = Vec::new();
     let mut at = view;
@@ -361,6 +367,7 @@ struct Scope {
     inside: bool,
     /// The nearest `aria-disabled` said above.
     disabled: bool,
+    live: i32,
 }
 
 /// A tree being built.
@@ -386,6 +393,7 @@ struct BarNodeInfo {
     id: i32,
     disabled: bool,
     hint: String,
+    actions: Vec<(ViewId, String)>,
 }
 
 impl Build {
@@ -399,208 +407,7 @@ impl Build {
 }
 
 impl<D: DataSource> Presenter<D> {
-    /// `aria-labelledby`'s words, else `aria-label`, unless empty.
-    pub(in crate::presenter) fn access_label(&self, node: &NodeRef<'_>) -> Option<String> {
-        let kernel = self.host.kernel();
-        let named = node.props.str(PropId::AccessibilityLabelledBy).map(|refs| {
-            (refs.split_whitespace())
-                .filter_map(|name| kernel.find_by_id(name).into_iter().next())
-                .filter_map(|key| kernel.node_by_key(key))
-                .map(|n| {
-                    let own = n.props.str(PropId::AccessibilityLabel);
-                    (own.filter(|l| !l.is_empty()).map(str::to_string))
-                        .unwrap_or_else(|| self.access_words(&n, true))
-                })
-                .filter(|words| !words.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ")
-        });
-        named.filter(|words| !words.is_empty()).or_else(|| {
-            let label = node.props.str(PropId::AccessibilityLabel);
-            label.filter(|l| !l.is_empty()).map(str::to_string)
-        })
-    }
-
-    /// A node's description: the words of what `aria-describedby` names,
-    /// else its `aria-description`, else its `title` where that is not its
-    /// name (HTML-AAM's accessible description).
-    fn access_hint(&self, node: &NodeRef<'_>) -> String {
-        let kernel = self.host.kernel();
-        let described = node
-            .props
-            .str(PropId::AccessibilityDescribedBy)
-            .map(|refs| {
-                (refs.split_whitespace())
-                    .filter_map(|name| kernel.find_by_id(name).into_iter().next())
-                    .filter_map(|key| kernel.node_by_key(key))
-                    .map(|n| self.access_name(&n))
-                    .filter(|words| !words.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            });
-        (described.filter(|words| !words.is_empty()))
-            .or_else(|| (node.props.str(PropId::AccessibilityHint)).map(str::to_string))
-            .or_else(|| {
-                let title = node.props.str(PropId::Title).filter(|t| !t.is_empty())?;
-                (self.access_name(node) != title).then(|| title.to_string())
-            })
-            .unwrap_or_default()
-    }
-
-    /// Whether a press on `node` is its own: a button, a link, a node with
-    /// a `press` handler.
-    fn access_pressable(&self, node: &NodeRef<'_>) -> bool {
-        node.node_type == NodeType::Pressable
-            || ControlKind::of(node.node_type, node.props) == Some(ControlKind::Button)
-            || node.props.link().is_some()
-            || (self.host.runner().handlers_of(node.id)).contains(&EventKind::Press)
-    }
-
-    /// A node's words: a text's own, an image's label, and for anything
-    /// else its children's, a space between them, less what is hidden from
-    /// assistive technology and, unless `all`, less the controls inside it,
-    /// which are named apart.
-    fn access_words(&self, node: &NodeRef<'_>, all: bool) -> String {
-        let kernel = self.host.kernel();
-        match node.node_type {
-            NodeType::Text => return self.access_inline_words(node),
-            NodeType::Image | NodeType::Svg => {
-                let label = node.props.str(PropId::AccessibilityLabel);
-                return label.unwrap_or_default().to_string();
-            }
-            NodeType::TextInput | NodeType::Control
-                if ControlKind::of(node.node_type, node.props) != Some(ControlKind::Button) =>
-            {
-                return String::new()
-            }
-            _ => {}
-        }
-        (node.children().into_iter())
-            .filter_map(|id| kernel.node(id))
-            .filter(|n| {
-                n.props.bool(PropId::AccessibilityElementsHidden) != Some(true)
-                    && n.style.display != Display::None
-                    && (all || !self.access_pressable(n))
-            })
-            .map(|n| match self.access_label(&n) {
-                Some(label) => label,
-                None => self.access_words(&n, all),
-            })
-            .filter(|words| !words.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    fn access_inline_words(&self, node: &NodeRef<'_>) -> String {
-        if let Some(text) = node.props.str(PropId::Text) {
-            // A Markdown text reads as the pieces `markup::expand` draws,
-            // which has no atoms: one is drawn and read as its source
-            // (LLP 1045.000's host table).
-            return match node.props.str(PropId::Markup) {
-                Some("markdown") => exact_markdown::spoken(&exact_markdown::pieces(text)),
-                _ => self.host.kernel().bar_text(node.id).unwrap_or_default(),
-            };
-        }
-        type RunLabel<'a> = (bool, Option<(ViewId, &'a str)>);
-        fn collect<'a>(
-            node: &NodeRef<'a>,
-            hidden: bool,
-            label: Option<(ViewId, &'a str)>,
-            out: &mut Vec<RunLabel<'a>>,
-        ) {
-            let hidden = hidden
-                || node.style.display == Display::None
-                || node.props.bool(PropId::AccessibilityElementsHidden) == Some(true);
-            let label = label.or_else(|| {
-                node.props
-                    .str(PropId::AccessibilityLabel)
-                    .filter(|s| !s.is_empty())
-                    .map(|s| (node.id, s))
-            });
-            if node.props.str(PropId::Text).is_some() {
-                out.push((hidden, label));
-            } else {
-                for child in node.child_nodes().filter(|n| n.node_type == NodeType::Text) {
-                    collect(&child, hidden, label, out);
-                }
-            }
-        }
-        let mut semantics = Vec::new();
-        collect(node, false, None, &mut semantics);
-        let runs = node.text_runs();
-        let mut said = BTreeSet::new();
-        let words: Vec<&str> = runs
-            .iter()
-            .zip(semantics)
-            .map(|(run, (hidden, label))| {
-                if hidden {
-                    return "";
-                }
-                match label {
-                    Some((id, label)) if said.insert(id) => label,
-                    Some(_) => "",
-                    None => &run.text,
-                }
-            })
-            .collect();
-        match exact_textflow::collapse(&words, node.paragraph().white_space.model()) {
-            Some(collapsed) => collapsed.runs.concat(),
-            None => words.concat(),
-        }
-    }
-
-    fn access_inline_controls(&self, b: &mut Build, node: &NodeRef<'_>, scope: Scope) {
-        if node.props.str(PropId::Text).is_some() {
-            return;
-        }
-        for child in node.child_nodes().filter(|n| n.node_type == NodeType::Text) {
-            if child.style.display == Display::None
-                || child.props.bool(PropId::AccessibilityElementsHidden) == Some(true)
-            {
-                continue;
-            }
-            if self.access_pressable(&child) {
-                self.access_walk(b, child.id, scope);
-            } else {
-                self.access_inline_controls(b, &child, scope);
-            }
-        }
-    }
-
-    /// A node's accessible name: its label, else a button's face, else its
-    /// words, else its `title` (accname's tooltip attribute, step 2I).
-    fn access_name(&self, node: &NodeRef<'_>) -> String {
-        if let Some(label) = self.access_label(node) {
-            return label;
-        }
-        if node.node_type == NodeType::Text {
-            return self.access_inline_words(node);
-        }
-        let words = self.access_words(node, false);
-        match node.props.str(PropId::Title) {
-            Some(title) if words.trim().is_empty() && !title.is_empty() => title.to_string(),
-            _ => words,
-        }
-    }
-
-    /// How a live region speaks: its `aria-live`, else its role's
-    /// (`status` polite, `alert` assertive).
-    fn access_live(node: &NodeRef<'_>) -> i32 {
-        let role = node.props.str(PropId::AccessibilityRole);
-        let live = node.props.str(PropId::AccessibilityLive).or(match role {
-            Some("status") => Some("polite"),
-            Some("alert") => Some("assertive"),
-            _ => None,
-        });
-        match live {
-            Some("polite") => flag::POLITE,
-            Some("assertive") => flag::ASSERTIVE,
-            _ => 0,
-        }
-    }
-
-    /// Add `node` to the tree where its box shows; its identity, or `None`
-    /// where nothing of it shows (what is under it is then left out too).
+    /// Add a visible node and return its identity.
     #[allow(clippy::too_many_arguments)]
     fn access_emit(
         &self,
@@ -613,7 +420,7 @@ impl<D: DataSource> Presenter<D> {
         words: impl FnOnce() -> Option<(String, String)>,
     ) -> Option<i32> {
         let kernel = self.host.kernel();
-        if !self.display.allows(kernel, node.id) {
+        if !self.display.allows(kernel, node.id) || !crate::paint::paints(kernel, node.id, None) {
             return None;
         }
         let painted = b
@@ -628,7 +435,7 @@ impl<D: DataSource> Presenter<D> {
             painted.rect.3,
         );
         let shows = intersect(rect, scope.clip)
-            .or_else(|| walk::empty_item_bounds(rect, scope.clip, node, role))?;
+            .or_else(|| walk::empty_bounds(rect, scope.clip, node, role, scope.live))?;
         let (name, value) = words()?;
         let id = b.unique(match scope.hash {
             Some(hash) => rowed(hash),
@@ -642,7 +449,10 @@ impl<D: DataSource> Presenter<D> {
         } else if scope.disabled {
             flags |= flag::DISABLED;
         }
-        flags |= Self::access_live(node);
+        if node.props.get(PropId::TabIndex).is_some() && self.focusable(node.id) {
+            flags |= flag::FOCUSABLE;
+        }
+        flags |= scope.live;
         b.out.push(Node {
             id,
             parent: scope.parent,
@@ -656,6 +466,8 @@ impl<D: DataSource> Presenter<D> {
             name,
             value,
             hint: self.access_hint(node),
+            action_owner: node.id,
+            actions: self.access_actions(node),
         });
         Some(id)
     }
@@ -732,6 +544,7 @@ impl<D: DataSource> Presenter<D> {
             Some("radio" | "menuitemradio") => (role::RADIO, check),
             Some("tab") => (role::TAB, 0),
             Some("link") => (role::LINK, 0),
+            Some("article" | "group") => (role::GROUP, 0),
             None | Some("button") if matches!(pressed, Some("true" | "false" | "mixed")) => {
                 let on = if pressed == Some("true") {
                     flag::CHECKED
@@ -810,38 +623,22 @@ impl<D: DataSource> Presenter<D> {
                 identity(kernel, view)
             },
             disabled,
+            actions: node
+                .as_ref()
+                .map(|n| self.access_actions(n))
+                .unwrap_or_default(),
             hint: node.map(|n| self.access_hint(&n)).unwrap_or_default(),
         }
     }
 
-    /// The top app bar's nodes: the Up arrow, the leading buttons, the
-    /// title as a heading, the trailing buttons. And the pane: the route
-    /// and its title.
-    fn access_top(&mut self, b: &mut Build) -> (i32, String) {
-        // Under a sheet the bars are the page's, inert: the sheet is the
-        // pane, titled by its first heading (LLP 1115.001 D13).
-        if let Some((route, _)) = self.top_sheet() {
-            let kernel = self.host.kernel();
-            let role = |props: &exact_kernel::PropList| {
-                props.str(PropId::AccessibilityRole) == Some("heading")
-            };
-            let title = (kernel
-                .preorder_where(&[route], |_, props| role(props))
-                .first())
-            .and_then(|heading| kernel.bar_text(*heading))
-            .or_else(|| kernel.node(route).and_then(|n| self.access_label(&n)))
-            .unwrap_or_default();
-            return (identity(kernel, route), title);
-        }
-        let (top, _) = self.bar_plans();
-        let Some(plan) = top.cloned() else {
-            return (0, String::new());
-        };
-        let (bar, _) = self.bars();
-        let Some(bar) = bar else {
-            return (0, String::new());
-        };
-        let (frame, targets, texts) = (bar.frame, bar.targets.to_vec(), bar.texts);
+    fn access_top_bar(
+        &self,
+        b: &mut Build,
+        plan: &bars::Top,
+        frame: [f32; 4],
+        targets: &[bars::Target],
+        texts: &[(ViewId, Rect4)],
+    ) {
         let target = |what: bars::What| targets.iter().find(|t| t.what == what).copied();
         let enabled = |on: bool| if on { flag::CLICK } else { flag::DISABLED };
         if let Some(up) = target(bars::What::Up).filter(|_| plan.up) {
@@ -867,10 +664,96 @@ impl<D: DataSource> Presenter<D> {
             let title = plan.title.clone();
             self.access_bar_node(b, *heading, 0, role::HEADING, 0, title, place);
         }
+        if let Some((sub_node, rect)) = texts
+            .iter()
+            .find(|(node, _)| Some(*node) == plan.subtitle_node)
+        {
+            if !self.bar_node_aria_hidden(*sub_node, plan.heading)
+                && !self.host.authored_visibility(*sub_node).1
+            {
+                let label = self
+                    .host
+                    .kernel()
+                    .node(*sub_node)
+                    .map(|n| self.access_name(&n))
+                    .unwrap_or_default();
+                if !label.trim().is_empty() {
+                    self.access_bar_node(b, *sub_node, 0, role::TEXT, 0, label, (*rect, frame));
+                }
+            }
+        }
         for item in &plan.trailing {
             button(self, b, item);
         }
+    }
+
+    /// The top app bar's nodes: the Up arrow, the leading buttons, the
+    /// title as a heading, the trailing buttons. And the pane: the route
+    /// and its title.
+    fn access_top(&mut self, b: &mut Build) -> (i32, String) {
+        // Under a sheet the page's bars are inert behind the scrim; if the sheet
+        // route has its own projected header bar (LLP 1156.008.001 B5), expose
+        // its nodes here, else title the sheet pane by its first heading.
+        if let Some((route, _)) = self.top_sheet() {
+            if let Some((plan, frame, targets, texts)) = self.sheet_bar_access() {
+                self.access_top_bar(b, &plan, frame, &targets, &texts);
+                return (identity(self.host.kernel(), route), plan.title);
+            }
+            let kernel = self.host.kernel();
+            let role = |props: &exact_kernel::PropList| {
+                props.str(PropId::AccessibilityRole) == Some("heading")
+            };
+            let title = (kernel
+                .preorder_where(&[route], |_, props| role(props))
+                .first())
+            .and_then(|heading| kernel.bar_text(*heading))
+            .or_else(|| kernel.node(route).and_then(|n| self.access_label(&n)))
+            .unwrap_or_default();
+            return (identity(kernel, route), title);
+        }
+        let (top, _) = self.bar_plans();
+        let Some(plan) = top.cloned() else {
+            return (0, String::new());
+        };
+        let (bar, _) = self.bars();
+        let Some(bar) = bar else {
+            return (0, String::new());
+        };
+        let (frame, targets, texts) = (bar.frame, bar.targets.to_vec(), bar.texts);
+        self.access_top_bar(b, &plan, frame, &targets, &texts);
         (identity(self.host.kernel(), plan.route), plan.title)
+    }
+
+    fn bar_node_aria_hidden(&self, view: ViewId, heading: Option<ViewId>) -> bool {
+        let kernel = self.host.kernel();
+        let holds_heading = |ancestor: ViewId| {
+            let Some(mut cur) = heading else {
+                return false;
+            };
+            loop {
+                if cur == ancestor {
+                    return true;
+                }
+                let Some(parent) = kernel.node(cur).and_then(|n| n.parent) else {
+                    return false;
+                };
+                cur = parent;
+            }
+        };
+        let mut at = Some(view);
+        while let Some(id) = at {
+            if holds_heading(id) {
+                break;
+            }
+            let Some(node) = kernel.node(id) else {
+                break;
+            };
+            if node.props.bool(PropId::AccessibilityElementsHidden) == Some(true) {
+                return true;
+            }
+            at = node.parent;
+        }
+        false
     }
 
     /// The navigation bar's nodes: the bar, and its destinations in it.
@@ -967,7 +850,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// What the tree is built from, read cheaply.
-    fn access_key(&mut self) -> Key {
+    fn access_key(&mut self, scale: u32) -> Key {
         let ten = |v: f32| (v * 10.0).round() as i32;
         let surface = self.surface().map(|s| (s.serial, s.revision));
         let bars = self.bars_revision();
@@ -982,6 +865,7 @@ impl<D: DataSource> Presenter<D> {
             bars,
             frame: self.chrome().frame.map(ten),
             menu: (self.menu).map(|id| (id, self.menu_scroll.to_bits())),
+            scale,
         }
     }
 
@@ -1013,6 +897,7 @@ impl<D: DataSource> Presenter<D> {
                     clip: viewport,
                     inside: false,
                     disabled: false,
+                    live: 0,
                 },
             );
             self.access_menu(&mut b);
@@ -1033,6 +918,7 @@ impl<D: DataSource> Presenter<D> {
             clip: viewport,
             inside: false,
             disabled: false,
+            live: 0,
         };
         if page.axes.0 || page.axes.1 {
             // The page itself scrolls: it is the scroller everything is in.
@@ -1051,6 +937,8 @@ impl<D: DataSource> Presenter<D> {
                 name: String::new(),
                 value: String::new(),
                 hint: String::new(),
+                action_owner: 0,
+                actions: Vec::new(),
             });
             scope.parent = id;
         }
@@ -1117,7 +1005,8 @@ impl<D: DataSource> Presenter<D> {
             if was.name != node.name || was.value != node.value || was.hint != node.hint {
                 what |= change::TEXT;
             }
-            if was.flags != node.flags
+            if was.actions != node.actions
+                || was.flags != node.flags
                 || was.set != node.set
                 || was.grid != node.grid
                 || was.role != node.role
@@ -1159,19 +1048,35 @@ impl<D: DataSource> Presenter<D> {
         let region = |id: i32| {
             std::iter::once(id)
                 .chain(above(id))
-                .find(|id| new.get(id).is_some_and(|n| live(n)))
+                .map_while(|id| {
+                    new.get(&id)
+                        .copied()
+                        .filter(|n| n.flags & flag::LIVE_OFF == 0)
+                })
+                .find(|n| live(n))
+                .map(|n| n.id)
         };
         for (id, (what, ..)) in &changed {
-            if what & (change::TEXT | change::SUBTREE) != 0 {
+            let children_changed =
+                what & change::SUBTREE != 0
+                    && were
+                        .get(id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|id| old.get(id).is_some_and(|n| n.flags & flag::LIVE_OFF == 0))
+                        .ne(are.get(id).into_iter().flatten().filter(|id| {
+                            new.get(id).is_some_and(|n| n.flags & flag::LIVE_OFF == 0)
+                        }));
+            if what & change::TEXT != 0 || children_changed {
                 spoken.extend(region(*id));
             }
         }
         for id in now
             .iter()
-            .filter(|n| !old.contains_key(&n.id))
-            .map(|n| n.id)
+            .filter(|n| !old.contains_key(&n.id) && n.flags & flag::LIVE_OFF == 0)
+            .map(|n| n.parent)
         {
-            spoken.extend(above(id).find(|id| new.get(id).is_some_and(|n| live(n))));
+            spoken.extend(region(id));
         }
         // What is under a node whose subtree changed is not told apart.
         let covered = |id: i32| {
@@ -1214,14 +1119,16 @@ impl<D: DataSource> Presenter<D> {
     ///   ([`Node::grid`]: four words), and three strings: its name, its
     ///   value and its description.
     pub fn reader_access(&mut self, scale: f32, again: bool) -> Option<Vec<i32>> {
-        let key = self.access_key();
+        let scale_bits = scale.to_bits();
+        let key = self.access_key(scale_bits);
         if !again && self.access.told && self.access.key.as_ref() == Some(&key) {
             return None;
         }
         let (nodes, host, pane) = self.access_tree();
         self.access.key = Some(key);
         let same = self.access.told && host == self.access.host;
-        if !again && same && nodes == self.access.nodes && pane == self.access.pane {
+        let same_scale = self.access.scale == scale_bits;
+        if !again && same && same_scale && nodes == self.access.nodes && pane == self.access.pane {
             return None;
         }
         let state = &mut self.access;
@@ -1229,15 +1136,15 @@ impl<D: DataSource> Presenter<D> {
             c.into_iter().filter(|c| c.1 == change::LIVE).collect()
         };
         // Told whole: to a shell that holds nothing, when the tree is
-        // another window's, and when too much changed to tell apart. What a
-        // live region came to say is spoken even so, but to a shell that
-        // holds nothing.
+        // another window's, when the display scale changed (every pixel box
+        // moved), and when too much changed to tell apart. What a live region
+        // came to say is spoken even so, but to a shell that holds nothing.
         let (changes, whole) = match (again, same, &state.page) {
             (true, ..) => (Vec::new(), true),
             (_, true, _) => {
                 let new_pane = pane.0 != state.pane.0;
                 let all = Self::access_changes(&state.nodes, &nodes, new_pane);
-                match all.len() <= MOST_CHANGES {
+                match same_scale && all.len() <= MOST_CHANGES {
                     true => (all, false),
                     false => (spoken(all), true),
                 }
@@ -1280,13 +1187,18 @@ impl<D: DataSource> Presenter<D> {
             for text in [&node.name, &node.value, &node.hint] {
                 string(&mut out, text);
             }
+            out.push(node.actions.len() as i32);
+            for (id, name) in &node.actions {
+                out.push(*id as i32);
+                string(&mut out, name);
+            }
         }
-        (state.nodes, state.host, state.pane, state.told) = (nodes, host, pane, true);
+        (state.nodes, state.host, state.pane, state.scale, state.told) =
+            (nodes, host, pane, scale_bits, true);
         Some(out)
     }
 
-    /// The shell stopped asking (no service is on): what it was told is
-    /// forgotten, and nothing is kept for it.
+    /// Forget the last statement when the shell stops asking.
     pub fn access_reset(&mut self) {
         self.access = State::default();
     }
@@ -1381,11 +1293,13 @@ impl<D: DataSource> Presenter<D> {
                 // handler may have moved it, bounded it anew, disabled it or
                 // made it inert.
                 let range = |p: &Self| {
-                    (p.host.kernel().node(view))
+                    let kernel = p.host.kernel();
+                    (kernel.node(view))
                         .filter(|n| {
                             n.node_type == NodeType::Control
                                 && n.props.bool(PropId::Disabled) != Some(true)
                                 && !p.host.route_visibility(view).1
+                                && !events::css_hidden(kernel, view, p.alert_root())
                         })
                         .map(|n| exact_kernel::Range::of(n.props))
                 };
@@ -1427,7 +1341,12 @@ impl<D: DataSource> Presenter<D> {
     /// (ARIA's keys for one) or an `aria-orientation="vertical"` slider.
     /// Whether it was such a node.
     pub(crate) fn access_step_range(&mut self, view: ViewId, up: bool, now_ms: f64) -> bool {
-        let Some(node) = self.host.kernel().node(view) else {
+        let kernel = self.host.kernel();
+        if self.host.route_visibility(view).1 || events::css_hidden(kernel, view, self.alert_root())
+        {
+            return false;
+        }
+        let Some(node) = kernel.node(view) else {
             return false;
         };
         let aria = node.props.str(PropId::AccessibilityRole);

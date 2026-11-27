@@ -218,6 +218,7 @@ fn a_parameter_shadows_a_state_in_a_large_component() {
         None,
         &[],
         &[],
+        &[],
         &mut sink,
     );
     assert!(sink.errors.is_empty(), "{:?}", sink.errors);
@@ -612,6 +613,7 @@ fn a_derive_dependency_in_a_let_initializer_is_outside_its_binding() {
             &file.components[0],
             &Types::default(),
             None,
+            &[],
             &[],
             &[],
             &mut sink,

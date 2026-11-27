@@ -254,26 +254,41 @@ pub(crate) fn resolve(
         let parent = font_basis(arena, slot);
         let mut next = StyleProps::clone(arena.style(slot));
         let mut changed = StyleMask::EMPTY;
-        let relative: Vec<_> = next.relative.iter().collect();
+        let relative: Vec<_> = next
+            .relative
+            .iter_specs()
+            .map(|(id, spec)| (id, spec.clone()))
+            .collect();
+        // A container unit is a share of the box's query containers, the content roots it lies
+        // in (LLP 1123 D16), which the arena's environment does not hold
+        let contained = relative.iter().any(|(_, spec)| spec.is_container());
+        let env = match contained {
+            true => {
+                let mut env = arena.env().clone();
+                env.container = Some(crate::kernel::owner::container_at(arena, slot));
+                std::borrow::Cow::Owned(env)
+            }
+            false => std::borrow::Cow::Borrowed(arena.env()),
+        };
         // `font-size` first: an `em` elsewhere on the node is its font size.
         let mut font = arena.computed_source(slot, StyleId::FontSize).font_size;
-        for (id, unit, n) in relative.iter().copied() {
-            if id != StyleId::FontSize {
+        for (id, spec) in &relative {
+            if *id != StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, parent, device, arena.env());
-            if next.set_resolved(id, px) {
-                changed.set(id);
+            let px = spec.px(*id, root, parent, device, &env);
+            if next.set_resolved(*id, px) {
+                changed.set(*id);
             }
         }
         if next.mask.has(StyleId::FontSize) {
             font = next.font_size;
         }
-        for (id, unit, n) in relative {
+        for (id, spec) in relative {
             if id == StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, font, device, arena.env());
+            let px = spec.px(id, root, font, device, &env);
             if next.set_resolved(id, px) {
                 changed.set(id);
             }

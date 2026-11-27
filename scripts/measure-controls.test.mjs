@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const HOSTS = ['ios', 'macos', 'web', 'linux', 'windows', 'terminal', 'android'];
-const PROVENANCE = ['measured', 'inferred: same painter, not measured', 'none by construction', 'measured, key window via EXACT_AGENT_ACTIVATE'];
+const PROVENANCE = ['measured', 'inferred: same painter, not measured', 'inferred from presenter, not measured', 'none by construction', 'measured, key window via EXACT_AGENT_ACTIVATE'];
 
 test('every cell of the table is recorded with its measurement, and no other', () => {
   const { controls } = JSON.parse(readFileSync(resolve(ROOT, 'kernel/tables/schema.json'), 'utf8'));

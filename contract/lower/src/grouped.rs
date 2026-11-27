@@ -86,6 +86,8 @@ pub(crate) fn style(tag: &str, attrs: &[Attr]) -> Result<Option<&'static str>, L
                 )
             }
         },
+        None if tag == "list" && attrs.iter().any(|a| a.name == "reorderdrop") =>
+            attrs.iter().any(|a| a.name == "listStyle" && matches!(&a.value, Expr::Str(s, _) if s == "inset-grouped")),
         _ => false,
     };
     let named = attrs.iter().rev().find(|a| a.name == "listStyle");

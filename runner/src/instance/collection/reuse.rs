@@ -357,6 +357,9 @@ impl Collection {
         u.theme = around;
         updated?;
         views::rekey(u, mounted.wrapper, text);
+        if mounted.preview_hidden {
+            views::style(u, mounted.wrapper, &[("visibility", Value::str("visible"))])?;
+        }
         mounted.position = position;
         mounted.token = token;
         mounted.epoch = advance(&mut self.next_epoch)?;

@@ -515,6 +515,10 @@ final class RouteSheetMacTests: XCTestCase {
                   text "Font"
                 button testId="open-weight" press=open("weight")
                   text "Weight"
+                button testId="open-headline" press=open("headline")
+                  text "Headline"
+                button testId="open-body" press=open("body")
+                  text "Body"
                 button testId="open-plain" press=open("plain")
                   text "Plain"
               if screen != "home"
@@ -526,6 +530,10 @@ final class RouteSheetMacTests: XCTestCase {
                       text "Font" role="heading" font-family="Menlo" font-size=18 font-weight=700
                     if screen == "weight"
                       text "Weight" role="heading" font-weight=400
+                    if screen == "headline"
+                      text "Headline" role="heading" font="-exact-headline"
+                    if screen == "body"
+                      text "Body" role="heading" font="-exact-body"
                     if screen == "plain"
                       text "Plain" role="heading"
                   box width=200 height=80
@@ -545,6 +553,10 @@ final class RouteSheetMacTests: XCTestCase {
         let weight = try title("open-weight")
         XCTAssertEqual(weight.pointSize, NSFont.systemFontSize)
         XCTAssertEqual(TextEngine.cssWeight(of: weight), 400)
+        let headline = try title("open-headline")
+        XCTAssertEqual(TextEngine.cssWeight(of: headline), 700, "macOS -exact-headline is bold")
+        let body = try title("open-body")
+        XCTAssertEqual(TextEngine.cssWeight(of: body), 400, "macOS -exact-body is regular")
         XCTAssertEqual(try title("open-plain"), RouteChrome.titleFont)
     }
 

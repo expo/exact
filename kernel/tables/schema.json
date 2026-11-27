@@ -708,7 +708,8 @@
     {
       "id": 74,
       "name": "toolbarPlacement",
-      "kind": "str"
+      "kind": "str",
+      "_literalWords": ["window", "keyboard", "navigation", "bottom"]
     },
     {
       "id": 75,
@@ -767,7 +768,13 @@
       "id": 262,
       "name": "navigationSplit",
       "kind": "str",
-      "_comment": "@ref LLP 1116.004 D1.2: on a stack's root route, \"none\" keeps a wide window's stack pushed, and a positive width (CSS px, points) is the list column's when the stack splits, splitting a list the host's rule does not find; unsaid, a list whose rows push splits at 320. @ref LLP 1116.006 D2: \"placeholder\" on a box in the root route is the detail pane's while nothing is selected, in place of the platform's; the lowerer makes it `display: none`, which the web shell overrides there."
+      "_comment": "@ref LLP 1127 D1: on a stack's root route, \"split\" or a width, a whole number from 1 to 999999 in digits with no leading zero (CSS px, points: the list column's preferred width), asks for the split, and \"none\" pushes on every host; unsaid, the web and an iPhone push, and the Mac (LLP 1115.002 D4), the painted hosts and an iPad outside a tab (LLP 1127 D19, D22) split a list whose rows push. On iPad, \"split\" on the first route puts a split view in its tab or window at the platform column width, even for a custom primary without a directory list; a tab stays a stack by default. @ref LLP 1116.006 D2: \"placeholder\" on a plain box that is the root route's own child is the detail pane's while nothing is selected, in place of the platform's, and asks for the split; the lowerer makes it `display: none`, which the web shell overrides there."
+    },
+    {
+      "id": 328,
+      "name": "arrangement",
+      "kind": "str",
+      "_comment": "@ref LLP 1188 D3: a box whose two children are UIKit's primary and secondary panes on iOS 27.1 and later (UIArrangementViewController): split or overlay, each optionally followed by horizontal or vertical; none, or no word, is CSS's layout, as it is on every other host."
     },
     {
       "id": 221,
@@ -948,6 +955,11 @@
       "id": 109,
       "name": "preventsDisplaySleepDuringVideoPlayback",
       "kind": "bool"
+    },
+    {
+      "id": 340,
+      "name": "audiovisualBackgroundPlaybackPolicy",
+      "kind": "str"
     },
     {
       "id": 310,
@@ -1714,7 +1726,19 @@
       "id": 317,
       "name": "dataTransferFiles",
       "kind": "str",
-      "_comment": "@ref LLP 1094.000 D2: `DataTransfer(files=)`, newline-joined: each a shipped `assets/` file or an `app:/` path. The runner rewrites it to the entries its file rule admits for the host before a batch is sent. The compiler's, never authored."
+      "_comment": "@ref LLP 1094.000 D2: `DataTransfer(files=)`, newline-joined: each a shipped `assets/` file or an `app:/` path, the entries the runner admits for the host before a batch is sent; a plan compiled before LLP 1094.000 D14 binds it directly. The compiler's and the runner's, never authored."
+    },
+    {
+      "id": 348,
+      "name": "dataTransferEntries",
+      "kind": "str",
+      "_comment": "@ref LLP 1094.000 D14: `DataTransfer(files=, names=)` as the compiler binds them: each file percent-encoded and followed by a line feed, then, with `names=`, U+001E and each name likewise. The runner decodes it, admits each file with its name and writes `dataTransferFiles` and `dataTransferNames`; it reaches no host. The compiler's, never authored."
+    },
+    {
+      "id": 349,
+      "name": "dataTransferNames",
+      "kind": "str",
+      "_comment": "@ref LLP 1094.000 D14: the name a destination is offered for each admitted file, newline-joined beside `dataTransferFiles`, empty for a file's own. The runner's, never authored."
     },
     {
       "id": 255,
@@ -2010,6 +2034,12 @@
       "_comment": "@ref LLP 1115 §2 (what the author writes wins): on a menu's trigger (a `popovertarget` button, a bar button that opens a menu, a node with `contextPopover`), the order its rows show in: `fixed` (as written, wherever the menu opens), `priority` (the first row nearest the finger) or `automatic` (the default: the platform's; UIKit's shows a menu that opens upward last row first). iOS and tvOS set it as `preferredMenuElementOrder`; the other hosts always show the rows as written and ignore it."
     },
     {
+      "id": 350,
+      "name": "keepsMenuPresented",
+      "kind": "bool",
+      "_comment": "@ref LLP 1115 §2 (what the author writes wins): on a menu's popover column (a menu or a submenu) or on one of its rows, whether a pick on the row leaves the menu open. The row's own value wins over its popover's, which reaches no submenu. Unset, a pick closes the menu, the platform's. A row that follows a link, opens something, or hides a menu it is in closes it anyway. iOS sets UIKit's `keepsMenuPresented` on the row and updates the open menu after each pick, except in the edit menu a keyboard's menu key opens; the web keeps a menu open until a row hides it, as before; macOS, tvOS, Android, Linux and Windows close it at every pick and ignore it."
+    },
+    {
       "id": 303,
       "name": "glassInteractive",
       "kind": "bool",
@@ -2050,6 +2080,162 @@
       "name": "portal",
       "kind": "str",
       "_comment": "@ref LLP 1013.002 D1, D2: the `id` of the element this one is shown in, appended after that element's own children; empty, it stays where it is declared. The runner places it with `SetChildren`, so the same live node moves and its declaration keeps its state and handlers; one whose destination is missing or cannot hold it is detached, alive and not shown. No host reads it."
+    },
+    {
+      "id": 320,
+      "name": "panelHref",
+      "kind": "str",
+      "_comment": "@ref LLP 1030.004 D7: the destination of a panel link, exposed to accessibility. Its press requests the panel on every host."
+    },
+    {
+      "id": 321,
+      "name": "accessibilityActions",
+      "kind": "str",
+      "_comment": "@ref LLP 1114.008 D1: aria-actions names the elements whose presses are available from this element."
+    },
+    {
+      "id": 322,
+      "name": "swipeDirection",
+      "kind": "str",
+      "_comment": "@ref LLP 1057.001 §8: the one direction, left, right, up or down, of a node's `swipe`, the platform's discrete swipe (UIKit's `UISwipeGestureRecognizer`; no other host has one yet); physical, not mirrored in a right-to-left layout. Any other value leaves the swipe off. No layout effect."
+    },
+    {
+      "id": 323,
+      "name": "navigationSelectedDetent",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: the word of a sheet route's `navigationDetent` the sheet is at, applied whenever its value changes, the opening included, and again when the detents change; an unrelated update leaves the height the person dragged the sheet to. Removed, UIKit's `selectedDetentIdentifier` is nil again: the sheet's shortest detent. UIKit's `selectedDetentIdentifier`, SwiftUI's `presentationDetents(_:selection:)`."
+    },
+    {
+      "id": 324,
+      "name": "navigationEdgeAttachedInCompactHeight",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `true` or `false` (the default, UIKit's): whether a sheet route in a compact-height window attaches to the screen's bottom edge, as in a regular-height one, instead of covering the window's height. UIKit's `prefersEdgeAttachedInCompactHeight`, SwiftUI's `presentationCompactAdaptation`."
+    },
+    {
+      "id": 325,
+      "name": "navigationScrollExpands",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `true` or `false`: whether scrolling a sheet route's content at its top edge expands the sheet to its next detent; unsaid, the platform's, on a sheet with several detents. UIKit's `prefersScrollingExpandsWhenScrolledToEdge`, SwiftUI's `presentationContentInteraction`."
+    },
+    {
+      "id": 326,
+      "name": "navigationSizing",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `automatic` (the default), `page` or `form`: a sheet route's presentation, read as the sheet is presented. `automatic` is UIKit's own choice, as it presents a controller that names no style, a form sheet on iOS 18 and later and a page sheet before; `page` is its page sheet, `form` its form sheet (a centred sheet of a standard size in a regular-width window); `fitted` stays out (rules/DEFERRED.md). UIKit's `modalPresentationStyle`, SwiftUI's `presentationSizing`."
+    },
+    {
+      "id": 327,
+      "name": "navigationUndimmedDetent",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: the tallest word of a sheet route's `navigationDetent` at which the sheet dims nothing and is nonmodal: at or below it the screen under the sheet stays live, its touches, its accessibility and its reads, and the sheet begins no modal boundary. Unsaid, every detent dims and the sheet is modal. UIKit's `largestUndimmedDetentIdentifier`, SwiftUI's `presentationBackgroundInteraction(.enabled(upThrough:))`."
+    },
+    {
+      "id": 329,
+      "name": "navigationPopoverAnchor",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: the `id` of the element a popover route is anchored to, its source: UIKit's `sourceView`, the anchor's whole box. Read on a route presented as a popover."
+    },
+    {
+      "id": 330,
+      "name": "navigationPopoverMargins",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: one to four lengths in points, top right bottom left as `padding` expands them: how far a popover route keeps from the window's edges. UIKit's `popoverLayoutMargins`; unsaid, the platform's."
+    },
+    {
+      "id": 331,
+      "name": "navigationPopoverArrows",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `any`, or any of `up`, `down`, `left` and `right`: the directions a popover route's arrow may point. UIKit's `permittedArrowDirections`; unsaid, any."
+    },
+    {
+      "id": 332,
+      "name": "navigationPopoverOverlapsSource",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `true` or `false` (the default): whether a popover route may cover its anchor where it cannot fit beside it. UIKit's `canOverlapSourceViewRect`."
+    },
+    {
+      "id": 333,
+      "name": "navigationPopoverAdaptation",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `sheet` (the default) or `none`: what a popover route becomes in a compact-width window, a sheet as UIKit adapts it, or still a popover."
+    },
+    {
+      "id": 341,
+      "name": "navigationFullSizeContent",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7, D16: `true` or `false`: whether AppKit's content runs under its chrome. On a popover route, `NSPopover.hasFullSizeContent` (default `false`); on the window's root route, the window's `.fullSizeContentView` (unsaid, the host's own choice)."
+    },
+    {
+      "id": 342,
+      "name": "navigationSplitItemAdjustsForOverlays",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `true` or `false` (the default) on a route: whether the Mac split item it projects, the page's or the detail's, adjusts its safe area for the sidebars and inspectors overlaid on it. `NSSplitViewItem.automaticallyAdjustsSafeAreaInsets` (macOS 26)."
+    },
+    {
+      "id": 343,
+      "name": "navigationSplitItemFullHeight",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `true` (the default) or `false` on the root tablist or a route's inspector `aside`: whether the sidebar or inspector it projects on the Mac runs the window's full height under full-size content. `NSSplitViewItem.allowsFullHeightLayout`."
+    },
+    {
+      "id": 344,
+      "name": "navigationSplitItemTopAccessory",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: on a route, the root tablist or a route's inspector `aside`, the `id` of the element the Mac split item it projects shows at its top, a content owner (D2). `NSSplitViewItem.topAlignedAccessoryViewControllers` (macOS 26)."
+    },
+    {
+      "id": 345,
+      "name": "navigationSplitItemBottomAccessory",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: as `navigationSplitItemTopAccessory`, at the item's bottom. `NSSplitViewItem.bottomAlignedAccessoryViewControllers` (macOS 26)."
+    },
+    {
+      "id": 346,
+      "name": "navigationAccessoryContentInsets",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `true` (the default) or `false` on an element a Mac split item shows as an accessory: whether AppKit applies its standard content insets to it. `NSSplitViewItemAccessoryViewController.automaticallyAppliesContentInsets` (macOS 26)."
+    },
+    {
+      "id": 347,
+      "name": "navigationAccessoryScrollEdgeEffect",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `automatic` (the default), `soft` or `hard` on an element a Mac split item shows as an accessory: the edge effect content scrolling behind it takes. `NSSplitViewItemAccessoryViewController.preferredScrollEdgeEffectStyle` (macOS 26.1)."
+    },
+    {
+      "id": 334,
+      "name": "appleMagnification",
+      "kind": "float",
+      "_comment": "@ref LLP 1020.002 §9: the authored pinch scale of a macOS iframe, applied at its top left. https://developer.apple.com/documentation/webkit/wkwebview/setmagnification(_:centeredat:)"
+    },
+    {
+      "id": 335,
+      "name": "navigationExtendedLayout",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D4: `all` (the default), `none`, or the edges `top`, `left`, `bottom` and `right`, each once: the edges under whose translucent bars a route's controller view lies. UIKit's `edgesForExtendedLayout`; the content root follows (D3)."
+    },
+    {
+      "id": 336,
+      "name": "navigationExtendsUnderOpaqueBars",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D4: `true` or `false` (the default): whether a route's controller view lies under opaque bars too. UIKit's `extendedLayoutIncludesOpaqueBars`."
+    },
+    {
+      "id": 337,
+      "name": "navigationVerticalBar",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D4: `automatic` (the default) or `disabled`: whether a route's bars may move into the iPhone Duo's vertical bar. UIKit's `preferredVerticalBarBehavior` (iOS 27.1), which UIKit's containers take from the child that shows."
+    },
+    {
+      "id": 338,
+      "name": "navigationVerticalBarCompression",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D4: `automatic` (the default), `prefers-bar-items` or `prefers-tab-bar`: which compresses first where a route's bar items and the tab bar share the vertical bar. UIKit's `UINavigationItem.verticalBarCompressionBehavior` (iOS 27.1)."
+    },
+    {
+      "id": 339,
+      "name": "navigationWidthFollowsPreferredContentSize",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `true` or `false` (the default): whether a sheet attached to a compact-height window's bottom edge takes its content's preferred width, as a popover route's sheet in a compact width does. UIKit's `widthFollowsPreferredContentSizeWhenEdgeAttached`."
     }
   ],
   "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback. refused: keywords the wire carries and the compiler refuses an author, because no presenter builds them (LLP 1043.000 §3 D1); `contract vocab` lists the others. No wire reads it, so it is outside the digest.",
@@ -2590,6 +2776,17 @@
       ],
       "default": "auto"
     },
+    "ListInsetsReference": {
+      "values": [
+        "automatic",
+        "none",
+        "content-inset",
+        "safe-area",
+        "layout-margins",
+        "readable-content"
+      ],
+      "default": "automatic"
+    },
     "ScrollInsetAdjustment": {
       "values": [
         "automatic",
@@ -2606,8 +2803,31 @@
       ],
       "default": "auto"
     },
+    "SafeAreaTrack": {
+      "values": [
+        "live",
+        "observed-max"
+      ],
+      "default": "live"
+    },
     "LayoutMarginsPreserved": {
       "_comment": "@ref LLP 1123 D8: `-exact-preserves-superview-layout-margins`, the keywords of the layout_margins_preserved row, not a wire enum: false is 0, true 1.",
+      "values": [
+        "false",
+        "true"
+      ],
+      "default": "false"
+    },
+    "ListInsetsContentToSafeArea": {
+      "_comment": "@ref LLP 1123 D15: `-exact-list-insets-content-to-safe-area`, the keywords of the list_insets_content_to_safe_area row, not a wire enum: true, UIKit's default, is 0 and false 1.",
+      "values": [
+        "true",
+        "false"
+      ],
+      "default": "true"
+    },
+    "ListCellMarginsFollowReadableWidth": {
+      "_comment": "@ref LLP 1123 D15: `-exact-list-cell-margins-follow-readable-width`, the keywords of the list_cell_margins_follow_readable_width row, not a wire enum: false, UIKit's default, is 0 and true 1.",
       "values": [
         "false",
         "true"
@@ -3100,7 +3320,7 @@
       "default": "none"
     }
   },
-  "_styles": "Each row is one mask bit. codec: dimension (u8 kind + f32; kind 0 auto, 1 points, 2 percent as authored 0-100 points, 3-6 an env(safe-area-inset-top/right/bottom/left) length with the f32 the points added, 7 calc(<percent> ± <px>) with a second f32 the points, 8-13 an env(viewport-segment-width/height/top/left/bottom/right x y) length with the f32 the points added and then two u8 indices x then y — LLP 1078 D3; 14-23 viewport vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh and 30-35 container cqw/cqh/cqi/cqb/cqmin/cqmax (LLP 1123 D16), each with f32 the percentage; 24 a calculation after a zero f32 (style/calc/wire.rs, LLP 1116 D5): a tree node by node, each a u8 tag (0 a value, 1 env(), 2 a sum, 3 a product, 4 a negation, 5 an inversion, 6 min, 7 max, 8 clamp, 10 a var(--name) of an author's custom property, its name as a string, then its fallback's presence byte and the fallback — LLP 1123 D5; 11 an observation, its target as a u8 (0 the box; 1 a chain entry, then its u8 number from 1; 2 a kind, then its u8 index, 0 owner, 1 parent, 2 navigation, 3 tab, 4 split, 5 column; 3 a relation, then its u8 index, 0 presenter, 1 session, 2 root, 3 window, 4 tab-content, 5 window-content, 6 screen; 4 a registered target, then its name as a string), its u8 family (0 safe-area, 1 keyboard, 2 keyboard-undocked, 3 safe-area-corners, 4 layout-margins, 5 layout-margins-corners, 6 readable-content, 7 readable-content-corners, 8 readable-content-guide, 9 system-minimum-layout-margins), its u8 side (0 top, 1 right, 2 bottom, 3 left, 4 start, 5 end, the last two resolved against the reading box's direction — LLP 1123 D9), then its fallback's presence byte and the fallback; or family 10, an owner segment, with the box as its target, then its u8 field (0 width, 1 height, 2 top, 3 left, 4 bottom, 5 right) and its u8 column and row, each 0 to 15, then its fallback's presence byte and the fallback — LLP 1123 D16; a target's family is the safe area, and the box's own safe area is not admitted, its name being the local inset until activation — LLP 1123 D9, D10), then a value’s f64 and u8 unit (0 a number, 1 a percentage, 2 px, 3-12 a viewport unit, 13-18 a container unit, 128 rem); an env()’s u8 (0-3 a safe-area-inset edge, 4-7 a var(--exact-safe-area-inset-top/right/bottom/left), its content owner's local inset, which only a tree holds — LLP 1123 D5, D9; 8-13 a viewport-segment variable followed by its two u8 indices, 16-35 a layout region's inset, 16 + region × 4 + edge, 36-39 an env(titlebar-area-x/y/width/height), which only a tree holds); a list’s u8 count and its children; clamp’s three presence bytes, each before its argument; or, for a value whose env() has a fallback, tag 9 and the text as written as a string (u32 length, UTF-8), which the row reads once substituted (CSS Environment Variables 1 §3). A tree is admitted only when it is within CSS Values 4 §10.8’s limits, its own §10.13 text parses back to it and no other kind holds it; a text only when the row reads it as one. Kind 25 is an env(-exact-<region>-inset-<edge>) layout region's inset, the f32 the points added, then a u8 region (0 safe-area-corners, 1 layout-margins, 2 layout-margins-corners, 3 readable-content, 4 readable-content-corners) and a u8 edge (0 top, 1 right, 2 bottom, 3 left), LLP 1123 D10) | line-height (u8: 0 normal, 1 number followed by f32, 2 length followed by f32) | f32 | u8 (keyword bits; keywords names the enum) | u16 | u32 | i32 | auto-i32 (u8: 0 auto, 1 followed by i32) | color (tagged ColorValue, src/wire/codec.rs) | vec2 (f32 f32) | auto-color (u8: 0 auto, 1 followed by color) | current-color (u8: 0 currentcolor, 1 followed by color) | tracks (CSS grid-template grammar Taffy can lay out: none, named lines, px, %, fr, auto, min/max-content, calc()/min()/max()/clamp() over px and %, fit-content(px or %), minmax(), and fixed/auto-fill/auto-fit repeat(); canonical CSS text on the wire) | placement (CSS grid placement: auto, nonzero numeric or named lines and positive numeric or named spans; canonical CSS text on the wire) | aspect-ratio (CSS text: auto, a ratio, or both) | background-image (CSS text: none or gradient layers, LLP 1066) | paint (CSS text: none, currentcolor, or a colour) | dasharray (CSS text: none or a list of numbers) | transform (CSS text: a transform list) | paint-order (CSS text: normal, or fill/stroke/markers) | marker (CSS text: none or url(#id)) | transform-origin (CSS text: one to three lengths, percentages or keywords) | transitions (`_transitions`) | animations (`_animations`) | drag-timeline, animation-timeline, animation-range, timeline-scope, timeline-name, view-timeline-inset (CSS text: the timeline rows, LLP 1057.003) | box-shadow, text-shadow, filter, backdrop-filter, clip-path, shape-outside, corner-shape, mask-image, rotate-axis, symbol-palette, font-variations, font-features, position-try-fallbacks (CSS text, parsed by the types named in build/codec.rs) | enum:<Name> (u8). admitsAuto applies to dimension rows only; Auto on a non-admitting row is a typed decode rejection. refusesPercent marks a dimension row CSS gives no percentage (column-width): a percentage there, alone or inside a calculation, is refused when set and a typed decode rejection. Every length row (each dimension, line-height, font-size, letter-spacing, the gaps, border widths and radii, shape-margin, border-spacing) also takes CSS `rem` and `em` through `set_dynamic`; the row holds the pixels the kernel resolves at the end of each commit against the host's root font size (LLP 1069.000 D3), so every reader and the wire see pixels. Every length row also takes CSS `ch` and `lh` at a fixed 8×16 px cell (LLP 1101 D3). terminal: how a terminal entry admits the row (LLP 1101 §4) — cell (lengths only in `ch`/`lh`, a percentage, `auto` or 0), admit, or quantize (the host approximates it); a row without one is refused in a terminal entry. layout: a change re-runs layout. text: a change invalidates text measurement. inherited: the row follows CSS inheritance — a node without its own row takes the nearest logical ancestor's computed value, else the initial value (LLP 1035.000 D1); the kernel marks the descendants an inherited change reaches. Defaults are the storage defaults AND the semantic defaults — this table is the one default authority, and the defaults are CSS's: a bare node is a block, content-box, flex-direction row, flex-shrink 1 (rules/RULES.md: the web is the standard). A colour row's default may name a role from `colors` (`\"CanvasText\"`), as CSS's initial `color` is a system colour; a host with the platform's colour shows that, never a snapshot (LLP 1095 stage 2). hosts (LLP 1159.000 D2): what a native host does with the row other than draw it as written, a list of { host: ios | macos | linux | windows | android, or painted for every host that draws with exact-painted's paint walk (linux, windows, android); on: box (an element outside an svg) or svg (one inside), where the entry is limited to one; fidelity: none (the node draws as if the row were unset) or best-effort (it differs as why says); why }. A host with no entry has no known gap, which is not a measurement. The compiler's style-undrawn lint, `contract vocab` and scripts/svgparity.mjs read it; no wire does, so it is outside the digest.",
+  "_styles": "Each row is one mask bit. codec: dimension (u8 kind + f32; kind 0 auto, 1 points, 2 percent as authored 0-100 points, 3-6 an env(safe-area-inset-top/right/bottom/left) length with the f32 the points added, 7 calc(<percent> ± <px>) with a second f32 the points, 8-13 an env(viewport-segment-width/height/top/left/bottom/right x y) length with the f32 the points added and then two u8 indices x then y — LLP 1078 D3; 14-23 viewport vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh and 30-35 container cqw/cqh/cqi/cqb/cqmin/cqmax (LLP 1123 D16), each with f32 the percentage; 24 a calculation after a zero f32 (style/calc/wire.rs, LLP 1116 D5): a tree node by node, each a u8 tag (0 a value, 1 env(), 2 a sum, 3 a product, 4 a negation, 5 an inversion, 6 min, 7 max, 8 clamp, 10 a var(--name) of an author's custom property, its name as a string, then its fallback's presence byte and the fallback — LLP 1123 D5; 11 an observation, its target as a u8 (0 the box; 1 a chain entry, then its u8 number from 1; 2 a kind, then its u8 index, 0 owner, 1 parent, 2 navigation, 3 tab, 4 split, 5 column; 3 a relation, then its u8 index, 0 presenter, 1 session, 2 root, 3 window, 4 tab-content, 5 window-content, 6 screen; 4 a registered target, then its name as a string), its u8 family (0 safe-area, 1 keyboard, 2 keyboard-undocked, 3 safe-area-corners, 4 layout-margins, 5 layout-margins-corners, 6 readable-content, 7 readable-content-corners, 8 readable-content-guide, 9 system-minimum-layout-margins, 11 bar on start or end only), its u8 side (0 top, 1 right, 2 bottom, 3 left, 4 start, 5 end, the last two resolved against the reading box's direction — LLP 1123 D9), then its fallback's presence byte and the fallback; or family 10, an owner segment, with the box as its target, then its u8 field (0 width, 1 height, 2 top, 3 left, 4 bottom, 5 right) and its u8 column and row, each 0 to 15, then its fallback's presence byte and the fallback — LLP 1123 D16; a target's family is the safe area, and the box's own safe area is not admitted, its name being the local inset until activation — LLP 1123 D9, D10), then a value’s f64 and u8 unit (0 a number, 1 a percentage, 2 px, 3-12 a viewport unit, 13-18 a container unit, 128 rem); an env()’s u8 (0-3 a safe-area-inset edge, 4-7 a var(--exact-safe-area-inset-top/right/bottom/left), its content owner's local inset, which only a tree holds — LLP 1123 D5, D9; 8-13 a viewport-segment variable followed by its two u8 indices, 16-35 a layout region's inset, 16 + region × 4 + edge, 36-39 an env(titlebar-area-x/y/width/height), which only a tree holds); a list’s u8 count and its children; clamp’s three presence bytes, each before its argument; or, for a value whose env() has a fallback, tag 9 and the text as written as a string (u32 length, UTF-8), which the row reads once substituted (CSS Environment Variables 1 §3). A tree is admitted only when it is within CSS Values 4 §10.8’s limits, its own §10.13 text parses back to it and no other kind holds it; a text only when the row reads it as one. Kind 25 is an env(-exact-<region>-inset-<edge>) layout region's inset, the f32 the points added, then a u8 region (0 safe-area-corners, 1 layout-margins, 2 layout-margins-corners, 3 readable-content, 4 readable-content-corners) and a u8 edge (0 top, 1 right, 2 bottom, 3 left), LLP 1123 D10) | line-height (u8: 0 normal, 1 number followed by f32, 2 length followed by f32) | f32 | u8 (keyword bits; keywords names the enum) | u16 | u32 | i32 | auto-i32 (u8: 0 auto, 1 followed by i32) | color (tagged ColorValue, src/wire/codec.rs) | vec2 (f32 f32) | auto-color (u8: 0 auto, 1 followed by color) | current-color (u8: 0 currentcolor, 1 followed by color) | tracks (CSS grid-template grammar Taffy can lay out: none, named lines, px, %, fr, auto, min/max-content, calc()/min()/max()/clamp() over px and %, fit-content(px or %), minmax(), and fixed/auto-fill/auto-fit repeat(); canonical CSS text on the wire) | placement (CSS grid placement: auto, nonzero numeric or named lines and positive numeric or named spans; canonical CSS text on the wire) | aspect-ratio (CSS text: auto, a ratio, or both) | background-image (CSS text: none or gradient layers, LLP 1066) | paint (CSS text: none, currentcolor, or a colour) | dasharray (CSS text: none or a list of numbers) | transform (CSS text: a transform list) | paint-order (CSS text: normal, or fill/stroke/markers) | marker (CSS text: none or url(#id)) | transform-origin (CSS text: one to three lengths, percentages or keywords) | transitions (`_transitions`) | animations (`_animations`) | drag-timeline, animation-timeline, animation-range, timeline-scope, timeline-name, view-timeline-inset (CSS text: the timeline rows, LLP 1057.003) | box-shadow, text-shadow, filter, backdrop-filter, clip-path, shape-outside, corner-shape, mask-image, rotate-axis, symbol-palette, font-variations, font-features, position-try-fallbacks (CSS text, parsed by the types named in build/codec.rs) | enum:<Name> (u8). admitsAuto applies to dimension rows only; Auto on a non-admitting row is a typed decode rejection. refusesPercent marks a dimension row CSS gives no percentage (column-width): a percentage there, alone or inside a calculation, is refused when set and a typed decode rejection. Every length row (each dimension, line-height, font-size, letter-spacing, the gaps, border widths and radii, shape-margin, border-spacing) also takes CSS `rem` and `em` through `set_dynamic`; the row holds the pixels the kernel resolves at the end of each commit against the host's root font size (LLP 1069.000 D3), so every reader and the wire see pixels. Every length row also takes CSS `ch` and `lh` at a fixed 8×16 px cell (LLP 1101 D3). terminal: how a terminal entry admits the row (LLP 1101 §4) — cell (lengths only in `ch`/`lh`, a percentage, `auto` or 0), admit, or quantize (the host approximates it); a row without one is refused in a terminal entry. layout: a change re-runs layout. text: a change invalidates text measurement. inherited: the row follows CSS inheritance — a node without its own row takes the nearest logical ancestor's computed value, else the initial value (LLP 1035.000 D1); the kernel marks the descendants an inherited change reaches. Defaults are the storage defaults AND the semantic defaults — this table is the one default authority, and the defaults are CSS's: a bare node is a block, content-box, flex-direction row, flex-shrink 1 (rules/RULES.md: the web is the standard). A colour row's default may name a role from `colors` (`\"CanvasText\"`), as CSS's initial `color` is a system colour; a host with the platform's colour shows that, never a snapshot (LLP 1095 stage 2). hosts (LLP 1159.000 D2): what a native host does with the row other than draw it as written, a list of { host: ios | macos | linux | windows | android, or painted for every host that draws with exact-painted's paint walk (linux, windows, android); on: box (an element outside an svg) or svg (one inside), where the entry is limited to one; fidelity: none (the node draws as if the row were unset) or best-effort (it differs as why says); why }. A host with no entry has no known gap, which is not a measurement. The compiler's style-undrawn lint, `contract vocab` and scripts/svgparity.mjs read it; no wire does, so it is outside the digest.",
   "styles": [
     {
       "bit": 0,
@@ -5872,9 +6092,143 @@
       "codec": "enum:AppRegion",
       "cold": true,
       "_comment": "LLP 1039 D8. A drag region moves its Mac window. The nearest authored region decides whether a descendant takes mouse input."
+    },
+    {
+      "bit": 303,
+      "field": "list_insets_reference",
+      "rare": true,
+      "codec": "enum:ListInsetsReference",
+      "_comment": "@ref LLP 1123 D15: `-exact-list-insets-reference: automatic | none | content-inset | safe-area | layout-margins | readable-content`, the region a compositional list's layout insets its content from (`UICollectionViewCompositionalLayoutConfiguration.contentInsetsReference`). `automatic`, the initial value, is UIKit's default, and a list that says nothing keeps UIKit's choice; `content-inset`, a flow layout's `.fromContentInset`, is `none` on a compositional layout. Not layout. Not inherited."
+    },
+    {
+      "bit": 304,
+      "field": "list_section_insets_reference",
+      "rare": true,
+      "codec": "enum:ListInsetsReference",
+      "_comment": "@ref LLP 1123 D15: `-exact-list-section-insets-reference: automatic | none | content-inset | safe-area | layout-margins | readable-content`, the region a list's sections are inset from (`NSCollectionLayoutSection.contentInsetsReference`, a flow layout's `sectionInsetReference`). `automatic`, the initial value, is UIKit's default, and a list that says nothing keeps UIKit's choice; `content-inset`, a flow layout's `.fromContentInset`, is `none` on a compositional layout. Not layout. Not inherited."
+    },
+    {
+      "bit": 305,
+      "field": "list_supplementary_insets_reference",
+      "rare": true,
+      "codec": "enum:ListInsetsReference",
+      "_comment": "@ref LLP 1123 D15: `-exact-list-supplementary-insets-reference: automatic | none | content-inset | safe-area | layout-margins | readable-content`, the region a list section's headers and footers are inset from (`NSCollectionLayoutSection.supplementaryContentInsetsReference`). `automatic`, the initial value, is UIKit's default, and a list that says nothing keeps UIKit's choice; `content-inset`, a flow layout's `.fromContentInset`, is `none` on a compositional layout. Not layout. Not inherited."
+    },
+    {
+      "bit": 306,
+      "field": "list_cell_margins_top",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-cell-margins: <length>{1,4}`, one row per edge: a list row's content margins, its cell's `UIListContentConfiguration.directionalLayoutMargins`, the start and end edges resolved against the list's `direction`. A row with none of them keeps UIKit's. Not layout. Not inherited."
+    },
+    {
+      "bit": 307,
+      "field": "list_cell_margins_right",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: the right edge of `-exact-list-cell-margins` (list_cell_margins_top)."
+    },
+    {
+      "bit": 308,
+      "field": "list_cell_margins_bottom",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: the bottom edge of `-exact-list-cell-margins` (list_cell_margins_top)."
+    },
+    {
+      "bit": 309,
+      "field": "list_cell_margins_left",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: the left edge of `-exact-list-cell-margins` (list_cell_margins_top)."
+    },
+    {
+      "bit": 310,
+      "field": "list_background_insets_top",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-background-insets: <length>{1,4}`, one row per edge: a list row's background insets, its cell's `UIBackgroundConfiguration.backgroundInsets`, the start and end edges resolved against the list's `direction`. A row with none of them keeps UIKit's. Not layout. Not inherited."
+    },
+    {
+      "bit": 311,
+      "field": "list_background_insets_right",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: the right edge of `-exact-list-background-insets` (list_background_insets_top)."
+    },
+    {
+      "bit": 312,
+      "field": "list_background_insets_bottom",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: the bottom edge of `-exact-list-background-insets` (list_background_insets_top)."
+    },
+    {
+      "bit": 313,
+      "field": "list_background_insets_left",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: the left edge of `-exact-list-background-insets` (list_background_insets_top)."
+    },
+    {
+      "bit": 314,
+      "field": "keyboard_dismiss_padding",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D7: `-exact-keyboard-dismiss-padding: <length>`, on a scroller: how far above the keyboard a finger dragging it in an interactive dismiss mode starts the keyboard following, UIKit's `keyboardDismissPadding`. A negative length is 0. Not layout. Not inherited."
+    },
+    {
+      "bit": 315,
+      "field": "safe_area_track",
+      "rare": true,
+      "codec": "enum:SafeAreaTrack",
+      "_comment": "@ref LLP 1123 D9 (\"Moving edges\"): `-exact-safe-area-track: live | observed-max`, on a reader: under `live`, the initial value, its lengths read the band as it is; under `observed-max`, they read the largest band its owner's host has reported for the owner's current configuration, while its readouts stay live. For a capture, the declaring node's. Not inherited."
+    },
+    {
+      "bit": 316,
+      "field": "list_insets_content_to_safe_area",
+      "codec": "u8",
+      "keywords": "ListInsetsContentToSafeArea",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-insets-content-to-safe-area: true | false`, a native table's `insetsContentViewsToSafeArea`: whether its cells' and headers' content views are inset from its safe area. For a table a native view lends the host, read from the box whose scroll policy it takes; a box that says nothing leaves the table's own choice. Not layout. Not inherited."
+    },
+    {
+      "bit": 317,
+      "field": "list_cell_margins_follow_readable_width",
+      "codec": "u8",
+      "keywords": "ListCellMarginsFollowReadableWidth",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-cell-margins-follow-readable-width: false | true`, a native table's `cellLayoutMarginsFollowReadableWidth`: whether its cells' margins keep their content within the readable width. For a table a native view lends the host, read from the box whose scroll policy it takes; a box that says nothing leaves the table's own choice. Not layout. Not inherited."
+    },
+    {
+      "bit": 318,
+      "field": "safe_area_aspect_fit",
+      "codec": "aspect-fit",
+      "rare": true,
+      "_comment": "@ref LLP 1123 D16: `-exact-safe-area-aspect-fit: none | <ratio>`, on the first authored root of a standalone `cover` session with no native primary container: the window's `safeAreaAspectFitLayoutGuide` at that ratio, width over height, gives the root's border box its origin and size, the document viewport unchanged. `none`, the initial value, claims no guide. Not inherited."
     }
   ],
-  "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
+  "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002; 31 is a box's `clip-path`, LLP 1003.003), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
   "_animations": "The `animation` row is CSS `animation` (LLP 1055 D5): count u8 (≤8), then per animation name (str), duration f32 s, delay f32 s, easing (as `_transitions`, never a spring), iteration count f32 (+inf is `infinite`), direction u8 (0 normal, 1 reverse, 2 alternate, 3 alternate-reverse), fill u8 (0 none, 1 forwards, 2 backwards, 3 both), paused u8, then its keyframes: count u8 (≤32), per keyframe offset f32 in [0,1], easing flag u8 (0 the animation's, 1 followed by an easing), count u8, per value property u8 (as `Property`), then its components as f32: one, two for `scale` (x and y factors), four for `translate` (x and y lengths in points, then x and y percentages of the box), three for `box-shadow` (offset x, y and blur, in points; its colour is the next value, `box-shadow`'s colour half), three for a `font-variation-settings` axis (its number, then its tag's high and low 16 bits; a keyframe carries one value per axis, LLP 1019 §13 D10), four for a colour (premultiplied sRGB red, green, blue, alpha; LLP 1055.000 D6), a colour then u8 1 and four more for the dark half of a `light-dark()` pair, else u8 0 (LLP 1062 D9). Its Rust type lives in exact-motion; the kernel owns the bytes.",
   "_opcodes": "The closed wire-visible op list for EXWF frame revision 1. There is no op count on the wire; consumers iterate by validated lengths.",
   "opcodes": [
@@ -6297,6 +6651,10 @@
         "frames": {
           "member": "frames",
           "codec": "bool"
+        },
+        "rides": {
+          "member": "rides",
+          "codec": "ids"
         },
         "presentOnly": {
           "member": "presentOnly",
@@ -7116,6 +7474,21 @@
       "finish",
       "flag.checkered",
       "M5 22V3M5 4h15v10H5M10 4v10M15 4v10M5 9h15"
+    ],
+    [
+      "globe",
+      "globe",
+      "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3a4 9 0 0 1 0 18 4 9 0 0 1 0-18Z"
+    ],
+    [
+      "sim-card",
+      "simcard",
+      "M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM8.5 11h7v6h-7ZM12 11v6M8.5 14h7"
+    ],
+    [
+      "sim-card-fill",
+      "simcard.fill",
+      "M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2ZM8 11h3v2.5H8ZM13 11h3v2.5h-3ZM8 15h3v2.5H8ZM13 15h3v2.5h-3Z"
     ]
   ],
   "symbolAliases": [
@@ -7418,6 +7791,10 @@
     [
       "checkered-flag",
       "finish"
+    ],
+    [
+      "language",
+      "globe"
     ]
   ],
   "symbolGlyphs": [
@@ -8103,6 +8480,24 @@
       "finish",
       "material",
       "M360-720h80v-80h-80v80Zm160 0v-80h80v80h-80ZM360-400v-80h80v80h-80Zm320-160v-80h80v80h-80Zm0 160v-80h80v80h-80Zm-160 0v-80h80v80h-80Zm160-320v-80h80v80h-80Zm-240 80v-80h80v80h-80ZM200-160v-640h80v80h80v80h-80v80h80v80h-80v320h-80Zm400-320v-80h80v80h-80Zm-160 0v-80h80v80h-80Zm-80-80v-80h80v80h-80Zm160 0v-80h80v80h-80Zm80-80v-80h80v80h-80Z",
+      true
+    ],
+    [
+      "globe",
+      "material",
+      "M480-80q-82 0-155-31.5t-127.5-86Q143-252 111.5-325T80-480q0-83 31.5-155.5t86-127Q252-817 325-848.5T480-880q83 0 155.5 31.5t127 86q54.5 54.5 86 127T880-480q0 82-31.5 155t-86 127.5q-54.5 54.5-127 86T480-80Zm0-82q26-36 45-75t31-83H404q12 44 31 83t45 75Zm-104-16q-18-33-31.5-68.5T322-320H204q29 50 72.5 87t99.5 55Zm208 0q56-18 99.5-55t72.5-87H638q-9 38-22.5 73.5T584-178ZM170-400h136q-3-20-4.5-39.5T300-480q0-21 1.5-40.5T306-560H170q-5 20-7.5 39.5T160-480q0 21 2.5 40.5T170-400Zm216 0h188q3-20 4.5-39.5T580-480q0-21-1.5-40.5T574-560H386q-3 20-4.5 39.5T380-480q0 21 1.5 40.5T386-400Zm268 0h136q5-20 7.5-39.5T800-480q0-21-2.5-40.5T790-560H654q3 20 4.5 39.5T660-480q0 21-1.5 40.5T654-400Zm-16-240h118q-29-50-72.5-87T584-782q18 33 31.5 68.5T638-640Zm-234 0h152q-12-44-31-83t-45-75q-26 36-45 75t-31 83Zm-200 0h118q9-38 22.5-73.5T376-782q-56 18-99.5 55T204-640Z",
+      true
+    ],
+    [
+      "sim-card",
+      "material",
+      "M280-200h80v-80h-80v80Zm0-160h80v-160h-80v160Zm160 160h80v-160h-80v160Zm0-240h80v-80h-80v80Zm160 240h80v-80h-80v80Zm0-160h80v-160h-80v160ZM240-80q-33 0-56.5-23.5T160-160v-480l240-240h320q33 0 56.5 23.5T800-800v640q0 33-23.5 56.5T720-80H240Zm0-80h480v-640H434L240-606v446Zm0 0h480-480Z",
+      true
+    ],
+    [
+      "sim-card-fill",
+      "material",
+      "M280-200h80v-80h-80v80Zm0-160h80v-160h-80v160Zm160 160h80v-160h-80v160Zm0-240h80v-80h-80v80Zm160 240h80v-80h-80v80Zm0-160h80v-160h-80v160ZM240-80q-33 0-56.5-23.5T160-160v-480l240-240h320q33 0 56.5 23.5T800-800v640q0 33-23.5 56.5T720-80H240Z",
       true
     ]
   ],
@@ -9026,8 +9421,8 @@
     ["grouped-separator-end", "style length", 0, 10, 0, 0],
     ["grouped-row-min-height", "style length", 52, 36, 52, 52, 56],
     ["grouped-row-padding-block", "style length", "unset", 10, "unset", "unset", 8],
-    ["grouped-row-inset", "style length", 16, 10, 16, 16],
-    ["grouped-row-padding-end", "style length", 16, 10, 16, 16],
+    ["grouped-row-inset", "style length", 16, 10, 16, 16, 16],
+    ["grouped-row-padding-end", "style length", 16, 10, 16, 16, 16],
     ["grouped-swipe-margin", "style length", 0, 10, 0, 0],
     ["grouped-swipe-max-width", "style length", "unset", "calc(100% - 10px)", "unset", "unset"],
     ["grouped-swipe-padding", "style length", 16, 0, 16, 16],
@@ -9296,7 +9691,7 @@
       "typeAhead": true
     }
   ],
-  "_controls": "LLP 1121 D9 (stage 8 C): each native control's parameters a design can set (accent-color, or a colour role it reads) and how each host Exact ships honours one: [control (a `:state` after it: that state's), parameter, ios, macos, web, linux, windows, terminal, android], each host `exact`, `best-effort` (the platform alters it) or `none` (the platform's own stands), `: why` after it saying so. Measured by scripts/measure-controls.mjs, recorded with provenance in docs/control-roles-measured.md, which a test holds this table to; the compiler's forma-unreachable lint reads it. A new parameter is a role first (LLP 1095 §3).",
+  "_controls": "LLP 1121 D9 (stage 8 C): each native control's parameters a design can set (accent-color, or a colour role it reads) and how each host Exact ships honours one: [control (a `:state` after it: that state's), parameter, ios, macos, web, linux, windows, terminal, android], each host `exact`, `best-effort` (the platform alters it) or `none` (the platform's own stands), `: why` after it saying so. Measured by scripts/measure-controls.mjs, recorded with provenance in docs/control-roles-measured.md, which a test holds this table to; the compiler's forma-unreachable lint reads it. The segmented-group row measures an inline selected segment. On macOS a header uses NSToolbarItemGroup, with no public selected-segment tint (none). A meter role exposes an authored view as a level indicator and has no native fill. A new parameter is a role first (LLP 1095 §3).",
   "controls": [
     ["switch", "accent-color", "exact", "none: NSSwitch draws the system accent", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"],
     ["switch:disabled", "accent-color", "best-effort: dimmed, as the platform draws a disabled control", "none: NSSwitch draws the system accent", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "none: the terminal draws no colour", "best-effort: dimmed, as the platform draws a disabled control"],
@@ -9304,8 +9699,9 @@
     ["checkbox:disabled", "accent-color", "best-effort: dimmed, as the platform draws a disabled control", "none: AppKit draws a disabled checkbox grey, whatever its contentTintColor", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "none: the terminal draws no colour", "best-effort: dimmed, as the platform draws a disabled control"],
     ["radio", "accent-color", "exact", "exact", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"],
     ["radio:disabled", "accent-color", "best-effort: dimmed, as the platform draws a disabled control", "none: AppKit draws a disabled radio button grey, whatever its contentTintColor", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "none: the terminal draws no colour", "best-effort: dimmed, as the platform draws a disabled control"],
-    ["range", "accent-color", "exact", "none: NSSlider draws the system accent", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"],
-    ["range:disabled", "accent-color", "best-effort: dimmed, as the platform draws a disabled control", "none: NSSlider draws the system accent", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "none: the terminal draws no colour", "best-effort: dimmed, as the platform draws a disabled control"],
+    ["range", "accent-color", "exact", "exact", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"],
+    ["range:disabled", "accent-color", "best-effort: dimmed, as the platform draws a disabled control", "none: AppKit draws a disabled slider grey, whatever its trackFillColor", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "best-effort: dimmed, as the platform draws a disabled control", "none: the terminal draws no colour", "best-effort: dimmed, as the platform draws a disabled control"],
+    ["segmented-group", "accent-color", "none: UIKit draws the selected segment with its default fill", "exact", "none: the neutral selected segment uses the page ground or fill", "none: the neutral selected segment uses the page ground or fill", "none: the neutral selected segment uses the page ground or fill", "none: the terminal draws no segment bezel", "none: the selected Material segment uses its container colour"],
     ["progress", "accent-color", "exact", "none: NSProgressIndicator takes no tint", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"],
     ["spinner", "accent-color", "best-effort: UIKit fades its activity indicator's spokes", "none: NSProgressIndicator takes no tint", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"],
     ["select", "accent-color", "exact", "none: NSPopUpButton takes no tint", "none: a browser's select takes no accent-color", "none: the neutral look, as the web's, draws a closed select without the accent", "none: the neutral look, as the web's, draws a closed select without the accent", "none: the terminal draws no colour", "none: Material's closed menu field takes no accent (the open menu marks its chosen row in it, which the table does not judge)"],

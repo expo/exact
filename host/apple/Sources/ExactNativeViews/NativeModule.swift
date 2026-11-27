@@ -72,6 +72,8 @@
 //        changes (LLP 1133.027 D17 item 3)
 //
 // 256  module_bindings(module, json, len)             size ≥ 264; committed track bindings
+// 264  safe_area(handle) → NSDictionary *, retained    size ≥ 272; nullable:
+//        the view's safe-area declaration (LLP 1123 D15, `ExactNativeSafeArea`)
 //
 //   event(ctx, nonce, kind, bytes, len)          kind: EventKind 0–8 — press,
 //     change, hover, focus, blur, key, submit, load, message; change, key and
@@ -103,10 +105,10 @@ import AppKit
 import UIKit
 #endif
 
-private typealias NativeEventFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafePointer<UInt8>?, UInt32) -> Void
-private typealias NativeReplyFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UInt32, UnsafePointer<UInt8>?, UInt32) -> Void
+typealias NativeEventFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafePointer<UInt8>?, UInt32) -> Void
+typealias NativeReplyFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UInt32, UnsafePointer<UInt8>?, UInt32) -> Void
 
-private struct NativeFailure: Error {
+struct NativeFailure: Error {
     let state: String, message: String
     /// The loader refused a file that is there: the build is broken (a
     /// library it links is not in the bundle), not skewed (LLP 1024 D8.3).
@@ -114,7 +116,7 @@ private struct NativeFailure: Error {
 }
 
 /// The loaded table: the roster and the entries, read once.
-private final class NativeTable {
+final class NativeTable {
     static let major: UInt32 = 5
     /// The hatch words the module handles, or nil for one that does not say.
     var hatchWords: Set<String>?
@@ -157,6 +159,8 @@ private final class NativeTable {
     var connect: HatchConnectFn?, navigationHatch: HatchNavigationFn?, routeHatch: HatchRouteFn?
     /// Tabs and native screens, in a table of 168 bytes or more.
     var tabsHatch: HatchTabsFn?, tabContainerHatch: HatchTabContainerFn?, platformController: ViewFn?
+    /// A view's safe-area declaration (LLP 1123 D15), in a table of 272 bytes or more.
+    var safeArea: ViewFn?
     /// Hatched nodes (LLP 1075.003.000), in a table of 176 bytes or more;
     /// the window toolbar's hatch (macOS), in one of 184 or more.
     var elementHatch: HatchElementFn?, toolbarHatch: HatchToolbarFn?
@@ -265,6 +269,7 @@ private final class NativeTable {
         if size >= 248 { loaded.image = pointer(240).map { unsafeBitCast($0, to: PackageImageFn.self) } }
         if size >= 256 { loaded.sessionView = pointer(248).map { unsafeBitCast($0, to: SessionViewFn.self) } }
         if size >= 264 { loaded.bindings = pointer(256).map { unsafeBitCast($0, to: BindingsFn.self) } }
+        if size >= 272 { loaded.safeArea = pointer(264).map { unsafeBitCast($0, to: ViewFn.self) } }
         return .success(loaded)
     }
 }
@@ -277,7 +282,7 @@ private final class QuitWork: @unchecked Sendable {
     func finish() { lock.withLock { done = true } }
 }
 
-private final class NativeEntry {
+final class NativeEntry {
     weak var owner: NodeView?
     let id: UInt32
     var name = ""
@@ -300,7 +305,24 @@ private final class NativeEntry {
     #if os(iOS) || os(tvOS)
     /// A native screen's controller, a child of its route's while it lives.
     var screen: UIViewController?
+    /// The controller the host made for a view with none that lets it clear its safe area (LLP 1123
+    /// D15), whose own view holds the view: made at the instance's first mount and kept with it
+    /// through reuse, so one controller holds the view while the instance lives.
+    var made: UIViewController?
     #endif
+    /// What the host puts in the node's box: the view, or the view of the controller the host made
+    /// for it, which holds it (`made`).
+    var attached: NativePlatformView? {
+        #if os(iOS) || os(tvOS)
+        return made?.viewIfLoaded ?? view
+        #else
+        return view
+        #endif
+    }
+    /// What the view declares of its safe area, read as it mounts (LLP 1123 D15), and the scroll
+    /// views it lends, which D14's writer writes.
+    var safeArea: NativeSafeArea?
+    var lent: [LentScroll] = []
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
     #if os(iOS) || os(tvOS)
@@ -339,7 +361,7 @@ struct NativeWorldLayout {
 private final class NativeWait { var data: Data?; var error: String?; var done = false }
 
 /// Process-wide: the one artifact, and every live nonce → its manager.
-private enum NativeProcess {
+enum NativeProcess {
     nonisolated(unsafe) static var table: Result<NativeTable, NativeFailure>?
     nonisolated(unsafe) static var owners: [UInt32: WeakNatives] = [:]
     nonisolated(unsafe) static var retired: [UInt32: WeakNatives] = [:]
@@ -351,7 +373,7 @@ private enum NativeProcess {
     static func incarnation(_ nonce: UInt32) -> UInt32 { lock.lock(); defer { lock.unlock() }; return live[nonce] ?? 0 }
     static func set(_ nonce: UInt32, _ token: UInt32?) { lock.lock(); live[nonce] = token; lock.unlock() }
 }
-private final class WeakNatives { weak var natives: NativeViews?; init(_ n: NativeViews) { natives = n } }
+final class WeakNatives { weak var natives: NativeViews?; init(_ n: NativeViews) { natives = n } }
 
 private let nativeEventCallback: NativeEventFn = { _, instance, kind, bytes, length in
     let data = bytes.map { Data(bytes: $0, count: Int(length)) } ?? Data()
@@ -444,7 +466,7 @@ final class NativeViews: NativeModuleHosting {
     /// `EXACT_HATCHES=off` (a development build only, §2.6): the module loads
     /// and its views and calls work; no hatch is connected or called.
     static let hatchesOff = !ExactEnv.productionBake && ExactEnv.environment["EXACT_HATCHES"] == "off"
-    private var entries: [UInt32: NativeEntry] = [:]
+    var entries: [UInt32: NativeEntry] = [:]
     var isEmpty: Bool { entries.isEmpty }
     private var gateOpen = false
     private var waits: [UInt32: NativeWait] = [:]
@@ -454,16 +476,21 @@ final class NativeViews: NativeModuleHosting {
     /// ones destroyed.
     private(set) var made = 0, reused = 0, returned = 0, parks = 0, dropped = 0, hidden = 0, released = 0
     #if os(iOS) || os(tvOS)
+    var waitingScreens = Set<UInt32>()
+    let screens = NSMapTable<UIView, NativeEntry>.weakToWeakObjects()
     /// Parked instances by tag, oldest first.
     fileprivate var parked: [String: [NativeEntry]] = [:]
     fileprivate var observers: [NSObjectProtocol] = []
-    deinit {
-        for o in observers { NotificationCenter.default.removeObserver(o) }
-    }
     #endif
+    deinit {
+        if let host = assetResolverHost { unregisterHatchAssetResolver(host: host) }
+        #if os(iOS) || os(tvOS)
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        #endif
+    }
     private static let kinds = ["press", "change", "hover", "focus", "blur", "key", "submit", "load", "message"]
 
-    private func log(_ line: String) {
+    func log(_ line: String) {
         session?.log("native \(line)")
         if ExactEnv.environment["EXACT_NATIVE_TRACE"] == "1" { fputs("exact native: \(line)\n", stderr) }
     }
@@ -594,6 +621,9 @@ final class NativeViews: NativeModuleHosting {
     var tabCalls: (HatchTabsFn, HatchTabContainerFn)?
     var elementCall: HatchElementFn?
     var toolbarCall: HatchToolbarFn?
+    private let retainedResolversLock = NSLock()
+    private var retainedResolvers: [ObjectIdentifier: AssetResolver] = [:]
+    private var assetResolverHost: UnsafeMutableRawPointer?
 
     /// The session's one module instance, made at the first view or long
     /// call that needs it. Main thread.
@@ -614,6 +644,16 @@ final class NativeViews: NativeModuleHosting {
             return .failure(failure)
         }
         instance = made
+        assetResolverHost = host
+        let app = session.app
+        registerHatchAssetResolver(host: host) { [weak self, weak app] name in
+            guard let self, let app, let resolver = app.resolver else { return nil }
+            guard let url = resolver.url(name, maximumBytes: 128 * 1024 * 1024, cacheBytes: false) else { return nil }
+            if resolver.isComplete {
+                self.retainedResolversLock.withLock { self.retainedResolvers[ObjectIdentifier(resolver)] = resolver }
+            }
+            return url
+        }
         log("module instance made (agent \(ExactEnv.agentMode)) \(sincePixel)")
         sessionViewChanged()
         if Self.hatchesOff { log("hatches: off (EXACT_HATCHES=off); no hatch is connected or called") }
@@ -630,6 +670,8 @@ final class NativeViews: NativeModuleHosting {
                 self?.connectScopes(app: table.appHatch, window: table.windowHatch)
             }
             if session.firstDrawMs != nil { activateHatches() }
+        } else if let connect = table.connect {
+            openAssetOnly(connect, made)
         }
         return .success(made)
     }
@@ -825,6 +867,11 @@ final class NativeViews: NativeModuleHosting {
         pendingHatches = nil
         // The session's end gives its breadcrumb slot back (LLP 1075.003.000.001 §4.4).
         if let crumbSlot { HatchBreadcrumb.shared?.free(crumbSlot); self.crumbSlot = nil }
+        if let host = assetResolverHost {
+            unregisterHatchAssetResolver(host: host)
+            assetResolverHost = nil
+        }
+        retainedResolversLock.withLock { retainedResolvers.removeAll() }
         guard let instance, case .success(let table)? = NativeProcess.table else { return }
         self.instance = nil
         hatchesConnected = false
@@ -899,11 +946,7 @@ final class NativeViews: NativeModuleHosting {
         #endif
         entry.handle = handle
         entry.view = view
-        #if os(iOS) || os(tvOS)
-        contain(entry, table: table) { owner.addSubview(view) }
-        #else
-        owner.addSubview(view)
-        #endif
+        mountView(entry, table: table)
         entry.props = props
         entry.state = "ready"
         entry.error = nil
@@ -1028,7 +1071,7 @@ final class NativeViews: NativeModuleHosting {
 
     private func available(_ owner: NodeView) -> NativeEntry? {
         guard let entry = entries[owner.id], entry.owner === owner, entry.state == "ready",
-              entry.handle != nil, let root = entry.view, root.superview === owner,
+              entry.handle != nil, let root = entry.view, entry.attached?.superview === owner,
               root.window != nil, !owner.disabled, !owner.inert,
               owner.bounds.width > 0, owner.bounds.height > 0 else { return nil }
         var next: NSView? = root
@@ -1114,22 +1157,26 @@ final class NativeViews: NativeModuleHosting {
     /// The node is gone: the nonce dies first, then the instance (D4).
     func destroy(id: UInt32) {
         guard let entry = entries.removeValue(forKey: id) else { return }
+        // Before a parked instance's reset, which a module may not undo Exact's writes through
+        releaseSafeArea(entry)
         if entry.nonce != 0 {
             NativeProcess.owners.removeValue(forKey: entry.nonce)
             NativeProcess.retired[entry.nonce] = WeakNatives(self)
         }
         #if os(iOS) || os(tvOS)
+        waitingScreens.remove(id)
+        if let owner = entry.owner { screens.removeObject(forKey: owner) }
         if park(entry) { return }
         #endif
         if entry.instance != 0 { NativeProcess.set(entry.instance, nil) }
         #if os(iOS) || os(tvOS)
-        release(entry)
+        detach(entry, moving: false, released: true)
         #else
         // Retire a descendant/field editor before destroying its module instance.
         entry.owner?.presenter?.keyViewLoopStale = true
         if ownsFocus(entry) { entry.view?.window?.makeFirstResponder(nil) }
-        #endif
         entry.view?.removeFromSuperview()
+        #endif
         if let handle = entry.handle, case .success(let table)? = NativeProcess.table {
             table.destroy(handle)
             log("\(entry.name) #\(id): destroyed")
@@ -1191,7 +1238,17 @@ final class NativeViews: NativeModuleHosting {
         guard let entry = entries[owner.id], let view = entry.view else { return }
         if entry.sizing && owner.bounds.isEmpty { return }
         entry.sizing = false
+        #if os(iOS) || os(tvOS)
+        // A host-made controller's view lies on the content box, which the native view fills (`NativeScreens`)
+        if let box = entry.made?.viewIfLoaded {
+            box.frame = owner.contentBox()
+            view.frame = box.bounds
+        } else {
+            view.frame = owner.contentBox()
+        }
+        #else
         view.frame = owner.contentBox()
+        #endif
         #if os(iOS) || os(tvOS)
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         #endif
@@ -1206,8 +1263,8 @@ final class NativeViews: NativeModuleHosting {
     /// is not declining, and its box answers, as a UIKit superview would; so
     /// does a box with a handler a touch on it runs (`press`).
     func declined(_ owner: NodeView, at point: CGPoint, with event: UIEvent?) -> Bool {
-        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, view.superview === owner,
-              !view.isHidden, view.alpha > 0.01, view.isUserInteractionEnabled, view.frame.contains(point),
+        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, entry.attached?.superview === owner,
+              !view.isHidden, view.alpha > 0.01, view.isUserInteractionEnabled, owner.convert(view.frame, from: view.superview).contains(point),
               owner.handlers.isSubset(of: Self.reported) else { return false }
         return view.hitTest(owner.convert(point, to: view), with: event) == nil
     }
@@ -1217,7 +1274,7 @@ final class NativeViews: NativeModuleHosting {
     /// `accessibilityElement(at:)`). Then those are what VoiceOver reads, not
     /// the box.
     func speaksForItself(_ owner: NodeView) -> Bool {
-        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, view.superview === owner else { return false }
+        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, entry.attached?.superview === owner else { return false }
         func speaks(_ view: UIView) -> Bool {
             guard !view.isHidden, !view.accessibilityElementsHidden else { return false }
             if view.isAccessibilityElement { return true }
@@ -1296,7 +1353,7 @@ final class NativeViews: NativeModuleHosting {
 
     /// The platform views whose tag answers snapshots: hidden while the
     /// capture draws their pictures instead (Metal- and remote-layer views).
-    var snapshotViews: [NativePlatformView] { entries.values.filter(\.snapshotBit).compactMap(\.view) }
+    var snapshotViews: [UInt32: NativePlatformView] { entries.filter { $0.value.snapshotBit }.compactMapValues(\.view) }
 
     /// One tokened snapshot per snapshot-bit instance on screen, for this capture.
     func snapshots() -> [UInt32: NativeImage] {
@@ -1326,65 +1383,6 @@ final class NativeViews: NativeModuleHosting {
 
 #if os(iOS) || os(tvOS)
 extension NativeViews {
-    /// A native screen (LLP 1075.003 §3.6): its controller becomes a child
-    /// of the controller its node shows in (a route's), so UIKit gives it
-    /// appearance calls, the safe area and traits, in UIKit's order: added
-    /// as a child, its view `insert`ed, then moved in. A node created in the
-    /// batch that mounts its route is in no controller yet: it is contained
-    /// once that batch is applied.
-    fileprivate func contain(_ entry: NativeEntry, table: NativeTable, retry: Bool = true, insert: () -> Void = {}) {
-        guard let handle = entry.handle, let made = table.platformController?(handle), let owner = entry.owner else { return insert() }
-        let screen = Unmanaged<UIViewController>.fromOpaque(made).takeUnretainedValue()
-        // A node in a route is its route controller's, which the route may
-        // not have yet: one built with its tab or pushed with this node
-        // (LLP 1075.003 §9.14). Until it has, no controller above holds it.
-        var responder: UIResponder? = owner, route: NodeView?
-        while let next = responder, !(next is UIViewController) {
-            if route == nil, let node = next as? NodeView, node.props["navigationKey"] != nil, node.props["navigationBack"] == nil { route = node }
-            responder = next.next
-        }
-        let found = responder as? UIViewController
-        guard let parent = route.map({ $0.routeController(in: found) }) ?? found else {
-            insert()
-            guard retry, let presenter = owner.presenter else { return log("\(entry.name) #\(entry.id): a screen with no controller to hold it") }
-            presenter.afterBatch { [weak self, weak entry] in
-                guard let self, let entry, self.entries[entry.id] === entry, entry.screen == nil,
-                      case .success(let table)? = NativeProcess.table else { return }
-                self.contain(entry, table: table, retry: false)
-            }
-            return
-        }
-        if screen.parent != nil, screen.parent !== parent {
-            screen.willMove(toParent: nil)
-            screen.removeFromParent()
-        }
-        let adds = screen.parent !== parent
-        if adds { parent.addChild(screen) }
-        insert()
-        if adds { screen.didMove(toParent: parent) }
-        entry.screen = screen
-        if adds { log("\(entry.name) #\(entry.id): a screen in \(type(of: parent))") }
-    }
-
-    /// A route's controller has loaded its view: each screen made in the
-    /// route before then, waiting for a controller, is contained now.
-    func routeLoaded(_ route: NodeView) {
-        guard case .success(let table)? = NativeProcess.table else { return }
-        for entry in entries.values where entry.screen == nil && entry.owner?.isDescendant(of: route) == true {
-            contain(entry, table: table, retry: false)
-        }
-    }
-
-    /// A screen's view leaves with its controller, in UIKit's order; a plain
-    /// module view just leaves.
-    fileprivate func release(_ entry: NativeEntry) {
-        guard let screen = entry.screen else { return }
-        screen.willMove(toParent: nil)
-        entry.view?.removeFromSuperview()
-        screen.removeFromParent()
-        entry.screen = nil
-    }
-
     /// Parked instances per tag, and the rows one instance serves before it
     /// is destroyed (LLP 1068 §6, measured on the iPad, §0.3): an instance
     /// keeps what it drew for every region it showed — a map served without
@@ -1415,8 +1413,7 @@ extension NativeViews {
         if list.count >= Self.reuseCap { discard(list.removeFirst()) }
         view.alpha = 1
         view.isHidden = false
-        release(entry)
-        view.removeFromSuperview()
+        detach(entry, released: true)
         entry.nonce = 0; entry.revealing = false; entry.sizing = false; entry.owner = nil
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         list.append(entry)
@@ -1446,6 +1443,9 @@ extension NativeViews {
         entry.instance = from.instance
         entry.handle = handle
         entry.view = view
+        #if os(iOS) || os(tvOS)
+        entry.made = from.made
+        #endif
         entry.snapshotBit = from.snapshotBit
         entry.uses = from.uses + (same == nil ? 1 : 0)
         NativeProcess.set(from.instance, token)
@@ -1457,7 +1457,7 @@ extension NativeViews {
         // often the next row's, until the node is laid out (`laidOut`) — a
         // map's resize to nothing and back costs as much as its reset.
         if owner.bounds.isEmpty { view.autoresizingMask = []; entry.sizing = true } else { view.frame = owner.contentBox() }
-        contain(entry, table: table) { owner.addSubview(view) }
+        mountView(entry, table: table)
         let status = json.withUnsafeBytes { p in table.setProps(handle, p.bindMemory(to: UInt8.self).baseAddress, UInt32(json.count), &error, UInt32(error.count)) }
         entry.props = props
         entry.state = "ready"
@@ -1473,7 +1473,7 @@ extension NativeViews {
     /// the background.
     private func discard(_ entry: NativeEntry) {
         NativeProcess.set(entry.instance, nil)
-        entry.view?.removeFromSuperview()
+        entry.attached?.removeFromSuperview()
         if let handle = entry.handle, case .success(let table)? = NativeProcess.table { table.destroy(handle) }
         entry.handle = nil
         dropped += 1

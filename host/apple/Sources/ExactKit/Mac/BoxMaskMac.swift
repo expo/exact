@@ -14,8 +14,9 @@ extension NodeView {
         // A layout transition's surface clips with a mask of its own
         // (`Surface.swift`) until it ends.
         guard surface == nil, let layer else { return }
-        let outline = shapedOutline(), effect = materialView as? NSVisualEffectView
-        let key = BoxMaskState.Key(image: style["mask_image"], clip: style["clip_path"], outline: outline, size: bounds.size, dark: drawsDark,
+        let outline = shapedOutline(), effect = materialView as? NSVisualEffectView, image = style["mask_image"]
+        let key = BoxMaskState.Key(image: image, clip: style["clip_path"], outline: outline, size: bounds.size, dark: drawsDark,
+                                   scale: pixelScale ?? 2, tint: gradientTintKey(for: image),
                                    clipBox: clipBox != nil, filter: hasBoxFilter, material: effect != nil, materialOutline: nil)
         let state = BoxMaskState.of(self)
         if state.key == key, clipBox?.layer?.mask === state.boxMask, hasBoxFilter || layer.mask === state.layerMask,
@@ -25,7 +26,7 @@ extension NodeView {
         let shaped = ClipPath.mask(outline)
         if let box = clipBox?.layer { box.mask = shaped }
         state.boxMask = clipBox?.layer?.mask
-        guard !hasBoxFilter else { return }
+        guard !hasBoxFilter else { return noteClipLayer(nil) }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         defer { state.layerMask = layer.mask; state.effectMask = effect?.maskImage }
@@ -42,9 +43,10 @@ extension NodeView {
                 effect.maskImage = nil
             }
             layer.mask = clipMask(shaped: clipBox == nil ? shaped : nil)
-            return
+            return noteClipLayer(clipBox == nil && shaped != nil ? nil : layer.mask)
         }
         layer.mask = composedMask(shaped: clipBox == nil ? shaped : nil)
+        noteClipLayer(style["mask_image"] != nil || clipBox == nil && shaped != nil ? nil : layer.mask)
     }
 
     /// `mask-image` over `clip-path` over the shaped corners, as one mask.

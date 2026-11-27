@@ -984,6 +984,27 @@ fn a_decodes_peak_uses_the_sessions_current_budget() {
 }
 
 #[test]
+fn a_decode_in_flight_leaves_a_waiting_one_its_room() {
+    let gate = Gate::new();
+    let session = gate.session_with_budget(64 * MIB);
+    let first = session.request(demand(1, 1, 4, 44)).unwrap();
+    let permit = gate.next_decode().unwrap();
+    let second = session.request(demand(2, 2, 4, 44)).unwrap();
+    assert!(gate.next_decode().is_none());
+    assert_eq!(session.status(second), Some(RequestStatus::WaitingBudget));
+    assert_eq!(session.available_bytes(), 16 * MIB);
+    assert_eq!(session.unheld_bytes(), 64 * MIB);
+    // Landed and shown, it is held; let go of, it is cold.
+    complete(permit, &Arc::new(AtomicUsize::new(0)));
+    let lease = session.take_ready(first).unwrap();
+    assert_eq!(session.unheld_bytes(), 60 * MIB);
+    drop(lease);
+    session.cancel(first);
+    assert_eq!(session.unheld_bytes(), 64 * MIB);
+    session.cancel(second);
+}
+
+#[test]
 fn viewport_budget_shrink_preserves_backings_and_growth_wakes_queued_decodes() {
     let gate = Gate::new();
     let session = gate.session_with_budget(64 * MIB);

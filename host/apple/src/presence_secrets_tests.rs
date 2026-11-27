@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 /// (service, account) → (the line's words, the value).
 type Items = BTreeMap<(String, String), (String, Vec<u8>)>;
+static SERIAL: Mutex<()> = Mutex::new(());
 static ITEMS: Mutex<Items> = Mutex::new(BTreeMap::new());
 static FAIL_PROBE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static FAIL_DELETE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -115,6 +116,11 @@ fn item(account: &str) -> Option<(String, Vec<u8>)> {
 
 #[test]
 fn locked_items_are_the_keychain_s_by_name_and_generation_and_never_plain() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    ITEMS.lock().unwrap().clear();
+    FAIL_PROBE.store(false, std::sync::atomic::Ordering::Relaxed);
+    FAIL_DELETE.store(false, std::sync::atomic::Ordering::Relaxed);
+    *FAIL_CANDIDATE.lock().unwrap() = 0;
     on_keychain(Some(keychain));
     let b = bindings();
     let (mut backend, service) = keychain_backend(Some(&b), GRANTS, "com.example.lock").unwrap();
@@ -218,6 +224,7 @@ fn locked_items_are_the_keychain_s_by_name_and_generation_and_never_plain() {
         secrets: b.secrets.clone(),
         kv: b.kv.clone(),
         service: service.clone(),
+        prune_index: true,
     };
     let policy = lines(GRANTS)
         .into_iter()
@@ -380,4 +387,373 @@ fn locked_items_are_the_keychain_s_by_name_and_generation_and_never_plain() {
     assert!(item("old#1").is_some(), "an update keeps its keychain");
     ITEMS.lock().unwrap().clear();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn removing_last_presence_policy_tears_down_keychain_agent_and_stripped_vaults() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    ITEMS.lock().unwrap().clear();
+    FAIL_PROBE.store(false, std::sync::atomic::Ordering::Relaxed);
+    FAIL_DELETE.store(false, std::sync::atomic::Ordering::Relaxed);
+    *FAIL_CANDIDATE.lock().unwrap() = 0;
+    on_keychain(Some(keychain));
+
+    // 1. Keychain vault with Capability::Presence linked.
+    let app_id = "com.example.teardown";
+    let service = locked_service(app_id);
+    let b = bindings();
+    let (mut backend, _) =
+        keychain_backend(Some(&b), "secret.keep token biometry-any", app_id).unwrap();
+    backend.enqueue("token", Op::Write(Some(b"secret-1".to_vec())), None);
+    pump(&mut backend);
+    assert!(ITEMS
+        .lock()
+        .unwrap()
+        .contains_key(&(service.clone(), "token#1".into())));
+    assert_eq!(b.kv.keys(INDEX).unwrap(), vec!["token#1"]);
+    assert!(b.kv.get(RECORDS, "token").unwrap().is_some());
+
+    // Downgrading the last presence policy to plain tears down Keychain item, index, and record.
+    assert!(keychain_backend(Some(&b), "secret.keep token", app_id).is_none());
+    assert!(ITEMS.lock().unwrap().is_empty());
+    assert!(b.kv.keys(INDEX).unwrap().is_empty());
+    assert_eq!(b.kv.get(RECORDS, "token").unwrap(), None);
+
+    // Removing the secret from grants altogether also tears down orphaned items without reading plain.
+    let (mut backend, _) =
+        keychain_backend(Some(&b), "secret.keep token biometry-any", app_id).unwrap();
+    backend.enqueue("token", Op::Write(Some(b"secret-2".to_vec())), None);
+    pump(&mut backend);
+    assert!(keychain_backend(Some(&b), "", app_id).is_none());
+    assert!(ITEMS.lock().unwrap().is_empty());
+    assert!(b.kv.keys(INDEX).unwrap().is_empty());
+    assert_eq!(b.kv.get(RECORDS, "token").unwrap(), None);
+
+    // 2. Agent vault with Capability::Presence linked.
+    let b_agent = bindings();
+    let mut agent = agent_backend(Some(&b_agent), "secret.keep token biometry-any", true).unwrap();
+    agent.enqueue("token", Op::Write(Some(b"agent-secret".to_vec())), None);
+    pump(&mut agent);
+    assert_eq!(b_agent.kv.keys(LOCKED).unwrap(), vec!["token#1"]);
+    assert!(b_agent.kv.get(RECORDS, "token").unwrap().is_some());
+    assert!(agent_backend(Some(&b_agent), "secret.keep token", true).is_none());
+    assert!(b_agent.kv.keys(LOCKED).unwrap().is_empty());
+    assert_eq!(b_agent.kv.get(RECORDS, "token").unwrap(), None);
+
+    // 3. Stripped release build (reconcile_presence::<false>): deletes locked item, index, and record,
+    //    and retains index + record for retry when Keychain deletion fails transiently.
+    fn delete_hook(service: &str, account: &str) -> bool {
+        if FAIL_DELETE.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        ITEMS
+            .lock()
+            .unwrap()
+            .remove(&(service.to_owned(), account.to_owned()));
+        true
+    }
+    let b_stripped = bindings();
+    ITEMS.lock().unwrap().insert(
+        (service.clone(), "token#1".into()),
+        ("biometry-any".into(), b"stripped-secret".to_vec()),
+    );
+    b_stripped.kv.set(INDEX, "token#1", &[]).unwrap();
+    b_stripped
+        .kv
+        .set(RECORDS, "token", b"locked biometry-any")
+        .unwrap();
+    crate::store::DELETE_LOCKED_ITEM.with(|h| *h.borrow_mut() = Some(delete_hook));
+    FAIL_DELETE.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(crate::store::reconcile_presence::<false>(
+        Some(&b_stripped),
+        "secret.keep token",
+        app_id
+    )
+    .is_none());
+    assert!(b_stripped.kv.get(INDEX, "token#1").unwrap().is_some());
+    assert!(b_stripped.kv.get(RECORDS, "token").unwrap().is_some());
+    assert!(ITEMS
+        .lock()
+        .unwrap()
+        .contains_key(&(service.clone(), "token#1".into())));
+
+    FAIL_DELETE.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(crate::store::reconcile_presence::<false>(
+        Some(&b_stripped),
+        "secret.keep token",
+        app_id
+    )
+    .is_none());
+    crate::store::DELETE_LOCKED_ITEM.with(|h| *h.borrow_mut() = None);
+    assert!(ITEMS.lock().unwrap().is_empty());
+    assert!(b_stripped.kv.keys(INDEX).unwrap().is_empty());
+    assert_eq!(b_stripped.kv.get(RECORDS, "token").unwrap(), None);
+}
+
+#[test]
+fn prepare_plan_and_prepare_module_do_not_mutate_live_presence_vault_before_commit() {
+    use crate::abi::{Bridge, Hooks};
+    use crate::link::{IoLinks, Links};
+    use ibex2::{kv::KvStore, secrets::SecretStore};
+    use std::cell::RefCell;
+    use std::sync::Arc;
+
+    struct SharedSecrets(Arc<ibex2::secrets::MemoryStore>);
+    impl SecretStore for SharedSecrets {
+        fn get(&self, name: &str) -> Result<Option<String>, ibex2::boundary::HostError> {
+            self.0.get(name)
+        }
+        fn set(&self, name: &str, value: &str) -> Result<(), ibex2::boundary::HostError> {
+            self.0.set(name, value)
+        }
+        fn forget(&self, name: &str) -> Result<(), ibex2::boundary::HostError> {
+            self.0.forget(name)
+        }
+    }
+    struct SharedKv(Arc<ibex2::kv::MemoryStore>);
+    impl KvStore for SharedKv {
+        fn get(
+            &self,
+            scope: &str,
+            key: &str,
+        ) -> Result<Option<Vec<u8>>, ibex2::boundary::HostError> {
+            self.0.get(scope, key)
+        }
+        fn set(
+            &self,
+            scope: &str,
+            key: &str,
+            value: &[u8],
+        ) -> Result<(), ibex2::boundary::HostError> {
+            self.0.set(scope, key, value)
+        }
+        fn delete(&self, scope: &str, key: &str) -> Result<(), ibex2::boundary::HostError> {
+            self.0.delete(scope, key)
+        }
+        fn keys(&self, scope: &str) -> Result<Vec<String>, ibex2::boundary::HostError> {
+            self.0.keys(scope)
+        }
+    }
+
+    thread_local! {
+        static TEST_STORES: RefCell<Option<(Arc<ibex2::secrets::MemoryStore>, Arc<ibex2::kv::MemoryStore>)>> =
+            const { RefCell::new(None) };
+    }
+
+    fn test_endow(grants: &str, app_id: &str, fresh: bool) -> crate::store::Endowed {
+        let (secrets, kv) = TEST_STORES.with(|s| s.borrow().clone().unwrap());
+        let host = ibex2::host::Host::new()
+            .with_secret_store(Box::new(SharedSecrets(secrets)))
+            .with_kv_store(Box::new(SharedKv(kv)));
+        let bindings = crate::store::endow_in(host, grants).unwrap();
+        let mut snapshot = Vec::new();
+        if fresh {
+            snapshot = crate::store::snapshot_of(Some(&bindings));
+            snapshot.extend(keychain_snapshot(Some(&bindings), grants, app_id));
+        }
+        crate::store::Endowed {
+            snapshot,
+            unread_kept: Vec::new(),
+            presence: None,
+            secrets: Some(Box::new(crate::store::Platform::of(&bindings))),
+            bindings: Some(bindings),
+            unbound: None,
+        }
+    }
+
+    fn test_presence(
+        bindings: Option<&Bindings>,
+        grants: &str,
+        app_id: &str,
+    ) -> Option<(Backend, Option<String>)> {
+        keychain_backend(bindings, grants, app_id).map(|(b, s)| (b, Some(s)))
+    }
+
+    const APP_ID: &str = "com.example.prepare";
+    #[derive(Clone)]
+    struct PresenceSource;
+    impl exact_runner::DataSource for PresenceSource {
+        fn app_id(&self) -> &str {
+            APP_ID
+        }
+        fn grants(&self) -> &str {
+            GRANTS
+        }
+        fn query(
+            &mut self,
+            name: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<exact_runner::Value, exact_runner::DataError> {
+            Err(exact_runner::DataError::UnknownSource(name.into()))
+        }
+        fn replacement(
+            &self,
+            _: &[u8],
+            _: &str,
+            _: Vec<u8>,
+        ) -> Result<Self, exact_runner::DataError> {
+            Ok(self.clone())
+        }
+    }
+
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    ITEMS.lock().unwrap().clear();
+    FAIL_PROBE.store(false, std::sync::atomic::Ordering::Relaxed);
+    FAIL_DELETE.store(false, std::sync::atomic::Ordering::Relaxed);
+    *FAIL_CANDIDATE.lock().unwrap() = 0;
+    on_keychain(Some(keychain));
+
+    let secrets = Arc::new(ibex2::secrets::MemoryStore::new());
+    let kv = Arc::new(ibex2::kv::MemoryStore::new());
+    TEST_STORES.with(|s| *s.borrow_mut() = Some((secrets.clone(), kv.clone())));
+    let service = locked_service(APP_ID);
+
+    let seed = || {
+        ITEMS.lock().unwrap().clear();
+        // (a) pending Op::Move: plain copy + locked record
+        secrets.set("key", "pending-secret").unwrap();
+        kv.set(RECORDS, "key", b"locked biometry-any apple.orWatch")
+            .unwrap();
+        // (b) in-flight unprotect step 2: plain copy + locked item + plain record
+        secrets.set("token", "unprotect-plain").unwrap();
+        ITEMS.lock().unwrap().insert(
+            (service.clone(), "token#1".into()),
+            ("user-presence optional".into(), b"locked-copy".to_vec()),
+        );
+        kv.set(INDEX, "token#1", &[]).unwrap();
+        kv.set(RECORDS, "token", b"plain").unwrap();
+        // Missing Keychain candidate in index (must not be pruned during read-only prepare).
+        kv.set(INDEX, "key#9", &[]).unwrap();
+    };
+
+    let assert_untouched = |stage: &str| {
+        assert_eq!(
+            secrets.get("key").unwrap().as_deref(),
+            Some("pending-secret"),
+            "{stage}: pending plain copy mutated"
+        );
+        assert!(
+            !ITEMS
+                .lock()
+                .unwrap()
+                .contains_key(&(service.clone(), "key#1".into())),
+            "{stage}: Op::Move wrote locked Keychain item before commit"
+        );
+        assert_eq!(
+            secrets.get("token").unwrap().as_deref(),
+            Some("unprotect-plain"),
+            "{stage}: in-flight unprotect plain copy deleted"
+        );
+        assert_eq!(
+            ITEMS
+                .lock()
+                .unwrap()
+                .get(&(service.clone(), "token#1".into()))
+                .map(|i| i.1.as_slice()),
+            Some(&b"locked-copy"[..]),
+            "{stage}: locked item mutated"
+        );
+        assert_eq!(
+            kv.get(RECORDS, "token").unwrap().as_deref(),
+            Some(&b"plain"[..]),
+            "{stage}: record mutated"
+        );
+        assert!(
+            kv.get(INDEX, "key#9").unwrap().is_some(),
+            "{stage}: index entry pruned before commit"
+        );
+    };
+
+    let links = Links {
+        io: Some(IoLinks {
+            endow: test_endow,
+            presence: test_presence,
+            ..IoLinks::LINKED
+        }),
+        ..Links::ALL
+    };
+    let ok_plan = contract::compile("component App\n  view\n    text \"ok\"\n")
+        .unwrap()
+        .encode();
+    let bad_plan =
+        contract::compile("component App\n  derive boom = 1 / 0\n  view\n    text `${boom}`\n")
+            .unwrap()
+            .encode();
+
+    // 1. Cold prepare_plan + discard_plan, and cold refused prepare_plan: zero vault mutations.
+    seed();
+    let mut cold = Bridge::with_links(links.clone());
+    cold.input_write(&ok_plan);
+    cold.prepare_plan(ok_plan.len(), PresenceSource, Hooks::none(), 400., 800.);
+    assert_untouched("cold prepare_plan");
+    cold.discard_plan();
+    assert_untouched("cold discard_plan");
+    cold.input_write(&bad_plan);
+    cold.prepare_plan(bad_plan.len(), PresenceSource, Hooks::none(), 400., 800.);
+    assert_untouched("cold refused prepare_plan");
+
+    // 2. Live host with painted = true: prepare_plan, prepare_module (runs disposable validation),
+    //    refused prepare_module, and discard_plan all leave the live vault untouched.
+    let mut live = Bridge::with_links(links);
+    live.boot(&ok_plan, PresenceSource, Hooks::none(), 400., 800.);
+    live.data_ready();
+    seed();
+
+    live.input_write(&ok_plan);
+    live.prepare_plan(ok_plan.len(), PresenceSource, Hooks::none(), 400., 800.);
+    assert_untouched("live prepare_plan");
+    live.discard_plan();
+    assert_untouched("live discard_plan after prepare_plan");
+
+    live.input_write(&ok_plan);
+    live.prepare_module(
+        [ok_plan.len(), 0, 0],
+        PresenceSource,
+        Hooks::none(),
+        400.,
+        800.,
+    );
+    assert_untouched("live prepare_module (painted validation + candidate)");
+    live.discard_plan();
+    assert_untouched("live discard_plan after prepare_module");
+
+    live.input_write(&bad_plan);
+    live.prepare_module(
+        [bad_plan.len(), 0, 0],
+        PresenceSource,
+        Hooks::none(),
+        400.,
+        800.,
+    );
+    assert_untouched("live refused prepare_module");
+
+    // 3. Committing the prepared module reconciles the vault and pumps Op::Move.
+    live.input_write(&ok_plan);
+    live.prepare_module(
+        [ok_plan.len(), 0, 0],
+        PresenceSource,
+        Hooks::none(),
+        400.,
+        800.,
+    );
+    assert_untouched("before commit_plan");
+    live.commit_plan();
+    assert_eq!(secrets.get("key").unwrap(), None);
+    assert_eq!(
+        ITEMS
+            .lock()
+            .unwrap()
+            .get(&(service.clone(), "key#1".into()))
+            .map(|i| i.1.as_slice()),
+        Some(&b"pending-secret"[..])
+    );
+    assert_eq!(secrets.get("token").unwrap(), None);
+    assert_eq!(
+        kv.get(RECORDS, "token").unwrap().as_deref(),
+        Some(&b"locked user-presence optional"[..])
+    );
+    assert_eq!(kv.get(INDEX, "key#9").unwrap(), None);
+
+    TEST_STORES.with(|s| *s.borrow_mut() = None);
+    ITEMS.lock().unwrap().clear();
 }

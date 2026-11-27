@@ -34,6 +34,8 @@ export function answer(name: string, args: any): any {
   g.asks.push(name + '(' + a + ')');
   if (name === 'subjectWorks') return ${hold} ? new Promise(done => g.held.push(() => done({ ok: true, works: [a] }))) : Promise.resolve({ ok: true, works: [a] });
   if (name === 'now') return 'now ' + a;
+  if (name === 'mirror') return args[0];
+  if (name === 'one') return g.__exactRender ? 1 : new Promise(done => g.held.push(() => done(1)));
   if (name === 'emptyWorks') return { ok: true, works: ['ph'] };
   throw new Error('no source ' + name);
 }
@@ -176,7 +178,7 @@ component Feed
 
 /** Builds `source` for the web, opens it at `path` and hands `run` the page
  * and its helpers; `render` renders its `render=build` pages. */
-async function fixture(source, run, { path = '/', render = false, hold = true } = {}) {
+async function fixture(source, run, { path = '/', render = false, hold = true, stored } = {}) {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   mkdirSync(resolve(root, 'target'), { recursive: true });
   const dir = mkdtempSync(resolve(root, 'target/owned-test-'));
@@ -200,7 +202,8 @@ async function fixture(source, run, { path = '/', render = false, hold = true } 
       if (existsSync(file) && p.includes('.')) return new Response(Bun.file(file));
       return new Response(Bun.file(existsSync(page) ? page : resolve(dist, 'shell.html')));
     } });
-    browser = await open({ host: 'web', url: new URL(path, server.url).href, webDist: dist });
+    const env = stored && { EXACT_AGENT_STORAGE_FRESH: '1', EXACT_AGENT_STORED: JSON.stringify(stored) };
+    browser = await open({ host: 'web', url: new URL(path, server.url).href, webDist: dist, env });
     const text = async id => (await browser.tree()).nodes.find(n => n.props.testId === id)?.props.text ?? null;
     const asks = () => browser.carrier.evaluate('globalThis.asks ?? []');
     // Answers every request out; how many there were.
@@ -403,6 +406,70 @@ test("a rendered page's instance takes its own answer, not a sibling's at equal 
   expect(await asks()).toEqual([]);
 }, { path: '/discover', render: true, hold: false }), 180_000);
 
+test("a sleeping owned resource skips trapping arguments with only a sibling's answer", () => fixture(
+  PANELS.replace('subjectWorks("sf")', 'subjectWorks(`${range(shown ? 1 : -1).length}`)'),
+  async ({ text, asks }) => {
+    expect([await text('works-home'), await text('works-discover')]).toEqual(['home: ', 'discover: 1']);
+    expect(await asks()).toEqual([]);
+  }, { path: '/discover', render: true, hold: false }), 180_000);
+
+test('a sleeping owned resource boots before its dependency answers', () => fixture(`routes nav
+  home "/" render=build
+component App
+  state show = true
+  state input = 1 persist
+  view
+    column
+      if show
+        Chain(input=input)
+component Chain
+  props
+    input: number
+  resource first = one(input) as shape number
+  resource second = mirror(range(first - 1).length + 7) when first > 0 as shape number
+  view
+    text \`\${first}:\${second}\` testId="answer"
+`, async ({ text, asks, land }) => {
+  expect(await text('answer')).toBe('0:0');
+  expect(await asks()).toEqual(['one(2)']);
+  expect(await land()).toBe(1);
+  expect(await text('answer')).toBe('1:7');
+  expect(await asks()).toEqual(['one(2)', 'mirror(7)']);
+}, { render: true, stored: [['input', '2']] }), 180_000);
+
+test('a sleeping owned resource discards an answer when persisted state breaks its arguments', () => fixture(`routes nav
+  home "/" render=build
+component App
+  state show = true
+  state number = 1 persist
+  state forced = false
+  action wake
+    forced = true
+  action repair
+    number = 2
+  view
+    column
+      button "Wake" press=wake testId="wake"
+      button "Repair" press=repair testId="repair"
+      if show
+        Sleeping(number=number, awake=(number > 0 || forced))
+component Sleeping
+  props
+    number: number
+    awake: bool
+  resource answer = mirror(range(number).length) when awake as shape number
+  view
+    text \`\${answer}:\${current(answer)}\` testId="answer"
+`, async ({ browser, text, asks }) => {
+  expect(await text('answer')).toBe('0:false');
+  await browser.tap('wake');
+  expect((await browser.state()).slots.forced).toBe(false);
+  expect(await text('answer')).toBe('0:false');
+  expect(await asks()).toEqual([]);
+  await browser.tap('repair');
+  expect(await text('answer')).toBe('2:true');
+  expect(await asks()).toEqual(['mirror(2)']);
+}, { render: true, stored: [['number', '-1']] }), 180_000);
 
 const TASK_REFUSAL = `component App
   state shown = false
@@ -548,4 +615,29 @@ test("a child's task key reads its synchronous resource before mounting", () => 
   expect(await asks()).toEqual(['now(x)']);
   await browser.clock('+10');
   expect(await text('clock')).toBe('1');
+}), 180_000);
+
+test('a virtualized list inside a child component mounts and updates when its owned resource settles', () => fixture(`shape Subject
+  ok: bool
+  works: string[]
+
+component App
+  state show = true
+  view
+    column
+      if show
+        Screen()
+
+component Screen
+  resource feed = subjectWorks("sf") as shape Subject else empty(ok=true)
+  state ids = [1, 2]
+  view
+    list virtualized=true height=200
+      for x in ids key=x
+        text \`\${feed.works.join(",") }:\${pending(feed)}:\${failed(feed)}:\${x}\` testId=\`row-\${x}\`
+`, async ({ text, asks, land }) => {
+  expect(await asks()).toEqual(['subjectWorks(sf)']);
+  expect([await text('row-1'), await text('row-2')]).toEqual([':true:false:1', ':true:false:2']);
+  expect(await land()).toBe(1);
+  expect([await text('row-1'), await text('row-2')]).toEqual(['sf:false:false:1', 'sf:false:false:2']);
 }), 180_000);

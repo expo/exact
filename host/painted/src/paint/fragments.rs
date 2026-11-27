@@ -53,8 +53,10 @@ impl Painter {
             // A fitted paragraph's line box is at its runs' scale (LLP 1116.001 D1.4).
             let strut = exact_kernel::TextStyle::from_style(&computed).scaled(node.fit_scale());
             spec.strut = Run::from_style("", strut);
-            spec.runs = node.text_runs().iter().map(Run::from_kernel).collect();
-            spec.shown(node.props.str(PropId::Markup) == Some("markdown"))
+            spec.shown(
+                &node.text_runs(),
+                exact_kernel::text::Markup::from_prop(node.props.str(PropId::Markup)),
+            )
         };
         let paragraph = if let Some(stamp) = node.paragraph_stamp() {
             // @ref LLP 1043.000 §3 D7 — ordinary text takes the same

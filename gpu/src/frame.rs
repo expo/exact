@@ -183,52 +183,62 @@ impl Module {
             return Some(false);
         }
         if inst.surface.is_empty() {
-            inst.held = None;
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                inst.scratch = None;
+            let had_wake = inst.wake.take();
+            if inst.surface.is_empty() {
+                inst.held = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    inst.scratch = None;
+                }
+                inst.input_dirty = inst.surface.input_pending();
+                inst.dirty = false;
+                #[cfg(exact_android_draw_trace)]
+                inst.draw_trace.empty();
+                return Some(inst.wake.is_woken());
             }
-            inst.input_dirty = inst.surface.input_pending();
-            inst.dirty = false;
-            return Some(false);
+            if had_wake {
+                inst.wake.rearm();
+            }
         }
+        #[cfg(exact_android_draw_trace)]
+        inst.draw_trace.attempt();
         #[cfg(target_os = "android")]
         if inst.ring.is_some() {
             return self.render_to_buffer(id, frame);
         }
         let target = inst.presentation.as_ref()?;
         let config = inst.config.as_mut()?;
-        // Configuring again needs nothing of the surface acquired.
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut idle = || inst.acquire.reconfigure();
-        #[cfg(target_arch = "wasm32")]
-        let idle = || true;
         let alpha = crate::target::alpha_mode(inst.surface.opaque(), &inst.alpha_modes);
-        if config.alpha_mode != alpha {
-            if !idle() {
+        if config.alpha_mode != alpha || config.width != w || config.height != h {
+            #[cfg(not(target_arch = "wasm32"))]
+            if !inst.acquire.reconfigure() {
                 return Some(true);
             }
             inst.held = None;
+            let alpha_changed = config.alpha_mode != alpha;
             config.alpha_mode = alpha;
+            config.width = w;
+            config.height = h;
             crate::swapchains(|| target.configure(&gpu.device, config));
+            if alpha_changed {
+                let destination = crate::ColorTarget::of(config);
+                if let Err(e) = inst.set_color_target(destination) {
+                    self.error = e.0;
+                    return None;
+                }
+            }
         }
+        let target = inst.presentation.as_ref()?;
+        let config = inst.config.as_ref()?;
         let format = crate::view_format(config);
+        #[cfg(not(target_arch = "wasm32"))]
+        let sampleable = self.frame_samples && config.usage.contains(wgpu::TextureUsages::COPY_SRC);
         inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
-        // Off the presenter's thread (`acquire`) unless the clock is the
-        // agent's, whose frames are rendered when asked for.
+        // Off the presenter's thread unless the clock is the agent's.
         #[cfg(not(target_arch = "wasm32"))]
         let off_thread = crate::acquire::Acquire::ENABLED && !self.seekable;
         #[cfg(target_arch = "wasm32")]
         let off_thread = false;
-        if config.width != w || config.height != h {
-            if !idle() {
-                return Some(true);
-            }
-            inst.held = None;
-            config.width = w;
-            config.height = h;
-            crate::swapchains(|| target.configure(&gpu.device, config));
-        }
         use wgpu::CurrentSurfaceTexture as Current;
         // The drawable an incomplete frame was submitted into.
         let retry = inst.held.is_some();
@@ -254,10 +264,9 @@ impl Module {
             let current = target.get_current_texture();
             current
         };
-        let texture = match current {
-            Current::Success(t) => t,
-            Current::Suboptimal(t) => {
-                drop(t);
+        let texture = match classify_current(current) {
+            AcquireOutcome::Present(t) => t,
+            AcquireOutcome::Reconfigure => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     inst.acquire.reconfigure();
@@ -265,14 +274,13 @@ impl Module {
                 crate::swapchains(|| target.configure(&gpu.device, config));
                 return Some(true);
             }
-            // Nothing to draw into this frame; the inputs stay dirty.
-            Current::Timeout | Current::Occluded => return Some(true),
-            Current::Lost => {
+            AcquireOutcome::Skip => return Some(true),
+            AcquireOutcome::Lost => {
                 self.lose_device();
                 return None;
             }
-            other => {
-                self.error = format!("surface: {other:?}");
+            AcquireOutcome::Error(error) => {
+                self.error = error;
                 return None;
             }
         };
@@ -312,7 +320,10 @@ impl Module {
         if let Some(s) = inst.scratch.as_mut().filter(|s| retry && !s.continues) {
             s.clear(&mut recording.encoder);
         }
+        #[cfg(exact_android_draw_trace)]
+        let reasons = inst.trace_draw_begin(id, &frame);
         inst.surface.timing(&timing);
+        inst.wake.take();
         let wants = inst.surface.render(
             &frame,
             &gpu.device,
@@ -324,9 +335,10 @@ impl Module {
         inst.drain();
         let mut failure = inst.surface.take_error();
         let ready = cfg!(target_arch = "wasm32") || inst.surface.frame_presentable();
+        let woken = inst.wake.is_woken();
         let cap = inst.surface.max_fps();
         inst.cadence
-            .after(cap, frame.now_ms, self.period_ms, wants || !ready);
+            .after(cap, frame.now_ms, self.period_ms, wants || !ready || woken);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(s) = inst
             .scratch
@@ -335,6 +347,19 @@ impl Module {
         {
             s.copy(&mut recording.encoder, &view);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let sampled = (sampleable && ready && failure.is_none()).then(|| {
+            crate::readback::Rows::capture(
+                inst.sampled.as_ref(),
+                gpu,
+                &mut recording.encoder,
+                &texture.texture,
+            )
+            .presented(
+                crate::target::granted(inst.config.as_ref()),
+                alpha == wgpu::CompositeAlphaMode::Opaque,
+            )
+        });
         let commands = match recording.finish() {
             Ok(commands) => Some(commands),
             Err(e) => {
@@ -342,6 +367,10 @@ impl Module {
                 None
             }
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(rows) = sampled.filter(|_| commands.is_some()) {
+            inst.sampled = Some(rows);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(s) = inst.scratch.as_mut().filter(|_| retry) {
             s.continues = !ready && failure.is_none();
@@ -354,16 +383,19 @@ impl Module {
             inst.held = Some(texture);
             (None, None)
         };
+        let drawn = inst.surface.frame_ready() && failure.is_none();
+        #[cfg(exact_android_draw_trace)]
+        inst.trace_draw_end(&frame, id, reasons, wants, drawn);
         let open = self.open.get_or_insert_with(Open::default);
         open.canvases.push(Rendered {
             id,
             refused: commands.is_none(),
             commands,
             complete: ready,
-            drawn: inst.surface.frame_ready() && failure.is_none(),
+            drawn,
             texture,
             failed,
-            request: off_thread && wants && ready,
+            request: off_thread && (wants || woken) && ready,
             buffer: None,
         });
         if let Some(SurfaceError(e)) = failure {
@@ -372,7 +404,7 @@ impl Module {
         }
         inst.input_dirty = inst.surface.input_pending();
         inst.dirty = !ready;
-        Some(wants || !ready)
+        Some(wants || !ready || woken)
     }
 
     /// [`Module::render`] for a canvas with buffers: the frame goes into
@@ -423,7 +455,10 @@ impl Module {
             ..*frame
         };
         let mut recording = Recording::begin(&gpu.device);
+        #[cfg(exact_android_draw_trace)]
+        let reasons = inst.trace_draw_begin(id, &frame);
         inst.surface.timing(&timing);
+        inst.wake.take();
         let wants = inst.surface.render(
             &frame,
             &gpu.device,
@@ -442,16 +477,20 @@ impl Module {
             }
         };
         let ready = inst.surface.frame_presentable();
+        let woken = inst.wake.is_woken();
         let cap = inst.surface.max_fps();
         inst.cadence
-            .after(cap, frame.now_ms, self.period_ms, wants || !ready);
+            .after(cap, frame.now_ms, self.period_ms, wants || !ready || woken);
+        let drawn = inst.surface.frame_ready() && failure.is_none();
+        #[cfg(exact_android_draw_trace)]
+        inst.trace_draw_end(&frame, id, reasons, wants, drawn);
         let open = self.open.get_or_insert_with(Open::default);
         open.canvases.push(Rendered {
             id,
             refused: commands.is_none(),
             commands,
             complete: ready,
-            drawn: inst.surface.frame_ready() && failure.is_none(),
+            drawn,
             texture: None,
             failed: None,
             request: false,
@@ -463,7 +502,7 @@ impl Module {
         }
         inst.input_dirty = inst.surface.input_pending();
         inst.dirty = !ready;
-        Some(wants || !ready)
+        Some(wants || !ready || woken)
     }
 
     /// Submit the open frame once, then present each canvas's drawable in
@@ -646,6 +685,32 @@ impl Module {
         self.instances
             .get(&id)
             .is_some_and(|i| i.seen.load(Ordering::Acquire))
+    }
+}
+
+/// Outcome of acquiring a frame's drawable in [`Module::render`].
+#[derive(Debug, PartialEq, Eq)]
+enum AcquireOutcome<T> {
+    Present(T),
+    Reconfigure,
+    Skip,
+    Lost,
+    Error(String),
+}
+
+fn classify_current(current: wgpu::CurrentSurfaceTexture) -> AcquireOutcome<wgpu::SurfaceTexture> {
+    use wgpu::CurrentSurfaceTexture as Current;
+    match current {
+        Current::Success(t) => AcquireOutcome::Present(t),
+        Current::Suboptimal(t) => {
+            drop(t);
+            AcquireOutcome::Reconfigure
+        }
+        Current::Outdated => AcquireOutcome::Reconfigure,
+        // Nothing to draw into this frame; the inputs stay dirty.
+        Current::Timeout | Current::Occluded => AcquireOutcome::Skip,
+        Current::Lost => AcquireOutcome::Lost,
+        other => AcquireOutcome::Error(format!("surface: {other:?}")),
     }
 }
 
@@ -934,6 +999,9 @@ mod scene_tests {
         fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
             Ok(())
         }
+        fn render_scale(&self) -> f32 {
+            0.5
+        }
         fn is_empty(&self) -> bool {
             self.0
         }
@@ -944,7 +1012,7 @@ mod scene_tests {
             _: &wgpu::Queue,
             encoder: &mut wgpu::CommandEncoder,
             target: &wgpu::TextureView,
-            _: wgpu::TextureFormat,
+            format: wgpu::TextureFormat,
         ) -> bool {
             if !self.0 {
                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -953,7 +1021,18 @@ mod scene_tests {
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                            load: wgpu::LoadOp::Clear(
+                                if format == wgpu::TextureFormat::Rgba16Float {
+                                    wgpu::Color {
+                                        r: 1.5,
+                                        g: -0.25,
+                                        b: 0.375,
+                                        a: 1.,
+                                    }
+                                } else {
+                                    wgpu::Color::GREEN
+                                },
+                            ),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -1012,5 +1091,104 @@ mod scene_tests {
             gpu.queue.submit([encoder.finish()]);
             assert_eq!(fixture::read(&gpu, &texture).unwrap().at(2, 2), expected);
         }
+    }
+
+    #[test]
+    fn classify_current_reconfigures_on_outdated() {
+        use wgpu::CurrentSurfaceTexture as Current;
+        assert_eq!(
+            classify_current(Current::Outdated),
+            AcquireOutcome::Reconfigure
+        );
+        assert_eq!(classify_current(Current::Timeout), AcquireOutcome::Skip);
+        assert_eq!(classify_current(Current::Occluded), AcquireOutcome::Skip);
+        assert_eq!(classify_current(Current::Lost), AcquireOutcome::Lost);
+        assert!(matches!(
+            classify_current(Current::Validation),
+            AcquireOutcome::Error(_)
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn outdated_surface_reconfigures_and_recovers_on_next_render() {
+        let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+            return;
+        };
+        static REGISTRY: crate::Registry = crate::Registry {
+            surfaces: &[("layer", 0, || Box::new(Layer(false)))],
+            shaders: &[],
+        };
+        let mut m = Module::new(&REGISTRY);
+        m.set_seekable(true);
+        m.frame_samples = true;
+        m.set_gpu(gpu);
+        // SAFETY: a new CAMetalLayer retained past the module.
+        let layer: objc2::rc::Retained<objc2::runtime::AnyObject> =
+            unsafe { objc2::msg_send![objc2::class!(CAMetalLayer), new] };
+        let ptr = objc2::rc::Retained::as_ptr(&layer) as *mut std::ffi::c_void;
+        // SAFETY: `layer` outlives `m`.
+        let target = unsafe {
+            m.gpu()
+                .unwrap()
+                .instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(ptr))
+        }
+        .unwrap();
+        let id = m.create("layer", target, 8, 8).expect("create");
+        assert!(m.bind(id, &[], None));
+        m.instances
+            .get_mut(&id)
+            .unwrap()
+            .acquire
+            .inject(wgpu::CurrentSurfaceTexture::Outdated);
+        let frame = Frame {
+            width: 8.,
+            height: 8.,
+            scale: 2.,
+            now_ms: 0.,
+            seekable: true,
+            period_ms: 0.,
+            children_generation: 0,
+            shader_generation: 0,
+            headroom: 1.,
+        };
+        assert_eq!(
+            m.render(id, &frame),
+            Some(true),
+            "Outdated must reconfigure and ask for another frame"
+        );
+        assert_eq!(m.take_error(), "");
+        assert!(m.has_device(id));
+        assert_eq!(m.render(id, &frame), Some(false));
+        let (size, bytes) = m.sampled_frame(id).expect("the presented pixels");
+        assert_eq!(&size[..2], [8, 8]);
+        assert!(bytes.chunks_exact(4).all(|p| p == [0, 255, 0, 255]));
+        assert!(m.flush());
+        assert!(m.sync());
+        assert_eq!(m.take_error(), "");
+        let config = m.instances.get_mut(&id).unwrap().config.as_mut().unwrap();
+        config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
+        config.format = wgpu::TextureFormat::Rgba16Float;
+        config.view_formats.clear();
+        assert_eq!(m.render_readback(id, &frame, None), Some(false));
+        let (info, bytes) = m
+            .sampled_frame(id)
+            .expect("the offscreen extended-range frame");
+        assert_eq!(&info[..2], [8, 8]);
+        assert_eq!(
+            info[2], 1,
+            "an offscreen frame takes the bound surface's alpha policy"
+        );
+        let expected = [0x3e00u16, 0xb400, 0x3600, 0x3c00]
+            .map(u16::to_le_bytes)
+            .concat();
+        assert!(bytes.chunks_exact(8).all(|p| p == expected));
+
+        m.instances.get_mut(&id).unwrap().surface = Box::new(Layer(true));
+        assert_eq!(m.render_readback(id, &frame, None), Some(false));
+        assert_eq!(m.sampled_frame(id), Some(([1, 1, 0], vec![0; 4])));
+        drop(m);
+        drop(layer);
     }
 }

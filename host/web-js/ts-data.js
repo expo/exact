@@ -21,6 +21,10 @@ import { failureCode, failureReason, Shaped } from './shape.js';
 // What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
 import { knownFolderPath } from './grant-admission.js';
+import { loadOnce } from '../web/load-once.js';
+
+const moduleLoads = {};
+
 useFetch(sourceFetch);
 // The app's id is app.json's, which the build writes here; app.ts need not export one.
 const appId = source.appId;
@@ -221,7 +225,7 @@ const conv = (v, t, target) => { const a = arrays(v, t, answered.get(target)); a
 // re-asks the resources whose current answers watch the topic when the
 // module announces it (LLP 1016.002): an answer's topics are its call's
 // `watches`, which rt.js keeps on the resource it asked for.
-let watching = null, page = null, load = null;
+let watching = null, load = null;
 const announce = (topic, why) => rt.commit(() => { const m = moduleWatched.get(topic); for (const r of rt.Resources) if (r.watches?.has(topic) || m?.has(r.source)) rt.sourceChanged(r, topic); }, `${why} ${topic}`);
 const watch = topic => answering.call.watches.add(topic);
 // Another tab's durable write (LLP 1030.004 D2): its topics cross between the app's tabs on a channel of the app's,
@@ -264,8 +268,10 @@ globalThis.__exact_module = body => {
   if (body.source && watching) (moduleWatched.get(key) ?? moduleWatched.set(key, new Set()).get(key)).add(watching);
   // A continuation keeps the least privileged pending call until its answer settles.
   const origin = call?.origin ?? 'app';
+  const owner = answering.call ?? answering.promiseCall;
+  const startedByInput = owner?.input === true && !owner.settled;
   answering.call = call;
-  try { return ordinary(() => globalThis.exact?.extensions?.call?.({ ...body, origin }, () => call?.wanted?.() ?? true) ?? Promise.resolve({ error: 'NotSupportedError' })); }
+  try { return ordinary(() => rt.Origin.callData?.({ ...body, origin }, () => call?.wanted?.() ?? true, startedByInput, tsGrantSet) ?? Promise.resolve({ error: 'NotSupportedError' })); }
   finally { answering.call = before; }
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
@@ -277,10 +283,10 @@ export const watchState = () => [...new Set(rt.Resources.flatMap(r => r.gone ? [
   const m = /^doc-watch(-recursive)?:(.*)$/.exec(t);
   return m ? [{ path: m[2], recursive: !!m[1] }] : [];
 });
-const pageModule = () => page ??= load().then(m => m.pageModule({
+const pageModule = () => loadOnce(moduleLoads, "page", () => load().then(m => m.pageModule({
   agent: rt.clock.agent, now: () => rt.clock.now,
   changed: topic => announce(topic, 'native'),
-}));
+})));
 const native = Object.freeze({
   get available() { return true; },
   call() { if (overlaying.on) throw inOverlay('native.call()'); throw new Error('native.call: the web has no synchronous module call; use native.later'); },
@@ -461,9 +467,11 @@ function renderStorage(owner) {
 // adapters, the SQLite handles and the topics a write tells the app's other tabs.
 const STORAGE_GRANTED = true;
 function storageOf(grants) {
+  const storageLoads = {};
+
   const ordinary = start => answering.ordinary(start, true);
   const admitted = STORAGE_GRANTED && ['fs-read', 'fs-write', 'sqlite-open'].some(kind => hasGrant(grants, kind));
-  let fs, sqlite;
+
   const key = () => import('./storage-environment.js').then(({ storageKey, agentStorageRefusal }) => {
     const k = appId ? storageKey(appId) : null;
     if (k == null) throw Object.assign(new Error(agentStorageRefusal), { kind: 'Unavailable', code: 'agent' });
@@ -477,13 +485,13 @@ function storageOf(grants) {
   const refused = e => (e?.code === 'agent' ? tell() : Promise.resolve()).then(() => coded(e));
   // A refused read answers as an empty store would (storage-environment.js `emptyRead`).
   const orEmpty = (m, path) => e => e?.code === 'agent' ? tell().then(env => { if (!env.agentReads.includes(m)) throw e; return env.emptyRead(m, path); }) : Promise.reject(e);
-  const files = () => fs ??= key().then(k => import(new URL('./storage-fs.js', import.meta.url).href).then(m => m.createFileSystem(k, grants)));
+  const files = () => loadOnce(storageLoads, "fs", () => key().then(k => import(new URL('./storage-fs.js', import.meta.url).href).then(m => m.createFileSystem(k, grants))));
   // A document the person chose (`doc:/`, LLP 1069.010 D1) is the page's
   // handle, not app storage: no store key, so a drive without a scratch
   // store reaches it too, as a Rust source's storage request does.
-  let docs;
+
   // What the app keeps across launches is read back first (LLP 1069.010.000 D4).
-  const documents = () => docs ??= ((globalThis.exact ??= {}), import(new URL('./documents-glue.js', import.meta.url).href)).then(() => globalThis.exact.documents.keeping(appId, grants)).then(() => globalThis.exact.documents.files(grants));
+  const documents = () => loadOnce(storageLoads, "docs", () => ((globalThis.exact ??= {}), import(new URL('./documents-glue.js', import.meta.url).href)).then(() => globalThis.exact.documents.keeping(appId, grants)).then(() => globalThis.exact.documents.files(grants)));
   // In the storage queue, as every storage call is (an overlay refuses it).
   const keptDocuments = (what, f) => ordinary(() => queued(what, () => documents().then(() => f(globalThis.exact.documents))).catch(refused));
   let listWatched = false;
@@ -494,7 +502,7 @@ function storageOf(grants) {
     throw Object.assign(new Error(`denied: ${op}`), { kind: 'Unavailable', code: 'denied' });
   });
   // The page's SQLite worker, and the module's handles over it (ts-sqlite.js), loaded at the first open.
-  const databases = () => sqlite ??= key().then(k => Promise.all([import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)), import('./ts-sqlite.js')]));
+  const databases = () => loadOnce(storageLoads, "sqlite", () => key().then(k => Promise.all([import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)), import('./ts-sqlite.js')])));
   // `compressImage` (LLP 1069.002 A1) and `transformImage` (LLP 1133.019 D14): their options are checked before either
   // is queued (`imageOptions`); app files only.
   const image = (method, from, to, options, limits) => {
@@ -543,7 +551,7 @@ function storageOf(grants) {
         if (!FILE_WRITES.test(m)) { shared.watch(topics); return done; }
         return done.then(v => { shared.relay(topics); return v; });
       })])) }),
-    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(([d]) => d.open(path))).then(d => sqlite.then(([, m]) => m.database(d, path, call, queued, openDatabases, shared))) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
+    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(([d]) => d.open(path))).then(d => storageLoads.sqlite.then(([, m]) => m.database(d, path, call, queued, openDatabases, shared))) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
     work: promise => Promise.resolve(promise),
   });
 }
@@ -555,9 +563,22 @@ const opener = (stream, conv, name) => (deliver, controller) => {
     .catch(e => ({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
 };
 export function install(data, rustSources = null, modules = null) {
+  const keyLoads = {};
+
   // What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
   // outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
   answering.page = { clock: rt.clock, journal: rt.journal, drive: rt.drive, time: rt.time };
+  const clockWarned = new Set();
+  // LLP 1195.000 D2.4 / Q2: mark clock-reading calls and warn once per app resource.
+  answering.onClockRead = () => {
+    const c = answering.call ?? answering.promiseCall;
+    if (!c) return;
+    c.clockRead = true;
+    if (!c.mutation && !globalThis.__exactRender && !clockWarned.has(c.name)) {
+      clockWarned.add(c.name);
+      rt.journal.push(`t=${rt.clock.now} [ambient-clock] resource ${c.name} read ambient Date/performance.now; its value is not baked and does not auto-refresh when the clock ticks — pass exactTime() for reactive or SSR-safe time`);
+    }
+  };
   data.appId = appId;
   bodyFiles.appId = appId ?? null; // `exactBodyFrom`'s store (ts-fetch.js)
   data.grants = setAppGrantSet(tsGrantSet);
@@ -587,7 +608,7 @@ export function install(data, rustSources = null, modules = null) {
   // paint (rt.js `painted`), whether or not anything asks `later`.
   load = modules && (() => rt.painted().then(modules));
   if (modules && typeof requestAnimationFrame === 'function') pageModule().catch(e => rt.journal.push(`t=${rt.clock.now} native: ${e.message}`));
-  let keys = null, asking = '', thrown = null, threwRead = false, threwWatches = null;
+  let asking = '', thrown = null, threwRead = false, threwClock = false, threwWatches = null;
   // The answer an async function was called under, put back around each of
   // its steps by the bundle's async helper (js/bake/src/typescript.mjs
   // `asyncContextHelper`, LLP 1133.002 D14), as Hermes's prelude does with
@@ -603,8 +624,8 @@ export function install(data, rustSources = null, modules = null) {
       return before;
     },
   });
-  const kept = () => keys ??= import('./storage-environment.js').then(({ keyStore, storageKey }) =>
-    keyStore(typeof location === 'object' && appId ? storageKey(appId) : null, globalThis.indexedDB));
+  const kept = () => loadOnce(keyLoads, "keys", () => import('./storage-environment.js').then(({ keyStore, storageKey }) =>
+    keyStore(typeof location === 'object' && appId ? storageKey(appId) : null, globalThis.indexedDB)));
   __AUTH_INSTALL__
   // A module's `kept(source, args, value)` is given the answers its page was
   // rendered with, once, before it is first asked: they are its own answers,
@@ -629,7 +650,7 @@ export function install(data, rustSources = null, modules = null) {
     // The store as the module sees it (LLP 1018): a read marks the answer.
     const seen = createSecretFacade(store, tsGrantSet, kept);
     // A call that read the store and then threw read it too: its resource is a store reader (LLP 1146 §2.3).
-    threwRead = false; threwWatches = null;
+    threwRead = false; threwClock = false; threwWatches = null;
     try { return answerWith(name, args, target, mutation, types, params, result, seen, forced); } catch (e) { threwRead = !!seen.read; throw e; }
   };
   const answerWith = (name, args, target, mutation, types, params, result, seen, forced) => {
@@ -638,7 +659,7 @@ export function install(data, rustSources = null, modules = null) {
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: rt.Origin.now(), watches: new Set() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, input: mutation && rt.Origin.input === true, origin: rt.Origin.now(), invocation: rt.Invocation?.id ?? 0, watches: new Set() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).
@@ -648,7 +669,7 @@ export function install(data, rustSources = null, modules = null) {
     };
     let r;
     thrown = null;
-    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; threwWatches = call.watches; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
+    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; threwClock = !!call.clockRead || answering.moduleClock; threwWatches = call.watches; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
     const shaped = types ? v => checked(name, v, result) : v => v;
     // A stream's answer has replied once it returns (LLP 1016.000): what runs on is background work.
     // Socket operations go out only with a value given now: not with a
@@ -658,8 +679,9 @@ export function install(data, rustSources = null, modules = null) {
       throw new Error(SOCKET_AND_FETCH);
     }
     const effects = effectsOf(!mutation || !!(r && typeof r.then === 'function'));
+    const clocked = !!call.clockRead || answering.moduleClock;
     // An upload's request identity: the same request for newer arguments keeps it (rt.js, LLP 1016.000 D10).
-    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects, watches: call.watches, madeBy: call }; }
+    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, clock: clocked, effects, watches: call.watches, madeBy: call }; }
     if (r && typeof r.then === 'function') {
       pendingAnswers++;
       call.seen = seen; // a read after an `await` makes a store reader too: rt.js looks when the answer lands (LLP 1146 §2.3)
@@ -682,10 +704,10 @@ export function install(data, rustSources = null, modules = null) {
       call.flight = true;
       const stood = Object.assign(() => { call.stood = true; for (const go of call.waiting ?? []) go(); call.waiting = null; },
         { refused: why => { call.stood = false; for (const go of call.waiting ?? []) go.refused(why); call.waiting = null; call.unsent = []; } });
-      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call, watches: call.watches, madeBy: call };
+      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, clock: clocked, effects: [...(effects ?? []), stood], call, watches: call.watches, madeBy: call };
     }
     call.settled = true; dropTimers(call); answering.untraced.delete(call);
-    return { v: conv(shaped(r), result, target_), store: seen.read, effects, watches: call.watches, madeBy: call };
+    return { v: conv(shaped(r), result, target_), store: seen.read, clock: clocked, effects, watches: call.watches, madeBy: call };
   };
   // Beside a Rust source (LLP 1027.002, LLP 1153.003 D2): a source the crate's RUST_SOURCES lists is the Rust
   // module's, not ready until it loads (rust-data.js), and this module answers every other, as `exact_data::Mixed`
@@ -712,6 +734,7 @@ export function install(data, rustSources = null, modules = null) {
   // fresh answer that fills no slot, with the call's origin on it, so a module call it makes is admitted with that
   // origin (`__exact_module`). Its answer, or null for a name `tools` does not export.
   data.tool = (name, args, store, origin) => {
+    if (typeof name !== 'string' || name === 'script.message') return null;
     const handler = source.tools && Object.hasOwn(source.tools, name) ? source.tools[name] : undefined;
     if (typeof handler !== 'function') return null;
     const before = answering.call, call = answering.call = { stream: null, mutation: true, name, turn: true, origin };
@@ -727,6 +750,7 @@ export function install(data, rustSources = null, modules = null) {
   // A resource's source that sent and then threw: what it sent, which rt.js `ask` queues with the commit.
   data.thrown = () => { const t = thrown ?? []; thrown = null; return t; };
   data.threwRead = () => { const read = threwRead; threwRead = false; return read; };
+  data.threwClock = () => { const clocked = threwClock; threwClock = false; return clocked; };
   // What a call that threw watched: its resource watches it too, as the runner's failed ask does.
   data.threwWatches = () => { const w = threwWatches; threwWatches = null; return w; };
   for (const f of data.q.splice(0)) f();

@@ -3,11 +3,13 @@ package dev.exact.canvas
 import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.drawable.ColorDrawable
 import android.graphics.fonts.Font
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
@@ -33,8 +35,10 @@ import java.nio.IntBuffer
 internal class Pane(
     context: Context, private val faces: HashMap<List<Int>, Font>,
     private val touch: (Int, Float, Float) -> Unit, private val key: ((Int) -> Unit)?,
+    private val picture: (Int, Int, Int) -> Bitmap = { id, w, h -> makePicture(id, w, h, false) },
 ) : View(context) {
     private val fonts = HashMap<Int, Font>()
+    private val bitmaps = HashMap<Int, Bitmap>()
     private val player = Player(fonts)
     private var ops: IntBuffer? = null
     private val walker = Structure()
@@ -62,6 +66,7 @@ internal class Pane(
     override fun dispatchHoverEvent(event: MotionEvent): Boolean = access?.hover(event) == true || super.dispatchHoverEvent(event)
 
     init {
+        player.image = { bitmaps[it] }
         // Keys reach the window's focused view: a hardware keyboard's Tab, arrows and Enter go to exact2 from here.
         isFocusable = key != null
         isFocusableInTouchMode = key != null
@@ -71,10 +76,10 @@ internal class Pane(
         }
     }
 
-    /** A new picture of the surface: the faces it announces made (each file's face once, however often a stream
-     * names it), then drawn. */
+    /** A new picture of the surface: the faces and images it announces made, then drawn. */
     fun show(stream: IntBuffer) {
         fonts.clear()
+        val kept = HashMap<Int, Bitmap>()
         var i = 0
         val n = stream.limit()
         while (i < n) {
@@ -84,12 +89,29 @@ internal class Pane(
                 // A face is its file, index, weight and axes: every word of the op but its key.
                 val words = List(end - i - 2) { stream.get(i + 2 + it) }
                 fonts[stream.get(i + 1)] = faces.getOrPut(words) { fontAt(stream, i) }
+            } else if (op == 11) {
+                val id = stream.get(i + 1)
+                val w = stream.get(i + 2)
+                val h = stream.get(i + 3)
+                kept[id] = bitmaps[id] ?: picture(id, w, h)
             }
             i = end
         }
+        for ((id, bmp) in bitmaps) if (kept[id] !== bmp) bmp.recycle()
+        bitmaps.clear()
+        bitmaps.putAll(kept)
         ops = stream
         invalidate()
     }
+
+    /** Release any bitmaps held by this pane when its surface closes or hides. */
+    fun clearBitmaps() {
+        ops = null
+        for (bmp in bitmaps.values) bmp.recycle()
+        bitmaps.clear()
+    }
+
+    var legacyBack: (() -> Unit)? = null
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -140,6 +162,16 @@ internal class Pane(
     }
 }
 
+/** On API 32 and earlier the popup decor calls dismiss for a tracked Back or an outside
+ * touch. Outside touches and our own closes go straight to the window. */
+private class MenuWindow(activity: ExactActivity, private val pane: Pane) : PopupWindow(activity) {
+    override fun dismiss() {
+        val back = pane.legacyBack
+        if (back != null) back() else close()
+    }
+    fun close() = super.dismiss()
+}
+
 /**
  * The top layer's windows (LLP 1115.001 D10). A confirmation and a menu are windows of the platform's own, not a
  * layer painted in the page: an alert is a [Dialog] and a menu a [PopupWindow], the framework's classes and no
@@ -166,6 +198,8 @@ internal class Pane(
  * (`res/anim/exact_menu_*`, `res/values/motion.xml`). The system's animation scale and "remove animations" apply.
  */
 internal class Surfaces(private val activity: ExactActivity, private val root: View) {
+    /** Resolves `IMAGE_DEF` bitmaps for surface panes; wired to the active reader view. */
+    var picture: (Int, Int, Int) -> Bitmap = { id, w, h -> makePicture(id, w, h, false) }
     /** Called when a surface's window comes over the page (true) and when it goes (false): the page under one is
      * inert, and what the page hosts is told so ([Fields.covered]). */
     var covering: (Boolean) -> Unit = {}
@@ -173,7 +207,8 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
     val open: Boolean get() = shown != null
 
     /** One surface as it shows: its window, and whether exact2 already knows it is going. */
-    private class Shown(val serial: Int, val pane: Pane, val dialog: Dialog?, val popup: PopupWindow?) {
+    private class Shown(val serial: Int, val pane: Pane, val dialog: Dialog?, val popup: MenuWindow?, val cancellable: Boolean) {
+        var removeBack: (() -> Unit)? = null
         var quiet = false
         var frame = IntArray(4)
     }
@@ -210,6 +245,7 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
         val radius = java.lang.Float.intBitsToFloat(w[at + 7]); val elevation = java.lang.Float.intBitsToFloat(w[at + 8])
         val now = shown
         if (what == CLOSED) { if (now?.serial == serial) close(now); return }
+        if (activity.moduleOwners?.hasWindow(serial) == false) return
         // One surface at a time: another one's window goes before this one's comes.
         if (now != null && now.serial != serial) close(now)
         val stream = IntBuffer.wrap(w, at + 10, w[at + 9]).slice()
@@ -227,7 +263,7 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
     }
 
     private fun open(serial: Int, what: Int, flags: Int, frame: IntArray, radius: Float, elevation: Float, stream: IntBuffer) {
-        val pane = Pane(activity, faces, { action, x, y -> Exact.surface(serial, action, x, y) }) { key -> Exact.surface(serial, key, 0f, 0f) }
+        val pane = Pane(activity, faces, { action, x, y -> Exact.surface(serial, action, x, y) }, { key -> Exact.surface(serial, key, 0f, 0f) }) { id, w, h -> picture(id, w, h) }
         pane.radius = radius
         if (log) {
             val asked = SystemClock.uptimeMillis() - Exact.touched
@@ -245,7 +281,13 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
             ALERT -> {
                 // The framework's dialog window, with the activity's own dialog theme for its dim and its motion.
                 // Nothing of the theme's is drawn: the window is clear, and the picture is the dialog.
-                val dialog = Dialog(activity)
+                val dialog = object : Dialog(activity) {
+                    @Deprecated("Called for legacy system Back")
+                    override fun onBackPressed() {
+                        val back = pane.legacyBack
+                        if (back != null) back() else @Suppress("DEPRECATION") super.onBackPressed()
+                    }
+                }
                 dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
                 dialog.setContentView(pane, ViewGroup.LayoutParams(frame[2], frame[3]))
                 dialog.window?.let { window ->
@@ -261,13 +303,13 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
                 dialog.setCanceledOnTouchOutside(flags and OUTSIDE_DISMISSES != 0)
                 dialog.setOnCancelListener { dismissed(serial) }
                 known?.headline?.let { dialog.window?.setTitle(it) }
-                Shown(serial, pane, dialog, null).also { dialog.show() }
+                Shown(serial, pane, dialog, null, flags and BACK_DISMISSES != 0).also { dialog.show() }
             }
             MENU -> {
                 // The framework's popup window in the theme's own style; its background is not used. The window
                 // casts the shadow, from the pane's outline. Placed where exact2 says, not dropped from an anchor
                 // view.
-                val popup = PopupWindow(activity)
+                val popup = MenuWindow(activity, pane)
                 popup.setBackgroundDrawable(null)
                 popup.contentView = pane
                 popup.width = frame[2]; popup.height = frame[3]
@@ -283,8 +325,8 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
                 // Focusable: Back goes to it and the page under it takes no touch; a tap outside dismisses it.
                 popup.isFocusable = true
                 popup.isOutsideTouchable = flags and OUTSIDE_DISMISSES != 0
-                pane.escape = { popup.dismiss() }
-                val s = Shown(serial, pane, null, popup)
+                pane.escape = popup::close
+                val s = Shown(serial, pane, null, popup, true)
                 popup.setOnDismissListener { if (!s.quiet) dismissed(serial) }
                 popup.showAtLocation(root, Gravity.LEFT or Gravity.TOP, frame[0], frame[1])
                 s
@@ -293,8 +335,50 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
         }
         made.frame = frame
         shown = made
+        connectBack()
         covering(true)
         pane.requestFocus()
+    }
+
+    fun connectBack() {
+        val s = shown ?: return
+        val owners = activity.moduleOwners ?: return
+        if (!s.cancellable || s.removeBack != null) return
+        if (Build.VERSION.SDK_INT < 33) {
+            s.pane.legacyBack = {
+                Exact.backHandoff?.flush()
+                if (owners.hasWindow(s.serial)) owners.receiveBack() else if (shown === s) close(s)
+            }
+            s.popup?.setTouchInterceptor { decor, event ->
+                val outside = event.action == MotionEvent.ACTION_OUTSIDE || event.action == MotionEvent.ACTION_DOWN &&
+                    (event.x < 0 || event.y < 0 || event.x >= decor.width || event.y >= decor.height)
+                if (outside) s.popup.close()
+                outside
+            }
+        } else {
+            // A popup's decor installs its own callback on attach, before its children attach.
+            if (s.pane.isAttachedToWindow) activity.backSurface(s.pane.findOnBackInvokedDispatcher()) { shown === s && owners.hasWindow(s.serial) }
+            else s.pane.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {
+                    if (shown === s) activity.backSurface(v.findOnBackInvokedDispatcher()) { shown === s && owners.hasWindow(s.serial) }
+                    v.removeOnAttachStateChangeListener(this)
+                }
+                override fun onViewDetachedFromWindow(v: View) {}
+            })
+        }
+        s.removeBack = {
+            s.pane.legacyBack = null
+            if (Build.VERSION.SDK_INT >= 33) activity.backSurface(null)
+        }
+    }
+
+    fun dismissBack(serial: Int): Boolean {
+        val s = shown?.takeIf { it.serial == serial } ?: return false
+        if (s.cancellable) {
+            close(s)
+            dismissed(serial)
+        }
+        return true
     }
 
     /** The same surface again: painted again, and its window moved or sized where its frame is another. */
@@ -314,14 +398,16 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
      * its window goes, and exact2 is told nothing of that. */
     private fun close(s: Shown) {
         s.quiet = true
+        s.removeBack?.invoke()
         if (shown === s) { shown = null; covering(false) }
-        try { s.dialog?.dismiss(); s.popup?.dismiss() } catch (e: RuntimeException) { Log.w(TAG, "surface ${s.serial}: $e") }
+        s.pane.clearBitmaps()
+        try { s.dialog?.dismiss(); s.popup?.close() } catch (e: RuntimeException) { Log.w(TAG, "surface ${s.serial}: $e") }
     }
 
     /** The system dismissed the window by its own rules (Back, Escape, a tap outside a menu): exact2 closes the
      * surface, as its cancel closes it. */
     private fun dismissed(serial: Int) {
-        if (shown?.serial == serial) { shown = null; covering(false) }
+        if (shown?.serial == serial) { shown?.removeBack?.invoke(); shown = null; covering(false) }
         Exact.surface(serial, DISMISSED, 0f, 0f)
     }
 

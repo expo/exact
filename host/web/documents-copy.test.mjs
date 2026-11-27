@@ -164,3 +164,40 @@ chromeTest('a chosen file copied into app:/data reads back from the page store',
     page.stop(true);
   }
 }, 60_000);
+
+test('document writes abort their FileSystemWritableFileStream when getFile, seek, write or close fails', async () => {
+  globalThis.exact = {};
+  try {
+    await import(`./documents-glue.js?abort=${Date.now()}`);
+    const fs = globalThis.exact.documents.files(normalized('fs.read doc:/\nfs.write doc:/'));
+    const bytes = new TextEncoder().encode('data');
+    for (const [op, failAt] of [
+      ['appendFile', 'getFile'],
+      ['appendFile', 'seek'],
+      ['appendFile', 'write'],
+      ['writeFile', 'write'],
+      ['atomicWriteFile', 'close'],
+    ]) {
+      let aborted = 0;
+      const handle = {
+        kind: 'file', name: `${op}-${failAt}.txt`,
+        async queryPermission() { return 'granted'; },
+        async getFile() {
+          if (failAt === 'getFile') throw new DOMException('gone', 'NotFoundError');
+          return new File(['seed'], this.name);
+        },
+        async createWritable() {
+          return {
+            async seek() { if (failAt === 'seek') throw new DOMException('seek failed', 'InvalidStateError'); },
+            async write() { if (failAt === 'write') throw new DOMException('full', 'QuotaExceededError'); },
+            async close() { if (failAt === 'close') throw new DOMException('close failed', 'InvalidStateError'); },
+            async abort() { aborted++; },
+          };
+        },
+      };
+      const path = globalThis.exact.documents.mint(handle);
+      await expect(fs[op](path, bytes)).rejects.toThrow();
+      expect(aborted, `${op}/${failAt}`).toBe(1);
+    }
+  } finally { delete globalThis.exact; }
+});

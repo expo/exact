@@ -452,7 +452,7 @@ impl<'a> Checker<'a> {
                 first,
                 "forma-tuples",
                 format!(
-                    "the axes {} make {tuples} tuples; a design has at most {MAX_TUPLES}",
+                    "{tuples} tuples exceed the limit of {MAX_TUPLES} across the axes {}",
                     named.join(" × ")
                 ),
             );

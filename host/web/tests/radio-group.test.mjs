@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // LLP 1116.004 D5.2 in a real browser: a value chosen from a few is a `radiogroup` of native
 // `radio` buttons, which a default build's stylesheet (look.mjs) draws as a segmented control (a track, the
 // checked radio raised in it) and the input piece (input-glue.js, which both web targets load)
@@ -44,7 +44,9 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 async function inChrome(test) {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/navigation.js' ? 'navigation.js' : 'input-glue.js')));
+    const module = hostFixtureModule(req.url.slice(1));
+    if (module === null) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(module);
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=600,400'] }), { cdp } = suite;

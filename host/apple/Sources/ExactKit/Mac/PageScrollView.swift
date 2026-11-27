@@ -261,6 +261,8 @@ package final class PageScrollView: NSScrollView {
         if verticalScrollElasticity != y { verticalScrollElasticity = y }
     }
     func pinInsets() {
+        // A scroller D14's writer holds is its alone (`ScrollInsetsMac.Claim`)
+        guard ScrollInsetsMac.claim(of: self) == nil else { return }
         if automaticallyAdjustsContentInsets { automaticallyAdjustsContentInsets = false }
         if contentInsets.top != 0 || contentInsets.left != 0 || contentInsets.bottom != 0 || contentInsets.right != 0 {
             contentInsets = NSEdgeInsetsZero
@@ -278,6 +280,7 @@ extension NSScrollView {
     /// viewport are as CSS lays them out. The inset on each side is how far
     /// this view reaches into the window outside `contentLayoutRect`.
     func insetScrollersFromChrome() {
+        guard ScrollInsetsMac.claim(of: self) == nil else { return }
         var insets = NSEdgeInsetsZero
         if let window, window.styleMask.contains(.fullSizeContentView), !isHiddenOrHasHiddenAncestor {
             let safe = convert(window.contentLayoutRect, from: nil), box = bounds

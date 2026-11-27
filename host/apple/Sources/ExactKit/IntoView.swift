@@ -77,7 +77,7 @@ extension Presenter {
     }
 
     /// `given`: the node to align, found by its caller (a fragment's, in its route: `Fragment.swift`).
-    func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
+    package func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
         if given == nil { cancelFragment() }
         guard let name = args.first as? String,
               let target = given ?? views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }),
@@ -303,12 +303,15 @@ extension Presenter {
     }
 
     /// `given`: the node to align, found by its caller (a fragment's, in its route: `Fragment.swift`).
-    func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
+    package func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
         if given == nil { cancelFragment() }
         guard let name = args.first as? String,
               let target = given ?? views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }) else {
             session?.log("scrollIntoView \"\(args.first ?? "")\" refused: no live node with that id")
             return
+        }
+        for case let node as NodeView in sequence(first: target.superview, next: { $0?.superview }) where node.scrollView != nil {
+            node.askedToScroll()
         }
         guard canScrollIntoView(target), !applying else {
             elementScrolls.hold(target, name, args)
@@ -339,7 +342,7 @@ extension Presenter {
         // reveals arrive, and where it is now, in the last of them.
         for (index, sv) in scrollers.enumerated() {
             // A newer request owns the scroller: a position Exact carries for it gives way, instant or animated
-            ((sv as? ScrollView)?.scrollingNode ?? (sv as? GroupedScroller)?.scrollingNode)?.dropCarriedScroll()
+            if let node = (sv as? ScrollView)?.scrollingNode ?? (sv as? GroupedScroller)?.scrollingNode { node.dropCarriedScroll(); node.afterScrollAnimation = nil }
             // The inner ports, weakly, for a destination asked again later.
             let inners = scrollers[..<index].map { inner in { [weak inner] in inner } }
             let projected = projection(target, through: inners.compactMap { $0() }, grouped: grouped, block: block, inline: inline)

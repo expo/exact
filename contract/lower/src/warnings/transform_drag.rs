@@ -77,21 +77,13 @@ impl Element<'_> {
 }
 
 fn rows(tag: &str, attrs: &[Attr], styles: &[StyleDecl]) -> Option<Vec<Attr>> {
-    let unwritten: Vec<_> = crate::tags::tag(tag)?
-        .fixed_styles
-        .iter()
-        .map(|(id, value)| (*id, Expr::Str((*value).into(), Span::default())))
-        .collect();
-    let class = crate::class::rows(
-        attrs,
-        &|name| {
-            styles
-                .iter()
-                .find(|s| s.name == name)
-                .map(|s| s.attrs.as_slice())
-        },
-        &unwritten,
-    )
+    crate::tags::tag(tag)?;
+    let class = crate::class::rows(attrs, &|name| {
+        styles
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.attrs.as_slice())
+    })
     .ok()?
     .map(|(_, rows)| rows)
     .unwrap_or_default();
@@ -307,7 +299,7 @@ impl StaticStyle {
                 self.props.clear(StyleMask::of(id));
                 self.unknown.clear(id);
             } else if self.props.set_dynamic(id, &value).is_ok()
-                && self.props.relative.get(id).is_none()
+                && self.props.relative.get_spec(id).is_none()
             {
                 self.unknown.clear(id);
             }

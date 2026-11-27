@@ -330,6 +330,36 @@ fn a_form_css_refuses_is_not_a_colour() {
     }
 }
 
+/// CSS's white space is a space, a tab or a newline (CSS Syntax 3 §4.2), not
+/// every Unicode space: Chrome 156 drops `rgb(1\u{a0}2\u{a0}3)` and
+/// `\u{a0}red` and reads `rgb(1\r2\x0c3)`.
+#[test]
+fn only_css_white_space_separates_a_colours_words() {
+    for bad in [
+        "rgb(1\u{a0}2\u{a0}3)",
+        "rgb(1 2 3\u{a0}/ 0.5)",
+        "hsl(120\u{a0}50% 50%)",
+        "rgb(1\u{b}2 3)",
+        "color(srgb\u{a0}1 0 0)",
+        "\u{a0}red",
+        "red\u{2003}",
+        "color(--brand 1\u{a0}0 0)",
+    ] {
+        assert_eq!(parse(bad), None, "{bad:?}");
+        assert_eq!(parse_profiled(bad), None, "{bad:?}");
+    }
+    for good in [
+        "rgb(1\t2\n3)",
+        "rgb(1\r2\x0c3)",
+        "\n red \t",
+        "color(\tsrgb\n1 0 0 )",
+        "rgb(1 2 3\t/\n0.5)",
+    ] {
+        assert!(parse(good).is_some(), "{good:?}");
+    }
+    assert!(parse_profiled("color(\t--brand\n1 0 0 )").is_some());
+}
+
 #[test]
 fn the_arithmetic_is_css_colour_4s() {
     // CSS Color 4's sample code: P3 red in linear sRGB.
@@ -829,6 +859,29 @@ fn hwb_whiteness_and_blackness_are_not_clamped_above_100() {
         let [r, g, b] = v;
         assert_eq!(bytes(text), Some(Rgba8 { r, g, b, a: 1.0 }), "{text}");
     }
+}
+
+/// A colour so far out of gamut that its lightness is outside 0 to 1 has a
+/// negative saturation, which hsl takes as the opposite hue and a positive
+/// saturation (CSS Color 4 §7.2's sample code, csswg-drafts#9222); hwb keeps
+/// the hue. Chrome 156: `color-mix(in hsl, color(srgb 1.5 1.2 1.1), blue)` is
+/// `color(srgb 0.816667 0.879167 0.983333)`.
+#[test]
+fn a_negative_saturation_turns_the_hue_half_round() {
+    use MixSpace::*;
+    #[rustfmt::skip]
+    let cases = [
+        ("color(srgb 1.5 1.2 1.1)", "blue", Hsl, [0.816667, 0.879167, 0.983333], 1.0),
+        ("color(srgb 1.5 1.2 1.1)", "hsl(195 50% 50%)", Hsl, [0.841667, 0.929167, 0.958333], 1.0),
+        ("color(srgb -0.5 -0.2 -0.1)", "blue", Hsl, [0.183333, 0.0166667, 0.1625], 1.0),
+        ("color(srgb 1.5 1.2 1.1)", "blue", Hwb, [1.25, 0.55, 1.1625], 1.0),
+    ];
+    chrome_mixes(&cases, 5e-4);
+    let back = Hsl.to_linear_srgb(Hsl.from_linear_srgb([1.5, 1.2, 1.1].map(srgb_to_linear)));
+    assert!(
+        close(back.map(linear_to_srgb), [1.5, 1.2, 1.1], 1e-9),
+        "{back:?}"
+    );
 }
 
 /// `rgb()`, `hsl()` and `hwb()` mix as written (CSS Color 4 §12): unrounded,

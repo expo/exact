@@ -1,7 +1,9 @@
-import { views, ask, shownValue, host, INHERITED_CSS, now, root, iframeLoading, waiting, httpHelpers, loadGpuIfNeeded, heldNamed, loadAfterPaint, stageLoaded, loadStage, agentMode, gpuInPlay, register, seek, postSurface, deferFulfill, documentsGlue, picker, t0, log, readOut, presence, forgettable, writeIn, pageFacts, pageChanged, foldChanged, followOffset, pieces, moduleReady, SETTLE_DEADLINE_MS, mediaAttached, GLIDE_BOUND_MS, collections, settleCandidate } from "../glue.js";
+import { views, ask, shownValue, host, INHERITED_CSS, now, root, iframeLoading, waiting, httpHelpers, loadGpuIfNeeded, heldNamed, loadAfterPaint, stageLoaded, loadStage, agentMode, gpuInPlay, register, seek, postSurface, deferFulfill, documentsGlue, picker, t0, log, readOut, presence, byTicket, writeIn, pageFacts, pageChanged, foldChanged, followOffset, pieces, moduleReady, SETTLE_DEADLINE_MS, mediaAttached, GLIDE_BOUND_MS, collections, settleCandidate } from "../glue.js";
 import { inertAncestor, routeFlags, navigation, environment, preferFold, FOLD_EVENT, preferDisplayMode, foldEnv, typedControl, settleValue } from "../navigation.js";
 import { applyBatch, sendBatch } from "./commit.js";
 import { replacements } from "./boot.js";
+import { loadOnce } from '../load-once.js';
+
 function nodeDetail(id, plan = false) {
   const el = views.get(id);
   if (!el || !el.isConnected) {
@@ -224,10 +226,10 @@ export async function waitForInflight(deadline, includeRequests = false) {
   }
   return true;
 }
-async function settleGpu() {
+async function settleGpu(wakes = false) {
   loadGpuIfNeeded();
   await host.gpuLoading;
-  return await globalThis.exact.gpu?.settled() ?? [];
+  return await globalThis.exact.gpu?.settled(wakes) ?? [];
 }
 function gpuPendingReply(request, pending) {
   const names = pending.map((item) => item.name ?? "GPU work");
@@ -245,11 +247,11 @@ export function agentInputReady() {
   if (host.viewBox) {
     return Promise.resolve();
   }
-  return host.agentInputLoading ??= loadAfterPaint("./agent-input.js", "agentInput").then((helpers) => {
+  return loadOnce(host, "agentInputLoading", () => loadAfterPaint("./agent-input.js", "agentInput").then((helpers) => {
     ({guestOutline: host.guestOutline, guestTap: host.guestTap, guestType: host.guestType, reveal: host.reveal, backButton: host.backButton, viewBox: host.viewBox, textBaseline: host.textBaseline, layoutBoxes: host.layoutBoxes, scrollRange: host.scrollRange, selectAll: host.selectAll, typeControl: host.typeControl, glidesSettled: host.glidesSettled, scrollsSeen: host.scrollsSeen} = helpers);
     helpers.watchGlides?.();
     // a scroller gliding on its own holds `clock settle` (agent-input.js)
-  });
+  }));
 }
 // Synchronous once inspection and the agent's input helpers are ready (LLP 1043.000 D7/D8).
 export function agent(request) {
@@ -339,14 +341,12 @@ function agentReply(request) {
         // The runner's report of the last replacement, with what a waiting one waits for (LLP 1029.000.002 D9).
         const pending = replacements.pending;
         st.replacement = st.replacement || pending ? { ...st.replacement, pending } : null;
-        for (const [c, t] of forgettable) {
-          const s = c.retrying && st.streams?.find((s) => s.ticket === t);
-          if (s) {
-            s.retrying = {
-              attempt: c.retrying.attempt,
-              inMs: Math.max(0, Math.round(c.retrying.at - performance.now())),
-              error: c.retrying.error
-            };
+        for (const stream of st.streams ?? []) {
+          const controller = byTicket.get(stream.ticket);
+          if (controller?.grant) stream.grant = controller.grant;
+          if (controller?.retrying) {
+            const { attempt, at, error } = controller.retrying;
+            stream.retrying = { attempt, inMs: Math.max(0, Math.round(at - performance.now())), error };
           }
         }
         /* a long poll's backoff (LLP 1016.000 D8), which only the page sees */ const faults = globalThis.__exactFaults?.entries;
@@ -788,7 +788,7 @@ async function clock(request) {
     }
     // rows a list shows are built at this clock, before it moves (as the JS agent does): their animations start here
     if (gpuInPlay()) {
-      const pending = await settleGpu();
+      const pending = await settleGpu(true);
       if (pending.length) {
         return gpuPendingReply(request, pending);
       }
@@ -801,7 +801,8 @@ async function clock(request) {
     for (let steps = 0, stops = 0;;) {
       // Deliver each world's record before later timers (LLP 1012, LLP 1046.003).
       const worlds = globalThis.exact.gpu?.clock?.(false), nextTick = worlds?.nextTickAt;
-      const worldAt = worlds?.reply?.world?.length || nextTick > host.agentClock ? Math.min(to, nextTick > host.agentClock ? nextTick : to, host.flowDue > host.agentClock ? host.flowDue : to) : to;
+      let worldAt = worlds?.reply?.world?.length || nextTick > host.agentClock ? Math.min(to, nextTick > host.agentClock ? nextTick : to, host.flowDue > host.agentClock ? host.flowDue : to) : to;
+      if (HAS_PACKAGE_VIEWS && host.packageViews && steps < 4096) worldAt = Math.min(worldAt, Math.max(host.agentClock, host.packageViews.nextDue));
       // while a view declares a layout transition, each due time is a batch of its own, which presence plays from that time (as the native hosts lay out there), in stops apart from the 4096
       const layout = host.flowDue != null && host.flowDue < to && stops < 36e3 && presence.live?.tracking(), sensing = host.wasm.exact_sensor_inputs?.() ? host.agentClock + 1e3 / 60 : Infinity, at = Math.min(layout ? Math.max(host.flowDue, host.agentClock) : to, sensing, worldAt), waited = (host.flowDue != null && host.flowDue <= at || host.flowLanding) && await waitForInflight(deadline) && await mediaAttached(deadline, host.sizes), held = waited && steps < 4096;
       // a canvas the substitute feeds a sensor steps a display frame at a time, that frame's samples handed it first (LLP 1133.013 D6)
@@ -836,7 +837,7 @@ async function clock(request) {
       };
     }
     if (gpuInPlay()) {
-      const pending = await settleGpu();
+      const pending = await settleGpu(true);
       if (pending.length) {
         return gpuPendingReply(request, pending);
       }

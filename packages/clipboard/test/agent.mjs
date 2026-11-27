@@ -33,7 +33,9 @@ for (const host of hosts.length ? hosts : ['web']) {
   try {
     await s.clock('data');
     const supports = (await texts(s)).supports;
-    check(host, 'ClipboardItem.supports answers from the declaration', supports === 'image/png=true text/plain=true text/html=false image/svg+xml=false', supports);
+    check(host, 'ClipboardItem.supports answers from the declaration', supports === 'image/png=true text/plain=true text/html=true image/svg+xml=false', supports);
+    const denied = (await texts(s)).mount;
+    check(host, 'mount cannot read', denied === 'NotAllowedError: clipboard.readText: NotAllowedError: person-required', denied);
     let writes = 0, sha = {};
     for (const [kind, answer, landed] of KINDS) {
       await s.tap(kind);
@@ -43,11 +45,44 @@ for (const host of hosts.length ? hosts : ['web']) {
       const own = (await s.state()).extensions?.clipboard?.implementation ?? {};
       if (landed) writes++;
       check(host, `${kind}: ${landed ? 'lands' : 'leaves the clipboard as it was'}`, own.writes === writes && (!landed || holds(own.lastWrite, landed)), JSON.stringify(own));
+      if (kind === 'html' || kind === 'html-only') {
+        for (const id of ['paste', 'open-url']) {
+          await s.tap(id);
+          await s.clock('data');
+          const result = (await texts(s)).wrote;
+          check(host, `${kind}: ${id} reads only plain text`, result === (kind === 'html' ? 'Plain fallback' : ''), result);
+        }
+      }
+      if (kind === 'both') {
+        for (const [id, expected] of [['paste', 'https://example.com/red.png | png 137 80'], ['open-url', 'https://example.com/red.png'], ['read-pair', 'https://example.com/red.png | https://example.com/red.png']]) {
+          await s.tap(id);
+          await s.clock('data');
+          const seen = (await texts(s)).wrote;
+          check(host, id, seen === expected, seen);
+        }
+        await s.tap('contract-copy');
+        await s.tap('open-url');
+        await s.clock('data');
+        const copied = (await texts(s)).wrote;
+        check(host, 'Contract copy and the package share the private board', copied === 'Contract copy', copied);
+        const called = await s.op({ op: 'call', tool: 'readClipboard', args: '{}', door: 'agent' });
+        await s.clock('data');
+        const denied = (await texts(s)).wrote;
+        check(host, 'tool cannot read after a press', denied === 'NotAllowedError: clipboard.readText: NotAllowedError: person-required', JSON.stringify({ called, denied }));
+      }
       if (landed?.image) sha[kind] = own.lastWrite?.image?.sha256;
     }
     // The sanitized PNG of the red file and of its bytes are the same; the APNG's frame 0 (green) differs from both.
     check(host, 'a path and bytes of one PNG write the same sanitized image', sha.png && sha.png === sha['png-bytes'] && sha.png === sha.both, JSON.stringify(sha));
     check(host, 'the APNG writes frame 0, not its default image', sha.apng && sha.apng !== sha.png, JSON.stringify(sha));
+    await s.tap('expiry');
+    await s.clock('data');
+    const written = (await texts(s)).wrote;
+    check(host, 'a write with a deadline succeeds', written === 'ok expiry', written);
+    await s.tap('open-url');
+    await s.clock('data');
+    const remaining = (await texts(s)).wrote;
+    check(host, 'an elapsed deadline expires an iOS copy', remaining === (host === 'ios' ? '' : 'ephemeral note'), remaining);
     const logs = (await s.logs?.()) ?? '';
     if (logs) check(host, 'the journal names each write and refusal', /clipboard: wrote image\/png 8×8/.test(JSON.stringify(logs)) && /clipboard: write refused: DataError/.test(JSON.stringify(logs)), String(JSON.stringify(logs)).slice(-600));
   } finally {

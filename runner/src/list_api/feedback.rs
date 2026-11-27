@@ -46,7 +46,9 @@ pub struct CollectionFeedback {
     pub cross: f64,
     /// The main-axis padding before the first row and after the last, as
     /// the host laid it out: the room `offset` counts past and the scroll
-    /// range runs into (LLP 1010 §6.9).
+    /// range runs into (LLP 1010 §6.9). Signed: a scroller's content inset
+    /// (LLP 1123 D14) lies in it, and a negative one takes room away, so a
+    /// negative leading padding keeps the port past the first row's start.
     pub padding: [f64; 2],
     /// Mounted data wrappers and both fixed items, when present.
     pub measurements: Vec<RowMeasurement>,
@@ -432,16 +434,12 @@ impl CollectionFeedback {
         if self.view == 0
             || self.focus_view == Some(0)
             || self.interaction_view == Some(0)
-            || !(self.offset.is_finite() && self.offset.abs() <= f32::MAX as f64)
-            || ![
-                self.port_main,
-                self.port_cross,
-                self.cross,
-                self.padding[0],
-                self.padding[1],
-            ]
-            .into_iter()
-            .all(valid)
+            || ![self.offset, self.padding[0], self.padding[1]]
+                .into_iter()
+                .all(|n| n.is_finite() && n.abs() <= f32::MAX as f64)
+            || ![self.port_main, self.port_cross, self.cross]
+                .into_iter()
+                .all(valid)
         {
             return Err(FeedbackError);
         }

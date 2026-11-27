@@ -274,7 +274,7 @@ fn write_validate_domain(w: &mut String, schema: &Schema) {
 /// part's state where it names one; a parameter `accent-color` or a colour
 /// role; each host a fidelity, `: why` after it; one row a pair.
 fn validate_controls(schema: &Schema) {
-    const CONTROLS: [&str; 10] = ["switch", "checkbox", "radio", "range", "progress", "spinner", "select", "button-prominent", "field", "textarea"];
+    const CONTROLS: [&str; 11] = ["switch", "checkbox", "radio", "range", "segmented-group", "progress", "spinner", "select", "button-prominent", "field", "textarea"];
     const STATES: [&str; 5] = ["active", "hover", "focus-visible", "disabled", "checked"];
     let mut seen = BTreeSet::new();
     for [control, parameter, hosts @ ..] in &schema.controls {

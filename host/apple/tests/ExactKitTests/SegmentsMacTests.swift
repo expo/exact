@@ -7,13 +7,13 @@ import XCTest
 /// reports the control's height as its automatic minimum, as on iOS, so an
 /// unsized row of text tabs does not squash the control.
 final class SegmentsMacTests: XCTestCase {
-    func testARIAUnavailableTabStaysOperableInNativeSegments() throws {
+    private func tablist() throws -> (Presenter, NSWindow, NSSegmentedControl) {
         _ = NSApplication.shared
         let p = Presenter()
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
         w.isReleasedWhenClosed = false
         w.contentView = p.viewport
-        defer { p.reset(); w.close() }
+        addTeardownBlock { p.reset(); w.close() }
         p.apply(wireBatch([
             ["op": "create", "id": 10, "kind": "view", "props": ["accessibilityRole": "tablist"]],
             ["op": "create", "id": 11, "kind": "button", "props": ["accessibilityRole": "tab", "testId": "one", "accessibilityDisabled": "true"], "handlers": ["press"]],
@@ -26,7 +26,11 @@ final class SegmentsMacTests: XCTestCase {
             ["op": "roots", "ids": [10]],
             ["op": "frame", "id": 10, "x": 0.0, "y": 0.0, "w": 400.0, "h": 40.0],
         ]))
-        let control = try XCTUnwrap(p.segments.control(of: 10))
+        return (p, w, try XCTUnwrap(p.segments.control(of: 10)))
+    }
+
+    func testARIAUnavailableTabStaysOperableInNativeSegments() throws {
+        let (p, _, control) = try tablist()
         XCTAssertTrue(control.isEnabled(forSegment: 0), "ARIA does not suppress the native action")
         let top = try XCTUnwrap(control.accessibilityChildren() as? [NSObject])
         let children = top.count == 1
@@ -58,6 +62,45 @@ final class SegmentsMacTests: XCTestCase {
         XCTAssertEqual(pressed, [11])
         p.apply(wireBatch([["op": "props", "id": 11, "set": ["accessibilityDisabled": "false"]]]))
         XCTAssertEqual(children[0].accessibilityAttributeValue(.enabled) as? Bool, true, "clearing ARIA restores AXEnabled")
+    }
+
+    func testSegmentBezelFollowsTheGroupsAccent() throws {
+        let (p, w, control) = try tablist()
+        let group = try XCTUnwrap(p.views[10])
+        let light = [48.0, 176, 199, 255], dark = [64.0, 200, 224, 255]
+        w.appearance = NSAppearance(named: .aqua)
+        p.apply(wireBatch([["op": "props", "id": 12, "set": ["accessibilitySelected": "true"]],
+                           ["op": "style", "id": 10, "style": ["accent_color": [light, dark]]]]))
+        XCTAssertEqual(control.selectedSegmentBezelColor, TextEngine.color(light))
+        w.appearance = NSAppearance(named: .darkAqua)
+        group.viewDidChangeEffectiveAppearance()
+        XCTAssertEqual(control.selectedSegmentBezelColor, TextEngine.color(dark))
+        p.apply(wireBatch([["op": "props", "id": 12, "set": ["accessibilitySelected": "false"]],
+                           ["op": "props", "id": 11, "set": ["accessibilitySelected": "true"]]]))
+        XCTAssertEqual(control.selectedSegment, 0)
+        XCTAssertEqual(control.selectedSegmentBezelColor, TextEngine.color(dark))
+        p.apply(wireBatch([["op": "style", "id": 10, "style": [:]]]))
+        XCTAssertNil(control.selectedSegmentBezelColor)
+        p.apply(wireBatch([["op": "style", "id": 10, "style": ["accent_color": light]]]))
+        control.selectedSegmentBezelColor = .systemOrange
+        p.apply(wireBatch([["op": "style", "id": 10, "style": [:]]]))
+        XCTAssertEqual(control.selectedSegmentBezelColor, .systemOrange)
+    }
+
+    func testProjectedGroupsInheritTheParentsAccent() throws {
+        let (p, window, node, act) = try paintedGroups()
+        window.appearance = NSAppearance(named: .aqua)
+        let group = try XCTUnwrap(p.segments.control(of: try node("period").id))
+        let tabs = try XCTUnwrap(p.segments.control(of: try node("tabs").id))
+        let automatic = try XCTUnwrap(p.segments.control(of: try node("pair").id))
+        for control in [group, tabs] {
+            XCTAssertEqual(control.selectedSegmentBezelColor, TextEngine.color([48, 176, 199, 255]))
+        }
+        XCTAssertNil(automatic.selectedSegmentBezelColor)
+        window.appearance = NSAppearance(named: .darkAqua)
+        XCTAssertEqual(group.selectedSegmentBezelColor, TextEngine.color([64, 200, 224, 255]))
+        try act("flip")
+        XCTAssertNil(group.selectedSegmentBezelColor)
     }
 
     func testAppearanceNoneRestoresAuthoredTabsAndTheirActions() throws {

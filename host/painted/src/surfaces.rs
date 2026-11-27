@@ -22,7 +22,7 @@ mod android;
 #[cfg(any(target_os = "android", all(test, unix)))]
 mod android_init;
 #[cfg(target_os = "android")]
-pub(crate) use android_init::bind as bind_application;
+pub(crate) use android_init::{attach as attach_application, bind as bind_application};
 #[cfg(any(target_os = "android", test))]
 mod fingers;
 mod performance;
@@ -46,6 +46,7 @@ mod placed;
 mod shaders;
 mod size;
 mod storage;
+mod wake;
 #[cfg(windows)]
 pub(crate) mod window;
 
@@ -61,6 +62,7 @@ struct Abi {
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,
     device_loaded: bool,
+    wake_registered: bool,
     reduced_motion: std::cell::Cell<Option<bool>>,
     #[cfg(any(target_os = "android", all(test, unix)))]
     initialized: bool,
@@ -133,6 +135,7 @@ impl Abi {
             shaders: Default::default(),
             rendered: std::env::var("EXACT_GPU_RENDER").as_deref() == Ok("1"),
             device_loaded: false,
+            wake_registered: false,
             reduced_motion: std::cell::Cell::new(None),
             #[cfg(any(target_os = "android", all(test, unix)))]
             initialized: false,
@@ -238,8 +241,15 @@ impl Abi {
         if load {
             android::load(&mut abi)?;
         }
-        #[cfg(not(target_os = "android"))]
-        let _ = load;
+        if load {
+            if let Ok(register) = unsafe {
+                abi.library
+                    .get::<unsafe extern "C" fn(Option<extern "C" fn()>)>(b"gpu_on_wake")
+            } {
+                unsafe { register(Some(wake::surface_woken)) };
+                abi.wake_registered = true;
+            }
+        }
         Ok(abi)
     }
 
@@ -369,6 +379,14 @@ impl Drop for Abi {
         #[cfg(any(target_os = "android", all(test, unix)))]
         if !self.initialized {
             return;
+        }
+        if self.wake_registered {
+            if let Ok(register) = unsafe {
+                self.library
+                    .get::<unsafe extern "C" fn(Option<extern "C" fn()>)>(b"gpu_on_wake")
+            } {
+                unsafe { register(None) };
+            }
         }
         // A missing symbol can occur during validation of an older artifact.
         if let Ok(unload) = unsafe { self.library.get::<unsafe extern "C" fn()>(b"gpu_unload") } {
@@ -640,6 +658,11 @@ impl Surfaces {
 
     pub(crate) fn take_outcomes(&mut self) -> Vec<(u64, Outcome)> {
         std::mem::take(&mut self.outcomes)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn has_pending_requests(&self) -> bool {
+        !self.captures.is_empty() || !self.work.is_empty() || !self.outcomes.is_empty()
     }
 
     fn sync<D: DataSource>(

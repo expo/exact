@@ -135,7 +135,7 @@ fn append(
                     // Its bytes are the stream's own bound, beside the reservation.
                     bytes: 0,
                     message: true,
-                    stream: true,
+                    stream: Some(crate::StreamKind::Network),
                     light: false,
                     again: false,
                     reply: false,

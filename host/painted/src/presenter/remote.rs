@@ -219,7 +219,7 @@ impl<D: DataSource> Presenter<D> {
         if !self.remote() {
             return None;
         }
-        (self.shortcut_buttons("Escape").into_iter()).find(|&id| {
+        (self.shortcut_buttons("Escape", "Escape").into_iter()).find(|&id| {
             (self.host.kernel().node(id))
                 .is_some_and(|n| n.props.bool(PropId::Disabled) != Some(true))
                 && ((self.host.route_visibility(id) == (false, false) && self.box_of(id).is_some())

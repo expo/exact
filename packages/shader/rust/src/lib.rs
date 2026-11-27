@@ -362,6 +362,11 @@ impl Surface for Shader {
             picture.uniform = None;
             picture.generation = 0;
         }
+        if let Some(name) = self.state.pending_asset() {
+            if !self.changes.requests.iter().any(|r| r == name) {
+                self.changes.requests.push(name.to_string());
+            }
+        }
         self.state.generation += 1;
     }
 

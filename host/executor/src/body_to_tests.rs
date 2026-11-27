@@ -140,11 +140,22 @@ impl Files {
     pub(in super::super) fn roots(&self) -> [std::path::PathBuf; 3] {
         ["data", "cache", "tmp"].map(|dir| self.0.join(dir))
     }
-    /// The names in `app:/cache`: no staging file is left behind.
+    /// The names in `app:/cache`, and any file a launch's staging directory
+    /// still holds: no staging file is left behind.
     pub(in super::super) fn cache(&self) -> Vec<String> {
-        let mut names: Vec<_> = std::fs::read_dir(self.0.join("cache"))
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
+        let names = |dir: std::path::PathBuf| -> Vec<String> {
+            let entries = std::fs::read_dir(dir).into_iter().flatten();
+            let names = entries.map(|e| e.unwrap().file_name().into_string().unwrap());
+            names.filter(|name| name != ".lock").collect()
+        };
+        let staging = self.0.join("cache/.exact-staging");
+        let mut names: Vec<_> = (names(self.0.join("cache")).into_iter())
+            .filter(|name| name != ".exact-staging")
+            .chain(
+                names(staging.clone())
+                    .into_iter()
+                    .flat_map(|launch| names(staging.join(launch))),
+            )
             .collect();
         names.sort();
         names
@@ -673,8 +684,11 @@ fn a_ceiling_open_streams_leave_no_room_for_is_refused_when_made() {
     core.run(job(1, stream), None).unwrap();
     fixture.wait_held(1);
     let read = |ceiling| Request::get("https://example.test/read").independent_http(ceiling);
-    let refused = core.run(job(2, read(64 << 20)), None).unwrap_err();
-    assert!(refused.contains("held by open streams"), "{refused}");
+    let request = read(64 << 20);
+    let needed = reservation(&request).unwrap().2;
+    let held = core.shared.state.lock().unwrap().running[0].charge;
+    let refused = core.run(job(2, request), None).unwrap_err();
+    assert_eq!(refused, format!("This response needs {needed} bytes and open streams hold {held} bytes (maximum {} bytes for independent requests)", BYTES[1]));
     core.run(job(3, read(48 << 20)), None).unwrap();
     let outcomes = collect(&core, &woke, 1);
     assert!(
@@ -749,7 +763,7 @@ fn a_queued_read_crowded_out_by_a_later_stream_is_refused() {
         let outcomes = collect(&core, &woke, 1);
         assert!(
             matches!(&outcomes[0], (2, Outcome::Failed { kind: FailureKind::Refused, message })
-                if message == "native response ceiling exceeds the lane budget held by open streams"),
+                if message.contains("bytes and open streams hold")),
             "{outcomes:?}"
         );
 
@@ -767,7 +781,7 @@ fn a_queued_read_crowded_out_by_a_later_stream_is_refused() {
         {
             let state = core.shared.state.lock().unwrap();
             assert_eq!(state.counts, [0, 2]);
-            assert_eq!(state.streams, 1);
+            assert_eq!(state.streams.len(), 1);
             assert_eq!(
                 state.bytes[1],
                 state.running.iter().map(|r| r.charge).sum::<usize>()
@@ -795,7 +809,7 @@ fn a_queued_read_crowded_out_by_a_later_stream_is_refused() {
         let state = core.shared.state.lock().unwrap();
         assert_eq!(state.counts, [0, 0]);
         assert_eq!(state.bytes, [0, 0]);
-        assert_eq!(state.streams, 0);
+        assert_eq!(state.streams.len(), 0);
     }
 }
 
@@ -872,12 +886,12 @@ fn an_upload_reserving_room_wakes_queued_reads_before_its_first_event() {
             let outcomes = collect(&core, &woke, 1);
             assert!(
                 matches!(&outcomes[0], (2, Outcome::Failed { kind: FailureKind::Refused, message })
-                    if message == "native response ceiling exceeds the lane budget held by open streams"),
+                    if message.contains("bytes and open streams hold")),
                 "{outcomes:?}"
             );
             let state = core.shared.state.lock().unwrap();
             assert_eq!(state.counts, [0, 2]);
-            assert_eq!(state.streams, 1);
+            assert_eq!(state.streams.len(), 1);
             assert_eq!(
                 state.bytes[1],
                 state.running.iter().map(|r| r.charge).sum::<usize>()
@@ -913,6 +927,6 @@ fn an_upload_reserving_room_wakes_queued_reads_before_its_first_event() {
         let state = core.shared.state.lock().unwrap();
         assert_eq!(state.counts, [0, 0]);
         assert_eq!(state.bytes, [0, 0]);
-        assert_eq!(state.streams, 0);
+        assert_eq!(state.streams.len(), 0);
     }
 }

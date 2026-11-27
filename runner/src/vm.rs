@@ -404,6 +404,8 @@ pub struct Accounting {
 /// them. A string read twice is the same object, inline text or one shared
 /// allocation, never a fresh one.
 pub struct Strings {
+    /// Host notation for strings this VM formats, fixed before the first settlement.
+    keyboard: crate::page::Keyboard,
     cells: Vec<std::cell::OnceCell<Value>>,
     constants: Option<std::sync::Arc<Constants>>,
 }
@@ -413,6 +415,7 @@ impl Strings {
     pub fn new(plan: &Plan) -> Strings {
         let cells = (0..plan.strings.len()).map(|_| std::cell::OnceCell::new());
         Strings {
+            keyboard: crate::page::Platform::at_boot().keyboard(),
             cells: cells.collect(),
             constants: None,
         }
@@ -429,6 +432,7 @@ impl Strings {
     /// or holding what is not text).
     pub fn of(values: impl IntoIterator<Item = Value>) -> Strings {
         Strings {
+            keyboard: crate::page::Keyboard::Unknown,
             cells: values.into_iter().map(std::cell::OnceCell::from).collect(),
             constants: None,
         }
@@ -668,6 +672,18 @@ fn projected_string_default(code: &[u8], env: &Env<'_>, value: &Value) -> Option
     }
 }
 
+/// Observe the loads executed by one binding, including an at-read derive.
+pub(crate) fn observe_reads(code: &[u8], env: &Env<'_>, observer: ReadObserver<'_>) {
+    let _ = eval_machine_main::<true, _>(
+        code,
+        env,
+        &[],
+        &mut Scratch::default(),
+        Some(observer),
+        |_| (),
+    );
+}
+
 // The general interpreter remains the oracle for a projected row field.
 fn eval_machine(
     code: &[u8],
@@ -675,7 +691,7 @@ fn eval_machine(
     allowed_writes: &[u32],
     scratch: &mut Scratch,
 ) -> Result<Outcome, Trap> {
-    eval_machine_main::<false, _>(code, env, allowed_writes, scratch, |_| ()).0
+    eval_machine_main::<false, _>(code, env, allowed_writes, scratch, None, |_| ()).0
 }
 
 fn eval_machine_accounted(
@@ -684,7 +700,7 @@ fn eval_machine_accounted(
     allowed_writes: &[u32],
     scratch: &mut Scratch,
 ) -> (Result<Outcome, Trap>, Accounting) {
-    eval_machine_main::<false, _>(code, env, allowed_writes, scratch, |run| Accounting {
+    eval_machine_main::<false, _>(code, env, allowed_writes, scratch, None, |run| Accounting {
         calls: run.calls,
         list_steps: run.steps,
         call_depth: run.depth,
@@ -693,16 +709,20 @@ fn eval_machine_accounted(
 
 // The generic capture is unit on the ordinary path, so that instantiation
 // neither constructs an Accounting nor reads the counters after evaluation.
+type ReadObserver<'a> = &'a dyn Fn(&Env<'_>, &Instruction);
+
 fn eval_machine_main<const CONSTANT: bool, R>(
     code: &[u8],
     env: &Env<'_>,
     allowed_writes: &[u32],
     scratch: &mut Scratch,
+    observer: Option<ReadObserver<'_>>,
     capture: impl FnOnce(&Run<'_, '_, CONSTANT>) -> R,
 ) -> (Result<Outcome, Trap>, R) {
     let mut run = Run::<CONSTANT> {
         env,
         code,
+        observer,
         allowed_writes,
         constants: env.strings.constants.as_deref().and_then(|pool| {
             let base = code
@@ -885,6 +905,7 @@ impl Val for Value {
 /// One evaluation's environment, effects and bounds: the machine's host.
 struct Run<'e, 'a, const CONSTANT: bool> {
     env: &'e Env<'a>,
+    observer: Option<ReadObserver<'e>>,
     code: &'e [u8],
     allowed_writes: &'e [u32],
     /// Where the last instruction was read up to.
@@ -903,6 +924,14 @@ impl<const CONSTANT: bool> Run<'_, '_, CONSTANT> {
     #[inline]
     fn fetch_instruction(&mut self, pos: usize) -> Result<Option<(Instruction, usize)>, Trap> {
         let found = self.decode_instruction(pos)?;
+        if CONSTANT {
+            if let Some(observer) = self.observer {
+                if let Some((ins, _)) = &found {
+                    observer(self.env, ins);
+                }
+                return Ok(found);
+            }
+        }
         let read = if CONSTANT {
             found
                 .as_ref()
@@ -1003,6 +1032,7 @@ impl<const CONSTANT: bool> Host<Value> for Run<'_, '_, CONSTANT> {
             let code = env.plan.code(row.body);
             let mut nested = Run::<CONSTANT> {
                 env: &nested_env,
+                observer: self.observer,
                 code,
                 allowed_writes: &[],
                 constants: env
@@ -1236,6 +1266,18 @@ impl<const CONSTANT: bool> Host<Value> for Run<'_, '_, CONSTANT> {
             return Ok(v);
         }
         let env = self.env;
+        // Like the implicit locale of a localized formatter, the keyboard is
+        // supplied by the VM. It is never a platform value in the Contract.
+        let shortcut_args;
+        let call_args = if f == Stdlib::FormatShortcut {
+            shortcut_args = [
+                call_args[0].clone(),
+                Value::Number(env.strings.keyboard as u8 as f64),
+            ];
+            &shortcut_args[..]
+        } else {
+            call_args
+        };
         stdlib::call(
             f,
             call_args,

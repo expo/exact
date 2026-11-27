@@ -126,10 +126,6 @@ impl Lowerer<'_> {
         span: Span,
         scope: &Scope,
     ) -> Result<(), LowerError> {
-        // Reorder is a collection's (LLP 1010 §6, LLP 1043.000): every host
-        // drags only a virtualized list's measured rows, so anywhere else
-        // `reorderdrop` would never fire, on any host (the weather diary's
-        // F1 met it as the web build's refusal).
         let virtualized = tag == "list"
             && attrs
                 .iter()
@@ -156,11 +152,44 @@ impl Lowerer<'_> {
             self.check_kept_keys(keep, children, scope)?;
         }
         if let Some(reorder) = attrs.iter().find(|a| a.name == "reorderdrop") {
-            if !virtualized {
-                return err("lower-reorder-collection", format!("`reorderdrop` reorders a virtualized list's rows, and every host drags only those: write `list virtualized=true` with one `for`, and give each row a handle with `reorderFor` naming the list's `id`; on {} it would never fire", if tag == "list" { "a list that is not virtualized".to_string() } else { format!("`{tag}`") }), reorder.span);
+            if !virtualized && !(tag == "list" && literal(attrs, "listStyle").is_some()) {
+                return err("lower-reorder-collection", format!("`reorderdrop` needs a vertical virtualized list or a grouped settings list. On `{tag}`, write `list virtualized=true` with one keyed `for`, or `list appearance=\"auto\"` with sections; name the list's id with `reorderFor`"), reorder.span);
+            }
+            let layout = self.with_class_rows(attrs);
+            let display = literal(&layout, "display");
+            let horizontal = matches!(display.and_then(string), Some("flex" | "inline-flex"))
+                && literal(&layout, "flex-direction").and_then(string) != Some("column");
+            if !virtualized
+                && (display
+                    .is_some_and(|a| matches!(string(a), None | Some("grid" | "inline-grid")))
+                    || horizontal)
+            {
+                return err(
+                    "lower-collection-reorder",
+                    "reordering a grouped list needs vertical sections in block flow",
+                    reorder.span,
+                );
             }
         }
-        self.check_group(virtualized, attrs, children, scope)?;
+        if tag == "list" {
+            for child in Node::walk(children) {
+                if let Node::Element {
+                    tag, attrs: inner, ..
+                } = child
+                {
+                    if tag == "list"
+                        && (literal(attrs, "listStyle").is_some()
+                            && literal(attrs, "reorderdrop").is_some()
+                            || literal(inner, "reorderdrop").is_some()
+                                && crate::grouped::style(tag, &self.with_class_rows(inner))?
+                                    .is_some())
+                    {
+                        return err("lower-collection-reorder", "reordering a grouped list is confined to a single list; move the nested list outside it", child.span());
+                    }
+                }
+            }
+        }
+        self.check_group(tag, virtualized, attrs, children, scope)?;
         let Some(opt) = attrs.iter().find(|a| a.name == "virtualized") else {
             return Ok(());
         };
@@ -270,9 +299,11 @@ impl Lowerer<'_> {
     /// so each takes the drop (`reorderdrop`), is named by its `id` in the
     /// drop's `ReorderEvent`, and keys its rows by strings, the keys a row
     /// carries from one list to another. A row list and a nested list are
-    /// refused by their own reorder rules (LLP 1094 §7).
+    /// refused by their own reorder rules, and a grouped list, which builds
+    /// every row and reorders within itself, joins none (LLP 1094 §7).
     fn check_group(
         &self,
+        tag: &str,
         virtualized: bool,
         attrs: &[Attr],
         children: &[Node],
@@ -289,6 +320,10 @@ impl Lowerer<'_> {
             return Ok(());
         };
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
+        // Its repair is not `virtualized=true`, which a grouped list refuses too
+        if let Ok(Some(_)) = crate::grouped::style(tag, &self.with_class_rows(attrs)) {
+            return err("lower-reorder-group", "a grouped list's rows move only within it, so it joins no `reorderGroup`: remove `reorderGroup`, or, for rows that move between lists, give up the grouping: write `list appearance=\"none\" virtualized=true` without `listStyle`, its sections flattened into one keyed `for` directly in the list", group.span);
+        }
         if !virtualized || !has("reorderdrop") || !has("id") {
             return err("lower-reorder-group", "`reorderGroup` joins lists that take a drop: give this `list virtualized=true` a `reorderdrop` and an `id`", group.span);
         }

@@ -2,10 +2,11 @@
 import AppKit
 
 extension Presenter {
-    func orderChildren(_ children: [NodeView], in container: NSView) {
+    func orderChildren(_ children: [NodeView], in container: NSView, leaving: Set<UInt32>? = nil) {
         // Detaching a retained child clears AppKit's first responder. Sort
         // in place; a flight's slot stands for its lifted child (LLP 1013.000).
-        // Exit ghosts keep their slots among both live and flying children.
+        // Exit ghosts and held/leaving subtrees keep their slots rather than
+        // forcing AppKit to reorder large retiring subtrees at the reveal.
         let wanted = Set(children.map(ObjectIdentifier.init))
         let current = container.subviews
         var ordered: [NSView] = children.compactMap { child in
@@ -15,13 +16,17 @@ extension Presenter {
         }
         let placed = Set(ordered.map(ObjectIdentifier.init))
         let peers = current.filter { $0 is NodeView || $0 is FlightSlot }
-        for (index, child) in peers.enumerated() where !placed.contains(ObjectIdentifier(child)) &&
-            ((child as? NodeView)?.paintGhost == true || child is FlightSlot) {
-            ordered.insert(child, at: min(index, ordered.count))
+        func keepsSlot(_ node: NodeView) -> Bool {
+            node.paintGhost || node.held || leaving?.contains(node.id) == true
         }
-        let leaving = current.filter { ($0 as? NodeView).map { !$0.paintGhost } ?? false && !wanted.contains(ObjectIdentifier($0)) }
+        for (index, child) in peers.enumerated() where !placed.contains(ObjectIdentifier(child)) {
+            if child is FlightSlot || (child as? NodeView).map(keepsSlot) == true {
+                ordered.insert(child, at: min(index, ordered.count))
+            }
+        }
+        let trailing = current.filter { ($0 as? NodeView).map { !keepsSlot($0) } == true && !wanted.contains(ObjectIdentifier($0)) }
         let native = current.filter { !($0 is NodeView) && !($0 is FlightSlot) }
-        ordered = native.filter { !($0 is DataTableScrollView) } + ordered + leaving + native.filter { $0 is DataTableScrollView }
+        ordered = native.filter { !($0 is DataTableScrollView) } + ordered + trailing + native.filter { $0 is DataTableScrollView }
         guard !ordered.elementsEqual(current, by: { $0 === $1 }) else { return }
         var ranks = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
         withUnsafeMutablePointer(to: &ranks) { context in

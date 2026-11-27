@@ -63,8 +63,9 @@ class OwnerBackgroundTest {
             var scrollStatement: IntArray? = null
             val samples = ArrayList<Float>()
             val touches = ArrayList<Triple<Int, Float, Long>>()
-            @JvmStatic @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long) {
+            @JvmStatic @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long): IntArray? {
                 touches.add(Triple(action, y, at))
+                return null
             }
             fun statement() = intArrayOf(
                 scrollScale.toBits(), 1, 2 or 4 or 8, 0,
@@ -103,6 +104,24 @@ class OwnerBackgroundTest {
         }
     }
 
+    @Test fun anOwnerlessMoveEchoLeavesTheNextTurnToTheScrollStep() {
+        val activity = Robolectric.buildActivity(Activity::class.java).get()
+        val view = ExactView(activity, false) {}
+        val paused = ShadowChoreographer.isPaused()
+        ShadowChoreographer.setPaused(true)
+        Host.frameDemand = true
+        try {
+            Host.paint = ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply { putInt(22); putInt(0); rewind() }
+            view.pump(vsync = true)
+            assertFalse(getField<Boolean>(view, "turnPosted"))
+            view.step()
+            assertTrue(getField<Boolean>(view, "turnPosted"))
+        } finally {
+            Host.frameDemand = false
+            ShadowChoreographer.setPaused(paused)
+        }
+    }
+
     @Test fun aStepThatOnlyMovesMakesNoFrameAndStillDoesWhatFollowsOne() {
         // The turn the move posts runs only when this test moves the clock. Unpaused, Robolectric delivers a vsync
         // the moment one is asked for, so the turn could run, and run again while a frame is demanded, before the
@@ -119,7 +138,7 @@ class OwnerBackgroundTest {
         val chrome = ArrayList<Int>()
         val requests = ArrayList<Int>()
         owner.chrome = { chrome += it[0] }
-        owner.asked = { requests += it[0] }
+        owner.asked = { words, _ -> requests += words[0] }
         try {
             val frames = Host.frames
             owner.ask {
@@ -249,6 +268,62 @@ class OwnerBackgroundTest {
 
     @Test
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun aMoveAfterAGroupUpdateKeepsTheRootDrawing() = withOwner { owner ->
+        val activity = Robolectric.buildActivity(Activity::class.java).get()
+        val view = ExactView(activity, false) {}
+        view.owner = owner
+        view.ownerStarted(true)
+        var ticks = 0
+        view.ticker = object : android.view.View(activity) { override fun invalidate() { ticks++ } }
+        val player = getField<Player>(view, "main")
+        var field = RenderNode("search")
+        player.native = { field }
+        fun paint(outside: Int, inside: Int): IntArray {
+            fun rect(color: Int) = intArrayOf(2, color, 0, 0, 32f.toBits(), 32f.toBits()) + IntArray(8)
+            val search = intArrayOf(28, 1, 4, 0, 0, 32f.toBits(), 32f.toBits()) + IntArray(9)
+            return search + rect(outside) + intArrayOf(20, 7) + rect(inside) + intArrayOf(17, 42, 0, 0, 21)
+        }
+        fun queue(words: IntArray) {
+            owner.queue.add(Owner.Pub(0, java.nio.IntBuffer.wrap(words), words[0] == 22, 0, 7, null, null, null, null))
+        }
+        val move = intArrayOf(22, 1, 7, 0, (-10f).toBits())
+        queue(paint(-1, -1))
+        assertTrue(view.publish())
+        val root = RenderNode("page")
+        view.draw(root.beginRecording(64, 64))
+        root.endRecording()
+        val group = checkNotNull(view.group(7))
+        val shadow = shadowOf(view)
+        shadow.clearWasInvalidated()
+        ticks = 0
+        queue(paint(-1, 0))
+        queue(move)
+        assertTrue(view.publish())
+        assertEquals("the retained group requests a frame through the ticker", 1, ticks)
+        assertEquals(-10f, group.translationY, 0f)
+        assertFalse(shadow.wasInvalidated())
+        var rowDraws = 0
+        val row = player.row
+        player.row = { id -> rowDraws++; row(id) }
+        queue(paint(0, 0))
+        queue(paint(0, -1))
+        queue(move)
+        assertTrue(view.publish())
+        assertTrue("changed content outside the group invalidates the view", shadow.wasInvalidated())
+        assertEquals(1, ticks)
+        assertEquals("the changed group waits for that root recording", 0, rowDraws)
+        view.draw(root.beginRecording(64, 64))
+        root.endRecording()
+        assertEquals(1, rowDraws)
+        shadow.clearWasInvalidated()
+        field = RenderNode("replacement search")
+        queue(paint(0, -1))
+        assertTrue(view.publish())
+        assertTrue("a replacement field at the same ID changes the root", shadow.wasInvalidated())
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun twoMovesInOneOwnerDrainKeepThePredictedPixel() = withOwner { owner ->
         val activity = Robolectric.buildActivity(Activity::class.java).get()
         val reader = ScrollReader(activity, owner, 2.625f, 0.1875f, 0f)
@@ -293,7 +368,7 @@ class OwnerBackgroundTest {
         val calls = ArrayList<String>()
         val landscape = intArrayOf(Requests.ORIENTATION, 0, 5, 1, 0b1100, 0, 0, 0)
         owner.chrome = { calls += "chrome ${it[0]}" }
-        owner.asked = { assertArrayEquals(landscape, it); calls += "orientation" }
+        owner.asked = { words, _ -> assertArrayEquals(landscape, words); calls += "orientation" }
         withMainSyncBarrier {
             assertTrue(owner.boot(64, 64, 1f, "", "", false, started = {
                 turn(1)
@@ -327,7 +402,7 @@ class OwnerBackgroundTest {
         val alert = intArrayOf(Requests.SURFACE, 0, 10, 1, Surfaces.ALERT, 0, 0, 0, 64, 64, 0, 0, 0)
         owner.published = { calls += "published" }
         owner.chrome = { calls += "chrome ${it[0]}" }
-        owner.asked = { assertArrayEquals(alert, it); calls += "alert" }
+        owner.asked = { words, _ -> assertArrayEquals(alert, words); calls += "alert" }
         assertTrue(owner.boot(64, 64, 1f, "", "", false) {})
         owner.ask { }
         main.idle()

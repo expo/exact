@@ -121,6 +121,7 @@ final class MIDIHub {
         outputs.removeAll { $0.output == nil || $0.output === output }
         outputs.append(Weak(output))
         if let ports { output.reported(ports) }
+        else if handle == nil { output.reported("{\"state\":\"unavailable\"}") }
         listen()
     }
 
@@ -263,6 +264,8 @@ final class MIDIOutput: AudioOutputting {
         if payload["boot"] as? Bool == true {
             for id in ids.values { hub?.op(3, id, 0, 0, []) }
             ids = [:]
+            (open, clock) = ([], [])
+            hub?.listen()
         }
         for op in payload["ops"] as? [[String: Any]] ?? [] {
             let id = UInt64((op["id"] as? NSNumber)?.int64Value ?? 0)
@@ -275,7 +278,8 @@ final class MIDIOutput: AudioOutputting {
                     deliver("{\"ports\":{\"state\":\"unavailable\"}}")
                     continue
                 }
-                if hub == nil { hub = MIDIHub.shared(library); hub?.join(self) }
+                if hub == nil { hub = MIDIHub.shared(library) }
+                hub?.join(self)
             case "send":
                 guard let hub, let output = op["output"] as? String, let uid = Int32(output) else { continue }
                 let at = (op["at"] as? NSNumber)?.doubleValue ?? 0

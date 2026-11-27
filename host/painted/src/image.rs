@@ -249,6 +249,8 @@ pub struct Images {
     pub bitmaps: BTreeMap<ViewId, Arc<Bitmap>>,
     /// Images presented outside the page, at their requested device-pixel side.
     pub(crate) status_sizes: BTreeMap<ViewId, u32>,
+    /// Active top-bar badge picture nodes and their requested square pixel size and `object-fit`.
+    pub(crate) bar_sizes: BTreeMap<ViewId, (u32, exact_kernel::ObjectFit)>,
     /// Current loaded views and NATURAL pixel sizes; never traversal history.
     pub loaded: Vec<(String, (u32, u32))>,
     /// The views whose source's first picture has landed since the presenter
@@ -317,6 +319,7 @@ impl Images {
             views: BTreeMap::new(),
             bitmaps: BTreeMap::new(),
             status_sizes: BTreeMap::new(),
+            bar_sizes: BTreeMap::new(),
             loaded: Vec::new(),
             load_events: Vec::new(),
             boot_visible_only: false,
@@ -501,6 +504,15 @@ impl Images {
                 view.desired = (*side as f32, *side as f32);
                 view.fit = Some(exact_kernel::ObjectFit::Contain);
                 view.object_fit = exact_kernel::ObjectFit::Contain;
+            }
+            if let Some((side, fit)) = self.bar_sizes.get(id) {
+                view.desired = (*side as f32, *side as f32);
+                // Keep whole-image decoding when object-position shifts the crop
+                // off center so painting can sample the requested edge.
+                view.fit = (!shared
+                    && node.style.object_position == exact_kernel::object::Position::default())
+                .then_some(*fit);
+                view.object_fit = *fit;
             }
             // LLP 1011 §3: a symbol is a font-relative box no file fills (the
             // paint walk strokes a portable role's path into it, `symbol`),
@@ -906,8 +918,10 @@ impl Images {
                         continue;
                     }
                     Some(RequestStatus::WaitingBudget) => {
+                        // Once the decodes in flight land it may fit, at the
+                        // size it asked for: only what views hold shrinks it.
                         admission_budget =
-                            admission_budget.min(self.backend.session.available_bytes());
+                            admission_budget.min(self.backend.session.unheld_bytes());
                         let smaller = plan_view(header, view, scale, admission_budget);
                         if smaller.as_ref().is_ok_and(|p| p.pixels != pixels) {
                             self.backend.cancel(request);
@@ -983,15 +997,16 @@ impl Images {
                         generation: self.generation,
                         pixels: decode.pixels,
                         variant: decode.storage(),
-                        crop: decode.crop,
+                        crop: if header.is_svg() {
+                            svg_picture::scale_crop(scale)
+                        } else {
+                            decode.crop
+                        },
                     },
                     metadata: header.metadata,
                     cost: decode.cost,
                     priority: Priority::Visible,
                 };
-                if header.is_svg() {
-                    self.backend.note_scale(source, decode.pixels, scale);
-                }
                 match self.backend.request(demand, false) {
                     Ok(request) => {
                         #[cfg(target_os = "macos")]
@@ -1253,6 +1268,7 @@ impl Images {
         self.package = std::mem::take(&mut self.package).reset();
         self.bitmaps.clear();
         self.status_sizes.clear();
+        self.bar_sizes.clear();
         self.loaded.clear();
         self.load_events.clear();
         self.generation = self.backend.generation();
@@ -1420,7 +1436,11 @@ fn plain_box(style: &exact_kernel::StyleProps) -> bool {
 fn resize_changes_view(header: png_decode::Header, view: &View, scale: f32) -> bool {
     let (previous, next) = (view.requested_for, view.desired);
     if header.is_svg() {
-        return svg_picture::resize_changes(header, svg_ask(view, scale), previous, next);
+        let prev_ask = svg_picture::Ask {
+            fit: view.requested_fit,
+            scale: view.requested_scale,
+        };
+        return svg_picture::resize_changes(header, prev_ask, previous, svg_ask(view, scale), next);
     }
     if view.rendering != view.requested_rendering {
         return true;

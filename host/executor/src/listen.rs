@@ -55,14 +55,15 @@ extern "C" {
     fn dlsym(handle: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
     fn dlerror() -> *const std::ffi::c_char;
 }
+#[cfg(unix)]
 const RTLD_NOW: i32 = 2;
 #[cfg(target_vendor = "apple")]
 const RTLD_LOCAL: i32 = 4;
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 const RTLD_LOCAL: i32 = 0;
 #[cfg(target_vendor = "apple")]
 const LIBRARY: &str = "libexact_listen.dylib";
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 const LIBRARY: &str = "libexact_listen.so";
 
 /// The module, opened at the first listener; why not, when it is absent.
@@ -379,7 +380,7 @@ fn queue(shared: &Shared, ticket: u64, message: Message, bounded: bool) -> u32 {
         outcome: Outcome::Message(message),
         bytes: 0,
         message: true,
-        stream: true,
+        stream: Some(crate::StreamKind::Network),
         light: false,
         again: false,
         reply: false,

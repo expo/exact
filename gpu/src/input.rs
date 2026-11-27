@@ -244,14 +244,40 @@ impl crate::Module {
         true
     }
 
+    /// Whether a canvas has something to render: inputs it has not shown.
+    pub fn dirty(&self, id: u32) -> bool {
+        self.has_device(id)
+            && self.instances.get(&id).is_some_and(|i| {
+                i.dirty || i.input_dirty || i.wake_dirty() || i.surface.preparing()
+            })
+    }
+
+    /// Whether canvas `id` has pending work aside from an asynchronous
+    /// [`SurfaceWaker::wake`](crate::SurfaceWaker::wake).
+    pub fn dirty_without_wake(&self, id: u32) -> bool {
+        self.has_device(id)
+            && self
+                .instances
+                .get(&id)
+                .is_some_and(|i| i.dirty || i.input_dirty || i.surface.preparing())
+    }
+
     /// A painted display needs a callback for a requested frame, a change or
     /// output from its last tick that the host still has to deliver.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn frame_pending(&self, id: u32) -> bool {
         self.instances.get(&id).is_some_and(|i| {
-            self.seekable
-                || i.dirty
+            #[cfg(windows)]
+            let unpresented = self
+                .window
+                .as_ref()
+                .is_some_and(|w| w.canvas == id && w.rested.is_none());
+            #[cfg(not(windows))]
+            let unpresented = false;
+            i.dirty
                 || i.input_dirty
+                || i.wake_dirty()
+                || unpresented
                 || i.surface.preparing()
                 || !i.messages.is_empty()
                 || i.published.is_some()
@@ -281,20 +307,41 @@ impl crate::Module {
 }
 
 impl crate::Instance {
+    pub(crate) fn invalidate(&mut self) {
+        self.dirty = true;
+        #[cfg(exact_android_draw_trace)]
+        {
+            self.draw_trace.invalidated = true;
+        }
+    }
+
+    pub(crate) fn wake_dirty(&self) -> bool {
+        self.bound && self.wake.is_woken()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn frame_dirty(&mut self, now_ms: f64, period_ms: f64, seekable: bool) -> bool {
-        if !self.dirty && self.input_dirty && !seekable && !self.surface.preparing() {
+        if !self.dirty
+            && self.input_dirty
+            && !self.wake_dirty()
+            && !seekable
+            && !self.surface.preparing()
+        {
             let decision = self.surface.redraw_for_input(now_ms, period_ms);
             self.drain();
             match decision {
                 std::task::Poll::Ready(draw) => {
                     self.input_dirty = false;
                     self.dirty = draw;
+                    #[cfg(exact_android_draw_trace)]
+                    {
+                        self.draw_trace.polled = draw;
+                    }
                 }
                 std::task::Poll::Pending => return false,
             }
         }
-        self.dirty || self.input_dirty || self.surface.preparing()
+        self.dirty || self.input_dirty || self.wake_dirty() || self.surface.preparing()
     }
 }
 

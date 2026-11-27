@@ -358,7 +358,22 @@ int exact_js_load(void *h, const uint8_t *data, size_t len, char **out) {
       } catch (const jsi::JSIException &) {
       }
     }
-    return fail(out, e.getMessage(), 1);
+    std::string msg = e.getMessage();
+    const std::string stack = e.getStack();
+    size_t pos = 0, kept = 0;
+    while (pos < stack.size() && kept < 6) {
+      size_t end = stack.find('\n', pos);
+      if (end == std::string::npos) end = stack.size();
+      std::string line = stack.substr(pos, end - pos);
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      pos = end < stack.size() ? end + 1 : end;
+      if (line.empty()) continue;
+      if (kept == 0 && (line == msg || msg.find(line) != std::string::npos)) continue;
+      msg += "\n";
+      msg += line;
+      kept++;
+    }
+    return fail(out, msg, 1);
   } catch (const std::exception &e) {
     return fail(out, e.what(), 2);
   }

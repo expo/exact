@@ -570,14 +570,12 @@ impl Painter {
         } else {
             value_ink
         };
-        if native
-            && disabled
-            && !node.style.mask.has(if placeholder {
-                exact_kernel::StyleId::PlaceholderColor
-            } else {
-                exact_kernel::StyleId::TextColor
-            })
-        {
+        let authored_ink = if placeholder {
+            node.style.mask.has(exact_kernel::StyleId::PlaceholderColor)
+        } else {
+            node.style.written.has(exact_kernel::StyleId::TextColor)
+        };
+        if native && disabled && !authored_ink {
             ink = look::role("GrayText", self.dark);
         }
         // A single line is shaped unconstrained, so `text-align` places

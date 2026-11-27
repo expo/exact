@@ -5,6 +5,7 @@
 //! and hung marker (`shaping`'s line insets), and links keep a target the
 //! presenter follows.
 use super::Run;
+use exact_kernel::LineHeight;
 use exact_markdown::Role;
 
 /// `ui-monospace`: one of the eight generic stacks at fixed ids (`Plan`).
@@ -33,7 +34,7 @@ pub fn target(href: &str) -> Option<&str> {
 }
 
 /// Expand `source`, the node's one run of Markdown, over its own style.
-pub fn expand(source: &Run) -> Vec<Run> {
+pub fn expand(source: &Run, line_height: LineHeight) -> Vec<Run> {
     exact_markdown::pieces(&source.text)
         .into_iter()
         .map(|p| {
@@ -45,8 +46,9 @@ pub fn expand(source: &Run) -> Vec<Run> {
             // A short line between blocks keeps the node's line height from
             // stretching it back to a full line (as Apple's runs).
             let gap = p.scale < 1.0 && p.text == "\n";
+            let size = source.size * p.scale;
             Run {
-                size: source.size * p.scale,
+                size,
                 // A piece's own weight (bold) is stepped as its run's was.
                 weight: match p.weight {
                     0 => source.weight,
@@ -58,7 +60,7 @@ pub fn expand(source: &Run) -> Vec<Run> {
                 stretch: source.stretch,
                 variations: source.variations,
                 optical_sizing: source.optical_sizing,
-                line_height: source.line_height.filter(|_| !gap),
+                line_height: if gap { None } else { line_height.resolve(size) },
                 letter_spacing: source.letter_spacing,
                 font_variant_numeric: source.font_variant_numeric,
                 font_variant_ligatures: source.font_variant_ligatures,

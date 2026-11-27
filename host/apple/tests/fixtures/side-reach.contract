@@ -1,0 +1,25 @@
+// LLP 1188 D2 (SideReachIOSTests): a route whose scroller fills it under its header, and the shapes that keep it in its box.
+routes nav
+  home "/"
+
+component App
+  state shape = "plain"
+  action show(name: string)
+    shape = name
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationScroll="content" testId="route" position="absolute" inset=0 display="flex" flex-direction="column" -exact-safe-area=(shape == "opted" ? "left right" : "")
+          header
+            text "Sides" role="heading" aria-level=2
+          column testId="box" flex=1 min-height=0 display="flex" flex-direction="column" padding-left=(shape == "padded" ? "12px" : shape == "opted" ? "var(--exact-safe-area-inset-left)" : "0px") padding-right=(shape == "padded" ? "12px" : shape == "opted" ? "var(--exact-safe-area-inset-right)" : "0px") overflow=(shape == "clipped" ? "hidden" : "visible") transform=(shape == "moved" ? "translateY(8px)" : "none") backdrop-filter=(shape == "material" ? "blur(20px)" : "none")
+            if shape == "list"
+              list appearance="none" virtualized=true estimated-item-height=60 id="content" testId="scroll" flex=1 min-height=0
+                for n in range(100) key=n
+                  view testId=`row-${n}` height=60
+            else
+              scroll id="content" testId="scroll" flex=1 min-height=0 overflow-x=(shape == "hidden" ? "hidden" : "auto") border-radius=(shape == "round" ? 16 : 0) border-style="solid" border-width="0px" border-right-width=(shape == "bordered" ? "1px" : "0px") border-left-width=(shape == "bordered" ? "1px" : "0px") -exact-safe-area-reach=(shape == "held" ? "none" : "auto")
+                column testId="rows" width=(shape == "wide" or shape == "hidden" ? "150%" : "100%") height=3000
+                  for name in ["plain", "opted", "padded", "clipped", "moved", "material", "wide", "hidden", "round", "bordered", "held", "list"] key=name
+                    button press=show(name) testId=`show-${name}`
+                      text name

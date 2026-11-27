@@ -727,7 +727,7 @@ fn block_intrinsic_probes_cannot_leave_cached_final_children_wrapped() {
             Style {
                 display: taffy::Display::Flex,
                 flex_wrap: FlexWrap::Wrap,
-                align_items: Some(taffy::AlignItems::CENTER),
+                align_items: taffy::AlignItems::CENTER,
                 gap: Size {
                     width: length(10.0_f32),
                     height: length(0.0_f32),

@@ -69,6 +69,7 @@ impl Doc {
         if when.is_empty() {
             let (indent, code, trailing) = self.parts(p.name.line);
             let l = crate::lex::Line {
+                comment: None,
                 indent,
                 text: code,
                 line: p.name.line,

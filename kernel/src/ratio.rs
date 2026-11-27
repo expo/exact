@@ -99,6 +99,51 @@ impl AspectRatio {
     }
 }
 
+/// @ref LLP 1123 D16 — `-exact-safe-area-aspect-fit: none | <ratio>`: the ratio, width over height,
+/// at which the window's aspect-fit guide fits the session's first root, or `none`, the initial
+/// value, which claims no guide. Each number of the ratio and their quotient are finite and
+/// positive; `auto` is no word of it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AspectFit {
+    /// The ratio as authored, `[width, height]`; a lone number `n` is `n / 1`. `None` for `none`.
+    pub ratio: Option<[f32; 2]>,
+}
+
+impl AspectFit {
+    /// `none`, or `<ratio>` as `aspect-ratio` writes one, refused where a number or the quotient
+    /// is not finite and positive.
+    pub fn parse(css: &str) -> Option<Self> {
+        if css.trim().eq_ignore_ascii_case("none") {
+            return Some(Self::default());
+        }
+        let parsed = AspectRatio::parse(css)?;
+        if parsed.auto {
+            return None;
+        }
+        parsed.preferred()?;
+        Some(Self {
+            ratio: parsed.ratio,
+        })
+    }
+
+    /// The declaration's value: `none` or `16 / 9`.
+    pub fn css(&self) -> String {
+        match self.ratio {
+            None => "none".into(),
+            Some([w, h]) => format!(
+                "{} / {}",
+                exact_num::Shortest32(w),
+                exact_num::Shortest32(h)
+            ),
+        }
+    }
+
+    /// Width over height, or `None` for `none`.
+    pub fn quotient(&self) -> Option<f32> {
+        self.ratio.map(|[w, h]| w / h)
+    }
+}
+
 fn number(token: &str) -> Option<f32> {
     let n = exact_num::parse_f32(token).ok()?;
     (n.is_finite() && n >= 0.0).then_some(n)
@@ -107,6 +152,31 @@ fn number(token: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::AspectRatio;
+
+    #[test]
+    fn aspect_fit_takes_none_or_a_positive_ratio() {
+        use super::AspectFit;
+        let fit = |css: &str| AspectFit::parse(css);
+        assert_eq!(fit("none"), Some(AspectFit::default()));
+        assert_eq!(fit("16 / 9").and_then(|f| f.quotient()), Some(16.0 / 9.0));
+        assert_eq!(fit("2").map(|f| f.ratio), Some(Some([2.0, 1.0])));
+        assert_eq!(fit("4/3").map(|f| f.css()), Some("4 / 3".into()));
+        assert_eq!(fit("none").map(|f| f.css()), Some("none".into()));
+        for bad in [
+            "auto",
+            "auto 16 / 9",
+            "0",
+            "0 / 1",
+            "1 / 0",
+            "-1",
+            "16:9",
+            "16 / 9 / 1",
+            "",
+            "1e40 / 1e-40",
+        ] {
+            assert_eq!(fit(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn the_css_grammar() {

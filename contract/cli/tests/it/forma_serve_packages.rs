@@ -24,6 +24,39 @@ fn with_reading(dir: &std::path::Path, design: &str) {
 }
 
 #[test]
+fn axis_removal_lists_app_and_package_conditions_with_their_source_lines() {
+    let dir = app("pkg-axis", "forma t\n\naxes\n  size = small | big\n  tone = pale | deep\n\ntheme\n  brand = #abcdef\n    when size=big tone=deep: #012345\n");
+    with_reading(
+        &dir,
+        "forma reading\ntheme\n  reading.card = #123456\n    when tone=deep: #654321\n",
+    );
+    std::fs::write(
+        dir.join("other.forma"),
+        "forma other\naxes\n  tone = deep\ntheme\n  panel = #123456\n    when tone=deep: #654321\n",
+    )
+    .unwrap();
+    let mut server = Serve::start(&dir, &[]);
+    let (reply, _) =
+        server.ask(json!({"method":"propose","ops":[{"op":"remove-axis","name":"tone"},{"op":"remove-axis","name":"tone","file":"other.forma"}]}));
+    let refs = reply["error"]["diagnostics"].as_array().expect("referrers");
+    assert_eq!(refs.len(), 3, "{reply}");
+    for (file, line, owner, condition) in [
+        ("other.forma", 6, "panel", "tone=deep"),
+        ("app.forma", 9, "brand", "size=big tone=deep"),
+        ("reading.forma", 4, "reading.card", "tone=deep"),
+    ] {
+        assert!(
+            refs.iter()
+                .any(|d| d["file"].as_str().unwrap().ends_with(file)
+                    && d["line"] == line
+                    && d["message"].as_str().unwrap().contains(owner)
+                    && d["message"].as_str().unwrap().contains(condition)),
+            "{reply}"
+        );
+    }
+}
+
+#[test]
 fn the_server_reads_an_app_token_that_names_a_package_token() {
     let dir = app("pkg-alias", "forma t\n\ntheme\n  brand = reading.card\n");
     with_reading(&dir, "forma reading\n\ntheme\n  reading.card = #112233\n");

@@ -25,6 +25,7 @@ internal class FrameBrowser(
     private val web: () -> WebView?,
     /** The element's `src`. */
     private val source: () -> String,
+    contextId: () -> String,
     /** Loads a URL in the element's view, as `src` is loaded. */
     private val load: (String) -> Unit,
     /** Sends an event and its record to the element's handler, while the element is current. */
@@ -58,7 +59,7 @@ internal class FrameBrowser(
     private var closed = false
     private val main = Handler(Looper.getMainLooper())
     /** `@exact/browser-automation` on this frame (D9); a change of its controller is a `currententrychange`. */
-    val automation = FrameAutomation(web) { send("currententrychange") }
+    val automation = FrameAutomation(web, contextId) { send("currententrychange") }
 
     /** The frame's view is gone ([reason]): a navigation in flight ends in `AbortError`, as a superseded one does. */
     fun end(reason: String) {
@@ -172,6 +173,7 @@ internal class FrameBrowser(
         if (navigation.isSameDocument) return sameDocument(navigation)
         if (navigation.didCommit()) automation.committed(navigation.page)
         val current = flight?.takeIf { it.navigation === navigation } ?: return
+        if (!navigation.didCommit()) automation.cancelled()
         if (navigation.didCommit() && !navigation.didCommitErrorPage()) {
             dead = false
             errorPage = false
@@ -275,6 +277,7 @@ internal class FrameBrowser(
                 val current = flight
                 flight = null
                 // Also a load asked for whose start WebView has not reported: it then ends uncommitted, AbortError.
+                automation.cancelled()
                 view.stopLoading()
                 current?.let { send("navigateerror", it, "AbortError", "stopLoading") }
             }

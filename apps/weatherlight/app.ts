@@ -188,9 +188,10 @@ async function deliverPurchases(storage: Parameters<Answer>[3]): Promise<Result<
         try {
           if (p.itemId === 'tip.small') {
             if (!kept.tokens.includes(p.purchaseToken)) {
-              kept.tips += 1;
-              kept.tokens.push(p.purchaseToken);
-              await writeJson(storage, TIPS, kept);
+              const next = { tips: kept.tips + 1, tokens: [...kept.tokens, p.purchaseToken] };
+              await writeJson(storage, TIPS, next);
+              kept.tips = next.tips;
+              kept.tokens = next.tokens;
             }
             await consume({ purchaseToken: p.purchaseToken });
           } else {

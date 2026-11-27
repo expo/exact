@@ -1,13 +1,14 @@
 // @ref LLP 1075.003 §3.7 — Exact's tab container on iOS: a
-// `UITabBarController` with one controller per tab, made with it and never
-// replaced: a navigation controller for a tab that can push or show a header,
+// `UITabBarController` with one controller per tab: a split when requested on iPad,
+// a navigation controller for a tab that can push or show a header,
 // a plain one for a tab that shows one fixed route with no header
 // (PlainTabIOS.swift).
 // Each tab's stack is kept as the router keeps it (LLP 1038 §7's "one
 // navigation owner per tab"), so a scroll offset, a draft or a pushed screen
 // survives a switch. The authored `tablist` supplies the items — a symbol
 // over a label, its `-fill` symbol when selected — and takes no room while
-// the bar shows. A tap on the bar is UIKit's (`TabDelegateProxy`): on another
+// the bar shows, or the bar's where the author wrote rows between the panels
+// and it (TabBarRoomIOS.swift). A tap on the bar is UIKit's (`TabDelegateProxy`): on another
 // tab, Exact presses that tab's authored tab inside `shouldSelect`, so the
 // router follows; on the selected tab above its root, UIKit pops the stack,
 // which the router follows as a Back. Under the agent
@@ -43,10 +44,19 @@ final class TabDelegateProxy: ForwardingDelegate, UITabBarControllerDelegate {
     }
 
     #if os(iOS)
+    func tabBarController(_ tabs: UITabBarController, willBeginCustomizing controllers: [UIViewController]) {
+        app?.tabBarController?(tabs, willBeginCustomizing: controllers)
+        // (An app's native code can have an image of its own come to the bar)
+        (tabs as? TabController)?.mark.watch(tabs) { [weak host, weak tabs] in
+            host?.tabController === tabs && host?.presenter.session?.natives.hasAppModule == false
+        }
+    }
+
     /// More's Edit moved tabs between the bar and More, and UIKit their
     /// routes with them (`syncNextTurn`).
     func tabBarController(_ tabs: UITabBarController, didEndCustomizing controllers: [UIViewController], changed: Bool) {
         let app = self.app
+        (tabs as? TabController)?.mark.stop()
         if changed { host?.syncNextTurn() }
         app?.tabBarController?(tabs, didEndCustomizing: controllers, changed: changed)
     }
@@ -87,14 +97,26 @@ extension NavigationHost {
         let kernel = presenter.rootTabs[p.root.id]
         let needsNavigation = Dictionary(zip(kernel?.panels ?? [], kernel?.navigation ?? []), uniquingKeysWith: { $1 })
         let navs = tabs.panels.enumerated().map { index, panel in
-            makeTabStack(panel.id, index == p.at ? first : base(p.wanted[index]), navigation: needsNavigation[panel.id] ?? true)
+            let routes = index == p.at ? first : base(p.wanted[index])
+            let navigation = needsNavigation[panel.id] ?? true
+            let owner: UIViewController
+            if UIDevice.current.userInterfaceIdiom == .pad, !ExactEnv.authoredChrome, routes.isEmpty,
+               kernel?.possibleSplits.contains(panel.id) == true {
+                owner = PendingTab(navigation: navigation)
+            } else {
+                owner = makeTabStack(panel.id, routes, navigation: navigation)
+            }
+            tabStacks[panel.id] = owner
+            return owner
         }
-        primaryNavigation = navs[p.at] as? UINavigationController
+        split = tabSplits[tabPanels[p.at]]
+        primaryNavigation = split?.list ?? (navs[p.at] as? UINavigationController)
         syncItems(tabs)
         let owned = askTabContainer(tabs, selected: p.at)
         tabContainerAsked = presenter.session?.natives.hatchesConnected == true
         let holder: UIViewController = owned ?? {
             let container = TabController()
+            container.host = self
             if #available(iOS 18.0, tvOS 18.0, *), buildsTabs(tabs) {
                 buildTabs(container, navs, tabs, unsaid: kernel?.unsaid ?? false, selected: p.at)
             } else {
@@ -115,7 +137,8 @@ extension NavigationHost {
             // builds the rows a More list on screen gains.
             container.registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) { [weak self] (tabs: UITabBarController, previous: UITraitCollection) in
                 let now = tabs.traitCollection
-                if previous.horizontalSizeClass != now.horizontalSizeClass { self?.refollowFloatingBar() }
+                // (Only an iPad's bar changes with the width, between floating and not)
+                if previous.horizontalSizeClass != now.horizontalSizeClass, now.userInterfaceIdiom == .pad { self?.refollowTabBarWish() }
                 // Skip the change UIKit reports as the container enters or leaves a window, from or to unspecified
                 let known = [previous.horizontalSizeClass, previous.verticalSizeClass, now.horizontalSizeClass, now.verticalSizeClass].allSatisfy { $0 != .unspecified }
                 if known { self?.syncNextTurn() }
@@ -176,10 +199,14 @@ extension NavigationHost {
         guard !tabContainerAsked, presenter.modalHost.routes.isEmpty, !presenter.modalHost.inTransition, presentedNavigations.isEmpty,
               let root = self.container, let tabs = NavigationTabs.of(root, presenter), let parent = container.parent else { return }
         tabContainerAsked = true
+        // The stacks go without Exact's clearance for the rows on its bar (LLP 1083.000 D4), and get none until
+        // they have moved; when Exact's container keeps them, the next pass gives it back
+        releaseRowStacks()
         // Offer the stacks in place: a container the hook returns takes them from Exact's, as UIKit moves any
         // child. Emptying Exact's first would lose its bar's selection: a tab bar controller emptied and filled
         // again keeps its selected index but shows no tab selected (iOS 26 and 27).
         guard let owned = askTabContainer(tabs, selected: routerTab) else {
+            siblings.rowStacksHeld = false
             let navs = tabPanels.compactMap { tabStacks[$0] }
             if !restoreBuiltTabs(container, navs), container.viewControllers?.count != navs.count {
                 presenter.session?.log("hatch: tabContainer took the tabs' stacks but returned no container; Exact's has them back")
@@ -196,6 +223,7 @@ extension NavigationHost {
         // The release's UIKit calls reach only the covers, which retire no tabs; the handoff ends if they ever do
         guard tabController === container, self.container === root else {
             tabAccessoryHandingOff = false
+            siblings.rowStacksHeld = false
             return
         }
         #endif
@@ -216,6 +244,7 @@ extension NavigationHost {
         container.removeFromParent()
         tabController = nil
         tabOwner = owned
+        siblings.rowStacksHeld = false
         mount(owned, in: parent, at: root)
         #if os(iOS)
         tabAccessoryHandingOff = false
@@ -319,8 +348,9 @@ extension NavigationHost {
     }
 
     /// Before installing: a root that gains, loses or changes its tabs, or a
-    /// stack that starts or stops splitting (its list's rows came later, or
-    /// its root says `navigationSplit="none"` now; LLP 1127 D2), gets its
+    /// stack that starts or stops splitting (its root route asks for the split
+    /// or says `navigationSplit="none"` now, or, on an iPad outside a tab, the
+    /// rule finds or loses a list whose rows push; LLP 1127 D1, D2, D19), gets its
     /// containers again (the router's stacks are untouched). While the
     /// runner cannot say whether the stack splits (a sync inside a callback
     /// it waits on), the containers stay, and the stack is asked again on
@@ -332,7 +362,7 @@ extension NavigationHost {
         var startsOrStops = false
         if !tabsChanged, p.tabs == nil {
             guard let rule = splitRule(p.chosen.first) else { return askSplitNextTurn() }
-            if let list = rule?.list { split?.listNode = list }
+            split?.listNode = rule?.list
             split?.rule = rule
             startsOrStops = (rule != nil) != (split != nil)
         }
@@ -362,7 +392,7 @@ extension NavigationHost {
     }
 
     /// Each batch: every other tab's stack, the selected tab, its items.
-    func syncTabs(_ p: Projection) {
+    func syncTabs(_ p: Projection, sequence: UInt64) {
         guard tabOwner != nil, let tabs = p.tabs else { return }
         // Re-adopt a replacement over unchanged panels and remove the standalone bar projected earlier in this batch
         if adoptedTablist != tabs.tablist.id {
@@ -379,7 +409,9 @@ extension NavigationHost {
             tablistOwed = nil
             tablistHidBar = false
             if let container = tabController, tabOwner === container, !ExactEnv.authoredChrome {
+                // (Also where a route on the shown stack hides the bar by UIKit's flag, as the state follows it, iOS 18)
                 let hidden = authored || tabs.tablist.style["display"]?.string == "none"
+                    || selectedTabStack(container).flatMap { stackHidesTabBar($0) } == true
                 if #available(iOS 18.0, tvOS 18.0, *) { setTabBarHidden(hidden, in: container, animated: false) }
                 else {
                     container.tabBar.isHidden = hidden
@@ -399,6 +431,10 @@ extension NavigationHost {
         // already is only projected again; one UIKit is moving (`writable`) is
         // written once the move ends.
         for index in navs.indices where index != p.at {
+            if let columns = tabSplits[tabPanels[index]] {
+                syncInactiveSplit(columns, base(p.wanted[index]), sequence: sequence)
+                continue
+            }
             let stack = routesStack(index) ?? navs[index]
             let routes = base(p.wanted[index])
             if stack.stackRoutes.elementsEqual(routes, by: ===) || writable(stack, routes) { setRoutes(routes, in: stack) } else {
@@ -410,8 +446,10 @@ extension NavigationHost {
         // its bar when the router's tab changes, before UIKit shows it, where
         // nothing animates in; `sync` writes the rest of its stack.
         let selected = routesStack(p.at) ?? navs[p.at]
-        if selected.stackRoutes.isEmpty { if writable(selected, p.wanted[p.at]) { setRoutes(base(p.wanted[p.at]), in: selected) } }
-        else if routerTab != p.at { prepareRoutes(base(p.wanted[p.at]), in: selected) }
+        if split == nil {
+            if selected.stackRoutes.isEmpty { if writable(selected, p.wanted[p.at]) { setRoutes(base(p.wanted[p.at]), in: selected) } }
+            else if routerTab != p.at { prepareRoutes(base(p.wanted[p.at]), in: selected) }
+        }
         // @ref LLP 1038 D6 — a tab change swaps immediately. UIKit's selection
         // is the state (LLP 1075.003 §3.7): it is written only when the
         // router's own tab changes (a link, the agent's authored tablist, a
@@ -423,12 +461,12 @@ extension NavigationHost {
             selectionPressed = nil
             if let container = tabController, container.selectedViewController !== navs[p.at], navs[p.at] !== tapping {
                 selectInUIKit(p.at, in: container)
-                refollowFloatingBar() // (no push or pop: the stack it shows keeps its wish on an iPad)
+                refollowTabBarWish() // (no push or pop: the stack it shows keeps its wish)
             }
             if tabController == nil { presenter.session?.natives.tabsHatch(nil, event: 2, index: p.at) }
         }
         // Follow More's stack for a tab under More: selecting it moved its routes there
-        primaryNavigation = (routesStack(p.at) ?? navs[p.at]) as? UINavigationController
+        primaryNavigation = split?.list ?? ((routesStack(p.at) ?? navs[p.at]) as? UINavigationController)
         syncItems(tabs)
     }
 
@@ -549,7 +587,9 @@ extension NavigationHost {
     /// The stack that holds tab `index`'s routes: More while UIKit holds them
     /// there, else the tab's own.
     func routesStack(_ index: Int) -> UIViewController? {
-        index == moreTab ? more : tabStack(index)
+        if index == moreTab { return more }
+        let owner = tabStack(index)
+        return (owner as? PendingTab)?.children.first ?? owner
     }
 
     /// Tab `index`'s item, when Exact's tab bar shows it: a tab whose item
@@ -662,6 +702,19 @@ extension NavigationHost {
         }
         guard let index = tabIndex(of: controller) else { return true }
         if controller === tabs.selectedViewController {
+            if let columns = tabSplits[tabPanels[index]], let root = columns.shown.first, let top = columns.shown.last {
+                if top === root { reselected = root; return true }
+                guard backAllows("tab reselect") else { return false }
+                if columns.shown.count == 2 { goBack() } else { goBack(from: top.key, to: root.key) }
+                if let tab = authoredTab(index) { pressTab(tab) }
+                return true
+            }
+            if let tab = controller as? PendingTab, let stack = tab.children.first as? UINavigationController,
+               stack.stackRoutes.count > 1 {
+                guard backAllows("tab reselect") else { return false }
+                stack.popToRootViewController(animated: !ExactEnv.agentFreezes)
+                return true
+            }
             if controller.stackRoutes.count > 1 {
                 return backAllows("tab reselect")
             }
@@ -706,9 +759,9 @@ extension NavigationHost {
             if pendingSync {
                 tapping = nil
                 resync()
-                return refollowFloatingBar()
+                return refollowTabBarWish()
             }
-            refollowFloatingBar()
+            refollowTabBarWish()
             tabs.view.layoutIfNeeded()
             tapping = nil
             return reportCovers()
@@ -720,13 +773,13 @@ extension NavigationHost {
             if let more, tabs.selectedViewController === more { reportCovers() }
             return
         }
-        if index == routerTab, screen == nil, !popped { return refollowFloatingBar() }
+        if index == routerTab, screen == nil, !popped { return refollowTabBarWish() }
         guard let tab = authoredTab(index) else { return }
         let again = index == routerTab
         pressTab(tab, scrolling: screen)
         // Leave the router's own tab, tapped again, to its press; another tab's press can leave the router elsewhere
         if again { return }
-        guard routerTab != index, tabStack(routerTab) != nil else { return refollowFloatingBar() }
+        guard routerTab != index, tabStack(routerTab) != nil else { return refollowTabBarWish() }
         showRouterTab(declining: index)
     }
 
@@ -746,7 +799,14 @@ extension NavigationHost {
     /// its list (LLP 1075.003 §9.16).
     func selectInUIKit(_ index: Int, in tabs: UITabBarController) {
         guard let stack = tabStack(index) else { return }
-        tabs.selectedViewController = index == moreTab ? more : stack
+        let select = {
+            if #available(iOS 18.0, tvOS 18.0, *), index != self.moreTab, !self.tabSplits.isEmpty, self.builtTabs.indices.contains(index), let tab = self.builtTabs[index] as? UITab {
+                tabs.selectedTab = tab
+            } else {
+                tabs.selectedViewController = index == self.moreTab ? self.more : stack
+            }
+        }
+        if ScreenshotMode.uikitAnimationsOff { UIView.performWithoutAnimation(select) } else { select() }
     }
 
     /// Whether a tap may let UIKit pop a stack to its root: only where Back
@@ -759,11 +819,11 @@ extension NavigationHost {
 
     /// Press `tab` as a tap on its item does, unless the tab is disabled.
     /// Then scroll `screen` (`reselectedRoot`), if given, to its top unless
-    /// the press asked for a row there (`scrollToTop`).
+    /// the press asked its list to move (`scrollToTop`).
     func pressTab(_ tab: NodeView, scrolling screen: RouteController? = nil) {
-        let requests = screen == nil ? nil : presenter.collections.lastRequests()
+        let requests = screen == nil ? nil : presenter.collections.lastRequests(), asks = presenter.scrollAskCount
         if !tab.disabled { presenter.press(tab.id) }
-        if let screen { scrollToTop(screen, since: requests) }
+        if let screen { scrollToTop(screen, since: requests, asks: asks) }
     }
 
     /// The authored tab whose panel is tab `index`.
@@ -787,45 +847,86 @@ extension NavigationHost {
     }
 
     /// A route's content scroller (`contentScroller`, the status bar's) to
-    /// its top, as the status bar's tap takes it: UIKit's animation, to where
-    /// a large title is open, which UIKit opens as the offset arrives.
+    /// its top, where the status bar's tap takes it: UIKit's animation to the
+    /// top with a large title and a hidden search field open (`openTop`).
     /// UIKit's tab bar does not do this itself: a selected tab tapped again
     /// scrolls nothing in UIKit alone (iOS 27, a real touch). It is the
-    /// reader's move of a list there (`CollectionHost.readerMoves`), and it
-    /// gives way to a `scrollIntoView` the tab's press asked for there,
-    /// landed, under way or already shown: the author's answer to the tap
-    /// wins over the platform's (LLP 1070.000 §2.6). `requests`: every
-    /// list's latest request before the press (`CollectionHost.lastRequests`),
-    /// read for them all because the press may make the screen's list, or
-    /// make another list the screen's.
-    func scrollToTop(_ c: RouteController, since requests: [UInt32: UInt64]? = nil) {
-        guard let sv = contentScrollView(of: c) else { return }
+    /// reader's move of the list, as the status bar's tap is, and it gives way
+    /// to any scroll the tab's press asked of the list, landed, under way or
+    /// already shown: the author's answer to the tap wins over the platform's
+    /// (LLP 1070.000 §2.6). `requests`: every list's latest request before the
+    /// press (`CollectionHost.lastRequests`), read for them all because the
+    /// press may make the screen's list, or make another list the screen's;
+    /// `asks`: the presenter's count of scroll asks before it
+    /// (`NodeView.lastScrollAsk`).
+    func scrollToTop(_ c: RouteController, since requests: [UInt32: UInt64]? = nil, asks: UInt64? = nil) {
+        // What the press left decides: it may have shown another tab or route, or answered the tap itself.
+        let selected = tabController.map { tabs in sequence(first: c as UIViewController, next: \.parent).contains { $0 === tabs.selectedViewController } } ?? true
+        guard selected, presentedNavigations.isEmpty, c.navigationController.map({ $0.topViewController === c }) ?? true,
+              let sv = contentScrollView(of: c) else { return }
         let node = contentScroller(of: c)
-        if let node, presenter.collections.owns(node.id) {
-            if let requests, presenter.collections.lastRequest(node.id) != requests[node.id] ?? 0 { return }
-            presenter.collections.readerMoves(node.id)
-        }
-        // At its top under a collapsed title it goes on to the open title's
-        // inset, as UIKit's status-bar tap does, and opens it.
-        let inset = max(sv.adjustedContentInset.top, node != nil && node === c.collapseScroll ? node?.scrollOrigin ?? 0 : 0)
-        guard sv.contentOffset.y > 0.5 - inset else { return restAtTop(sv, in: c) }
+        if let node, presenter.collections.owns(node.id), let requests, presenter.collections.lastRequest(node.id) != requests[node.id] ?? 0 { return }
+        if let node, let asks, node.lastScrollAsk > asks { return }
+        #if os(iOS)
+        // Older reveals and carried positions give way, and a far windowed list cuts to two screens from the top
+        _ = node?.scrollViewShouldScrollToTop(sv)
+        #else
+        if let node, presenter.collections.owns(node.id) { presenter.collections.readerMoves(node.id) }
+        #endif
         guard scrollsToTopAnimated else { return restAtTop(sv, in: c) }
-        sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -inset), in: sv, clamped: false), animated: true)
+        let top = openTop(sv, in: c)
+        guard abs(top - sv.contentOffset.y) > 0.5 else { return }
+        let aim = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: top), in: sv, clamped: false)
+        sv.setContentOffset(aim, animated: true)
+        // The bar can change in flight (a filter projected into it, a fold): where the scroll landed as aimed, it goes
+        // on to the top under the bar as it is then
+        node?.afterScrollAnimation = { [weak sv] in
+            guard let sv, abs(sv.contentOffset.y - aim.y) < 0.5, abs(sv.contentOffset.y + sv.adjustedContentInset.top) > 0.5 else { return nil }
+            return PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv)
+        }
     }
 
-    /// Where `scrollToTop` ends, in one turn, under the agent's frozen clock,
-    /// where Exact starts no UIKit animation: the content at its top and a
-    /// large title expanded. Measured in UIKit alone on iOS 27, an offset written
-    /// at the top under a collapsed title leaves it collapsed, and one written
-    /// above the top opens the title and leaves the content that far below
-    /// the bar. So the scroller is pulled past its top and put at rest there,
-    /// unanimated: no frame shows the pull. This is the one place Exact moves
-    /// a large title itself.
+    /// Where the content's top is now, with as much of the bar open as UIKit opens there: a large title, a search
+    /// field the scroll hid. UIKit's own scroll to top (the status-bar tap) opens both, and UIKit publishes neither
+    /// that operation nor the open inset, so the scroller is put at its top with the bar opened (`restAtTop`) and
+    /// back in this turn, before anything draws, with Exact's own scroll reactions muted (`probingScroll`). Where
+    /// nothing can open, it is the inset UIKit has. Nothing sampled before stands in for it: UIKit lays the bar out
+    /// anew at launch, on a fold, as a filter moves into it.
+    func openTop(_ sv: UIScrollView, in c: RouteController) -> CGFloat {
+        #if os(iOS)
+        // A refresh holds its room open, which a pull would change
+        if sv.refreshControl?.isRefreshing == true { return -sv.adjustedContentInset.top }
+        #endif
+        guard c.navigationItem.barOpensAtTop, let nav = c.navigationController, !nav.isNavigationBarHidden else { return -sv.adjustedContentInset.top }
+        let start = sv.contentOffset
+        NodeView.probingScroll = true
+        defer { NodeView.probingScroll = false }
+        restAtTop(sv, in: c)
+        let top = sv.contentOffset.y
+        UIView.performWithoutAnimation {
+            sv.contentOffset = start
+            nav.navigationBar.setNeedsLayout()
+            nav.view.setNeedsLayout()
+            nav.navigationBar.layoutIfNeeded()
+            nav.view.layoutIfNeeded()
+        }
+        return top
+    }
+
+    /// Puts the scroller at its top with a large title expanded and a search
+    /// field the scroll hid shown, in one turn. `scrollToTop` lands there under
+    /// the agent's frozen clock, where Exact starts no UIKit animation, and
+    /// `openTop` reads where its animation should end from it. Measured in
+    /// UIKit alone on iOS 27, an offset written at the top under a collapsed
+    /// title leaves it collapsed, and one written above the top opens the
+    /// title and leaves the content that far below the bar. So the scroller is
+    /// pulled past its top and put at rest there, unanimated, and no frame
+    /// shows the pull.
     func restAtTop(_ sv: UIScrollView, in c: RouteController) {
         sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv, clamped: false)
         // tvOS has no large titles.
         #if !os(tvOS)
-        guard c.navigationItem.largeTitleDisplayMode == .always, c.viewIfLoaded?.window != nil,
+        guard c.navigationItem.barOpensAtTop, c.viewIfLoaded?.window != nil,
               let nav = c.navigationController, nav.topViewController === c, nav.transitionCoordinator == nil,
               !nav.isNavigationBarHidden else { return }
         UIView.performWithoutAnimation {
@@ -850,6 +951,8 @@ extension NavigationHost {
     /// tablist paints again.
     func retireTabs() {
         projectSidebarFooter(nil)
+        // The stacks leave without Exact's clearance for the rows on the bar, and get none back while they go
+        releaseRowStacks()
         #if os(iOS)
         // The retiring container shows no accessory again, whatever UIKit calls back during the release
         tabAccessoryHandingOff = true
@@ -860,7 +963,13 @@ extension NavigationHost {
         tablistRoot = nil
         tablistOwed = nil
         tablistHidBar = false
-        for stack in tabPanels.compactMap({ tabStacks[$0] }) {
+        for columns in tabSplits.values {
+            release(columns.list)
+            release(columns.detail)
+        }
+        if !tabSplits.isEmpty { split = nil; tabSplits.removeAll() }
+        for owner in tabPanels.compactMap({ tabStacks[$0] }) {
+            let stack = (owner as? PendingTab)?.children.first ?? owner
             if let nav = stack as? UINavigationController { release(nav) } else { (stack as? PlainTab)?.show(nil) }
         }
         releaseMore()
@@ -879,6 +988,7 @@ extension NavigationHost {
         }
         tabController = nil
         tabOwner = nil
+        siblings.rowStacksHeld = false
         #if os(iOS)
         tabAccessoryHandingOff = false
         #endif

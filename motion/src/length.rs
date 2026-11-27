@@ -16,9 +16,7 @@ use crate::{word, Value};
 /// One or two axes; with `z`, a third value, a px length, which the engine
 /// does not animate (it is the kernel's `translate_z` row).
 pub fn translate(text: &str, z: bool) -> Option<Value> {
-    // CSS white space (CSS Syntax 3 §4.2) separates the values.
-    let spaced = text.replace(['\t', '\n', '\r', '\u{c}'], " ");
-    let parts: Vec<&str> = split_top_level(&spaced, ' ')
+    let parts: Vec<&str> = split_top_level(text, ' ')
         .into_iter()
         .filter(|p| !p.is_empty())
         .collect();

@@ -66,8 +66,8 @@ extension NodeView {
     /// `draw(_:)`'s background colour and gradients, within the clip.
     func drawBackground(_ path: NSBezierPath, rounded: Bool) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        if backgroundClip != "border-box" {
-            if surface == nil { paintBackground(ctx, border: path.cgPath, color: true) }
+        if standsOnPanelGround || backgroundClip != "border-box" {
+            if surface == nil { paintBackground(ctx, border: path.cgPath, color: !standsOnPanelGround) }
             return
         }
         let bg = color("background_color", .clear)

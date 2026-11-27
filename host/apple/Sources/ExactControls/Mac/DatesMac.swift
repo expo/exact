@@ -20,7 +20,7 @@ extension ControlHost {
         return picker
     }
 
-    func configureDate(_ picker: NSDatePicker, _ owner: NodeView, accent: NSColor?) {
+    func configureDate(_ picker: NSDatePicker, _ owner: NodeView) {
         let kind = kinds[owner.id] ?? "date"
         picker.minDate = owner.props["min"].flatMap { DateValue.parse(kind, $0) }
         picker.maxDate = owner.props["max"].flatMap { DateValue.parse(kind, $0) }
@@ -47,7 +47,7 @@ extension ControlHost {
         guard presenter.views[id] != nil, let kind = kinds[id] else { return }
         (picker as? DateField)?.empty = false
         presenter.controlValue(id, DateValue.format(kind, picker.dateValue), input: true, change: true)
-        if let owner = presenter.views[id] { configureDate(picker, owner, accent: nil) }
+        if let owner = presenter.views[id] { configureDate(picker, owner) }
     }
 
     /// The agent's `type <id> <value>` (D9): the value an edit reports, in
@@ -61,7 +61,7 @@ extension ControlHost {
         if let date = DateValue.parse(kind, text) { picker.dateValue = date }
         (picker as? DateField)?.empty = text.isEmpty
         presenter.controlValue(node.id, text, input: true, change: true)
-        if let owner = presenter.views[node.id] { configureDate(picker, owner, accent: nil) }
+        if let owner = presenter.views[node.id] { configureDate(picker, owner) }
         // What it shows, as the web's reply says: the choice, or what the
         // action wrote over it.
         let shown = (picker as? DateField)?.empty == true ? "" : DateValue.shown(kind, typed: text, picker.dateValue)

@@ -13,7 +13,7 @@ import dev.exact.canvas.NativeModules
 class MainActivity : ExactActivity() {
     override val input = true
     override val modules = NativeModules.load()
-    /** Compose Material 3's, when the plan has a date or time control (`src/compose`). */
+    /** Compose Material 3's, when the APK links Compose (`src/compose`). */
     override val pickers get() = materialPickers ?: super.pickers
     /** Media3's, when the APK links it (`src/video`). */
     override val video = videoPlayers
@@ -37,7 +37,9 @@ class MainActivity : ExactActivity() {
      * ([AgentDrive]; `bun scripts/agent.mjs android --reader`). The process's one: an activity made again in it
      * keeps the driver the first one attached. This shell is a development build. */
     override fun drive(scroll: (Float) -> Unit): Drive? =
-        agent ?: intent.getStringExtra("agent")?.let { name -> AgentDrive(name).also { agent = it } }
+        agent ?: intent.getStringExtra("agent")?.let { name ->
+            AgentDrive(name, waitSeed = intent.getStringExtra("x_agent_seed_wait") == "1").also { agent = it }
+        }
 
     private companion object {
         var agent: AgentDrive? = null

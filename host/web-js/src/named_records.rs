@@ -124,7 +124,7 @@ component App
 
     /// `shape.js`'s `roleIndex` reads a role as the kernel's `roles::role`
     /// does, over every role's spellings, their web forms, the tint's form
-    /// around each, its recursion, a role's name in another case (ASCII
+    /// around each, nested tints refused, a role's name in another case (ASCII
     /// only: the Kelvin sign is no `k`), and the white space either trims.
     #[test]
     fn the_js_target_reads_a_role_as_the_kernel_does() {

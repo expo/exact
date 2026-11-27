@@ -138,7 +138,9 @@ export function implementation({ changed, agent, now, log, audioSession, foregro
     if (current) { Object.assign(utterances.get(current), { state: 'ended', outcome: 'error', error: 'interrupted' }); current = null; }
     reasons.delete('requested');
     boundary = NO_BOUNDARY;
+    // `cancel()` leaves the browser paused: the next utterance would be given to a paused synthesizer.
     synth?.cancel();
+    if (!reasons.size) synth?.resume();
     reclaim();
     announce();
   }

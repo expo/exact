@@ -18,6 +18,9 @@ package protocol DragOutCapability: AnyObject {
     /// A presenter's mouse drag out of the app, last in the mouse chain's
     /// rank on one node (D8).
     func mouseDrag(_ presenter: Presenter) -> MouseRecognizer
+    /// Whether a press on `node` would arm a drag (D8), which a first click
+    /// in a window that is not key may do alone (D5, "From an inactive window").
+    func arms(_ node: NodeView, in presenter: Presenter) -> Bool
     #endif
 }
 

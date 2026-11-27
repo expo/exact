@@ -662,4 +662,61 @@ final class BoxFilterTests: XCTestCase {
         }, "the published glyphs are in the filtered picture")
     }
 
+    /// `BoxMaskState.Key` must include display/zoom scale for drawn `mask-image` bitmaps,
+    /// and both `BoxMaskState.Key` and `BoxMaskState.FilterKey` must include the resolved
+    /// gradient tint when `mask-image` references `AccentColor`.
+    func testBoxMaskCacheKeysIncludeScaleAndGradientTint() throws {
+        let conic: BatchValue = ["conic": [0, 0.5, 0, 0.5, 0], "stops": [0, 0, 0, 0, 255, 1, 0, 0, 0, 0]]
+        let scaled = node(1)
+        scaled.applyStyle(["mask_image": conic])
+        #if os(macOS)
+        p.viewport.minMagnification = 0.25
+        p.viewport.maxMagnification = 5
+        p.viewport.magnification = 1
+        defer { p.viewport.magnification = 1 }
+        scaled.applyBoxMask()
+        let firstImage = try XCTUnwrap((scaled.layer?.mask as? GradientImageMaskLayer)?.contents) as! CGImage
+        p.viewport.magnification = 2
+        scaled.applyBoxMask()
+        let secondImage = try XCTUnwrap((scaled.layer?.mask as? GradientImageMaskLayer)?.contents) as! CGImage
+        XCTAssertEqual(secondImage.width, firstImage.width * 2, "drawn mask bitmap must rebuild at the new zoom scale")
+        #else
+        scaled.traitOverrides.displayScale = 1
+        scaled.updateTraitsIfNeeded()
+        scaled.applyBoxMask()
+        let firstImage = try XCTUnwrap((scaled.layer.mask as? GradientImageMaskLayer)?.contents) as! CGImage
+        XCTAssertEqual(firstImage.width, 40)
+        scaled.traitOverrides.displayScale = 2
+        scaled.updateTraitsIfNeeded()
+        scaled.applyBoxMask()
+        let secondImage = try XCTUnwrap((scaled.layer.mask as? GradientImageMaskLayer)?.contents) as! CGImage
+        XCTAssertEqual(secondImage.width, 80, "drawn mask bitmap must rebuild at the new display scale")
+        #endif
+
+        let tintMask: BatchValue = [
+            "css": "linear-gradient(180deg, AccentColor, transparent)",
+            "tint": "linear-gradient(180deg, AccentColor, transparent)",
+            "sys": "@tint",
+        ]
+        func topAlpha(_ mask: CALayer?) throws -> CGFloat {
+            let gradient = try XCTUnwrap(mask as? CAGradientLayer)
+            let colors = try XCTUnwrap(gradient.colors)
+            return (colors[0] as! CGColor).alpha
+        }
+        let parent = node(10), child = node(11, in: parent)
+        parent.applyStyle(["accent_color": [0, 0, 0, 26]])
+        child.applyStyle(["mask_image": tintMask])
+        child.applyBoxMask()
+        let childLayer: CALayer? = child.layer
+        XCTAssertEqual(try topAlpha(childLayer?.mask), 26.0 / 255.0, accuracy: 0.03)
+        parent.applyStyle(["accent_color": [0, 0, 0, 255]])
+        XCTAssertEqual(try topAlpha(childLayer?.mask), 1.0, accuracy: 0.02, "applyBoxMask must rebuild when ancestor accent-color changes")
+
+        parent.applyStyle(["accent_color": [0, 0, 0, 26]])
+        child.applyStyle(["mask_image": tintMask, "filter": try filter()])
+        XCTAssertEqual(try topAlpha(child.resolvedClipMask()), 26.0 / 255.0, accuracy: 0.03)
+        parent.applyStyle(["accent_color": [0, 0, 0, 255]])
+        XCTAssertEqual(try topAlpha(child.resolvedClipMask()), 1.0, accuracy: 0.02, "resolvedClipMask must rebuild when ancestor accent-color changes")
+    }
+
 }

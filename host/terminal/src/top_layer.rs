@@ -162,7 +162,7 @@ impl<D: DataSource> Host<D> {
         Some(((x, y, f.width, f.height), scroll))
     }
 
-    fn layout_popover_blocks(&mut self) {
+    pub(crate) fn layout_popover_blocks(&mut self) {
         let offer = Offer::definite(self.cols as f32 * COLUMN, self.rows as f32 * ROW);
         for root in self.runner.roots() {
             let _ = self.runner.kernel_mut().compute_layout(root, offer);

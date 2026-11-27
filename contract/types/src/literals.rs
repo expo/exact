@@ -101,3 +101,21 @@ pub(crate) fn currency_code(args: &[Expr], span: Span) -> Result<(), TypeError> 
         _ => Ok(()),
     }
 }
+
+/// Levenshtein distance in Unicode scalar values for diagnostic suggestions.
+pub(super) fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (diagonal + usize::from(ca != *cb))
+                .min(row[j] + 1)
+                .min(row[j + 1] + 1);
+            diagonal = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}

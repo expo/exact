@@ -23,7 +23,7 @@ import { open, runTests } from './agent.mjs';
 import { parseDrag } from './agent-drag.mjs';
 import { HOST_DEV, resolveApp } from './app.mjs';
 import { appleArtifacts } from '../host/apple/build.mjs';
-import { chooseSimulator } from '../host/apple/devices.mjs';
+import { chooseSimulator, simulatorScreenshot } from '../host/apple/devices.mjs';
 import { openTouches } from '../host/apple/touches.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -363,7 +363,8 @@ async function archiveActivities(udid, check) {
       await Bun.sleep(100);
     } while (performance.now() < deadline);
     record(name, tree);
-    simctl('io', udid, 'screenshot', resolve(dir, `${name}.png`));
+    const shot = simulatorScreenshot(udid, resolve(dir, `${name}.png`));
+    if (shot.status !== 0) throw new Error(`simctl io screenshot: ${(shot.stderr || '').trim().split('\n').pop() || 'failed'}`);
     const valid = !missing.length && !coverMissing && !lockMissing && !islandMissing;
     check(valid, `${name}: after 12 s, missing exact element labels ${JSON.stringify(missing)}${coverMissing ? '; cover sheet was not exposed' : ''}${lockMissing ? '; locked state was not exposed' : ''}${islandMissing ? `; leading label ${JSON.stringify(islandLabel)} is not shown in the Island` : ''}`);
     if (valid) comparisons.push({name, labels:expected});

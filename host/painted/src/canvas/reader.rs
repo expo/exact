@@ -55,10 +55,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.paint_by = None;
         self.travel = crate::travel::Travel::default();
         self.forget_chrome();
+        // A keyboard animation the last reader told of is not this one's
+        self.p.set_keyboard_progress(None);
         // The device's colours as the new reader read them: a wallpaper
         // changed while the last one was stopped is a new palette (D4).
         if let Some(palette) = colors::palette() {
-            self.p.set_palette(&palette);
+            self.p.set_reader_palette(&palette);
         }
         match device::windowed(size, scale) {
             Some(told) => self.set_window(told),

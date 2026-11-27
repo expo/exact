@@ -54,14 +54,14 @@ impl Machine {
         state.waiting.clear();
         state.waiting_set.clear();
         state.counts = [0, 0];
-        state.streams = 0;
         let mut runs = Vec::new();
         state.running.retain(|r| !r.waiting);
+        state.streams = Default::default();
         for r in &mut state.running {
+            state.streams.take(r.stream);
             let run = (r.ticket, r.generation);
             let counted = r.generation == 0 || !r.terminal || state.book.downloads.contains(&run);
             state.counts[r.lane] += usize::from(counted);
-            state.streams += usize::from(r.stream);
             if r.generation != 0 {
                 if counted {
                     state.book.held_counts.insert(run);
@@ -147,7 +147,7 @@ pub(in super::super) fn external_end(shared: &Shared, state: &mut State, ticket:
         let run = state.running.swap_remove(at);
         state.bytes[run.lane] -= run.charge;
         state.counts[run.lane] -= usize::from(!run.waiting);
-        state.streams -= usize::from(run.stream);
+        state.streams.release(run.stream);
     }
     shared.ready.notify_all();
 }

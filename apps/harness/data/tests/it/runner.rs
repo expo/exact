@@ -4,7 +4,7 @@
 
 use exact_kernel::Kernel;
 use exact_plan::Value;
-use exact_runner::{DataSource, Runner, RunnerError};
+use exact_runner::{DataSource, Runner};
 use harness_data::shapes::{ContractValue, Session};
 use harness_data::{Harness, Options};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -59,35 +59,49 @@ fn a_runner_takes_the_shapes_and_the_push() {
 }
 
 #[test]
-fn the_shape_check_is_live() {
-    // The same session read as the wrong shape is not accepted, so the
-    // test above proves conformance rather than passing anything through.
+fn a_session_read_as_the_wrong_shape_fails_its_resource() {
     let wrong = r#"
 shape Wrong
   model: number
 component App
   resource session = session() as shape Wrong
+  derive bad = failed(session)
+  derive code = match failure(session) { case some(f) => f.code, case none => "" }
   view
-    text `${session.model}`
+    text `${session.model} ${code}`
 "#;
-    let plan = contract::compile(wrong).expect("compiles");
-    let booted = Runner::boot(
-        plan,
-        Harness::with_options(Options::offline(None)),
-        Kernel::with_monospace(),
-        Default::default(),
-        "/",
-    );
-    match booted {
-        Err(RunnerError::Shape { resource, why }) => {
-            assert_eq!(resource, "session");
-            // The refusal names the field (LLP 1101.002 §0 P9).
-            assert!(
-                why.starts_with("Wrong.model: a Number was declared"),
-                "{why}"
-            );
-        }
-        Err(other) => panic!("refused for another reason: {other:?}"),
-        Ok(_) => panic!("a session read as the wrong shape was accepted"),
+    for (declaration, placeholder) in [
+        ("as shape Wrong", 0.),
+        ("as shape Wrong else empty(model=-1)", -1.),
+    ] {
+        let source = wrong.replace("as shape Wrong", declaration);
+        let plan = contract::compile(&source).expect("compiles");
+        let runner = Runner::boot(
+            plan,
+            Harness::with_options(Options::offline(None)),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        assert_eq!(runner.derive("bad"), Some(&Value::Bool(true)));
+        assert!(runner.resource_is_placeholder("session"));
+        assert_eq!(runner.derive("code"), Some(&Value::str("shape")));
+        assert_eq!(
+            runner.resource("session"),
+            Some(&Value::record(vec![Value::Number(placeholder)]))
+        );
+        let failures = runner.failed_resources();
+        let [("session", why)] = failures.as_slice() else {
+            panic!("expected the session's shape failure: {failures:?}");
+        };
+        let (message, detail) = why
+            .split_once(": ")
+            .expect("shape failure has a field diagnostic");
+        assert!(message.starts_with("`session` "), "{why}");
+        assert!(
+            detail.starts_with("Wrong.model: a Number was declared"),
+            "{why}"
+        );
     }
 }

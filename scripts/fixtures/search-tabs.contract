@@ -50,6 +50,16 @@ component SearchTabs
                   if e.name == "find" and not bare
                     input type="search" autofocus value=query input=edit placeholder="Search speakers"
                       testId="speaker-search"
+                box position="absolute" pointer-events="none" height=1 width="var(--exact-bar-inset-start)" testId=`bar-start-${e.name}`
+                box position="absolute" pointer-events="none" height=1 width="var(--exact-bar-inset-end)" testId=`bar-end-${e.name}`
+                if e.name == "detail"
+                  row position="absolute" width="100%" height=24 pointer-events="none" testId="arranged-detail"
+                    column testId="first-pane"
+                      box direction="ltr" width="var(--exact-bar-inset-start)" height=1 testId="first-pane-start"
+                      box direction="ltr" width="var(--exact-bar-inset-end)" height=1 testId="first-pane-end"
+                    column testId="second-pane"
+                      box direction="ltr" width="var(--exact-bar-inset-start)" height=1 testId="second-pane-start"
+                      box direction="ltr" width="var(--exact-bar-inset-end)" height=1 testId="second-pane-end"
                 scroll flex=1 min-height=0 testId=`content-${e.name}`
                   if e.name == "home"
                     button press=open testId="open-detail"

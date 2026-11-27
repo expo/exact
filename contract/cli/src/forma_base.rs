@@ -5,6 +5,7 @@
 //! copy; an app's own line for a base name is its `override`.
 
 use super::*;
+use contract::forma_levels::Designs;
 use exact_kernel::style::scale::{self, ScaleSource, ScaleValue};
 use serde_json::{json, Value};
 
@@ -377,39 +378,19 @@ impl Server {
         // overrides, and the targets the app ships with their columns.
         let (base, targets) = base_rows(self, request, &design)?;
         // A package token's rows name its package and file; the package designs listed (*1.14*, D11).
-        let text = snap
-            .iter()
-            .find(|(f, _, _)| *f == file)
-            .map_or("", |(_, t, _)| t.as_str());
-        // Its icons' too (stage 13, *1.16*).
-        for rows in ["tokens", "icons"] {
-            crate::forma_packages::mark(
-                ir[rows].as_array_mut().map_or(&mut [][..], |r| &mut r[..]),
-                &app,
-                text,
-                &file,
-            );
+        if !app.packages.is_empty() {
+            let designs = Designs::parsed(&file, Some(design), &app, &self.vocab);
+            for key in ["tokens", "icons"] {
+                for row in ir[key].as_array_mut().into_iter().flatten() {
+                    if let Some(name) = row["name"].as_str().map(str::to_owned) {
+                        crate::forma_packages::mark(row, &designs, &name);
+                    }
+                }
+            }
         }
         let mut out = json!({"ir": ir, "files": files_json(&snap), "meta": {"dials": dials, "tokens": tokens}, "pairs": pairs, "warnings": warnings, "base": base, "targets": targets});
         crate::forma_packages::packaged(&app, &mut out, false);
         Ok(out)
-    }
-
-    /// A param's additions (stage 12 B2-levels, *1.15*) to `out`, from the
-    /// one walker over `file`'s `text`; nothing for a token that is no
-    /// param's.
-    fn levelled(
-        &self,
-        app: &contract::forma_params::AppParams,
-        file: &str,
-        text: Option<&str>,
-        name: &str,
-        out: &mut Value,
-    ) {
-        if let Some(p) = app.tokens.iter().find(|p| p.token == name) {
-            let designs = contract::forma_levels::Designs::read(file, text, app, &self.vocab);
-            designs.annotate(p, out);
-        }
     }
 
     /// A token's stored value per tuple and scheme; a host value (a role, a
@@ -420,8 +401,14 @@ impl Server {
     /// place.
     pub(super) fn resolve(&self, request: &Value) -> Result<Value, Value> {
         let Some(asked) = request.get("tokens") else {
-            let (snap, folding, name) = self.lookup(request)?;
-            return self.resolve_in(request, &required(request, "token")?, &snap, &folding, name);
+            let app = self.app_params();
+            let (snap, folding, design, name) = self.lookup(request, &app)?;
+            let given = required(request, "token")?;
+            let file = file(self, request)?;
+            let designs = std::cell::LazyCell::new(|| {
+                Designs::parsed(&file, Some(design), &app, &self.vocab)
+            });
+            return self.resolve_in(&file, || &*designs, &given, &snap, &folding, name);
         };
         // Refused whole, before any fold.
         if request.get("token").is_some() {
@@ -437,21 +424,25 @@ impl Server {
             );
         }
         let app = self.app_params();
-        let (snap, folding, _) = self.design_with(request, &app)?;
+        let (snap, folding, design) = self.design_with(request, &app)?;
+        let file = file(self, request)?;
+        let designs =
+            std::cell::LazyCell::new(|| Designs::parsed(&file, Some(design), &app, &self.vocab));
         // Each answer named as one alone is (`present`, per answer, so one
         // that can't be shown leaves the others shown); their bytes bounded
         // as they are made, whatever the names.
         let mut answers = Vec::with_capacity(names.len());
         let mut bytes = 0;
+        let resolver = std::cell::LazyCell::new(|| app.resolver());
         for given in names {
-            let answer = match Self::token_of(&app, given)
-                .and_then(|name| self.resolve_in(request, given, &snap, &folding, name))
+            let answer = match Self::token_of(&resolver, given)
+                .and_then(|name| self.resolve_in(&file, || &*designs, given, &snap, &folding, name))
             {
                 Ok(mut answer) => {
                     answer.as_object_mut().map(|o| o.remove("files"));
-                    self.present(answer)
+                    app.present(answer)
                 }
-                Err(error) => json!({ "error": self.present(error) }),
+                Err(error) => json!({ "error": app.present(error) }),
             };
             bytes += answer.to_string().len();
             if bytes > RESOLVE_BYTES {
@@ -462,14 +453,15 @@ impl Server {
             answers.push(answer);
         }
         // (Its `files` named as one alone's are, once.)
-        Ok(json!({"files": self.present(files_json(&snap)), "answers": answers}))
+        Ok(json!({"files": app.present(files_json(&snap)), "answers": answers}))
     }
 
     /// [`Self::resolve`] of the name `given`, looked up as `name`, in
     /// `snap` folded as `folding`.
-    fn resolve_in(
+    fn resolve_in<'a>(
         &self,
-        request: &Value,
+        file: &str,
+        designs: impl FnOnce() -> &'a Designs<'a>,
         given: &str,
         snap: &Snapshot,
         folding: &exact_forma::Folding,
@@ -478,32 +470,23 @@ impl Server {
         // A base name (*1.14*), not a param named like one: unset, its row
         // and no fold (each column's value); set, its token's tuples and row.
         let base = (given == name)
-            .then(|| Ok::<_, Value>(row(&name, &file(self, request)?, &folding.design)))
-            .transpose()?
+            .then(|| row(&name, file, &folding.design))
             .flatten();
         if let Some(base) = &base {
             if base["override"].is_null() {
                 return Ok(json!({"name": name, "base": base, "files": files_json(snap)}));
             }
         }
-        let file = optional(request, "file")?.unwrap_or_else(|| self.design.clone());
-        let text = snap
-            .iter()
-            .find(|(f, ..)| *f == file)
-            .map(|(_, t, _)| t.to_string());
-        // A param's (stage 12 B2-levels, *1.15*): each tuple's winning level
-        // and the name there, and its levels, from the one walker.
-        let app = self.app_params();
-        let levelled = |out: &mut Value| self.levelled(&app, &file, text.as_deref(), &name, out);
         // An icon (D10): its sources, the same in every tuple.
         if let Some(icon) = folding.icons.iter().find(|i| i.name == name) {
             let tuples: Vec<Value> = (0..folding.tuples)
                 .map(|t| json!({"modes": modes_of(&folding.design.axes, t), "kind": "icon", "sf": icon.sf, "material": icon.material, "svg": icon.svg}))
                 .collect();
             let mut out = json!({"token": name, "tuples": tuples, "files": files_json(snap)});
-            levelled(&mut out);
+            let designs = designs();
+            designs.annotate_named(&name, &mut out);
             // A package's icon names its package and file, as a token does (stage 13, *1.16*).
-            crate::forma_packages::fields(&app, snap, &file, &name, &mut out, false);
+            crate::forma_packages::fields(designs, &name, &mut out, false);
             return Ok(out);
         }
         let token = folding
@@ -618,33 +601,30 @@ impl Server {
         // The digests it read, so a client reading several tokens can tell
         // one revision from two.
         let mut out = json!({"token": name, "tuples": tuples, "files": files_json(snap)});
-        levelled(&mut out);
+        let designs = designs();
+        designs.annotate_named(&name, &mut out);
         if let Some(base) = base {
             out["base"] = base;
         }
-        crate::forma_packages::fields(&app, snap, &file, &name, &mut out, false);
+        crate::forma_packages::fields(designs, &name, &mut out, false);
         Ok(out)
     }
 
     /// A token's chain: its default and `when` values, the dials it depends
     /// on, and the tokens those values name, as the checker resolved them.
     pub(super) fn explain(&self, request: &Value) -> Result<Value, Value> {
-        // Each token's per-tuple names recorded, for `bases_by_tuple`.
-        let (snap, folding, name) = exact_forma::traced(|| self.lookup(request))?;
-        // An icon, an icon param's too (D10, *1.12*).
         let app = self.app_params();
-        // The design asked about (`file`), whose lines set the app's values.
-        let design = optional(request, "file")?.unwrap_or_else(|| self.design.clone());
-        let text = snap
-            .iter()
-            .find(|(f, ..)| *f == design)
-            .map(|(_, t, _)| t.to_string());
+        // Each token's per-tuple names recorded, for `bases_by_tuple`.
+        let (snap, folding, parsed, name) = exact_forma::traced(|| self.lookup(request, &app))?;
+        let design = file(self, request)?;
+        let designs =
+            std::cell::LazyCell::new(|| Designs::parsed(&design, Some(parsed), &app, &self.vocab));
         if let Some(mut icon) =
             crate::forma_explain::icon(&self.dir, &design, &app, &snap, &folding, &name)
         {
-            self.levelled(&app, &design, text.as_deref(), &name, &mut icon);
+            designs.annotate_named(&name, &mut icon);
             // A package's icon names its package and file, as a token does (stage 13, *1.16*).
-            crate::forma_packages::fields(&app, &snap, &design, &name, &mut icon, true);
+            crate::forma_packages::fields(&designs, &name, &mut icon, true);
             return Ok(icon);
         }
         // A base name (*1.14*), not a param named like one: its row, with
@@ -710,8 +690,8 @@ impl Server {
             out["param"] = crate::forma_explain::param(&self.dir, &design, p, &app, &snap);
         }
         // Its levels (stage 12 B2-levels, *1.15*).
-        self.levelled(&app, &design, text.as_deref(), &name, &mut out);
-        crate::forma_packages::fields(&app, &snap, &design, &name, &mut out, true);
+        designs.annotate_named(&name, &mut out);
+        crate::forma_packages::fields(&designs, &name, &mut out, true);
         Ok(with(out))
     }
 }

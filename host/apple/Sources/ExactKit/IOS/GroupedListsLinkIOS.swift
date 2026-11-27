@@ -54,8 +54,21 @@ package protocol GroupedLists: AnyObject {
     func reveal(_ id: UInt32, port: (UIScrollView) -> CGRect) -> Bool?
     /// Where a real finger aimed at `node` lands, for a row a list draws.
     func shown(_ node: NodeView) -> GroupedAim?
-    /// Show a press on a standard native row; false when its authored view owns it.
+    /// Show a press on a row a list draws or carries as its cell's highlight;
+    /// false when the row's own view shows it.
     func press(_ node: NodeView, down: Bool) -> Bool
+    /// The cell a list carries custom row `node` in, where its press is the
+    /// cell's highlight (`press`): a context menu lifts the whole cell, its
+    /// highlight with it, as a collection view lifts its own; nil otherwise.
+    func cell(carrying node: NodeView) -> UIView?
+    /// The cell a list shows custom row `node` in, whatever its press: where
+    /// a menu that lifted it returns to.
+    func carrier(of node: NodeView) -> UIView?
+    /// Runs the press of a tapped custom row `node` whose press is its
+    /// cell's as UIKit's selection runs a tapped standard row's
+    /// (`GroupedListView.pressSelected`); false for any other node, whose
+    /// press its caller runs.
+    func pressSelected(_ node: NodeView, _ press: () -> Void) -> Bool
     /// The agent's `tap` on a row UIKit draws.
     func activate(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]?
     /// The custom choice row whose carried radio is `node`.
@@ -72,9 +85,24 @@ package protocol GroupedLists: AnyObject {
     /// The authored parent of a row carried into a cell.
     func logicalParent(of view: UIView) -> UIView?
     #if os(iOS)
+    /// The grouped list that projects this authored reorder grip into a UIKit accessory.
+    func reorderList(for grip: NodeView) -> UInt32?
+    func reorderResponder(for grip: NodeView, accessibility: Bool) -> UIView?
     /// Close the swipe actions revealed in the list that draws row `id`.
     func closeSwipe(row id: UInt32)
     #endif
+}
+
+extension NodeView {
+    /// The visible cell receives the keys for the grip UIKit projects.
+    package func projectedReorderResponder(accessibility: Bool = false) -> UIView? {
+        #if os(iOS)
+        guard props["reorderFor"] != nil, !formDisabled, !inert, !cssVisibilityHidden else { return nil }
+        return presenter?.groupedLists?.reorderResponder(for: self, accessibility: accessibility)
+        #else
+        return nil
+        #endif
+    }
 }
 
 /// Where a finger aimed at a row a list draws lands (LLP 1080.000 D4): a
@@ -99,8 +127,21 @@ package enum GroupedListsLink {
 #endif
 
 #if os(iOS)
+/// A view that stands for a node the page hides, whose long press opens the
+/// node's context popover: a grouped list's cell, or a navigation bar's title.
 package protocol GroupedMenuSurface: AnyObject {
     var menuSource: NodeView? { get }
+}
+
+/// A navigation bar's title that stands for its header's pressable group,
+/// which the page hides while the bar shows it (LLP 1021 §5.1, LLP 1075.003
+/// §9.10). Its menu stands only while the bar shows it for that group.
+package protocol TitleMenuSurface: GroupedMenuSurface {
+    /// Whether the bar shows this title for `menuSource` now
+    var showsSource: Bool { get }
+    /// The avatar's view and its outline, which a lift with no preview row
+    /// shows alone (LLP 1021 §5.1)
+    var avatarLift: (view: UIView, outline: UIBezierPath)? { get }
 }
 
 extension Presenter {

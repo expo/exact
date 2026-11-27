@@ -4,7 +4,7 @@ use super::*;
 // Snapshots share paragraph and command data. Each picture keeps its owners
 // until the display acknowledges its replacement.
 pub(crate) struct Presentation {
-    text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
+    text: Rc<BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>>,
     fields: HashMap<ViewId, Rc<field::PaintedField>>,
     inline: HashMap<ViewId, Rc<inline_frame::PaintedInline>>,
     bars: Vec<scrollbar::Bar>,
@@ -13,6 +13,19 @@ pub(crate) struct Presentation {
 }
 
 impl Painter {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn use_text_predecessor(&mut self, state: &Presentation) {
+        self.accepted_text = state.text.clone();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn discard_text(&mut self, state: &Presentation, previous: Option<&Presentation>) {
+        self.numerals.discard(
+            previous.map_or(&self.accepted_text, |p| &p.text),
+            &state.text,
+        );
+    }
+
     pub(crate) fn presentation(&self) -> Presentation {
         Presentation {
             text: self.accepted_text.clone(),

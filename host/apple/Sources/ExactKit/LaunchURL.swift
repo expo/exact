@@ -19,8 +19,7 @@ extension ExactSession {
     /// containing app's to open (`openURL`).
     @discardableResult public func follow(_ href: String, target: String? = nil) -> Bool {
         guard state != .destroyed, !href.isEmpty else { return false }
-        // A link to a fragment (`href="#moves"`) is the visit shown, at that fragment (LLP 1153 D5).
-        let href = href.hasPrefix("#") ? String((routerOp?["url"] as? String ?? "/").prefix { $0 != "#" }) + href : href
+        let href = resolvedHref(href)
         if href.hasPrefix("/"), !href.hasPrefix("//"), booted, runtime.routeMatches(href) { return navigate(href, target: target) }
         delegate?.exactSession(self, command: "openURL", args: [href])
         return true
@@ -34,7 +33,9 @@ extension ExactSession {
             log("navigate refused: no navigation root handler or matching route")
             return nil
         }
-        if followed { return applyInput(go).map { $0.error == nil } ?? false }
+        // A link a row of a split's list followed is that row's press, which navigates (`Batch.splitPress`)
+        let row = followed ? pressSplitRow.map { SplitPress(row: $0.row, list: $0.list, writesRouter: true) } : nil
+        if followed { return applyInput { go().map { var batch = $0; batch.splitPress = row; return batch } }.map { $0.error == nil } ?? false }
         guard let batch = go() else { return false }
         apply(batch)
         return batch.error == nil
@@ -180,6 +181,24 @@ extension ExactSession {
         return true
     }
 
+    /// A fragment refers to the visit shown (LLP 1153 D5).
+    private func resolvedHref(_ href: String) -> String {
+        href.hasPrefix("#") ? String((routerOp?["url"] as? String ?? "/").prefix { $0 != "#" }) + href : href
+    }
+
+    func presentRoutePanel(_ args: [Any]) {
+        guard let openPanel else { return log("panel unsupported: this host does not present route panels") }
+        guard args.count == 2, let href = args[0] as? String, let target = args[1] as? String, !target.isEmpty,
+              target != "main", !target.hasPrefix("_"), !target.isUnnamedWindowLabel else {
+            return log("panel refused: expected an app route and a named secondary window")
+        }
+        let location = resolvedHref(href)
+        guard location.hasPrefix("/"), !location.hasPrefix("//"), runtime.routeMatches(location) else {
+            return log("panel refused: expected an app route")
+        }
+        openPanel(location, target)
+    }
+
     /// The view that hears `navigate`: the navigation root (LLP 1038 D8).
     package var navigationRoot: NodeView? {
         presenter.views.values.first { $0.props["navigationBack"] != nil && $0.handlers.contains("navigate") }
@@ -238,5 +257,13 @@ package enum IncomingURLBatch {
             if url.isFileURL, !webPage(url) { document(url) }
             else if url.isFileURL || !development(url) { location(url) }
         }
+    }
+}
+
+extension String {
+    package var isUnnamedWindowLabel: Bool {
+        guard hasPrefix("window-") else { return false }
+        let digits = utf8.dropFirst(7)
+        return !digits.isEmpty && digits.allSatisfy { (48...57).contains($0) }
     }
 }

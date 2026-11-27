@@ -79,10 +79,120 @@ fn the_plan_is_the_boxs_pixels_above_the_natural_size_and_under_the_caps() {
 fn a_box_moving_past_the_band_on_either_axis_asks_again() {
     let h = header("<svg viewBox=\"0 0 10 10\"/>").unwrap();
     let fill = Ask::default();
-    assert!(!resize_changes(h, fill, (100.0, 100.0), (110.0, 100.0)));
-    assert!(resize_changes(h, fill, (100.0, 100.0), (100.0, 130.0)));
-    assert!(resize_changes(h, fill, (100.0, 100.0), (40.0, 100.0)));
-    assert!(!resize_changes(h, fill, (100.0, 100.0), (100.0, 100.0)));
+    assert!(!resize_changes(
+        h,
+        fill,
+        (100.0, 100.0),
+        fill,
+        (110.0, 100.0)
+    ));
+    assert!(resize_changes(
+        h,
+        fill,
+        (100.0, 100.0),
+        fill,
+        (100.0, 130.0)
+    ));
+    assert!(resize_changes(h, fill, (100.0, 100.0), fill, (40.0, 100.0)));
+    assert!(!resize_changes(
+        h,
+        fill,
+        (100.0, 100.0),
+        fill,
+        (100.0, 100.0)
+    ));
+    // Display scale change on the same physical box always re-rasterizes.
+    let fill2x = Ask {
+        fit: ObjectFit::Fill,
+        scale: 2.0,
+    };
+    assert!(resize_changes(
+        h,
+        fill,
+        (200.0, 200.0),
+        fill2x,
+        (200.0, 200.0)
+    ));
+    // Fit change re-rasterizes when planned pixels differ, not when identical.
+    let contain = Ask {
+        fit: ObjectFit::Contain,
+        scale: 1.0,
+    };
+    assert!(resize_changes(
+        h,
+        fill,
+        (200.0, 100.0),
+        contain,
+        (200.0, 100.0)
+    ));
+    assert!(!resize_changes(
+        h,
+        fill,
+        (100.0, 100.0),
+        contain,
+        (100.0, 100.0)
+    ));
+}
+
+/// SVG raster cache keys and resize checks include display scale and
+/// `object-fit`, so changing scale on the same physical pixel box resolves the
+/// scene at the new CSS size without hitting a stale cache entry.
+#[test]
+fn an_svg_without_viewbox_re_rasterizes_at_a_new_display_scale_without_cache_collision() {
+    const BOX: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <rect width="100" height="100" fill="#ff0000"/>
+</svg>"##;
+    let assets = Assets::selected(
+        PathBuf::new(),
+        Arc::new(|name| Ok((name == "box.svg").then(|| Arc::from(BOX.as_bytes())))),
+    );
+    let mut images = Images::with_assets(assets);
+    // 200×200 CSS px @ 1× -> 200×200 device px: the 100×100 rect covers only the top-left quarter.
+    let k1 = kernel("box.svg", 200.0, 200.0, ObjectFit::Fill);
+    images.sync_visible(&k1, &k1.roots(), 1.0, |_| true);
+    images.wait(WAIT);
+    let b1 = images.bitmaps[&1].clone();
+    assert_eq!((b1.width(), b1.height()), (200, 200));
+    assert!(b1.crop().whole());
+    assert_eq!(rgba(&b1, 50, 50), [255, 0, 0, 255]);
+    assert_eq!(rgba(&b1, 150, 150), [0, 0, 0, 0]);
+
+    // Existing view switches to 100×100 CSS px @ 2× (same 200×200 device px):
+    // must re-rasterize and not hit the 1× entry in the cache.
+    let k2 = kernel("box.svg", 100.0, 100.0, ObjectFit::Fill);
+    images.sync_visible(&k2, &k2.roots(), 2.0, |_| true);
+    images.wait(WAIT);
+    let b2 = images.bitmaps[&1].clone();
+    assert_eq!((b2.width(), b2.height()), (200, 200));
+    assert!(b2.crop().whole());
+    assert_eq!(rgba(&b2, 50, 50), [255, 0, 0, 255]);
+    assert_eq!(
+        rgba(&b2, 150, 150),
+        [255, 0, 0, 255],
+        "at 2× the 100×100 CSS rect fills the entire 200×200 device bitmap"
+    );
+
+    // Switching back to 1× recovers the 1× rendering rather than reusing 2×.
+    images.sync_visible(&k1, &k1.roots(), 1.0, |_| true);
+    images.wait(WAIT);
+    let b3 = images.bitmaps[&1].clone();
+    assert_eq!(rgba(&b3, 150, 150), [0, 0, 0, 0]);
+
+    // Changing `object-fit` on the same box re-rasterizes at the new planned size.
+    let k_fill = kernel("box.svg", 200.0, 80.0, ObjectFit::Fill);
+    images.sync_visible(&k_fill, &k_fill.roots(), 1.0, |_| true);
+    images.wait(WAIT);
+    assert_eq!(
+        (images.bitmaps[&1].width(), images.bitmaps[&1].height()),
+        (200, 80)
+    );
+    let k_contain = kernel("box.svg", 200.0, 80.0, ObjectFit::Contain);
+    images.sync_visible(&k_contain, &k_contain.roots(), 1.0, |_| true);
+    images.wait(WAIT);
+    assert_eq!(
+        (images.bitmaps[&1].width(), images.bitmaps[&1].height()),
+        (80, 80)
+    );
 }
 
 const MARK: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">

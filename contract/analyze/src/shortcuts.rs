@@ -17,9 +17,10 @@ use std::collections::BTreeMap;
 /// host matches.
 pub fn chord_codes(chord: &str) -> (Vec<&str>, Vec<String>) {
     let (modifiers, key) = split_chord(chord);
-    if !modifiers
-        .iter()
-        .all(|m| matches!(*m, "Meta" | "Control" | "Alt" | "Shift"))
+    if ambiguous(&modifiers, key)
+        || !modifiers
+            .iter()
+            .all(|m| matches!(*m, "Mod" | "Meta" | "Control" | "Alt" | "Shift"))
     {
         return (modifiers, Vec::new());
     }
@@ -41,6 +42,28 @@ fn split_chord(chord: &str) -> (Vec<&str>, &str) {
         modifiers.split('+').filter(|m| !m.is_empty()).collect(),
         key,
     )
+}
+
+fn ambiguous(held: &[&str], key: &str) -> bool {
+    (held.contains(&"Mod") || key == "Mod")
+        && (held.contains(&"Meta")
+            || held.contains(&"Control")
+            || matches!(key, "Meta" | "Control"))
+}
+
+fn resolved_chord<'a>(chord: &'a str, primary: &'a str) -> Option<(Vec<&'a str>, &'a str)> {
+    let (mut held, key) = split_chord(chord);
+    if ambiguous(&held, key) {
+        return None;
+    }
+    if held.contains(&"Mod") {
+        for modifier in &mut held {
+            if *modifier == "Mod" {
+                *modifier = primary;
+            }
+        }
+    }
+    Some((held, key))
 }
 
 fn key_codes(key: &str, shift: bool) -> Vec<String> {
@@ -308,9 +331,23 @@ pub fn check_shortcut_keys(
                                 "drop {code} from `Actions` or the shortcut, or bind another key"
                             )
                         };
-                        let held = match modifiers.is_empty() {
-                            true => "no modifier".to_owned(),
-                            false => format!("exactly {}", modifiers.join("+")),
+                        let held = if modifiers.contains(&"Mod") {
+                            let resolved = |primary| {
+                                modifiers
+                                    .iter()
+                                    .map(|&m| if m == "Mod" { primary } else { m })
+                                    .collect::<Vec<_>>()
+                                    .join("+")
+                            };
+                            format!(
+                                "exactly {} on Apple platforms or {} elsewhere",
+                                resolved("Meta"),
+                                resolved("Control")
+                            )
+                        } else if modifiers.is_empty() {
+                            "no modifier".to_owned()
+                        } else {
+                            format!("exactly {}", modifiers.join("+"))
                         };
                         out.push(AnalyzeError {
                             id: "analyze-shortcut-world-key",
@@ -328,12 +365,16 @@ pub fn check_shortcut_keys(
     out
 }
 
+fn same_modifiers(a: &[&str], b: &[&str]) -> bool {
+    a.iter().all(|m| b.contains(m)) && b.iter().all(|m| a.contains(m))
+}
+
 /// What Windows does with a chord holding no Windows key (`Meta`) instead
 /// of giving it to the app, for the chords it keeps; `key` as
 /// [`split_chord`] gives it.
 fn windows_keeps(modifiers: &[&str], key: &str) -> Option<&'static str> {
     let held = |m: &str| modifiers.contains(&m);
-    let only = |ms: &[&str]| modifiers.len() == ms.len() && ms.iter().all(|m| held(m));
+    let only = |ms: &[&str]| same_modifiers(modifiers, ms);
     match key.to_ascii_lowercase().as_str() {
         "tab" if held("Alt") => Some("switching windows"),
         "escape" if only(&["Control", "Shift"]) => Some("opening Task Manager"),
@@ -361,15 +402,16 @@ fn control_sibling(modifiers: &[&str], key: &str) -> String {
 
 /// Whether two chords are one: the same modifiers in any order and the
 /// key compared without case, as the hosts match it.
-fn same_chord(a: &str, b: &str) -> bool {
-    let ((a_held, a_key), (b_held, b_key)) = (split_chord(a), split_chord(b));
+fn same_windows_chord(a: &str, b: &str) -> bool {
+    let Some((a_held, a_key)) = resolved_chord(a, "Control") else {
+        return false;
+    };
+    let (b_held, b_key) = split_chord(b);
     let key = |k: &str| match k {
         "+" => "plus".to_owned(),
         k => k.to_ascii_lowercase(),
     };
-    a_held.len() == b_held.len()
-        && a_held.iter().all(|m| b_held.contains(m))
-        && key(a_key) == key(b_key)
+    same_modifiers(&a_held, &b_held) && key(a_key) == key(b_key)
 }
 
 /// Every button `aria-keyshortcuts` chord that never presses its button on
@@ -387,7 +429,9 @@ pub fn check_windows_shortcuts(file: &File) -> Vec<AnalyzeError> {
         for &(text, written) in &button.values {
             let chords: Vec<&str> = text.split_whitespace().collect();
             for &chord in &chords {
-                let (modifiers, key) = split_chord(chord);
+                let Some((modifiers, key)) = resolved_chord(chord, "Control") else {
+                    continue;
+                };
                 if !modifiers
                     .iter()
                     .all(|m| matches!(*m, "Meta" | "Control" | "Alt" | "Shift"))
@@ -396,7 +440,7 @@ pub fn check_windows_shortcuts(file: &File) -> Vec<AnalyzeError> {
                 }
                 let (id, message) = if modifiers.contains(&"Meta") {
                     let sibling = control_sibling(&modifiers, key);
-                    if chords.iter().any(|c| same_chord(c, &sibling)) {
+                    if chords.iter().any(|c| same_windows_chord(c, &sibling)) {
                         continue;
                     }
                     let (sibling_held, sibling_key) = split_chord(&sibling);

@@ -235,5 +235,47 @@ final class FieldDirectionIOSTests: XCTestCase {
             window?.isHidden = true
         }
     }
+
+    /// A text area drawing its placeholder draws it again at a new size,
+    /// set as Exact sets it, through `frame`: its old picture is not
+    /// stretched to the new bounds (a field narrowing as the keys go down).
+    func testANarrowedFieldDrawsItsPlaceholderAtItsOwnWidth() throws {
+        let (_, node) = field("textarea", "", props: ["placeholder": "Message"], style: [:])
+        let tv = try XCTUnwrap(node.textArea as? TextArea)
+        // Black ink, whatever the simulator's appearance
+        tv.placeholderColor = .black
+        tv.frame.size.width = 300
+        tv.layoutIfNeeded()
+        let wide = try inkWidth(of: tv)
+        tv.frame.size.width = 240
+        tv.layoutIfNeeded()
+        // The layer's render draws afresh, so the stretched picture shows only
+        // on the screen: what tells is that the new size asks to draw again
+        XCTAssertTrue(tv.layer.needsDisplay(), "a narrower field draws its placeholder again")
+        let narrow = try inkWidth(of: tv)
+        XCTAssertGreaterThan(wide, 0, "the placeholder drew")
+        XCTAssertEqual(narrow, wide, accuracy: 2, "the placeholder keeps its width as the field narrows")
+        window?.isHidden = true
+    }
+
+    /// The placeholder's ink across the field, in pixels, as the layer shows it now.
+    private func inkWidth(of tv: TextArea) throws -> Int {
+        tv.layer.displayIfNeeded()
+        let image = UIGraphicsImageRenderer(bounds: tv.bounds).image { context in tv.layer.render(in: context.cgContext) }
+        let cg = try XCTUnwrap(image.cgImage)
+        let width = cg.width, height = cg.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let ctx = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let px = { (x: Int, y: Int) -> [Int] in let i = (y * width + x) * 4; return (0..<4).map { Int(pixels[i + $0]) } }
+        // Ink is darker than white at its own opacity: grey text over a white
+        // ground or a clear one. The first line's rows, 4 points inside the
+        // field's border on every side
+        let inset = Int(4 * image.scale)
+        let rows = inset..<min(height - inset, Int(40 * image.scale))
+        let dark = { (p: [Int]) -> Bool in p[3] > 20 && (p[0] + p[1] + p[2]) / 3 < p[3] * 3 / 4 }
+        let ink = (inset..<(width - inset)).filter { x in rows.contains { y in dark(px(x, y)) } }
+        return ink.isEmpty ? 0 : ink.max()! - ink.min()!
+    }
 }
 #endif

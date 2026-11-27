@@ -13,6 +13,8 @@ pub struct Device {
     pub font_scale: f32,
     /// Android's touch-exploration reading, a proxy for a screen reader (LLP 1039 D10).
     pub screen_reader: exact_runner::ScreenReader,
+    /// Orientation of the display hosting the reader.
+    pub orientation: Option<exact_runner::ScreenOrientation>,
     /// The first of the device's locales, a BCP 47 tag (`en-GB`).
     pub locale: String,
     /// That locale is laid out right to left.
@@ -63,8 +65,9 @@ impl<D: DataSource> Presenter<D> {
             .host
             .set_root_font_size(ROOT_FONT_SIZE * f64::from(scale));
         let field = self.host.set_control_text_scale(scale).err();
+        let bars = self.fit_bars();
         let applied = self.after_commit();
-        root.or(field).or(applied)
+        root.or(field).or(bars).or(applied)
     }
 
     /// The device's settings, as its shell read them (LLP 1115.001 D3.1,
@@ -101,6 +104,7 @@ impl<D: DataSource> Presenter<D> {
         self.set_system_scheme(device.night);
         let runner = self.host.runner();
         let mut preferences = runner.viewport().preferences;
+        preferences.orientation = device.orientation;
         preferences.dark = device.night;
         preferences.reduced_motion = device.reduced_motion;
         preferences.contrast = match device.high_contrast {
@@ -132,6 +136,7 @@ impl<D: DataSource> Presenter<D> {
             error = error.or(self.set_root_font_size(px));
             // A field the shell hosts starts at the scaled size too (D8).
             error = error.or(self.scale_field_font(device.font_scale));
+            error = error.or(self.fit_bars());
         }
         // A tag the runner refuses (an empty one) leaves the place as it was,
         // and so does a drive: its place (`EXACT_AGENT_LOCALE`) is the app's

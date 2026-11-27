@@ -43,6 +43,35 @@ test('a release-required key absent refuses a release and warns a development bu
   expect(thrown(() => packageConfig(app, 'macos', { extensions, release: true }))).toMatch(/^swatch-key-missing: /);
 });
 
+test('development overlays declared keys before resolving variables or enforcing release requirements', () => {
+  const base = { '@fixture/swatch': { android: { label: 'base' } } };
+  const overlay = { android: { apiKey: { env: 'TEST_KEY' } } };
+  const manifest = { packages: base, development: { packages: { '@fixture/swatch': overlay } } };
+  const save = () => writeFileSync(resolve(app, 'app.json'), JSON.stringify(manifest));
+  const env = { TEST_KEY: KEY };
+  const read = (development, release) => packageConfig(app, 'android', { extensions, development, release, env }).get('swatch');
+  save();
+  expect(read(true, true)).toEqual({ label: 'base', apiKey: KEY });
+  const release = trust => packageConfig(app, 'android', { extensions, release: true, env: { ...env, EXACT_UPDATE_TRUST: trust } }).get('swatch');
+  expect(release('development')).toEqual({ label: 'base', apiKey: KEY });
+  expect(() => release('production')).toThrow('swatch-key-missing');
+  expect(() => read(false, true)).toThrow('swatch-key-missing');
+  base['@fixture/swatch'].android.apiKey = { env: 'PUBLIC_KEY' };
+  overlay.android.label = 'test';
+  env.PUBLIC_KEY = 'public';
+  save();
+  expect(read(true, false)).toEqual({ label: 'test', apiKey: KEY });
+  Object.defineProperty(env, 'TEST_KEY', { get() { throw Error('production read the development variable'); } });
+  expect(read(false, true)).toEqual({ label: 'base', apiKey: 'public' });
+  expect(nativePackageConfig(manifest, 'android', env, false)).toEqual(nativePackageConfig({ packages: base }, 'android', env));
+  const evidence = nativePackageConfig(manifest, 'android', { TEST_KEY: KEY }, true);
+  expect(evidence['packages.@fixture/swatch'].apiKey.env).toBe('TEST_KEY');
+  expect(JSON.stringify(evidence)).not.toContain(KEY);
+  overlay.android.unknown = KEY;
+  save();
+  for (const development of [false, true]) expect(() => read(development, true)).toThrow('bake-config-unknown: app.json "development": {"packages":');
+});
+
 test('a value of another type than declared is refused, and the value is never said', () => {
   given({ android: { apiKey: KEY } }, { SWATCH_KEY: KEY });
   const said = thrown(() => packageConfig(app, 'android', { extensions }));
@@ -68,10 +97,14 @@ test('a key the interface does not declare for the target is refused, with the n
 });
 
 test('an entry for a package not installed is a warning; an unused one is not read', () => {
-  writeFileSync(resolve(app, 'app.json'), JSON.stringify({ packages: { '@fixture/swach': { web: { apiKey: 1 } }, '@fixture/swatch': { web: { nope: 1 } } } }));
-  const warned = [];
-  expect([...packageConfig(app, 'web', { extensions: {}, warn: (m) => warned.push(m) })]).toEqual([]);
-  expect(warned).toEqual(['app.json "packages" names @fixture/swach, which is not installed']);
+  const packages = { '@fixture/swatch': { web: { nope: 1 } } };
+  const development = { packages: { '@fixture/swach': { web: { apiKey: 1 } } } };
+  writeFileSync(resolve(app, 'app.json'), JSON.stringify({ packages, development }));
+  for (const trust of [true, false]) {
+    const warned = [];
+    expect([...packageConfig(app, 'web', { extensions: {}, development: trust, warn: (m) => warned.push(m) })]).toEqual([]);
+    expect(warned).toEqual(['app.json development.packages names @fixture/swach, which is not installed']);
+  }
 });
 
 test("an Android key fills a vendor's <meta-data> only by a name on the list, once", () => {

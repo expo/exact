@@ -130,6 +130,21 @@ fn a_chord_windows_never_delivers_warns_in_an_app_with_a_windows_host() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 
+    let portable = app(
+        "portable",
+        Some(r#"{"app":{"id":"com.exact.portable","name":"Portable"},"host":{"windows":{}}}"#),
+    );
+    let path = portable.join("app.contract");
+    std::fs::write(&path, SOURCE.replace("Control+Escape", "Mod+Escape")).unwrap();
+    let found = contract::shortcut_findings(&path).unwrap();
+    assert!(found
+        .iter()
+        .any(|e| e.id == "analyze-shortcut-windows-reserved"
+            && e.message.contains("Mod+Escape")
+            && e.message.contains("opening Start")));
+
+    std::fs::remove_dir_all(portable).unwrap();
+
     // A Windows crate is a Windows host too.
     let dir = app("crate", None);
     std::fs::create_dir_all(dir.join("windows")).unwrap();
@@ -141,4 +156,103 @@ fn a_chord_windows_never_delivers_warns_in_an_app_with_a_windows_host() {
         8
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn windows_shortcut_warnings_compare_modifier_sets() {
+    let dir = app(
+        "modifier-sets",
+        Some(r#"{"app":{"id":"com.exact.sets","name":"Sets"},"host":{"windows":{}}}"#),
+    );
+    let path = dir.join("app.contract");
+    let mut source = "component App\n  view\n    column\n".to_owned();
+    let mut expected = Vec::new();
+    for (chord, kept) in [
+        ("Control+Control+Escape", "opening Start"),
+        ("Shift+Control+Control+Escape", "opening Task Manager"),
+        ("Control+Alt+Control+Delete", "its security screen"),
+        ("Alt+Alt+F4", "closing the window"),
+        ("Alt+Alt+Space", "the window's system menu"),
+        ("Mod+Mod+Escape", "opening Start"),
+    ] {
+        for multiline in [false, true] {
+            let prefix = if multiline {
+                "      button \"Command\"\n        "
+            } else {
+                "      button \"Command\" "
+            };
+            source.push_str(prefix);
+            let line = source.lines().count() as u32;
+            source.push_str(&format!("aria-keyshortcuts=\"{chord} {chord}\"\n"));
+            expected.push((line, chord, kept));
+        }
+    }
+    for chords in [
+        "Meta+N Control+Control+n",
+        "Meta+Meta+S Control+s",
+        "Control+Control+Alt+Shift+Escape Hyper+Control+Escape",
+    ] {
+        source.push_str(&format!(
+            "      button \"Other\" aria-keyshortcuts=\"{chords}\"\n"
+        ));
+    }
+    std::fs::write(&path, source).unwrap();
+    let found = contract::shortcut_findings(&path).unwrap();
+    assert_eq!(found.len(), expected.len(), "{found:#?}");
+    for (finding, (line, chord, kept)) in found.iter().zip(expected) {
+        assert_eq!(finding.id, "analyze-shortcut-windows-reserved");
+        assert!(finding.is_warning());
+        assert_eq!(finding.span.line, line);
+        assert!(
+            finding.message.starts_with(&format!(
+                "`aria-keyshortcuts` \"{chord}\" is a chord Windows keeps for {kept}"
+            )),
+            "{finding:?}"
+        );
+    }
+    let (compiled, warnings) = contract::compile_path_all_with_warnings(&path, false);
+    assert!(compiled.is_ok(), "{:?}", compiled.err());
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|e| e.id.starts_with("analyze-shortcut-"))
+            .count(),
+        found.len(),
+    );
+}
+
+#[test]
+fn hosts_check_chords_in_literals_list_items_conditional_arms_concatenations_and_state_initializers(
+) {
+    for chord in ["Hyper+O", "Alt+Alt+O", "Mod+Meta+O", "Mod+Control+O"] {
+        let prefix = chord.strip_suffix('O').unwrap();
+        let cases = [
+            ("literal", format!("button \"Open\" aria-keyshortcuts=\"{chord}\"")),
+            ("list item", format!("column\n      for item in [\"{chord}\"] key=item\n        button \"Open\" aria-keyshortcuts=item")),
+            ("conditional arm", format!("button \"Open\" aria-keyshortcuts=(armed ? \"{chord}\" : \"Escape\")")),
+            ("concatenation", format!("button \"Open\" aria-keyshortcuts=(\"{prefix}\" + \"O\")")),
+            ("state initializer", "button \"Open\" aria-keyshortcuts=key".into()),
+        ];
+        for (position, view) in cases {
+            let source = format!("component App\n  state armed = false\n  state key = \"{chord}\"\n  view\n    {view}\n");
+            contract::compile(&source).unwrap_or_else(|e| panic!("{position}: {chord}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn the_literal_close_window_override_refuses_ambiguous_and_reserved_chords() {
+    let compile = |chord: &str| {
+        contract::compile(&format!("component App\n  view\n    column -exact-menu-keys=\"close-window={chord}\"\n      text \"Open\"\n"))
+    };
+    compile("Mod+Shift+W").unwrap();
+    for chord in ["Mod+Meta+J", "Mod+Control+J", "Mod+Q"] {
+        assert!(
+            compile(chord)
+                .unwrap_err()
+                .to_string()
+                .contains("lower-menu-keys"),
+            "{chord}"
+        );
+    }
 }

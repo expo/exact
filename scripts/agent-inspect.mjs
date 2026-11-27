@@ -5,6 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { renderAx } from './agent-ax.mjs';
+import { dragNote } from './agent-drag-out.mjs';
 import { decodePng, encodePng, shrink } from './png.mjs';
 
 /** Film's bounds (LLP 1012.001.000 D2): a drive's pictures, not a recording, decoded in memory at once. */
@@ -215,7 +216,9 @@ const TABLE_ELEMENTS = /^(table|caption|thead|tbody|tfoot|tr|th|td|dl|dt|dd)$/;
  *           {"  " × depth}{Type}#{id} [<{element}>, a table's or a description list's] [{testId}] hatch="…" "{text}" value="…" label="…" checked=true|false [focused] [hidden]|[inactive] ({handlers, comma-separated})
  *           `[hidden]` under a route the host does not show (inactive too), `[inactive]` under one only a sheet covers
  *           an iframe adds url="…" loading=true|false, a partitioned one partition="…", one that
- *           reported a navigation at="…" title="…" (LLP 1020.002 §10), and `[guest]` outline lines
+ *           reported a navigation at="…" title="…" (LLP 1020.002 §10), and `[guest]` outline lines; a node whose drag
+ *           carries something adds what it carries (`drag{image/jpeg assets/apple/1016.jpg as "Mount Fuji.jpg",
+ *           text/plain "Mount Fuji"}`, LLP 1094.000 D10, D14)
  *   layout  viewport W×H [· safe-area T R B L · keyboard K, when any is not 0] [· status bar light-content|dark-content (#id), iOS] · clock C ms
  *           #{id} [{testId}] {Type} {x},{y} {w}×{h} scroll {sx},{sy} of {rx},{ry} [port {x},{y} {w}×{h}] [overscroll {ox},{oy}]
  *   logs    "(N earlier lines dropped by the journal ring)" when dropped > 0; the journal lines as they are;
@@ -257,7 +260,7 @@ export function render(op, r, how = {}) {
       for (const n of r.nodes) {
         const depth = Math.max(0, n.depth - rootDepth);
         const p = n.props ?? {};
-        lines.push(`${'  '.repeat(depth)}${n.type}#${n.id}${TABLE_ELEMENTS.test(p.semanticTag ?? '') ? ` <${p.semanticTag}>` : ''}${p.testId != null ? ` [${p.testId}]` : ''}${p.hatch != null ? ` hatch=${q(p.hatch)}` : ''}${p.text != null ? ` ${q(p.text)}` : ''}${p.value != null ? ` value=${q(p.value)}` : ''}${p.accessibilityLabel != null ? ` label=${q(p.accessibilityLabel)}` : ''}${p.checked != null ? ` checked=${p.checked}` : ''}${n.focused ? " [focused]" : ""}${n.hidden ? " [hidden]" : n.inactive ? " [inactive]" : ""}${n.unshown ? " [not in the iOS bar: hidden in the app]" : ""}${n.world ? ` world{${n.world.name}} · ${n.world.entities} entities · tick ${n.world.tick}` : ""}${n.status != null ? ` status ${q(n.status)}` : ""}${n.handlers?.length ? ` (${n.handlers.join(', ')})` : ''}${n.url != null ? ` url=${q(n.url)} loading=${n.loading}` : ''}${n.partition != null ? ` partition=${q(n.partition)}` : ''}${n.navigation ? ` at=${q(n.navigation.url)} title=${q(n.navigation.title)}` : ''}${pictureInPictureNote(n.pictureInPicture)}`);
+        lines.push(`${'  '.repeat(depth)}${n.type}#${n.id}${TABLE_ELEMENTS.test(p.semanticTag ?? '') ? ` <${p.semanticTag}>` : ''}${p.testId != null ? ` [${p.testId}]` : ''}${p.hatch != null ? ` hatch=${q(p.hatch)}` : ''}${p.text != null ? ` ${q(p.text)}` : ''}${p.value != null ? ` value=${q(p.value)}` : ''}${p.accessibilityLabel != null ? ` label=${q(p.accessibilityLabel)}` : ''}${p.checked != null ? ` checked=${p.checked}` : ''}${n.focused ? " [focused]" : ""}${n.hidden ? " [hidden]" : n.inactive ? " [inactive]" : ""}${n.unshown ? " [not in the iOS bar: hidden in the app]" : ""}${n.world ? ` world{${n.world.name}} · ${n.world.entities} entities · tick ${n.world.tick}` : ""}${n.status != null ? ` status ${q(n.status)}` : ""}${n.handlers?.length ? ` (${n.handlers.join(', ')})` : ''}${n.url != null ? ` url=${q(n.url)} loading=${n.loading}` : ''}${n.partition != null ? ` partition=${q(n.partition)}` : ''}${n.navigation ? ` at=${q(n.navigation.url)} title=${q(n.navigation.title)}` : ''}${pictureInPictureNote(n.pictureInPicture)}${dragNote(n)}`);
         for (const g of n.guest ?? []) lines.push(`${'  '.repeat(depth + g.depth + 1)}[guest] ${g.tag}${g.id != null ? `#${g.id}` : ''}${g.testId != null ? ` [${g.testId}]` : ''}${g.text != null ? ` ${q(g.text)}` : ''}`);
       }
       return lines.join('\n');
@@ -1229,7 +1232,7 @@ export async function tapRefusal(session, target, error) {
   if (error.transport || error.malformed) return error; // App state cannot explain malformed input or a failed transport.
   // What covers a target may leave on one of the app's timers, which the agent's frozen clock never reaches (a boot
   // overlay's `after(900, …)`, euxy FRICTION 9): the tasks still waiting, and the step that runs them.
-  if (/covers its middle/.test(error.message ?? '')) try {
+  if (/covers (?:its middle|the requested point)/.test(error.message ?? '')) try {
     const r = await session.state(), now = r?.clock;
     const due = Object.entries(r?.tasks ?? {}).filter(([, at]) => Number.isFinite(at) && at > now).sort((a, b) => a[1] - b[1]);
     if (Number.isFinite(now) && due.length) {

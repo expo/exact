@@ -1,6 +1,14 @@
 use super::*;
-use exact_ink::instance::{Clip, CoverageClip, Scissor};
+use exact_ink::instance::{Clip, CoverageClip, Frame, Scissor};
 use exact_ink::path::Coverage;
+
+/// A target that holds the frame's pixels in `region`, the first of them at its
+/// origin. It can be larger than what was drawn into it, and is clear there.
+#[derive(Clone, Copy)]
+pub(super) struct Tile {
+    pub(super) texture: TextureId,
+    pub(super) region: Scissor,
+}
 
 pub(super) struct Group {
     parent: Encoder,
@@ -33,13 +41,21 @@ impl Ink {
 
     /// Flatten overflowing clips into one mask, so every child sees their intersection.
     pub(super) fn combined_clip(&mut self, mask: Option<Coverage>) -> Result<CoverageClip> {
-        let rect = [0., 0., self.size[0] as f32, self.size[1] as f32];
+        let viewport = Scissor::full(self.size);
         let bounds = self.encoder.clip_bounds();
         let bounds = mask.map_or(bounds, |mask| {
             bounds.intersect(Scissor::from_rect(mask.rect))
         });
+        if bounds.width == 0 || bounds.height == 0 {
+            // Nothing shows through an empty clip, so no mask is drawn for it.
+            return Ok(CoverageClip {
+                texture: TextureId::default(),
+                rect: bounds.rect(),
+                uv: [0.; 4],
+            });
+        }
         // Keep the texels next to the mask bounds for linear filtering.
-        let sample_bounds = bounds.outset(1);
+        let region = bounds.outset(1).intersect(viewport);
         let mut encoder = self.encoder.fork();
         let mask_in_first_draw = mask.is_some_and(|mask| {
             if encoder.push_clip(Clip::Coverage(mask_clip(mask))).is_ok() {
@@ -50,53 +66,79 @@ impl Ink {
             }
         });
         // Outset, so the fill's own antialiased corners fall outside the target.
-        let cover = [-2., -2., rect[2] + 4., rect[3] + 4.];
+        let [_, _, width, height] = viewport.rect();
+        let cover = [-2., -2., width + 4., height + 4.];
         encoder
             .push(
                 Instance::new(Kind::RoundedRect, Brush::Solid, cover),
                 Bindings::default(),
             )
             .map_err(|_| Error::Invalid("parent clip mask".into()))?;
-        let parent = self.render_mask(encoder, sample_bounds)?;
-        let texture = if let Some(mask) = mask.filter(|_| !mask_in_first_draw) {
+        let parent = self.render_mask(encoder, region)?;
+        let tile = if let Some(mask) = mask.filter(|_| !mask_in_first_draw) {
             let mut encoder = Encoder::new(self.size[0], self.size[1]);
-            let mut instance = Instance::new(Kind::Layer, Brush::Image, rect);
+            let mut instance = Instance::new(Kind::Layer, Brush::Image, parent.region.rect());
             instance.set_mask(mask_clip(mask));
             encoder
                 .push(
                     instance,
                     Bindings {
-                        image: parent,
+                        image: parent.texture,
                         mask: mask.entry.texture,
                         ..Default::default()
                     },
                 )
                 .map_err(|_| Error::Invalid("clip intersection".into()))?;
-            self.render_mask(encoder, sample_bounds)?
+            self.render_mask(encoder, region)?
         } else {
             parent
         };
+        let [x, y, width, height] = tile.region.rect();
         Ok(CoverageClip {
-            texture,
+            texture: tile.texture,
             rect: bounds.rect(),
             uv: [
-                bounds.x as f32 / self.size[0] as f32,
-                bounds.y as f32 / self.size[1] as f32,
-                bounds.width as f32 / self.size[0] as f32,
-                bounds.height as f32 / self.size[1] as f32,
+                (bounds.x as f32 - x) / width,
+                (bounds.y as f32 - y) / height,
+                bounds.width as f32 / width,
+                bounds.height as f32 / height,
             ],
         })
     }
 
-    fn render_mask(&mut self, encoder: Encoder, bounds: Scissor) -> Result<TextureId> {
-        let mut frame = encoder.finish();
-        for batch in &mut frame.batches {
-            batch.scissor = batch.scissor.intersect(bounds);
-        }
-        let target = self.pool.take(&mut self.device)?;
-        self.device.render(&frame, target, Some([0.; 4]))?;
+    fn render_mask(&mut self, encoder: Encoder, region: Scissor) -> Result<Tile> {
+        let tile = self.render_tile(encoder.finish(), region)?;
         exact_ink::counters::add(exact_ink::counters::Counter::ClipMasks, 1);
-        Ok(target)
+        Ok(tile)
+    }
+
+    /// Draw the part of `frame` inside `region` into a clear target of about the
+    /// region's size. `frame` holds nothing that reads a texture by the frame's
+    /// coordinates (`LAYER_MASK`, `REPLACE` or a blend).
+    pub(super) fn render_tile(&mut self, mut frame: Frame, region: Scissor) -> Result<Tile> {
+        let size = [region.width, region.height];
+        let (texture, [width, height]) = self.pool.take_fitting(&mut self.device, size)?;
+        let offset = [-(region.x as f32), -(region.y as f32)];
+        for instance in &mut frame.instances {
+            *instance = instance.translated(offset);
+        }
+        for batch in &mut frame.batches {
+            let scissor = batch.scissor.intersect(region);
+            batch.scissor = Scissor {
+                x: scissor.x - region.x,
+                y: scissor.y - region.y,
+                ..scissor
+            };
+        }
+        self.device.render(&frame, texture, Some([0.; 4]))?;
+        Ok(Tile {
+            texture,
+            region: Scissor {
+                width,
+                height,
+                ..region
+            },
+        })
     }
 
     pub(super) fn open_clip_group(&mut self, mask: Coverage) -> Result<()> {
@@ -113,23 +155,23 @@ impl Ink {
         if self.groups.is_empty() {
             return Ok(());
         }
-        let target = self.flush()?;
+        // The mask is read by the frame's coordinates, so its layer has the frame's.
+        let layer = self.draw(alpha_mask.is_none())?;
         let group = self.groups.pop().unwrap();
         let can_bound = group.can_bound_composite();
         self.encoder = group.parent;
         self.draw_target = group.target;
         self.draw_clear = group.clear;
-        let mut instance = Instance::new(
-            Kind::Layer,
-            Brush::Image,
-            [0., 0., self.size[0] as f32, self.size[1] as f32],
-        );
+        let Some(layer) = layer else {
+            return Ok(());
+        };
+        let mut instance = Instance::new(Kind::Layer, Brush::Image, layer.region.rect());
         instance.param[0] = group.opacity;
         if let Some(ts) = group.transform {
             instance.xform = affine(ts);
         }
         let mut bindings = Bindings {
-            image: target,
+            image: layer.texture,
             ..Default::default()
         };
         if let Some(mask) = alpha_mask {

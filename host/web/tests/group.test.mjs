@@ -43,7 +43,7 @@ const page = `<!doctype html>
 check('the ghost is a stripped clone in the top layer, with the row\'s look', async () => {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, 'group-glue.js')));
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/motion-glue.js' ? 'motion-glue.js' : 'group-glue.js')));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=600,900'] }), { cdp } = suite;
@@ -96,7 +96,7 @@ const small = `<!doctype html>
 check('a centre past a short port\'s edge scrolls toward that edge', async () => {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(small); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, 'group-glue.js')));
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/motion-glue.js' ? 'motion-glue.js' : 'group-glue.js')));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=600,900'] }), { cdp } = suite;
@@ -161,7 +161,7 @@ check('a row the keys lifted holds a replacement until it drops or cancels', asy
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(keyed); return; }
     res.writeHead(200, { 'content-type': 'text/javascript' });
-    res.end(readFileSync(resolve(WEB, req.url === '/engagement.js' ? 'engagement.js' : 'group-glue.js')));
+    res.end(readFileSync(resolve(WEB, req.url.slice(1))));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=600,900'] }), { cdp } = suite;

@@ -171,7 +171,7 @@ extension Agent {
             if let range = NavigationRules.stack(routeKeys: keys, selected: key) {
                 navigation["stack"] = Array(keys[range])
                 let selected = routes[range.upperBound - 1]
-                navigation["presentation"] = selected.props["navigationPresentation"] == "modal" ? "modal" : NSNull()
+                navigation["presentation"] = NavigationRules.sheetLike(selected.props["navigationPresentation"]) ? "modal" : NSNull()
                 navigation["closedby"] = selected.props["closedby"] ?? NSNull()
             }
         }
@@ -660,7 +660,7 @@ extension Agent {
             guard req["phase"] == nil, let activated = presenter.alerts.click(node) else { return ["error": "view \(id) is behind an alert"] }
             return activated ? ["tapped": id, "delivery": "host-activation", "native": "NSAlert"] : ["error": "alert button #\(id) is unavailable"]
         }
-        if let node = view(req), presenter.dialogs.blocks(node) { return ["error": "view \(node.id) is blocked by a modal dialog"] }
+        if let node = view(req), presenter.dialogs.blocks(node) { return ["error": "view \(node.id) is inert under the open modal dialog"] }
         // A status item and the menu its tap opened are AppKit's (LLP 1133.025 §11).
         if !attached, req["phase"] == nil, req["wheel"] == nil, let node = view(req),
            let clicked = presenter.statusItems.agentClick(node) ?? presenter.statusItems.agentChoose(node) { return clicked }
@@ -1365,7 +1365,7 @@ extension Agent {
     }
 }
 
-open class ExactAgentWindow: ExactSessionWindow {
+open class ExactAgentWindow: ExactSessionWindow, DrivenOcclusion {
     private(set) static var pointerEvent: NSEvent?
 
     /// An inactive process cannot make its window key. AppKit checks the target
@@ -1383,14 +1383,24 @@ open class ExactAgentWindow: ExactSessionWindow {
     /// page's frames and timers. At the driver's reserved level, a covered window
     /// and its sheets still have live pages; their window-server order never changes.
     public override var occlusionState: NSWindow.OcclusionState {
-        let actual = super.occlusionState
+        drivenOcclusion(super.occlusionState)
+    }
+
+    package var physicalOcclusionState: NSWindow.OcclusionState { super.occlusionState }
+}
+
+/// A window whose covered WebKit guests can keep drawing at the driven level.
+package protocol DrivenOcclusion: AnyObject {
+    var physicalOcclusionState: NSWindow.OcclusionState { get }
+}
+
+extension NSWindow {
+    func drivenOcclusion(_ actual: NSWindow.OcclusionState) -> NSWindow.OcclusionState {
         var parent: NSWindow = self
         while let over = parent.sheetParent { parent = over }
         guard parent.level == .agentBehind, isVisible, !isMiniaturized, !NSApp.isHidden else { return actual }
         return actual.union(.visible)
     }
-
-    var physicalOcclusionState: NSWindow.OcclusionState { super.occlusionState }
 }
 extension Agent {
     /// Whether this process's windows sit at `NSWindow.Level.agentBehind`: a drive

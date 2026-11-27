@@ -44,7 +44,7 @@ impl<D: DataSource> Host<D> {
             .and_then(|n| self.runner.reorder_binding(n.key));
         let Some((binding, geometry)) = binding.and_then(|b| {
             let g = self.runner.reorder_geometry(b.list)?;
-            (g.scroll_top == scroll_top).then_some((b, g))
+            (b.unwrapped() || g.scroll_top == scroll_top).then_some((b, g))
         }) else {
             return self.group_refused(None);
         };
@@ -57,7 +57,7 @@ impl<D: DataSource> Host<D> {
                     published: None,
                     dropped: false,
                 });
-                self.group_reply(start.receipt.into_iter().collect(), None)
+                self.group_reply_with_inputs(start.receipt.into_iter().collect(), None)
             }
             Ok(None) => self.group_refused(None),
             Err(e) => self.group_refused(Some(format!("{e:?}"))),
@@ -91,7 +91,13 @@ impl<D: DataSource> Host<D> {
         let (Some(target), Some(geometry), true) = (target, geometry, inside) else {
             return self.group_reply(Vec::new(), None);
         };
-        if geometry.scroll_top != target_scroll_top {
+        if self
+            .runner
+            .kernel()
+            .node_by_key(target)
+            .is_none_or(|n| n.props.str(exact_kernel::PropId::ListStyle).is_none())
+            && geometry.scroll_top != target_scroll_top
+        {
             return self.group_reply(Vec::new(), None);
         }
         match self
@@ -99,9 +105,9 @@ impl<D: DataSource> Host<D> {
             .preview_reorder_into(token, target, geometry, content_y)
         {
             Ok(exact_runner::ReorderProgress::Accepted { receipt }) => {
-                self.group_reply(receipt.into_iter().collect(), None)
+                self.group_reply_with_inputs(receipt.into_iter().collect(), None)
             }
-            Ok(_) => self.group_reply(Vec::new(), None),
+            Ok(_) => self.group_reply_with_inputs(Vec::new(), None),
             Err(e) => self.group_reply(Vec::new(), Some(format!("{e:?}"))),
         }
     }
@@ -121,9 +127,18 @@ impl<D: DataSource> Host<D> {
         };
         self.now_ms = now_ms.max(self.now_ms);
         match self.runner.reorder_step(token, step) {
-            Ok(receipts) => self.group_reply(receipts, None),
+            Ok(receipts) => self.group_reply_with_inputs(receipts, None),
             Err(e) => self.group_reply(Vec::new(), Some(format!("{e:?}"))),
         }
+    }
+
+    /// Drop at the successor UIKit chose in the lifted row's section.
+    pub fn reorder_drop_before(&mut self, serial: u64, before: ViewId, now: f64) -> String {
+        let accepted = self.group_token(serial).is_some_and(|token| {
+            self.runner
+                .native_section_gap(token, (before != 0).then_some(before))
+        });
+        self.reorder_group_end(serial, accepted, now)
     }
 
     /// The contact ended (D8): `drop` into the session's target, which may
@@ -169,7 +184,10 @@ impl<D: DataSource> Host<D> {
                 Err(e) => error = error.or(Some(format!("{e:?}"))),
             }
         }
-        self.group_reply_timed(&receipts, error)
+        // Flush any queued Input::ReorderTarget(list, false) before returning (LLP 1156.008.000 D6.4).
+        let (extra, extra_err) = self.advance_for_input(self.now_ms);
+        receipts.extend(extra);
+        self.group_reply_timed(&receipts, error.or(extra_err))
     }
 
     /// The ghost has landed or faded: the session ends, its pin retires and
@@ -187,7 +205,7 @@ impl<D: DataSource> Host<D> {
         // Once the runner has no frame for it, the reply says `finished`
         // and the session is gone here too (`group_op`).
         match self.runner.finish_reorder(token) {
-            Ok(receipt) => self.group_reply(receipt.into_iter().collect(), None),
+            Ok(receipt) => self.group_reply_with_inputs(receipt.into_iter().collect(), None),
             Err(e) => self.group_reply(Vec::new(), Some(format!("{e:?}"))),
         }
     }
@@ -211,11 +229,15 @@ impl<D: DataSource> Host<D> {
             self.group = None;
             return Some(format!("{{\"op\":\"reorder\",\"group\":true,\"token\":\"{serial}\",\"list\":{list},\"wrapper\":{wrapper},\"phase\":\"finished\",\"dispatched\":{dropped},\"ending\":null,\"target\":0,\"row\":0}}"));
         };
+        let anchor = self
+            .runner
+            .section_step_anchor(g.token)
+            .map_or(0, |(row, _)| row);
         let ending = frame
             .ending
             .map_or("null".to_owned(), |e| format!("\"{}\"", e.name()));
         Some(format!(
-            "{{\"op\":\"reorder\",\"group\":true,\"token\":\"{serial}\",\"list\":{list},\"wrapper\":{wrapper},\"phase\":\"{}\",\"dispatched\":{},\"ending\":{ending},\"target\":{},\"row\":{}}}",
+            "{{\"op\":\"reorder\",\"group\":true,\"token\":\"{serial}\",\"list\":{list},\"wrapper\":{wrapper},\"phase\":\"{}\",\"dispatched\":{},\"ending\":{ending},\"target\":{},\"row\":{},\"anchor\":{anchor}}}",
             frame.phase.name(),
             dropped,
             id(frame.target),
@@ -245,6 +267,23 @@ impl<D: DataSource> Host<D> {
             .map(|receipt| Timed { at_ms, receipt })
             .collect();
         self.group_reply_timed(&timed, error)
+    }
+
+    /// Commit reorder receipts and immediately advance queued runner inputs
+    /// (such as `Input::ReorderTarget`, LLP 1156.008.000 D6.4).
+    fn group_reply_with_inputs(
+        &mut self,
+        receipts: Vec<CommitReceipt>,
+        error: Option<String>,
+    ) -> String {
+        let at_ms = self.now_ms;
+        let mut timed: Vec<Timed> = receipts
+            .into_iter()
+            .map(|receipt| Timed { at_ms, receipt })
+            .collect();
+        let (extra, extra_err) = self.advance_for_input(self.now_ms);
+        timed.extend(extra);
+        self.group_reply_timed(&timed, error.or(extra_err))
     }
 
     fn group_reply_timed(&mut self, timed: &[Timed], error: Option<String>) -> String {

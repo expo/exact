@@ -67,7 +67,7 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
         ],
         // `virtual` is the driver's flag that it will not also seek (platformer R7).
         "hold" => &["op", "session", "phase", "ms", "mouse", "virtual"],
-        "up" | "cancel" => &["op", "session", "phase", "mouse"],
+        "reorderHold" | "up" | "cancel" => &["op", "session", "phase", "mouse"],
         _ => return Err(InputError::malformed("unknown contact phase")),
     };
     if request
@@ -106,6 +106,10 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
         } else {
             None
         };
+        #[cfg(target_os = "android")]
+        if p.module_ancestor(id).is_some() {
+            return Err("a module view needs the Android reader to receive touch".into());
+        }
         let (x, y, w, h) = p.rect_of(id).ok_or("contact target has no painted box")?;
         let (x, y) = xy.unwrap_or((x + w / 2., y + h / 2.));
         let taken = p.pointer_down(x, y, from);
@@ -164,6 +168,11 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
                         return Err(error.into());
                     }
                     p.delay_contact_event(ms);
+                }
+            }
+            "reorderHold" => {
+                if !p.recognize_arrange_hold(from) {
+                    return Err("the contact no longer holds the reorder grip".into());
                 }
             }
             "up" => {

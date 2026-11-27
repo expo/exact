@@ -253,27 +253,31 @@
   /* LLP 1116.004 D1: a wide window (900 px and up, the navigation glue's `WIDE`) adapts what the app left unsaid, as the
      projection marks it. A root tab bar whose placement is unsaid is a sidebar: the root's column turns, the tabs
      are rows beside their labels; neutral.css supplies their selected state. An authored colour
-     still wins; the layout is the platform's. A stack whose root route is a list whose rows push shows that route
+     still wins; the layout is the platform's. A stack whose root route asks for the split (LLP 1127 D1) shows that route
      as a column beside the detail, as a split view does: `navigationSplit` wide (320 by default), its rows without
      the disclosure (they select, not push), the row whose press pushed the detail shown marked. Across a fold, two
      viewport segments side by side, the list fills the segment at its inline start and the detail starts after the
      fold's gap (`--exact-split-detail`; LLP 1078 D6). */
   #exact-root [data-exact-sidebar] { flex-direction: row !important; }
-  #exact-root [role="tablist"][data-exact-sidebar-tabs] { order: -1; flex: none !important; box-sizing: border-box !important; width: 240px !important; height: auto !important; flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; justify-content: flex-start !important; gap: 2px !important; padding: 12px 10px !important; overflow-y: auto; }
+  /* The sidebar's sizing passes over a leaving list, which keeps the box presence measured for it (presence-glue.js `exit`). */
+  #exact-root [role="tablist"][data-exact-sidebar-tabs]:not([data-exiting]) { flex: none !important; box-sizing: border-box !important; width: 240px !important; height: auto !important; }
+  #exact-root [role="tablist"][data-exact-sidebar-tabs] { order: -1; flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; justify-content: flex-start !important; gap: 2px !important; padding: 12px 10px !important; overflow-y: auto; }
   #exact-root :is([role="tablist"][data-exact-sidebar-tabs], [role="tablist"][data-exact-sidebar-tabs] > :where([data-exact-list-item])) > [role="tab"] { flex: none !important; width: auto !important; height: auto !important; min-height: 36px; justify-content: start !important; padding: 6px 10px !important; border-radius: calc(8px * var(--exact-curve-reach)) !important; corner-shape: var(--exact-curve); }
   #exact-root [data-exact-tab-navigation="sidebar"] { order: -1; display: flex !important; flex: none !important; flex-direction: column !important; width: 240px !important; min-height: 0; }
-  #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > [data-exact-sidebar-tabs] { flex: 1 1 0% !important; min-height: 0; width: 100% !important; }
+  #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > [data-exact-sidebar-tabs]:not([data-exiting]) { flex: 1 1 0% !important; min-height: 0; width: 100% !important; }
   #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > footer { flex-shrink: 0; }
   #exact-root [data-exact-tab-navigation="hidden"], #exact-root :is([data-exact-tab-navigation="bar"], [data-exact-tab-navigation="bar"] > :where([data-exact-list-item])) > footer { display: none !important; }
   /* A tab's symbol is in its ink as the page lays it out now (the runtimes copy the title's at a commit, and a resize is none). */
   #exact-root :is([role="tablist"], [role="tablist"] > :where([data-exact-list-item])) > button[role="tab"][aria-controls] > img { color: inherit !important; }
-  #exact-root :is([role="tablist"][data-exact-sidebar-tabs], [role="tablist"][data-exact-sidebar-tabs] > :where([data-exact-list-item])) > button[role="tab"][aria-controls] > img { color: var(--exact-accent, AccentColor) !important; }
+  @media not (forced-colors: active) {
+    #exact-root :is([role="tablist"][data-exact-sidebar-tabs], [role="tablist"][data-exact-sidebar-tabs] > :where([data-exact-list-item])) > button[role="tab"][aria-controls] > img { color: var(--exact-accent, AccentColor) !important; }
+  }
   #exact-root [data-exact-split="list"] { inset-inline-end: auto !important; box-sizing: border-box !important; width: var(--exact-split, 320px) !important; }
   #exact-root [data-exact-split="detail"] { inset-inline-start: var(--exact-split-detail, var(--exact-split, 320px)) !important; }
   /* LLP 1116.006 D2: a split showing no detail fills the detail pane with one quiet line, centred, in the secondary
      label's colour, which asks for a choice as a web app's empty pane does, where an iPad's says "No Selection" (in
-     English: the web host has no strings table of its own; LLP 1115.000 D4.16). A box of
-     the root route marked `navigationSplit="placeholder"`, the author's own, takes the pane instead: a centred
+     English: the web host has no strings table of its own; LLP 1115.000 D4.16). The root
+     route's own child box marked `navigationSplit="placeholder"`, the author's own, takes the pane instead: a centred
      column at the pane's width (the navigation glue sets it), its alignment the author's. The lowerer hides that box
      wherever no split shows it (a phone, a detail shown, a host that does not split). */
   #exact-root [data-exact-split-empty]::before { content: "Select an item"; position: absolute; inset: 0; inset-inline-start: var(--exact-split-detail, var(--exact-split, 320px)); display: flex; align-items: center; justify-content: center; padding: 16px; color: var(--exact-secondary-label); font-size: 1.25rem; text-align: center; pointer-events: none; }
@@ -289,29 +293,31 @@
   /* LLP 1116.000 D4: the Back control a pushed route's header holds is pressed through the Back its bar draws
      (navigation.js), which stands for it, so it is not shown. A tap the agent aims at it lands on that Back
      (agent-input.js `viewBox`), where the hit is the header holding it: the driver's check that no ancestor takes the
-     press (scripts/agent.mjs, the tap's `why`) passes such a hit only for a target with `pointer-events: none`. */
+     press (scripts/agent.mjs, the tap's `why`) passes such a hit only for a target with `pointer-events: none`. At a
+     split's first detail, which has no Back (LLP 1116.004 D1), the control its bar holds is marked `suppressed` and
+     shows nowhere. */
   #exact-root [data-exact-bar-back] { display: none !important; pointer-events: none; }
   /* A dialog's padding is its author's (LLP 1115.000 D4.14): the user agent's own `1em` is a box the kernel does not
      know, so a plain `dialog` has none; the alert's is the page's, below. */
   :where(#exact-root dialog) { padding: 0; }
-  :where(#exact-root dialog[role="alertdialog"]) { box-sizing: border-box; display: flex; flex-wrap: wrap; }
-  :where(#exact-root dialog[role="alertdialog"][aria-label])::before { content: attr(aria-label) / ""; flex-basis: 100%; font-weight: 600; --exact-said-font-weight: ; }
-  :where(#exact-root dialog[role="alertdialog"] > :not(button)) { flex-basis: 100%; }
-  #exact-root dialog[role="alertdialog"] > button { flex: 1 1 0; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog])) { box-sizing: border-box; display: flex; flex-wrap: wrap; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog])[aria-label])::before { content: attr(aria-label) / ""; flex-basis: 100%; font-weight: 600; --exact-said-font-weight: ; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > :not(button)) { flex-basis: 100%; }
+  #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > button { flex: 1 1 0; }
   /* An alert the compiler grouped (`alertPart`, contract/lower/src/alert_parts.rs) is a column, as the kernel lays it
      out (kernel/src/arena/alert.rs): its message box shrinks to fit the dialog, whose height the user agent caps at
      the viewport's, and scrolls, while its title, a prompt's field and its actions keep their size; the dialog's
      own overflow is for when they alone do not fit. A message or actions box its `if` leaves empty takes no room,
      over the compiler's own `display` on it. Its actions share a row and wrap, as a flat alert's do. */
-  :where(#exact-root dialog[role="alertdialog"]:has(> [data-alertpart="actions"])) { flex-direction: column; flex-wrap: nowrap; }
-  :where(#exact-root dialog[role="alertdialog"]:has(> [data-alertpart="actions"]))::before, :where(#exact-root dialog[role="alertdialog"] > :is([data-alertpart="title"], [data-alertpart="actions"])) { flex: 0 0 auto; }
-  :where(#exact-root dialog[role="alertdialog"] > [data-alertpart="message"]) { flex: 0 1 auto; min-height: 0; overflow: auto; }
-  :where(#exact-root dialog[role="alertdialog"] > :is([data-alertpart="message"], [data-alertpart="actions"]):empty) { display: none !important; }
-  :where(#exact-root dialog[role="alertdialog"] > [data-alertpart="actions"]) { flex-wrap: wrap; }
-  #exact-root dialog[role="alertdialog"] > [data-alertpart="actions"] > button { flex: 1 1 0; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]):has(> [data-alertpart="actions"])) { flex-direction: column; flex-wrap: nowrap; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]):has(> [data-alertpart="actions"]))::before, :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > :is([data-alertpart="title"], [data-alertpart="actions"])) { flex: 0 0 auto; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > [data-alertpart="message"]) { flex: 0 1 auto; min-height: 0; overflow: auto; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > :is([data-alertpart="message"], [data-alertpart="actions"]):empty) { display: none !important; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > [data-alertpart="actions"]) { flex-wrap: wrap; }
+  #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > [data-alertpart="actions"] > button { flex: 1 1 0; }
   /* A prompt's text field is a line of its own, as the native alerts draw it. */
-  #exact-root dialog[role="alertdialog"] input { flex-basis: 100%; box-sizing: border-box; }
-  #exact-root dialog[role="alertdialog"]:has(> [data-alertpart="actions"]) > input { flex: 0 0 auto; }
+  #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) input { flex-basis: 100%; box-sizing: border-box; }
+  #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]):has(> [data-alertpart="actions"]) > input { flex: 0 0 auto; }
   /* Fields and `select` at a tap size (36 px at the body size) with one look:
      a 1 px line, 8 px corners, the field's own background. A select's height
      is its line height, so an authored padding adds to it as to the UA's and
@@ -375,7 +381,7 @@
   /* Modal dimming belongs to the host; UIKit supplies its own backdrop. It dims the route the
      sheet covers (the navigation glue marks it), so the sheet's own background paints undimmed (recipes F6).
      neutral.css supplies the sheet's ground; authored paint wins. */
-  [navigationPresentation="modal"] { isolation: isolate; position: relative; }
+  :is([navigationPresentation="modal"], [navigationPresentation="popover"]) { isolation: isolate; position: relative; }
   [data-exact-covered]::after { content: ""; position: absolute; inset: 0; background: #00000033; pointer-events: none; }
   /* A platform material (host policy, LLP 1053.000 D3, D4): the schema's approximation of the named material, from the variables the host sets
      (element.rs `material_css`). It wins over an authored backdrop-filter on the same node, as the native hosts do. */
@@ -384,6 +390,7 @@
   /* LLP 1123 D9: a content owner's local insets, which a length reads as `var(--exact-safe-area-inset-*)`, each
      registered so it computes to a length and inherits. The document's are the browser's `env()`; a sheet the
      look draws says its own (neutral.css). */
+  :root { --exact-bar-inset-start: 0px; --exact-bar-inset-end: 0px; }
   @property --exact-safe-area-inset-top { syntax: "<length>"; inherits: true; initial-value: 0px; }
   @property --exact-safe-area-inset-right { syntax: "<length>"; inherits: true; initial-value: 0px; }
   @property --exact-safe-area-inset-bottom { syntax: "<length>"; inherits: true; initial-value: 0px; }

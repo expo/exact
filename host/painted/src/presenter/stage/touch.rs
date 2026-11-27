@@ -37,6 +37,13 @@ const RETURN_MS: f64 = 150.0;
 pub(in crate::presenter) enum Gesture {
     /// A contact on a sheet's scrim.
     Scrim { modal: NodeKey, contact: Contact },
+    /// A contact on a target in the sheet's projected top app bar (LLP 1156.008.001 B5).
+    Bar {
+        index: usize,
+        what: super::bars::What,
+        cancelled: bool,
+        contact: Contact,
+    },
     /// A contact on a sheet that moves it once past the slop.
     Drag {
         modal: NodeKey,
@@ -47,6 +54,10 @@ pub(in crate::presenter) enum Gesture {
         velocity: VelocityTracker,
         moving: bool,
         directions: (bool, bool),
+        /// Whether a list under the finger shares the drag with the sheet
+        /// (`Under::nested_sheet`), which then moves as Android's nested
+        /// scrolling moves it: by what lies past the list's slop.
+        nested: bool,
         contact: Contact,
     },
 }
@@ -63,7 +74,9 @@ pub(in crate::presenter) struct Contact {
 impl Gesture {
     fn contact(&mut self) -> &mut Contact {
         match self {
-            Gesture::Scrim { contact, .. } | Gesture::Drag { contact, .. } => contact,
+            Gesture::Scrim { contact, .. }
+            | Gesture::Bar { contact, .. }
+            | Gesture::Drag { contact, .. } => contact,
         }
     }
 }
@@ -204,12 +217,12 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The top sheet, with its frame now.
-    fn grab_sheet(&self) -> Option<(NodeKey, f32)> {
+    fn grab_sheet(&self) -> Option<(&Sheet, f32)> {
         let sheet = self
             .front_sheets()
             .last()
             .filter(|_| self.stage_presents())?;
-        Some((sheet.modal, self.sheet_top_now(sheet)))
+        Some((sheet, self.sheet_top_now(sheet)))
     }
 
     /// Which finger directions move the sheet rather than its nested list:
@@ -284,9 +297,11 @@ impl<D: DataSource> Presenter<D> {
         now: f64,
         event: f64,
     ) -> bool {
-        let Some((modal, top)) = self.grab_sheet() else {
+        let Some((sheet, top)) = self.grab_sheet() else {
             return false;
         };
+        let modal = sheet.modal;
+        let handle = y < top + sheet.handle;
         let (left, width) = self.sheet_span();
         let contact = Contact {
             at: (x, y),
@@ -297,8 +312,18 @@ impl<D: DataSource> Presenter<D> {
             self.stage.gesture = Some(Gesture::Scrim { modal, contact });
             return true;
         }
-        let handle = y < top + SHEET_HANDLE;
+        if let Some((index, what, point)) = self.sheet_bar_target_at(x, y) {
+            self.sheet_bar_ripple(Some((index, point)), now);
+            self.stage.gesture = Some(Gesture::Bar {
+                index,
+                what,
+                cancelled: false,
+                contact,
+            });
+            return true;
+        }
         let under = self.scrollers_at(x, y);
+        let nested = !handle && under.nested_sheet.is_some();
         let directions = if handle || (under.chain.is_empty() && !under.claims.1) {
             (true, true)
         } else {
@@ -316,6 +341,7 @@ impl<D: DataSource> Presenter<D> {
                 velocity,
                 moving: false,
                 directions,
+                nested,
                 contact,
             }
         });
@@ -327,8 +353,16 @@ impl<D: DataSource> Presenter<D> {
     /// last heard.
     pub(in crate::presenter) fn stage_contact(&self) -> Option<Contact> {
         match self.stage.gesture.as_ref()? {
-            Gesture::Scrim { contact, .. } | Gesture::Drag { contact, .. } => Some(*contact),
+            Gesture::Scrim { contact, .. }
+            | Gesture::Bar { contact, .. }
+            | Gesture::Drag { contact, .. } => Some(*contact),
         }
+    }
+
+    pub(in crate::presenter) fn clear_pending_sheet_drag(&mut self) {
+        self.stage
+            .gesture
+            .take_if(|g| matches!(g, Gesture::Drag { moving: false, .. }));
     }
 
     /// Whether a contact down may yet drag a sheet.
@@ -374,6 +408,17 @@ impl<D: DataSource> Presenter<D> {
         };
         match self.stage.gesture {
             Some(Gesture::Scrim { .. }) => return true,
+            Some(Gesture::Bar {
+                index, cancelled, ..
+            }) => {
+                if !cancelled && self.sheet_bar_target_at(x, y).map(|a| a.0) != Some(index) {
+                    self.sheet_bar_ripple(None, now);
+                    if let Some(Gesture::Bar { cancelled, .. }) = &mut self.stage.gesture {
+                        *cancelled = true;
+                    }
+                }
+                return true;
+            }
             Some(Gesture::Drag {
                 finger,
                 moving: false,
@@ -396,12 +441,28 @@ impl<D: DataSource> Presenter<D> {
                     return false;
                 }
                 // Past the slop the drag is the sheet's: what the contact
-                // pressed is let go.
+                // pressed is let go. Dragged directly, the sheet moves from
+                // the event that crossed the slop, as Material's
+                // `ViewDragHelper` captures its view there and moves it
+                // from that event's position: the crossing moves nothing.
+                // A list sharing the drag hands the sheet what lies past
+                // its slop, as `RecyclerView` scrolls by the distance less
+                // the slop.
                 let gesture = self.stage.gesture.take();
                 let _ = self.pointer_cancel(now);
                 self.stage.gesture = gesture;
-                if let Some(Gesture::Drag { moving, .. }) = &mut self.stage.gesture {
+                if let Some(Gesture::Drag {
+                    moving,
+                    finger,
+                    nested,
+                    ..
+                }) = &mut self.stage.gesture
+                {
                     *moving = true;
+                    finger.1 = match nested {
+                        true => finger.1 + SLOP.copysign(y - finger.1),
+                        false => y,
+                    };
                 }
             }
             Some(Gesture::Drag { .. }) => {}
@@ -441,6 +502,18 @@ impl<D: DataSource> Presenter<D> {
             return false;
         };
         match gesture {
+            Gesture::Bar {
+                index,
+                what,
+                cancelled,
+                ..
+            } => {
+                self.sheet_bar_ripple(None, now);
+                if !cancelled && self.sheet_bar_target_at(x, y).map(|a| a.0) == Some(index) {
+                    self.bar_choose(what, now);
+                }
+                true
+            }
             Gesture::Scrim { modal, .. } => {
                 let closes = (self.host.kernel().node_by_key(modal))
                     .is_some_and(|n| n.props.str(PropId::Closedby) != Some("none"));
@@ -484,14 +557,15 @@ impl<D: DataSource> Presenter<D> {
     pub(in crate::presenter) fn stage_cancel(&mut self, now: f64) {
         // A drag still inside the slop is dropped like a scrim press: left,
         // a later move without a contact would start it.
-        if let Some(Gesture::Drag {
-            modal,
-            top,
-            moving: true,
-            ..
-        }) = self.stage.gesture.take()
-        {
-            self.settle_sheet(modal, top, 0.0, now);
+        match self.stage.gesture.take() {
+            Some(Gesture::Bar { .. }) => self.sheet_bar_ripple(None, now),
+            Some(Gesture::Drag {
+                modal,
+                top,
+                moving: true,
+                ..
+            }) => self.settle_sheet(modal, top, 0.0, now),
+            _ => {}
         }
     }
 

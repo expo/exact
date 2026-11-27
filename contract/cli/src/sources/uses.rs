@@ -746,6 +746,9 @@ fn local_names(names: &HashMap<(Kind, String), String>) -> ByLocal {
             .or_default()
             .push((*kind, to.clone()));
     }
+    for entries in local.values_mut() {
+        entries.sort();
+    }
     local
 }
 
@@ -831,5 +834,38 @@ mod tests {
             ),
             "\u{feff}use Card, Icon from \"./ui.contract\" // note\ncomponent App\n"
         );
+    }
+
+    #[test]
+    fn local_names_preserves_namespace_order() {
+        let all = [
+            Kind::Timeline,
+            Kind::Keyframes,
+            Kind::Atom,
+            Kind::Decoration,
+            Kind::Style,
+            Kind::Call,
+            Kind::Component,
+        ];
+        let expected: Vec<(Kind, String)> = [
+            Kind::Component,
+            Kind::Call,
+            Kind::Style,
+            Kind::Decoration,
+            Kind::Atom,
+            Kind::Keyframes,
+            Kind::Timeline,
+        ]
+        .into_iter()
+        .map(|k| (k, format!("{k:?}")))
+        .collect();
+        for _ in 0..20 {
+            let mut names = HashMap::new();
+            for kind in all {
+                names.insert((kind, "Badge".into()), format!("{kind:?}"));
+            }
+            let local = local_names(&names);
+            assert_eq!(local.get("Badge"), Some(&expected));
+        }
     }
 }

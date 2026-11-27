@@ -98,38 +98,52 @@ export function implementation({ invoke = () => Promise.resolve({ error: 'NotSup
       let pr;
       try { pr = new PaymentRequest(methods(args.methodData), details(args.details), without(args.options)); }
       catch (e) { return failure(e); }
-      const id = pr.id, entry = { pr, final: false };
+      const id = pr.id, entry = { pr, final: false, letGo: false, shown: false };
       shown.set(n, entry);
       const arg = (e, extra) => ({ requestId: id, shippingAddress: address(pr.shippingAddress), shippingOption: pr.shippingOption ?? null, methodName: e?.methodName ?? null, ...extra });
-      const updating = handler => e => e.updateWith(call(n, handler, arg(e)).then(u => u ? update(u) : { error: 'unavailable' }));
+      const updating = handler => e => e.updateWith(entry.letGo ? Promise.resolve({}) : call(n, handler, arg(e)).then(u => u ? update(u) : { error: 'unavailable' }));
       if (args.onshippingaddresschange) pr.onshippingaddresschange = updating(args.onshippingaddresschange);
       if (args.onshippingoptionchange) pr.onshippingoptionchange = updating(args.onshippingoptionchange);
       if (args.onpaymentmethodchange) {
-        pr.onpaymentmethodchange = e => e.updateWith(call(n, args.onpaymentmethodchange, arg(e, { methodDetails: e.methodDetails ?? null })).then(u => u ? update(u) : {}));
+        pr.onpaymentmethodchange = e => e.updateWith(entry.letGo ? Promise.resolve({}) : call(n, args.onpaymentmethodchange, arg(e, { methodDetails: e.methodDetails ?? null })).then(u => u ? update(u) : {}));
       }
       if (args.onmerchantvalidation) {
-        pr.onmerchantvalidation = e => e.complete(call(n, args.onmerchantvalidation, { requestId: id, methodName: e.methodName, validationURL: e.validationURL })
-          .then(v => v?.merchantSession ?? Promise.reject(new DOMException('no merchant session', 'OperationError'))));
+        pr.onmerchantvalidation = e => e.complete(entry.letGo
+          ? Promise.reject(new DOMException('aborted', 'AbortError'))
+          : call(n, args.onmerchantvalidation, { requestId: id, methodName: e.methodName, validationURL: e.validationURL })
+              .then(v => v?.merchantSession ?? Promise.reject(new DOMException('no merchant session', 'OperationError'))));
       }
       // `show()` first, in the press; everything after it may wait.
       const showing = pr.show();
       return (async () => {
         let response;
         try { response = await showing; } catch (e) { shown.delete(n); return failure(e); }
+        entry.shown = true;
         try {
           for (;;) {
-            entry.final = true;
             const r = response;
+            if (entry.letGo) {
+              log(`payment: closed after its call ended (${id}, last result none)`);
+              await r.complete('fail');
+              return { error: 'AbortError' };
+            }
+            entry.final = true;
             const answer = await call(n, args.onpaymentauthorized, { requestId: id, methodName: r.methodName, details: r.details,
               shippingAddress: address(r.shippingAddress), shippingOption: r.shippingOption ?? null, payerName: r.payerName ?? null,
               payerEmail: r.payerEmail ?? null, payerPhone: r.payerPhone ?? null });
             entry.final = false;
             if (answer?.retry && typeof answer.retry === 'object') {
+              if (entry.letGo) {
+                log(`payment: closed after its call ended (${id}, last result none)`);
+                await r.complete('fail');
+                return { error: 'AbortError' };
+              }
               await r.retry(without({ error: answer.retry.error, shippingAddress: answer.retry.shippingAddress, payer: answer.retry.payer, paymentMethod: answer.retry.paymentMethod }));
               continue;
             }
             const result = ['success', 'fail', 'unknown'].includes(answer?.result) ? answer.result : 'fail';
             await r.complete(result);
+            if (entry.letGo) log(`payment: closed after its call ended (${id}, last result ${result})`);
             const apple = r.methodName === APPLE ? { paymentMethod: r.details?.token?.paymentMethod ?? null } : null;
             const info = r.details?.paymentMethodData;
             const android = r.methodName === GOOGLE ? { paymentMethodDescription: info?.description ?? null, cardNetwork: info?.info?.cardNetwork ?? null } : null;
@@ -144,7 +158,9 @@ export function implementation({ invoke = () => Promise.resolve({ error: 'NotSup
     /** A send let go: its sheet aborted, unless its final handler runs, whose answer then completes it. */
     cancel(n) {
       const entry = shown.get(n);
-      if (!entry || entry.final) return;
+      if (!entry) return;
+      entry.letGo = true;
+      if (entry.final || entry.shown) return;
       entry.pr.abort().catch(() => {});
     },
   };

@@ -4,7 +4,7 @@
 // public space's permission is answered and not granted.
 import { expect, test } from 'bun:test';
 import { reachRefusal, redirectFor, setSpaceState, spaceOf } from './address-space.js';
-import { isCloudMetadata, isLocalNetwork } from './grant-admission.js';
+import { isCloudMetadata, isLocalNetwork, isLoopback } from './grant-admission.js';
 
 const page = host => { globalThis.location = { hostname: host }; };
 const setSpaceStates = state => { setSpaceState('local', state); setSpaceState('loopback', state); };
@@ -29,6 +29,29 @@ test('a grant\'s local network leaves out the cloud metadata service and keeps i
     expect([isCloudMetadata(host), isLocalNetwork(host, false)], host).toEqual([false, true]);
   }
   expect([isLocalNetwork('[::ffff:7f00:1]', true), isLocalNetwork('[::1]', true), isLocalNetwork('[::1]', false)]).toEqual([true, true, false]);
+});
+
+test('isLoopback matches only loopback literals and exact localhost', () => {
+  for (const host of [
+    '127.0.0.1', '127.0.0.0', '127.9.8.7', '127.255.255.255',
+    '[::1]', '[0:0:0:0:0:0:0:1]', '[::ffff:127.0.0.1]', '[::ffff:7f00:1]',
+    'localhost', 'LOCALHOST', 'localhost.', 'LocalHost.',
+  ]) {
+    expect(isLoopback(host), host).toBe(true);
+  }
+  for (const host of [
+    'foo.localhost', 'localhost.localhost', 'localhost..', '.localhost',
+    'localhost.evil.com', 'localhost.local', '0.0.0.0', '[::]', '[::7f00:1]',
+    '[::1%lo0]', '[::ffff:01.0.0.1]', '[1::2::3]', '[127.0.0.1]', '127.0.0.1.',
+    '127.0.0.256', '0127.0.0.1', '192.168.1.1', '169.254.169.254', '[fd00:ec2::254]', 'example.com',
+  ]) {
+    expect(isLoopback(host), host).toBe(false);
+  }
+  for (const value of [['localhost'], Object.create(null), null, undefined, 127]) {
+    expect(isLoopback(value)).toBe(false);
+    expect(isLocalNetwork(value, true)).toBe(false);
+    expect(isCloudMetadata(value)).toBe(false);
+  }
 });
 
 test('a tool from a public page is refused by the space\'s state; the app never', () => {

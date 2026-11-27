@@ -24,6 +24,15 @@ package struct LineBreakPlan {
 
     package init() {}
 
+    /// Snap a finite `room` arriving through `f32` layout widths onto its
+    /// nearest 1/64 pt grid step when within half an `f32` ULP (LLP 1156.008.001 A1).
+    package static func snapRoom(_ room: Double) -> Double {
+        guard room.isFinite, room > 0 else { return room }
+        let grid = (room * 64).rounded() / 64
+        let halfUlp = Double(Float(room).ulp) * 0.5
+        return abs(grid - room) <= halfUlp ? max(room, grid) : room
+    }
+
     package mutating func prepare(_ text: NSString, length: Int, emergency: [Int] = []) {
         (contentEnds, hardEnds) = TextEngine.breakEnds(text, boundaries: boundaries, length: length)
         if !emergency.isEmpty {
@@ -54,7 +63,7 @@ package struct LineBreakPlan {
         }
         // A forced break ends the line wherever the room is.
         let hard = (hardIndex < hardEnds.count ? hardEnds[hardIndex] : length) - start
-        let fitted = min(CTTypesetterSuggestClusterBreak(typesetter, start, room), hard)
+        let fitted = min(CTTypesetterSuggestClusterBreak(typesetter, start, Self.snapRoom(room)), hard)
         // UILabel keeps a whole word on its own line before using a syllable
         // break inside it. Authored soft hyphens remain ordinary opportunities.
         if !ordinary.isEmpty {

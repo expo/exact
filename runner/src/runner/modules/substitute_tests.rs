@@ -146,6 +146,34 @@ fn boot(plan: Plan) -> Runner<Source> {
     .unwrap()
 }
 
+#[test]
+fn an_unknown_package_name_or_wrong_verb_rejects_a_data_call() {
+    use crate::{Dispatch, Request, Work};
+    use serde_json::{json, Value as Json};
+    let mut runner = boot(plan("later"));
+    for body in [
+        json!({"extension":"missing", "source":"steps"}),
+        json!({"extension":"test.motion", "source":"missing"}),
+        json!({"extension":"test.motion", "send":"steps"}),
+        json!({"extension":"test.motion", "source":"", "send":"steps"}),
+        json!({"extension":"test.motion", "source":null, "send":"steps"}),
+        json!({"extension":"test.motion", "source":"missing", "send":"steps"}),
+    ] {
+        let call = Request::native(body.to_string().into_bytes());
+        let Some(Dispatch::Run(Work::Now(answer))) = runner.module_call(&call) else {
+            panic!("a missing package, name or verb is refused before dispatch")
+        };
+        let Outcome::Response(response) = answer() else {
+            panic!("a response")
+        };
+        assert_eq!(response.status, 500, "{body}");
+        assert_eq!(
+            serde_json::from_slice::<Json>(&response.body).unwrap(),
+            json!({"error":"NotSupportedError"})
+        );
+    }
+}
+
 /// A scroll report the view handles: the dispatch commits and its handler runs.
 fn scroll(r: &mut Runner<Source>, at: f64) {
     let root = r.roots()[0];
@@ -1035,6 +1063,15 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
     use crate::{Dispatch, Reply, Request, Work};
     use serde_json::{json, Value as Json};
     use std::sync::{Arc, Mutex};
+    struct Granted(&'static str);
+    impl DataSource for Granted {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!("the fixture answers nothing")
+        }
+        fn grants(&self) -> &str {
+            self.0
+        }
+    }
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let string = b.primitive(TypeKind::String);
     for (name, send) in [("devices", false), ("capture", true)] {
@@ -1051,7 +1088,15 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
         );
     }
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
-    let mut r = boot(b.finish().unwrap());
+    let app_grants = "net.fetch https://source.test\nstorage.read";
+    let mut r = Runner::boot(
+        b.finish().unwrap(),
+        Granted(app_grants),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     let heard: Arc<Mutex<Vec<Json>>> = Default::default();
     let seen = heard.clone();
     r.native_slot()
@@ -1065,6 +1110,7 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
     let scope = "net.fetch https://source.test";
     for (verb, name, grants) in [
         ("send", "capture", Some(scope)),
+        ("send", "capture", Some("net.fetch https://ungranted.test")),
         ("send", "capture", None),
         ("source", "devices", Some(scope)),
     ] {
@@ -1081,8 +1127,9 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
     }
     let heard = heard.lock().unwrap();
     assert_eq!(heard[0]["authority"], scope);
-    assert_eq!(heard[1]["authority"], json!(r.data.grants()));
-    assert_eq!(heard[2].get("authority"), None, "a read starts no work");
+    assert_eq!(heard[1]["authority"], "");
+    assert_eq!(heard[2]["authority"], json!(r.data.grants()));
+    assert_eq!(heard[3].get("authority"), None, "a read starts no work");
 }
 
 /// HTML's transient activation, on the session's clock: a call the app makes
@@ -1299,4 +1346,60 @@ fn a_host_activation_opens_the_activation_window_and_no_other_origin_does() {
         .journal()
         .filter(|line| line.ends_with(": heard by heard"));
     assert_eq!(ran.count(), 4, "the three events and the wake ran it");
+}
+
+#[test]
+fn a_repeated_action_id_is_one_wake_with_one_ending() {
+    use std::sync::Arc;
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("post", &[], string);
+    b.module(
+        source,
+        ("notifications", "@fixture/notifications"),
+        "post",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"effect":true,"takes":[]}"#,
+    );
+    let name = b.str("post");
+    let mut body = Asm::new();
+    body.command(name, 0);
+    let body = b.code(body);
+    let clicked = b.action("clicked", &[], &[], body);
+    b.module_event(
+        ("notifications", "@fixture/notifications"),
+        "notificationclick",
+        clicked,
+        "activation",
+        16,
+        0,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    r.native_slot()
+        .host(Some(Arc::new(|_: Vec<u8>, reply: crate::Reply| {
+            reply.send(super::response(&serde_json::json!(null)));
+        })));
+    r.bind_extensions(&["notifications"], &[]);
+    for _ in 0..2 {
+        r.raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow::default(),
+            "again",
+        )
+        .unwrap();
+    }
+    for _ in 0..4 {
+        assert!(r.step_invocations().1.is_none());
+        r.apply_announced();
+    }
+    assert_eq!(
+        r.take_ended_actions(),
+        serde_json::json!([{"id":"again","outcome":"completed"}])
+    );
 }

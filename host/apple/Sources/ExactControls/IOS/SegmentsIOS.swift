@@ -298,6 +298,11 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         }
     }
 
+    /// The control's height: its own, and taller at a larger `-exact-control-size` (LLP 1069.011.001 D8).
+    private func height(_ owner: NodeView, _ control: UISegmentedControl) -> CGFloat {
+        natural(owner.id, control).height + SegmentSizesIOS.extra(owner.style["control_size"]?.string)
+    }
+
     private func natural(_ id: UInt32, _ control: UISegmentedControl) -> CGSize {
         let fonts = [UIControl.State.normal, .selected].map { (control.titleTextAttributes(for: $0)?[.font] as? UIFont).map { "\($0.fontName) \($0.pointSize)" } ?? "" }
         let segments = (0..<control.numberOfSegments).map { "\(control.titleForSegment(at: $0) ?? "")|\(control.imageForSegment(at: $0)?.size ?? .zero)|\(control.widthForSegment(at: $0))" }
@@ -330,8 +335,7 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
             // (unit-converter: four text tabs overflowed a grouped row by
             // the hidden tabs' own widths). It fills the content box, so a
             // border-box minimum also holds the padding and border around it.
-            let natural = natural(owner.id, control as! UISegmentedControl)
-            size = CGSize(width: 1, height: natural.height)
+            size = CGSize(width: 1, height: height(owner, control as! UISegmentedControl))
             // The padding and border around the content box layout sent
             if owner.style["box_sizing"]?.string == "border-box" { size.height += owner.layoutBounds.height - owner.contentBox().height }
         } else {
@@ -546,7 +550,7 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         // does not stretch UIKit's control, as a hand-built screen's
         // never is.
         let box = owner.contentBox()
-        let height = min(box.height, natural(owner.id, control).height)
+        let height = min(box.height, height(owner, control))
         let frame = CGRect(x: box.minX, y: box.midY - height / 2, width: box.width, height: height)
         if control.frame != frame { control.frame = frame }
         owner.bringSubviewToFront(control)
@@ -563,6 +567,10 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         guard let ids = members[sender.ownerID], ids.indices.contains(sender.selectedSegmentIndex),
               let tab = presenter.views[ids[sender.selectedSegmentIndex]], !tab.disabled,
               let owner = presenter.views[sender.ownerID], available(owner) else { sync(); return }
+        #if os(iOS)
+        if presenter.textSelection.hasActiveSelection { presenter.textSelection.clear() }
+        guard presenter.views[tab.id] === tab, !tab.disabled else { sync(); return }
+        #endif
         presenter.press(tab.id)
     }
 

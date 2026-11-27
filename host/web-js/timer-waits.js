@@ -8,7 +8,8 @@ export { frameAtOrAfter, cap, idleAllowed, ScrollActivity } from './timer-observ
 export function timerWaits() {
   if (rt.timerWait) { return; }
   const activity = new ScrollActivity(), clock = rt.clock, watched = new WeakMap();
-  let frame = 0, idle = 0, timeout = 0, generation = 0, intersecting = true, takeoverAt = -Infinity;
+  let frame = 0, idle = 0, timeout = 0, generation = 0, intersecting = true, takeoverAt = -Infinity, observed = new WeakMap();
+  const heldBy = t => { const mark = observed.get(t); return mark != null && mark.due === t.due && mark.gen === t.gen; };
   const offscreen = () => document.hidden || !intersecting;
   const current = token => token === generation && !clock.agent;
   const requestFrame = () => {
@@ -22,6 +23,7 @@ export function timerWaits() {
     timeout = setTimeout(() => { if (!current(token)) { return; } timeout = 0; control.check(); }, Math.min(2147483647, delay));
   };
   function fire(t, now) {
+    observed.delete(t);
     const nominal = t.due, gen = t.gen;
     if (t.once) { clock.timers.splice(clock.timers.indexOf(t), 1); }
     else { t.due = beatAfter(nominal, t.ms, now); }
@@ -36,16 +38,18 @@ export function timerWaits() {
     generation: () => generation,
     cutoff(to, wall) { return wall ? to : Math.max(to, takeoverAt); },
     execution(t, wall) { if (!wall && t.due <= takeoverAt) { return takeoverAt; } return !t.wait ? t.due : wall ? cap(t) : t.wait === 1 ? frameAtOrAfter(t.due) : t.due; },
-    wake(t) { return !t.wait ? t.due + (t.tolerance ?? 0) : Math.min(cap(t), t.due > clock.now ? t.due : Infinity); },
+    wake(t) { return !t.wait ? t.due + (t.tolerance ?? 0) : Math.min(cap(t), t.due > clock.now || !heldBy(t) ? t.due : Infinity); },
     check(inFrame = false) {
-      if (clock.agent || clock.stopped || rt.poisoned?.()) { return; }
+      if (clock.stopped) { observed = new WeakMap(); return; }
+      if (clock.agent || rt.poisoned?.()) { return; }
       const now = Math.max(clock.now, rt.wall());
       if (!clock.timers.some(t => t.wait && t.due <= now)) { return; }
       // `true` resumes after a change timer's boundary; a journal line (a refused timer, the fire limit) ends this
       // turn, and `drive` schedules the rest.
       for (let step; (step = rt.advance(now, true));) {
         if (step !== true) { rt.drive(); return; }
-        if (clock.agent || clock.stopped || rt.poisoned?.()) { return; }
+        if (clock.stopped) { observed = new WeakMap(); return; }
+        if (clock.agent || rt.poisoned?.()) { return; }
       }
       const supported = 'onscrollend' in window;
       const scrolling = () => !offscreen() && (activity.sample(Math.max(clock.now, rt.wall()), supported, inFrame) || rt.collectionScrollPending?.() === true);
@@ -61,12 +65,15 @@ export function timerWaits() {
         }
         fire(next, now);
       }
+      if (clock.stopped) { observed = new WeakMap(); return; }
+      if (clock.agent || rt.poisoned?.()) { return; }
       if (scrolling() && (activity.moving.size || rt.collectionScrollPending?.() === true) && held().length) { requestFrame(); }
       if (held().some(t => t.wait === 4) && !idle) {
         const token = generation;
         const run = () => {
           if (!current(token)) { return; } idle = 0;
-          if (clock.stopped || rt.poisoned?.()) { return; }
+          if (clock.stopped) { observed = new WeakMap(); return; }
+          if (rt.poisoned?.()) { return; }
           const at = Math.max(clock.now, rt.wall()); clock.now = at;
           const busyScroll = !offscreen() && (activity.sample(at, supported, false) || rt.collectionScrollPending?.() === true);
           const animations = document.getAnimations().filter(a => a.timeline === document.timeline && a.playState === 'running' && a.playbackRate !== 0);
@@ -86,9 +93,10 @@ export function timerWaits() {
         else if (offscreen()) { idle = setTimeout(run, 0); }
         else { idle = requestAnimationFrame(() => { if (current(token)) { idle = setTimeout(run, 0); } }); }
       }
+      for (const t of held()) { observed.set(t, { due: t.due, gen: t.gen }); }
       rt.drive();
     },
-    takeover() { generation++; globalThis.cancelAnimationFrame?.(frame); clearTimeout(timeout); rt.pauseTimers?.(); frame = 0; idle = 0; },
+    takeover() { generation++; observed = new WeakMap(); globalThis.cancelAnimationFrame?.(frame); clearTimeout(timeout); rt.pauseTimers?.(); frame = 0; idle = 0; },
   };
   let agent = clock.agent;
   Object.defineProperty(clock, 'agent', {

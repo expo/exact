@@ -104,12 +104,9 @@ fn data_selector(selector: &str) -> bool {
     let Some(value) = value.strip_suffix("\"]") else {
         return false;
     };
-    !word.is_empty()
-        && word.split('-').all(|part| {
-            let mut chars = part.chars();
-            chars.next().is_some_and(|c| c.is_ascii_lowercase())
-                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        })
+    let mut chars = word.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !value.is_empty()
         && !value.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r'))
 }

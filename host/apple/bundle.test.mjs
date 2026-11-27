@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { placeMacDylibs, placeMacLibraries } from './bundle.mjs';
 import { spawnSync } from 'node:child_process';
 import * as appleToolchain from './toolchain.mjs';
+import { need } from '../../scripts/coverage.mjs';
 import { packageCompiler, swiftPrivacyManifests, swiftResourceOverlay } from './compose.mjs';
 import { plistFile } from './assets.mjs';
 import { useXcode } from './devices.mjs';
@@ -90,12 +91,12 @@ read()
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60_000);
 
-test('a static SwiftPM framework or archive is force-loaded ahead of the copy SwiftPM links', () => {
+function staticArchiveFixture(check) {
   const dir = mkdtempSync(join(tmpdir(), 'swift-force-load-'));
   let swift;
   try {
-    const bin = join(dir, 'bin'), artifacts = join(dir, 'vendor\\artifacts'), destination = join(dir, 'modules');
-    mkdirSync(bin); mkdirSync(destination);
+    const bin = join(dir, 'swift\\products'), artifacts = join(dir, 'vendor'), destination = join(dir, 'modules');
+    mkdirSync(bin, { recursive: true }); mkdirSync(destination);
     const machO = type => { const head = Buffer.alloc(16); head.writeUInt32LE(0xfeedfacf); head.writeUInt32LE(type, 12); return head; };
     const archive = Buffer.from('!<arch>\n'.padEnd(16));
     for (const [name, contents] of [['Static', archive], ['Dynamic', machO(6)]]) {
@@ -107,9 +108,14 @@ test('a static SwiftPM framework or archive is force-loaded ahead of the copy Sw
     // SwiftPM copies each binary target's product into `bin` and links that copy; `Other` is no input of this product.
     const copies = ['Static.framework', 'Dynamic.framework', 'libPlain.a'];
     const node = (root, name) => ({ kind: 'directory', name: join(root, name) });
+    const orderOnly = { kind: 'virtual', name: join(dir, 'libPlain.a') };
+    writeFileSync(orderOnly.name, machO(6));
     writeFileSync(join(bin, 'description.json'), JSON.stringify({
-      swiftCommands: { dependencies: { moduleName: 'ExactSwiftDependencies', otherArguments: [], inputs: copies.map(name => node(bin, name)) } },
-      copyCommands: Object.fromEntries([...copies, 'Other.framework'].map(name => [name, { inputs: [node(artifacts, name)], outputs: [node(bin, name)] }])),
+      swiftCommands: { dependencies: { moduleName: 'ExactSwiftDependencies', otherArguments: [], inputs: [...copies, 'libUnpaired.a'].map(name => node(bin, name)) } },
+      copyCommands: {
+        ...Object.fromEntries([...copies, 'Other.framework'].map(name => [name, { inputs: [orderOnly, node(artifacts, name)], outputs: [node(bin, name)] }])),
+        unpaired: { inputs: [], outputs: [node(bin, 'libUnpaired.a')] },
+      },
     }));
     const swiftPackages = [{ url: 'https://fixture.invalid/vendor.git', exactVersion: '1.0.0', products: ['Vendor'] }];
     writeFileSync(join(dir, 'Package.resolved'), JSON.stringify({ version: 3, pins: [{ identity: 'vendor', location: swiftPackages[0].url,
@@ -125,10 +131,59 @@ test('a static SwiftPM framework or archive is force-loaded ahead of the copy Sw
     const [, encodedFlags] = manifest.match(/linkerSettings: \[\.unsafeFlags\((.*)\)\]\)\]\)$/m);
     const flags = JSON.parse(encodedFlags);
     const loaded = flags.flatMap((flag, index) => flag === '-force_load' ? [flags.slice(index - 1, index + 3)] : []);
-    expect(loaded).toEqual(['Static.framework/Static', 'libPlain.a'].map(path =>
-      ['-Xclang-linker', '-force_load', '-Xclang-linker', join(artifacts, path)]));
+    check({ dir, bin, artifacts, loaded });
   } finally { swift?.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('SwiftPM force-loads its copies of static binary targets', () => staticArchiveFixture(({ bin, loaded }) => {
+  expect(loaded).toEqual(['Static.framework/Static', 'libPlain.a'].map(path =>
+    ['-Xclang-linker', '-force_load', '-Xclang-linker', join(bin, path)]));
+}));
+
+const runnable = paths => paths.find(path => path && spawnSync(path, ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0);
+const homebrew = (tool, formula) => process.platform === 'darwin'
+  ? [Bun.which(tool), ...['/opt/homebrew/opt', '/usr/local/opt'].flatMap(prefix =>
+    [formula, `${formula}@22`].map(name => join(prefix, name, 'bin', tool)))] : [];
+const sdkLinkers = ['iphonesimulator', 'iphoneos'].flatMap(name => {
+  try { return [join(appleToolchain.crossSdk(name).tools, 'ld64.lld')]; } catch { return []; }
 });
+const linkTools = {
+  'ld64.lld': runnable([...new Set(sdkLinkers), ...homebrew('ld64.lld', 'lld')]),
+  'llvm-ar': runnable([appleToolchain.appleLLVMTool('llvm-ar'), ...homebrew('llvm-ar', 'llvm')]),
+  'llvm-nm': runnable([appleToolchain.appleLLVMTool('llvm-nm'), ...homebrew('llvm-nm', 'llvm')]),
+  clang: runnable(['clang']),
+};
+const missingLinkTools = Object.keys(linkTools).filter(tool => !linkTools[tool]);
+need('Darwin link tools', missingLinkTools.length && `need runnable ${missingLinkTools.join(', ')} from the Darwin Swift SDK and LLVM, or Homebrew LLVM on macOS.`)(
+  'SwiftPM force-loads the same static archives it links with -ObjC', () => staticArchiveFixture(({ dir, bin, artifacts, loaded }) => {
+    const { 'ld64.lld': lld, 'llvm-ar': ar, 'llvm-nm': nm, clang } = linkTools;
+    const run = (command, args) => {
+      const result = spawnSync(command, args, { cwd: dir, encoding: 'utf8' });
+      expect(result.status, result.stderr || result.error?.message).toBe(0);
+      return result.stdout;
+    };
+    const framework = 'Static.framework/Static', plain = 'libPlain.a';
+    mkdirSync(join(bin, 'Static.framework'));
+    for (const [path, name] of [[framework, 'Framework'], [plain, 'Plain']]) {
+      writeFileSync(join(dir, 'class.m'), `__attribute__((objc_root_class))\n@interface Exact${name}\n@end\n@implementation Exact${name}\n@end\n`);
+      writeFileSync(join(dir, 'member.c'), `int unreferenced${name}(void) { return 42; }\n`);
+      for (const [source, object] of [['class.m', 'class.o'], ['member.c', 'member.o']]) {
+        run(clang, ['-target', 'arm64-apple-ios17.0-simulator', '-c', source, '-o', object]);
+      }
+      rmSync(join(artifacts, path));
+      run(ar, ['rcs', join(artifacts, path), 'class.o', 'member.o']);
+      copyFileSync(join(artifacts, path), join(bin, path));
+    }
+    const output = 'Linked.dylib';
+    run(lld, ['-dylib', '-arch', 'arm64', '-platform_version', 'ios-simulator', '17.0', '17.0',
+      '-undefined', 'dynamic_lookup', ...loaded.flat().filter(flag => flag !== '-Xclang-linker'),
+      '-ObjC', '-F', bin, '-framework', 'Static', '-L', bin, '-lPlain', '-o', output]);
+    const symbols = run(nm, ['-g', output]);
+    for (const name of ['Framework', 'Plain']) {
+      expect(symbols).toContain(`_OBJC_CLASS_$_Exact${name}\n`);
+      expect(symbols).toContain(`_unreferenced${name}\n`);
+    }
+  }));
 
 test('replacing package and service dylibs preserves the old open inode', () => {
   const root = mkdtempSync(join(tmpdir(), 'exact-dylibs-')), descriptors = [];

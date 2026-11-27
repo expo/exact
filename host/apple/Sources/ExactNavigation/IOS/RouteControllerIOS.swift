@@ -26,6 +26,19 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// as the stack's routes are prepared, before UIKit shows any of them
     /// (`NavigationRules.bar`).
     var pushed = false
+    #if os(iOS)
+    var bottomToolbar: BottomToolbarItems?
+    #endif
+    var liftedBottomRows: [NodeView] {
+        #if os(iOS)
+        bottomToolbar?.rows ?? []
+        #else
+        []
+        #endif
+    }
+    var coveredBarNodes: [NodeView] {
+        (lifted.map { [$0] } ?? barNodes) + [scoped].compactMap { $0 } + liftedBottomRows
+    }
     weak var lifted: NodeView?
     var barNodes: [NodeView] = []
     /// The pictures the bar's faces draw (`NodeView.drawnByBar`).
@@ -72,6 +85,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var barSpaces: [UInt32: UIBarButtonItem] = [:]
     /// The header's search field as UIKit's search controller (§9.6).
     var search: HeaderSearch?
+    #if os(iOS)
+    /// Where UIKit had put the search field when the route's filter was last projected (`searchLayout`, `scope`).
+    var searchLayoutRead: [Int]?
+    #endif
     /// The title Exact drew from the heading's group, and the subtitle it
     /// wrote; whether the root's tablist was hidden when it last looked (§9.10).
     let titleInk = NavigationTitleInk()
@@ -84,6 +101,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.init(nibName: nil, bundle: nil)
         #if os(iOS)
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (c: RouteController, _: UITraitCollection) in c.reopenTitle() }
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (c: RouteController, _: UITraitCollection) in c.widthClassChanged() }
         #endif
     }
     /// Whether UIKit is making it appear as the destination of its stack's pop: from `viewIsAppearing` until
@@ -110,11 +128,80 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         appeared?()
     }
     required init?(coder: NSCoder) { nil }
+
+    /// D4's controller allocation and vertical bar, from the route's node (LLP 1123): the edges and bars its view lies
+    /// under, and on iOS 27.1 whether its bars may move into the vertical bar, which UIKit's containers take from the
+    /// child that shows, and which of its bar items and the tab bar compress first there; and D8's minimum margins.
+    func followAllocation() {
+        followMinimumMargins(of: node)
+        let props = node.props
+        let edges = Self.extendedEdges(props["navigationExtendedLayout"])
+        if edgesForExtendedLayout != edges { edgesForExtendedLayout = edges }
+        let opaque = props["navigationExtendsUnderOpaqueBars"] == "true"
+        if extendedLayoutIncludesOpaqueBars != opaque { extendedLayoutIncludesOpaqueBars = opaque }
+        #if os(iOS)
+        guard #available(iOS 27.1, *) else { return }
+        let disabled = props["navigationVerticalBar"] == "disabled"
+        if verticalBarDisabled != disabled {
+            verticalBarDisabled = disabled
+            setNeedsUpdateOfVerticalBarConfiguration()
+        }
+        let compression: UIVerticalBarCompressionBehavior = switch props["navigationVerticalBarCompression"] {
+        case "prefers-bar-items": .prefersBarItems
+        case "prefers-tab-bar": .prefersTabBar
+        default: .automatic
+        }
+        if navigationItem.verticalBarCompressionBehavior != compression { navigationItem.verticalBarCompressionBehavior = compression }
+        #endif
+    }
+
+    /// `navigationExtendedLayout`'s edges: `all` unsaid, `none`, or the edges it names.
+    static func extendedEdges(_ word: String?) -> UIRectEdge {
+        guard let word, word != "all" else { return .all }
+        return word.split(separator: " ").reduce(into: []) { edges, edge in
+            switch edge {
+            case "top": edges.insert(.top)
+            case "left": edges.insert(.left)
+            case "bottom": edges.insert(.bottom)
+            case "right": edges.insert(.right)
+            default: break
+            }
+        }
+    }
+
+    #if os(iOS)
+    /// Whether the route said `navigationVerticalBar="disabled"`.
+    private var verticalBarDisabled = false
+    /// Whether UIKit sets its bar in the vertical bar (an iPhone Duo).
+    var inVerticalBar: Bool { traitCollection.placesVerticalBar && !verticalBarDisabled }
+    @available(iOS 27.1, *)
+    override var preferredVerticalBarBehavior: UIVerticalBarBehavior { verticalBarDisabled ? .disabled : .automatic }
+    #endif
     // The bar's height changed (a push to an inline title, a rotation, a
     // hatch): the route's content area follows (LLP 1075.003 §3.5), once
     // Exact's own writes settle (LLP 1123 D11).
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        // While UIKit presents the route it changes the safe area from inside the presentation's setup, as it adds the
+        // sheet to the window, having armed the transition's alongside animations to run at the end of the next
+        // animation block. Laid out there, a control of the route's animates (a segmented control's indicator), which
+        // runs UIKit's layout of the sheet early, inside that animation: it holds the route's scroller at the size it
+        // had then until the animation ends, over Exact's layout from the sheet's own size and safe area. A native view
+        // only invalidates its layout here; the route takes its safe area in UIKit's next layout pass.
+        if inPresentation {
+            safeAreaOwed = true
+            viewIfLoaded?.setNeedsLayout()
+            return
+        }
+        takeSafeArea()
+    }
+    /// A safe-area change that came while UIKit presented the route, taken in its next layout (`viewDidLayoutSubviews`).
+    private var safeAreaOwed = false
+    /// Whether UIKit is presenting the route's controller or a container holding it.
+    private var inPresentation: Bool {
+        sequence(first: self as UIViewController, next: \.parent).contains { $0.isBeingPresented }
+    }
+    private func takeSafeArea() {
         SafeAreaSteps.react(self) { [weak self] in
             self?.rideBars()
             self?.host?.coversChanged()
@@ -156,19 +243,24 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     // Its route is laid out in this view's bounds (LLP 1123 D2).
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if safeAreaOwed {
+            safeAreaOwed = false
+            takeSafeArea()
+        }
         fitContentViewport()
         host?.presenter.owners.publish()
         if scrollEdgesOwed { host?.settleScrollEdges() }
         #if os(iOS)
         search?.labelScopes()
+        // A fold or a width class can move where a filter the bar projects belongs (LLP 1134 and 1135, amended)
+        filterPlacementMoved()
         #endif
     }
 
     override func loadView() {
         view = PresentationMount()
         paintBackdrop()
-        view.addSubview(node)
-        host?.presenter.session?.natives.routeLoaded(node)
+        node.movingRoute(into: view) { view.addSubview(node) }
     }
 
     /// The backdrop's colours last written, light and dark.
@@ -190,7 +282,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         let view = surface
         // The route's view takes its accent as its tint, which its backdrop in the tint is resolved by
         assign(view, \.tintColor, node.ownAccent)
-        let modal = node.props["navigationPresentation"] == "modal"
+        let modal = NavigationRules.sheetLike(node.props["navigationPresentation"])
         let overPage = node.paintsOverPage
         let key = overPage ? []
             : modal ? [ownBackdrop(dark: false), ownBackdrop(dark: true)]
@@ -249,38 +341,51 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             scroll.contentInsetAdjustmentBehavior = .never
             scroll.keyboardDismissMode = viewportKeyboardDismissal
             #if os(iOS)
+            KeyboardDrag.watch(scroll) { [weak scroll] in scroll?.documentNode }
             scroll.scrollsToTop = false
             #endif
             scroll.delegate = self
             view.addSubview(scroll)
             contentViewport = scroll
+            // The bar's top edge may have taken its list before the page had this viewport: a launch
+            // projects once before `interactiveWidget` is read. `select` follows a list taken later
+            followTopEdge(contentScrollView(for: .top))
         } else if !usesPageViewport, let scroll = contentViewport {
             contentViewport = nil
             keyboardInset.apply(0, to: scroll)
-            view.addSubview(node)
+            node.movingRoute(into: view) { view.addSubview(node) }
             scroll.removeFromSuperview()
         }
-        if node.superview !== contentMount { contentMount.addSubview(node) }
+        if node.superview !== contentMount { node.movingRoute(into: contentMount) { contentMount.addSubview(node) } }
         host?.presenter.regrid(node) // from the controller's view, a grid origin of its own
     }
+    #if os(iOS)
+    /// Under a search in the bar the route keeps its layout (`block(in:)`) and takes the keys as safe
+    /// area, as SwiftUI's keyboard region is: UIKit insets its edge scroller so the last rows reach
+    /// above them. A visual viewport takes them as its inset instead, without reflow. Exact's part is
+    /// on the route's ledger, what an app's hatch set there staying (LLP 1123 D11).
+    private func fitSearchKeys() {
+        guard let presenter = host?.presenter else { return }
+        let view = surface, ledger = ContributionsIOS.of(self)
+        let id = ContributionsIOS.Identity(node: node.id, operation: .keyboardInsets)
+        var keys: CGFloat = 0
+        if contentViewport == nil || presenter.keyboardPolicy != "resizes-visual", presenter.editsInBar(of: view), let top = presenter.keyboardTop, let window = view.window {
+            let edge = view.convert(CGPoint(x: 0, y: top), from: window).y
+            // Extend the safe area the route has without it (a row beside the tabs, and an app's own
+            // addition, included) to the keys; the keyboard and that row obstruct the same edge.
+            keys = max(0, view.bounds.maxY - edge - (view.safeAreaInsets.bottom - ledger.effect(of: id).bottom))
+        }
+        ledger.write(id, UIEdgeInsets(top: 0, left: 0, bottom: keys, right: 0))
+    }
+    #endif
+
     /// The route's room for the keys, and its page viewport's frame, extent and inset.
     func fitContentViewport(in block: CGRect? = nil) {
         let view = surface
         #if os(iOS)
-        // Under a search in the bar the route keeps its layout (`block(in:)`)
-        // and takes the keys as safe area, as SwiftUI's keyboard region is:
-        // UIKit insets its edge scroller so the last rows reach above them.
-        // A visual viewport takes them as its inset instead, without reflow.
-        if let presenter = host?.presenter {
-            var keys: CGFloat = 0
-            if contentViewport == nil || presenter.keyboardPolicy != "resizes-visual", presenter.editsInBar(of: view), let top = presenter.keyboardTop, let window = view.window {
-                let edge = view.convert(CGPoint(x: 0, y: top), from: window).y
-                // Extend the inherited safe area (including a row beside the tabs) to the keys;
-                // the keyboard and that row obstruct the same edge.
-                keys = max(0, view.bounds.maxY - edge - (view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom))
-            }
-            if additionalSafeAreaInsets.bottom != keys { additionalSafeAreaInsets.bottom = keys }
-        }
+        // The keys as the route's safe area under a search in the bar, read once the ledger's writes
+        // settle, since a write's layout would read a prefix of them
+        if host?.presenter != nil { SafeAreaSteps.react(self) { [weak self] in self?.fitSearchKeys() } }
         #endif
         guard let scroll = contentViewport, let presenter = host?.presenter else { return }
         let oldSize = scroll.bounds.size, oldContent = scroll.contentSize, oldInset = scroll.contentInset
@@ -319,6 +424,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         }
         presenter.owners.publish()
         presenter.stickies.scrolled(node.id)
+        #if os(iOS)
+        presenter.textSelection.scrolled(scrollView)
+        #endif
         presenter.transformGeometry.changed()
         presenter.videoVisibility?.changed()
         presenter.scrollPump.scrolled(nil)
@@ -331,6 +439,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     private var dragOrigin: CGPoint?
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         if scrollView === contentViewport { dragOrigin = scrollView.contentOffset }
+        #if os(iOS)
+        host?.presenter.textSelection.scrollWillBeginDragging(scrollView)
+        #endif
         host?.presenter.elementScrolls.userScrolled(scrollView)
         if let session = host?.presenter.session { session.frameHealth.beginScroll(scrollView, session: session) }
     }
@@ -360,7 +471,25 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// The route's node, left in place after a batch removed the route while
     /// UIKit still shows it (`NavigationHost.prepare`), until UIKit takes the
     /// route's view out of the window.
-    var retiringRoot: NodeView?
+    private(set) var retiringRoot: NodeView?
+    func retire() {
+        retiringRoot = node
+        // Switching tabs during a pop can detach its view without completing the disappearance.
+        guard let mount = view as? PresentationMount, mount.window != nil else { return finishRetirement() }
+        mount.didLeaveWindow = { [weak self, weak mount] in
+            // UIKit can move a view between parents in one turn. Finish outside its hierarchy callbacks.
+            DispatchQueue.main.async {
+                if mount?.window == nil { self?.finishRetirement() }
+            }
+        }
+    }
+
+    private func finishRetirement() {
+        guard let retiringRoot else { return }
+        self.retiringRoot = nil
+        (viewIfLoaded as? PresentationMount)?.didLeaveWindow = nil
+        retiringRoot.removeFromSuperview()
+    }
     /// The exit it declares, kept while it is its stack's top: it has left
     /// the tree when UIKit asks for its pop's animator (RouteTransitionIOS).
     var exitPart: RoutePart?
@@ -368,8 +497,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.viewDidDisappear(animated)
         // A transition that made it appear was cancelled
         appearing = false
-        retiringRoot?.removeFromSuperview()
-        retiringRoot = nil
+        finishRetirement()
     }
 
     // Follow UIKit moving this route into another controller (`NavigationHost.moved(into:)`)
@@ -379,6 +507,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         held = true
         if let nav = parent as? UINavigationController { lastStack = nav }
         host?.moved(into: parent)
+        host?.moved(root: self)
     }
 
     private(set) var nativeContentScrollEdges: NSDirectionalRectEdge = []
@@ -450,36 +579,43 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// iOS 26 draws the bar's edge effect on the outermost scroll view under it, which for a route
     /// whose scroller (a list) lies in its page is the page's viewport, not that scroller (measured
     /// on iOS 27: UIKit alone does the same with a table view in a scroll view). So the viewport's
-    /// top effect shows only while that scroller is scrolled from its top, as UIKit's does over a
-    /// list that is the controller's own: no effect over a list at rest. Its style stays
-    /// `automatic`: the rows blurred and faded under the whole bar to a line at its foot, as a
-    /// UIKit or SwiftUI list or scroll view draws them there (iOS 27, measured), where `soft` left
-    /// them legible under the title. A route node that sets any aspect of its edge effect (LLP 1123
-    /// D14) stops the follow: the top shows again, or stays as it stands where the node hides its
-    /// own top, since the viewport keeps UIKit's default edge effects, which the property does not
-    /// style (LLP 1077 D16).
+    /// top effect stands in for the list's (LLP 1077 D16): it shows only while the list is scrolled
+    /// from its top, as UIKit's does over a list that is the controller's own, in the list's style,
+    /// and not where the list hides its top. A list that says nothing is `automatic`: the rows
+    /// blurred and faded under the whole bar to a line at its foot, as a UIKit or SwiftUI list or
+    /// scroll view draws them there (iOS 27, measured). A route node that sets any aspect of its
+    /// edge effect (LLP 1123 D14) stops the follow: the top shows again, or stays as it stands where
+    /// the node hides its own top, in UIKit's style.
     private func followTopEdge(_ scrollView: UIScrollView?) {
         topEdgeWatch = nil
         guard #available(iOS 26.0, tvOS 26.0, *), let page = contentViewport else { return }
         topEdgeRead = (node.setsEdgeEffect, node.edgeEffectHidden(.top))
         guard let scrollView, scrollView !== page, !node.setsEdgeEffect else {
+            if page.topEdgeEffect.style != .automatic { page.topEdgeEffect.style = .automatic }
             if page.topEdgeEffect.isHidden, !node.edgeEffectHidden(.top) { page.topEdgeEffect.isHidden = false }
             return
         }
-        let follow = { [weak page] (sv: UIScrollView) in
-            let rest = sv.contentOffset.y <= 0.5 - sv.adjustedContentInset.top
-            if let page, page.topEdgeEffect.isHidden != rest { page.topEdgeEffect.isHidden = rest }
-        }
-        follow(scrollView)
-        topEdgeWatch = scrollView.observe(\.contentOffset) { sv, _ in follow(sv) }
+        showTopEdge(of: scrollView)
+        topEdgeWatch = scrollView.observe(\.contentOffset) { [weak self] sv, _ in self?.showTopEdge(of: sv) }
+    }
+
+    /// The viewport's top shows `list`'s own top effect while `list` is scrolled from its top.
+    private func showTopEdge(of list: UIScrollView) {
+        guard #available(iOS 26.0, tvOS 26.0, *), let page = contentViewport else { return }
+        let own = list.topEdgeEffect
+        let hidden = own.isHidden || list.contentOffset.y <= 0.5 - list.adjustedContentInset.top
+        if page.topEdgeEffect.style != own.style { page.topEdgeEffect.style = own.style }
+        if page.topEdgeEffect.isHidden != hidden { page.topEdgeEffect.isHidden = hidden }
     }
 
     /// What `followTopEdge` last read of the node's own edge effect: whether it sets one, and whether it hides its top.
     private var topEdgeRead: (sets: Bool, hidden: Bool)?
-    /// Follows the top edge again where a restyle of the node changed what `followTopEdge` read of it.
+    /// Follows the top edge again where a restyle of the node changed what `followTopEdge` read of
+    /// it, and otherwise shows the followed list's effect again, which a restyle of the list changes.
     func refollowTopEdge() {
-        guard let read = topEdgeRead, read != (node.setsEdgeEffect, node.edgeEffectHidden(.top)) else { return }
-        followTopEdge(contentScrollView(for: .top))
+        guard let read = topEdgeRead else { return }
+        guard read == (node.setsEdgeEffect, node.edgeEffectHidden(.top)) else { return followTopEdge(contentScrollView(for: .top)) }
+        if topEdgeWatch != nil, let list = contentScrollView(for: .top) { showTopEdge(of: list) }
     }
 }
 

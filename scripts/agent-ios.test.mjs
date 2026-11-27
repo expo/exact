@@ -1,5 +1,5 @@
 // Native test runs reuse their startup check and simulator lookups (expo/exact#1400).
-import { test } from 'bun:test';
+import { spyOn, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { appleArtifacts } from '../host/apple/build.mjs';
 import { buildFirst, nativeBuild } from './agent-build.mjs';
+import { foldTaken, rotateSimulator } from './duo/hinge.mjs';
 import { resolveApp } from './app.mjs';
 
 const root = resolve(import.meta.dir, '..');
@@ -122,7 +123,7 @@ test('test and agent carry one native startup check to every test file on iOS an
     import { writeFileSync } from 'node:fs';
     import { basename } from 'node:path';
     const spawn = processes.spawn;
-    let checks = 0, launches = 0;
+    let checks = 0, launches = 0, iosFiles = 0;
     mock.module('./scripts/app-shells.mjs', () => ({ ...shells, platformOf: () => null }));
     mock.module('./scripts/web-build.mjs', () => ({ ...builds, privateNativeBuild: () => ({ env: {}, seed() {}, close() {} }) }));
     mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
@@ -133,6 +134,10 @@ test('test and agent carry one native startup check to every test file on iOS an
       } else if (basename(args[0]) === 'agent.mjs') {
         launches++;
         assert.equal(options.env.EXACT_BUILD_CHECKED, 'checked-' + checks);
+        if (args.includes('ios') && args.includes('--test')) {
+          assert.equal(options.env.EXACT_IOS_TEST_CHECKED, iosFiles++ === 0 ? '' : 'sim:warned');
+          return spawn(command, ['-e', 'process.send({ checkedSimulatorAccessibility: "sim", status: "warned" })'], options);
+        }
       } else assert.fail('unexpected subprocess: ' + args);
       return spawn(command, ['-e', ''], options);
     } }));
@@ -147,6 +152,7 @@ test('test and agent carry one native startup check to every test file on iOS an
       assert.equal(checks - before[0], windows ? 0 : 1);
       assert.equal(launches - before[1], windows ? 0 : verb === 'test' ? 2 : 1);
     }
+    assert.equal(iosFiles, platforms.size === 1 ? 0 : 2);
   `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -350,7 +356,7 @@ test('two iOS launches check once and look up each device once; reinstalls refre
       spawnSync(command, args, options) {
         if (command === 'git') return realSpawnSync(command, args, options);
         if (command === 'contract') {
-          assert.deepEqual(args, ['test', file]);
+          assert.deepEqual(args, ['test', file, '--app', dir]);
           return result(JSON.stringify({ tests: authored, properties: [] }));
         }
         assert.equal(command, 'xcrun'); return simctl(args);
@@ -540,4 +546,127 @@ test('macOS freshness checks the full product receipt when the bundle carries a 
     if (target === undefined) delete process.env.CARGO_TARGET_DIR; else process.env.CARGO_TARGET_DIR = target;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('rotate issues the turn on the new display and confirms the scene after landing', async () => {
+  const sample = { orientation: 'portrait', device: 3, inner: true, ready: true };
+  const reads = [
+    { ...sample, inner: false, orientation: 'landscapeLeft' },
+    { ...sample, ready: false }, sample,
+    { ...sample, orientation: 'landscapeLeft' }, sample, { ...sample, orientation: 'landscapeLeft' },
+  ];
+  let count = 0, turns = 0, lands = 0;
+  const result = await rotateSimulator({
+    duo: true, fold: 180,
+    ask({ op }) { assert.equal(op, 'layout'); return Promise.resolve(reads[count++]); },
+    issue(turn) {
+      assert.equal(count, 3);
+      assert.equal(turn.helper, 'portrait');
+      turns++;
+      throw new Error('setter timed out');
+    },
+    land(result) { lands++; return Promise.resolve(result); },
+  }, 'landscapeLeft');
+  assert.deepEqual(result, { orientation: 'landscapeLeft' });
+  assert.deepEqual([count, turns, lands], [6, 1, 1]);
+});
+
+test('a lost Duo turn is reissued from the reported pose at most twice', async () => {
+  const turns = [], messages = [];
+  let now = 0;
+  const clock = spyOn(performance, 'now').mockImplementation(() => now);
+  const log = spyOn(console, 'error').mockImplementation(message => messages.push(message));
+  try {
+    await assert.rejects(rotateSimulator({
+      duo: true, fold: 0,
+      async ask() {
+        if (turns.length) now += 3100;
+        return { orientation: 'portrait', device: 1, ready: true, inner: false, allowed: ['landscape-secondary'] };
+      },
+      issue(turn) { turns.push(turn.device); },
+      land() { assert.fail('the scene never turned'); },
+    }, 'landscapeLeft'), /device portrait .*scene stayed portrait on cover display/);
+    assert.deepEqual(turns, ['landscapeRight', 'portrait', 'landscapeRight', 'portrait', 'landscapeRight']);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /reissue 1\/2/);
+    assert.match(messages[1], /reissue 2\/2/);
+  } finally {
+    clock.mockRestore();
+    log.mockRestore();
+  }
+});
+
+test('a scene that turns at the deadline gets the same landing as any input', async () => {
+  let issued = false, now = 0;
+  const clock = spyOn(performance, 'now').mockImplementation(() => now);
+  try {
+    const result = await rotateSimulator({
+      duo: false,
+      async ask() {
+        return { orientation: issued ? 'landscapeLeft' : 'portrait', device: 1 };
+      },
+      issue() { issued = true; now = 10000; return 'landscapeRight'; },
+      async land(result) { await Bun.sleep(1050); return result; },
+    }, 'landscapeLeft');
+    assert.deepEqual(result, { orientation: 'landscapeLeft' });
+  } finally { clock.mockRestore(); }
+});
+
+test('a partial fold can report the new hinge angle on the outgoing cover', async () => {
+  const sample = { angle: 127.78, inner: false, ready: true, device: 4, orientation: 'landscapeLeft' };
+  const samples = [sample, sample, sample, { ...sample, inner: true, ready: false }, { ...sample, inner: true, orientation: 'portrait' },
+    { ...sample, inner: true }, { ...sample, inner: true }];
+  let reads = 0;
+  await rotateSimulator({
+    duo: true, fold: 130, display: () => reads === 1 ? {} : { inner: true, angle: 127.8 },
+    async ask() { return samples[reads++]; },
+    issue(turn) { assert.equal(reads, 5); assert.equal(turn.device, 'portrait'); },
+    async land(result) { return result; },
+  }, 'landscapeLeft');
+  assert.equal(reads, samples.length);
+});
+
+test('a fold lands once UIKit has told the app of it, moved it to the display and divided its window', async () => {
+  const flat = { 'horizontal-viewport-segments': 1, 'vertical-viewport-segments': 1 }, book = { ...flat, 'horizontal-viewport-segments': 2 };
+  // `samples`: what the host says each time, its own facts and then the app's segments; the first is from before the fold
+  const fold = async (degrees, [before, ...samples], { display = () => assert.fail('SpringBoard was asked'), still, within } = {}) => {
+    let reads = 0;
+    const at = () => samples[Math.min(reads, samples.length) - 1];
+    const taken = await foldTaken({ degrees, display, before, still, within, quiet: 50, pause: 1, ask: async ({ simulatorRotation }) => {
+      if (simulatorRotation) reads++;
+      return simulatorRotation ? at() : { env: at().env, viewport: at().viewport };
+    } });
+    return [taken, reads];
+  };
+  const wide = { w: 951, h: 669 }, narrow = { w: 466, h: 678 };
+  const open = { angle: 180, inner: true, ready: true, env: flat, viewport: wide }, half = { ...open, angle: 127.78, env: book };
+  const closed = { angle: 0, inner: false, ready: true, env: flat, viewport: narrow };
+  assert.deepEqual(await fold(130, [open, open, { ...half, env: flat }, half]), [true, 3]); // the division comes after the hinge
+  assert.deepEqual(await fold(0, [open, open, { ...open, angle: 0 }, { ...closed, ready: false }, { ...closed, viewport: wide }, closed]), [true, 5]); // and the display, and its size
+  assert.deepEqual(await fold(180, [closed, closed, { ...closed, angle: 180 }, open]), [true, 3]);
+  // Between two partial angles, only the new one is taken, unless the driver folded to this one; a first fold can find it there
+  assert.deepEqual(await fold(90, [half, half, { ...half, angle: 88 }], { still: false }), [true, 2]);
+  assert.equal((await fold(90, [half, half], { still: false, within: 100 }))[0], false);
+  assert.deepEqual(await fold(130, [half, half], { still: true }), [true, 1]);
+  assert.equal((await fold(130, [half, half], { display: () => ({}) }))[0], true);
+  assert.equal((await fold(0, [open, { ...closed, angle: null }], { within: 100 }))[0], false);
+  // From the cover, or nearly closed, SpringBoard says which display has the app
+  assert.deepEqual(await fold(130, [closed, { ...closed, angle: 127.78 }, half], { display: () => ({ inner: true, fresh: true }) }), [true, 2]);
+  assert.deepEqual(await fold(20, [open, { ...half, angle: 18 }, { ...closed, angle: 18 }], { display: () => ({ inner: false, fresh: true }) }), [true, 2]);
+  // A first fold to another partial angle waits for SpringBoard's
+  assert.equal((await fold(90, [half, half], { display: () => ({ angle: 88 }), within: 100 }))[0], false);
+  // Its word from before this fold is not of it: the display the app is on is taken once it has been quiet
+  const [taken, reads] = await fold(130, [closed, { ...closed, angle: 127.78 }, half], { display: () => ({ inner: false, fresh: false }) });
+  assert.ok(taken && reads > 2);
+  assert.equal((await fold(20, [closed, { ...closed, angle: 18 }], { display: () => ({ inner: false, fresh: false }) }))[0], true);
+  assert.equal((await fold(130, [open, open], { within: 100 }))[0], false);
+});
+
+test('losing the verification read cannot undo a turn the scene reported', async () => {
+  const replies = [{ orientation: 'portrait' }, { orientation: 'landscapeRight' }, { error: 'connection closed' }];
+  const result = await rotateSimulator({
+    duo: false, async ask() { return replies.shift(); }, issue() {},
+    async land(result) { return { ...result, epoch: 3 }; },
+  }, 'landscapeRight');
+  assert.deepEqual(result, { orientation: 'landscapeRight', epoch: 3 });
 });

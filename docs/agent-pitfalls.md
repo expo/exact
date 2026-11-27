@@ -46,6 +46,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `flex=1 min-width=0` so it takes the space left by the heading and buttons.
   (Agents, 402-point iOS simulator, 2026-11-12.)
 
+- **Safari drops a declaration that names a viewport segment, its fallback included.** Safari on
+  iOS 27.1 parses no `env()` with indices, so `width="env(viewport-segment-width 1 0, 100%)"` leaves
+  the width `auto`. Nor does it tell a page about the hinge: on an iPhone Duo the posture, the
+  segments and the window's size are the same at 180° and 90°. Fix: write a segment only where `exactViewport()`
+  reports two, as the [foldables recipe](recipes/foldables.md) does. (A page in Safari on an iPhone
+  Duo simulator, 2026-11-24.)
 - **A layout-region inset is not a page gutter.** The web can report zero
   for `env(-exact-readable-content-corners-inset-left)` and its right-edge equivalent. Give reading
   content ordinary padding inside the safe region, and bound a full-width
@@ -54,8 +60,8 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 - **`gap`, `row-gap` and `column-gap` accept numeric lengths, not `calc()` or `env()`.**
   The compiler rejects a segment-based gap with `lower-attr-value: expected
-  nonnegative number`. Place fold panes by segment edges in a container aligned
-  with the viewport. Global segment lengths used as flex bases shrink across
+  nonnegative number`. Place the panes either side of the hinge by segment edges, in a
+  container aligned with the viewport. Global segment lengths used as flex bases shrink across
   the hinge if a header or footer reduces the container's space. Put that chrome
   inside a pane, and end a bottom pane at `bottom: 0`. For side-by-side
   panes, automatic left/right insets with flex start/end alignment preserve
@@ -160,6 +166,21 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (a grouped list's footer and cells included), or two `text`s. **Candidate
   diagnostic:** a literal `\n` in a text whose `white-space` collapses it.
   (Bake-off round 6, unit-converter; LLP 1116.004 D2, 2026-10-11.)
+
+- **A `text` with `line-height` whose child runs all change the font can be taller than its
+  runs.** A code line with `line-height=1.5714` whose child runs set a 14 pt monospace
+  font measured 23 pt high on iOS instead of 22 pt beside a line-number column. Cause:
+  CSS's line-box strut comes from the block `text`'s own font (the inherited 17 pt body
+  font) and keeps every line box at least as tall as that strut (CSS Inline 3 §3). Fix:
+  set the same `font-family` and `font-size` on the parent `text` itself, not only on its
+  child runs. (expo/exact#1937, iOS, 2026-11-26.)
+
+- **Code blocks rendered as one `text` per line copy with blank lines between lines.**
+  Cause: each `text` is a separate paragraph block, so multi-paragraph copy joins separate
+  `text` blocks with `\n\n` on macOS and iOS (matching HTML `<p>` copy semantics). Fix:
+  put a code block's lines in one `text` with `white-space="pre"` (using inline runs for
+  syntax highlighting) so line breaks inside the block copy as single `\n`.
+  (expo/exact#1937, iOS and macOS, 2026-11-26.)
 
 - **A ported `clamp(inset, 15, 60)` never stops at 60.** Cause: React Native
   code's `clamp(value, min, max)` (lodash's order) is not CSS's `clamp(MIN, VAL,
@@ -281,6 +302,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   pattern's sortable table, LLP 1153 D8; reproduced on the web, 2026-10-30.)
 
 ## Lists and scrolling
+
+- Bind both `pinchrelease` and `wheel` on a grid that changes columns, and keep
+  column buttons for hosts where `pinchrelease` is silent (Android, Web, desktop).
+  iOS and iPadOS deliver `pinchrelease`; a Mac or browser trackpad delivers a
+  Control-held `wheel`.
 
 - **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
   order.** A whole document in one `text` (an article, a long Markdown note) is
@@ -453,9 +479,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 - **A native sidebar separator needs another touch to redraw.** Cause: a native
   module's own sidebar table reloads its rows during a row's selection and selects
   the same row again. Keep the cells and update selection only when it changes;
-  reload when the row data changes. A list whose rows push needs no table of its own:
-  beside its detail a grouped list is UIKit's sidebar list (LLP 1127), which UI
-  Gallery's tests compare before and after an extra touch
+  reload when the row data changes. A list beside its detail needs no table of its own:
+  its route asks (`navigationSplit="split"`, LLP 1127), and UIKit's split keeps the
+  detail's row selected, which UI Gallery's tests compare before and after an extra touch
   (`apps/ui-gallery/tests/GalleryUITests.swift`).
 - **A sideways swipe on a row opens it.** Cause: the row has no swipe actions. A
   `UITableView` or SwiftUI `List` row with none is selected by a horizontal drag of any
@@ -775,6 +801,15 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   tap anywhere in the row reaches it), the web and macOS a field with its line, corners
   and height (LLP 1116.005 D2), as `apps/shelf`'s add sheet shows. (Shelf recipe,
   2026-10-10; round 7, 2026-10-11.)
+- **A `popover="auto" role="menu"` styled with a literal `background-color` for the web
+  keeps that fill on Android.** Cause: Android's projected dropdown menu honors an
+  explicitly written `background-color` and uniform circular `border-radius` on the menu
+  popover container (LLP 1115.001 D10), deriving legible ink from the fill's luminance;
+  if you write a hardcoded light color such as `#ffffff` solely for the browser, Android
+  will paint a light menu in dark mode too. Fix: omit `background-color` to inherit the
+  platform's Material surface, or use `light-dark(...)` / system color roles so light and
+  dark modes both look right. Non-uniform or elliptical `border-radius` falls back to
+  Material's 4 dp and logs once. (LLP 1115.001 D10, #1956.)
 
 ## Porting a React Native app
 
@@ -794,6 +829,7 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `backgroundColor`, `flexDirection`, `onPress`, `activeOpacity` | `lower-unknown-attr` | `background-color`, `flex-direction`, `press`, `-exact-press-opacity` |
 | `paddingHorizontal=16` | `lower-unknown-attr` | `padding-left=16 padding-right=16`, or `padding="0px 16px"` |
 | `marginVertical=8` | `lower-unknown-attr` | `margin-top=8 margin-bottom=8`, or `margin="8px 0px"` |
+| `useWindowDimensions().width` used as a pane's width | nothing: the window and pane can differ | `exactViewport().width` is the window's; use `resize=<action>` on the pane for its content-box width. A sidebar, sheet or split view can make it narrower ([viewport units](contract-for-agents.md#viewport-and-container-units)) |
 | `shadowColor`, `shadowOpacity`, `shadowRadius`, `shadowOffset`, `elevation` | `lower-unknown-attr`, `lower-attr-tag` | one `box-shadow="<x>px <y>px <2 × radius>px <colour>"` (below); nothing when the same style has `overflow: "hidden"`, which iOS draws without its shadow |
 | `` line-height=`${28 / 17}` ``, `` width=`${n}` `` for numeric `n` | `lower-attr-value` | `line-height=(28 / 17)` for a multiplier, `width=n` for pixels or `` width=`${n}px` `` |
 | `font-weight="bold"`, `"600"` | `lower-attr-value` | `font-weight=700`, `font-weight=600` |
@@ -1001,8 +1037,8 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Actions
 
-- **A command-line run ends while the data module still works on a thread.**
-  A terminal entry run once from a shell (`--print`, or stdout a pipe) exits
+- **A new tab’s child fails to start.** A desktop app can run 16 streaming children and hold 16 network streams at once. Share a child across documents when more than 16 documents need one. Use one poll carrying the changes for all documents (design tool, #1759).
+- **A command-line run ends while the data module still works on a thread.** A terminal entry run once from a shell (`--print`, or stdout a pipe) exits
   when nothing holds it: no request in flight, no one-shot timer armed and no
   node `aria-busy` (LLP 1101.003 D2). A thread the module started after
   answering a send is none of these, so the run settles and prints before
@@ -1111,24 +1147,27 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `await`, and catch the failure ([recipe](recipes/report-errors.md)).
   (Scratch app under `agent macos` and `agent web`, 2026-11-14.)
 
-- **`Date.now()` in a data module passes its Bun tests and fails on the
-  device.** Since 2026-10-05 the build refuses a direct use by file and line
-  (`Date.now()`, `new Date()`, `Math.random()`, `setInterval` and the frame
-  timers; an answer's own `setTimeout` is allowed since 2026-10-28), including literal
-  bracket access such as `Date['now']()`. An alias or dynamic key still gets
-  past the build and throws on first use on every host but Bun. Take the time
-  from the call's arguments (the Contract's `wallTime.epochAtZero + performanceNow()`), as
-  every source already receives it. (Signal clone build 34, 2026-10-05.)
+- **Repeating timers fail in data modules; ambient clocks skip bake.**
+  The build refuses direct and literal-bracket calls to `setInterval`,
+  `requestAnimationFrame`, and `requestIdleCallback` by file and line, and
+  every executor refuses them at runtime (use `setTimeout` inside an answer or
+  a Contract `task`). `Date.now()`, `new Date()`, `performance.now()`, and
+  `Math.random()` work against the host's deterministic clock and seeded
+  substream (LLP 1195.000 D2), but exclude the resource from launch bake and
+  SSR caching and log `[ambient-clock]`. Pass `exactTime()` or
+  `performanceNow()` from Contract for reactive, baked, or SSR-cached values;
+  under Bun unit tests, pass `--preload ./scripts/test-clock-preload.mjs`.
 
-- **An npm package builds, then stops the page at boot.** The build names a
-  clock or randomness read in the app's own modules by file and line; a
-  package's is found only when it runs. `convex`'s `ConvexHttpClient` builds
-  and throws `Math.random() is unavailable in data sources` from its default
-  logger's constructor, so the page never boots: construct it with `{ logger:
-  false }`. Its reactive client (`ConvexClient`, `BaseConvexClient`) also
-  opens its own socket and arms timers no answer owns: use `@exact/convex`
-  (`bun exact.mjs docs convex live queries`). Drive a new package once (`agent web "clock
-  data" logs`) before building on it. (LLP 1157 §1, 2026-11-10.)
+- **An npm package builds, then fails at runtime on sockets or repeating timers.**
+  The build checks the app's own modules for forbidden timers; a package's use
+  of sockets, repeating timers, or browser globals may only surface when it
+  runs. `convex`'s reactive client (`ConvexClient`, `BaseConvexClient`) opens
+  its own socket and arms timers no answer owns: use `@exact/convex`
+  (`bun exact.mjs docs convex live queries`). For `ConvexHttpClient`, pass
+  `{ logger: false }` so its default logger does not draw ambient
+  `Math.random()` and exclude the resource from launch bake and SSR caching.
+  Drive a new package once (`agent web "clock data" logs`) before building on
+  it. (LLP 1157 §1, 2026-11-10.)
 
 - **A drive against a real Convex deployment: the second launch's
   writes do nothing.** A mutation replies ok and the data does not change.
@@ -1244,6 +1283,22 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## GPU surfaces
 
+- **Moving many positioned views with a camera is expensive on macOS.** On an
+  M5 Max, the counter-only scene averaged 4.61 million retired instructions per
+  display-link step across two runs. Adding 100 stationary, absolutely positioned labels with `font-size=9`
+  brought that to 6.35 million. Changing their `left` each step used 84.43 million.
+  After subtracting the counter-only scene, each label averaged about
+  17,000 instructions per step standing still and 798,000 moving.
+  Moving an already mounted label cost about 781,000 extra instructions. The Apple
+  host sends an unchanged paragraph before the label’s frame update. AppKit can
+  also redraw an unclipped layer-backed view when only its origin changes.
+  For plain columns with `width=20 height=20`, each averaged about 4,000 instructions
+  per step standing, 220,000 moving with `left` and 210,000 moving with `translate`.
+  For marks that follow a camera in bulk, draw
+  them in a GPU surface or let the surface place each canvas child (`ChildrenMode::Each`).
+  (macOS 27.0.1, #1762, [measurement procedure](testing.md#measuring-to-optimize-tests), LLP 1014 D5.)
+- A GPU board and grid can bind their own tokens with `surface=board(color("surface.board"), color("board.dot"))`. A transparent clear over a token-painted view also works for the board.
+
 - **A record's named fields reach the wrong surface arguments.** Records cross
   into a GPU surface by position, not by field name. Import the package's
   shapes (`ModelNode` and `ModelHotspot` for `@exact/model-viewer`); if you
@@ -1316,16 +1371,12 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   a text field commits on Enter and on blur, as in HTML. Fix: submit on `submit`
   (Return, a form's button) and keep `change` for normalizing the draft.
   (The Bluesky clone's muted words dialog, 2026-10-08.)
-- **A text field shows an edit its action refused or normalized.** A field bound with
-  `value=text input=edit`, where `edit` ignores a blank value, shows the blank while
-  `text` keeps the old value, and the next keystroke builds on what is shown; so does
-  one whose action or source normalizes `-2` to the `0` it already held. Cause: on
-  the web (both targets) a text field is re-set only when what its binding reads
-  changes, so an unchanged binding does not overwrite the edit. Fix: bind the field to draft state that `edit` always writes, and on commit
-  (`change`, Enter, `blur`) write the accepted value or reset the draft to it, which
-  changes the bound value and redraws the field; the guide's "Editing a value: the field's contract" has the recipe. (Authoring bench, LLP 1087, t2-todo:
-  two builders, about 10 minutes each, 2026-10-04; t1-tip, a normalized count,
-  2026-10-05.)
+- **Skipping an assignment keeps the rejected text visible.** A live filter
+  assigns the accepted value on every edit, including
+  when it equals the previous value. An action that only validates, or a data
+  layer that suppresses the assignment, leaves the draft in place. Keep raw
+  text in state for a number that can be half-typed, then parse on commit.
+  See "Editing a value: the field's contract" in the guide.
 
 - **A checkbox bound to a resource field does not tick until the save answers.** With
   `checked=form.terms change=editTerms`, where `editTerms` sends a mutation that
@@ -1374,12 +1425,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   bench, LLP 1087, t4-kanban: about 15 minutes, 2026-10-04.) **Candidate
   diagnostic:** the compiler could warn on a `pan` without `touch-action`.
 
-- **`swipeleft` is not swipe-to-delete.** A row given `swipeleft`, or built from
-  `pan`, `panrelease` and `translate`, follows the finger and runs one action when it
-  lifts, but reveals no Delete button and is not the platform's swipe action. Fix:
-  `delete=remove(item.id)` on the list's row (`contract vocab swipe`): on iOS UIKit's
-  own swipe action, which a full swipe performs. Cause: `swipeleft` and `swiperight`
-  are the reply gesture's (a message bubble), one action at the gesture's end.
+- **`swipe-follow="left"` is not swipe-to-delete.** A row given `swipe` with
+  `swipe-follow="left"`, or built from `pan`, `panrelease` and `translate`, follows the
+  finger and runs one action when it lifts, but reveals no Delete button and is not the
+  platform's swipe action. Fix: `delete=remove(item.id)` on the list's row (`contract
+  vocab swipe`): on iOS UIKit's own swipe action, which a full swipe performs. Cause: a
+  swipe the node follows is the reply gesture's (a message bubble), one action at the
+  gesture's end.
   Actions other than Delete are a swipe row written by hand (the next pitfall).
   (Ledger2 DIARY, "Needed: swipe gesture", about 15 minutes, 2026-10-04.)
 
@@ -1413,17 +1465,19 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
     a time and the actions VoiceOver reads (`apps/messages` paints its own circles in
     hex and is no model for the rest).
 
-- **A `swiperight` or `swipeleft` hears nothing from a finger on iOS.** A mouse drag fires it on
-  the web and macOS, in a drive and in a test, while a real touch on an iPhone
-  does nothing. Cause: with `touch-action` at `auto` a horizontal pan is the
-  platform's, as in a browser, so the swipe never begins. Fix:
+- **A swipe the node follows (`swipe-follow`) hears nothing from a finger on iOS.** A mouse
+  drag fires it on the web and macOS, in a drive and in a test, while a real touch on an
+  iPhone does nothing. Cause: with `touch-action` at `auto` a horizontal pan is the
+  platform's, as in a browser, so the swipe never begins. In a painted content region's
+  picture a row with a `swipeIndicator` child or a resting transform also stays still,
+  since the picture's route follows only a row with neither. Fix:
   `touch-action="pan-y"` on the swiped node, which leaves vertical scrolling to the
   page. The bubble follows the finger with or without a `transition`; the one
   Messages gives it, `transition="translate -exact-spring(300, 30, 1)"`, springs it
   back after the lift and does not arm the gesture
   ([Swipe to reply](contract-for-agents.md#swipe-to-reply)). (Chat2 DIARY, about 20
   minutes; reproduced with `agent ios --touch platform`, 2026-10-04.) **Candidate
-  diagnostic:** the compiler could warn on a `swiperight` without `touch-action`, as on a `pan`.
+  diagnostic:** the compiler could warn on a `swipe-follow` without `touch-action`, as on a `pan`.
 
 - **A dragged piece snaps back, lands on the wrong square, or a tap moves it.** A
   board has no drop target; build the drag from the pointer events (Chess DIARY,
@@ -1713,6 +1767,11 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   XML file comes as `application/octet-stream`: read its bytes to show it. Android
   gives no files: its page sees the paths. (LLP 1020.001 D7, 2026-10-29.)
 
+- **A magnified Mac iframe still lays out at its box's width.** For a sharp canvas
+  preview with the original line breaks, load your own wrapper with a fixed-size
+  HTML iframe and set `apple.magnification` on the outer Exact frame. The child
+  must allow framing. [Sizing and wrapper example](reference.md#enlarge-an-iframe-on-macos)
+
 - **A browser tab's title comes after its load.** On Apple a partitioned
   `iframe`'s `navigatesuccess` usually carries the old or an empty `title`: WebKit
   reports the new one a moment later, as its own `currententrychange`. Show the last
@@ -1860,6 +1919,9 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `scripts/agent.mjs` for dates that read as intended and stay reproducible; in a test
   file, `epoch "…"` and `time-zone "…"` lines, so a run without the flags still means it.
   Against a live backend, `--epoch now` (`epoch now`) instead.
+- **Every app launches slowly on the same iOS simulator.** An XCTest UI session can leave accessibility enabled
+  across reboots. `test ios` reports the existing settings and the commands to
+  clear them. [Timing an installed build](recipes/porting-and-release.md).
 - **A simulator measurement shows a 100–200 ms stall the app never makes.** A
   plain launch's frames hold 16.7 ms, but a run driven with `axe` shows one
   stall with no batch applied about 0.4 s after `axe` first reads the screen
@@ -2012,7 +2074,9 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   colour is `-exact-tint-color`; the title's is `color`. Use a custom `button`
   without `appearance="auto"` for aligned image frames or arbitrary children.
   `-exact-control-size` and `-exact-corner-style` are admitted only on an
-  explicit native button, including through classes. (LLP 1069.011.001 D12–D14.)
+  explicit native button, including through classes, and `-exact-control-size`
+  also written on a segmented control, a `tablist` or `radiogroup`.
+  (LLP 1069.011.001 D8, D12–D14.)
 
 - **`Request::continuation` does not compile: "type annotations needed"**, or
   an Apple production build answers a source's request with `Unlinked("io")`.
@@ -2534,3 +2598,31 @@ once, then reports it again only after its valid bindings disappear and return. 
   another writer. Use SQLite statements and constraints for shared collections
   (`pattern list-detail`); close each connection in `finally` so other web tabs
   can acquire it.
+
+- **`role="menu"` popovers are positioned at runtime.** On iOS and macOS the platform
+  presents `role="menu"` as a native menu (and under the driver as a managed popover),
+  so manual `top`/`left` coordinates on the menu box are overridden or drift. Anchor
+  the menu via `popovertarget` on its trigger button instead of explicit offsets.
+
+- **A `:hover` rule can override `:checked` or active button styling.** When a `:hover`
+  background or color shares specificity with (or follows) a selected/checked state, it
+  paints over the active state while the pointer stays on the control. Narrow hover
+  selectors with `:not(:checked)` or `:not([aria-pressed="true"])`, or omit custom
+  hover paint on platform controls.
+
+- **Same-origin absolute `href` links open outside the router unless `target="_self"` is set.**
+  A `link` with an `http(s)://` URL opens externally by default even on the same origin.
+  Use a relative path (`path(...)`) for in-app routes, or add `target="_self"` when an
+  absolute same-origin URL should navigate in place.
+
+- **Web tests exercising `showNotification` need notifications granted.** Headless Chrome
+  denies notification permission by default; add `prefer permission.notifications granted`
+  at the top of the `.test.contract` test (or in an interactive `agent web` drive) before
+  triggering the notification path.
+
+- **Live clocks cannot feed a `resource` argument directly.** Passing `performanceNow()`
+  into a `resource` argument re-requests data every frame (`analyze-resource-clock`), while
+  reading `Date.now()` inside `app.ts` does not trigger reactive updates and excludes the
+  resource from launch bake and SSR caching. Sample the current timestamp or day key into
+  `state` inside an action or timer task (`task` `every(...)`), then pass that state to
+  the `resource`.

@@ -22,8 +22,8 @@ pub(super) struct State {
     mapping: Mapping,
     scroll: f32,
     phase: Phase,
-    // Last actual pointer point, not an app resource or a destination pin.
-    point: (f32, f32),
+    // Edge scrolling starts with the first drag sample after the row lifts.
+    point: Option<(f32, f32)>,
     edge_clock: Option<f64>,
 }
 impl<D: DataSource> Presenter<D> {
@@ -191,7 +191,7 @@ impl<D: DataSource> Presenter<D> {
             mapping,
             scroll: self.scroll_of(list).1,
             phase: Phase::Active,
-            point: (0., 0.),
+            point: None,
             edge_clock: None,
         });
         self.brush.lift.arrange = Some((binding.list, binding.wrapper));
@@ -207,7 +207,7 @@ impl<D: DataSource> Presenter<D> {
         );
         self.dirty = true;
         Ok(Some(Hold {
-            primary,
+            primary: Some(primary),
             velocity,
             kind: HeldKind::Arrange(token),
             sampled: None,
@@ -256,15 +256,15 @@ impl<D: DataSource> Presenter<D> {
         let b = s.binding;
         let list = self.host.kernel().node_by_key(b.list).unwrap().id;
         let value = Value {
-            x: held.primary.value.x,
-            y: held.primary.value.y + dy + (self.scroll_of(list).1 - s.scroll) as f64,
+            x: held.motion().value.x,
+            y: held.motion().value.y + dy + (self.scroll_of(list).1 - s.scroll) as f64,
             ..Value::ZERO
         };
         if !finite(value) {
             return Err("Arrange position outside finite layout range".into());
         }
         self.host.arrange_clock(now)?;
-        if !self.host.hold_update(held.primary.token, value, now)? {
+        if !self.host.hold_update(held.motion().token, value, now)? {
             return Ok(false);
         }
         // A hold seek may advance a concurrent Height curve. Refine actual layout
@@ -285,7 +285,7 @@ impl<D: DataSource> Presenter<D> {
         };
         held.velocity.push(now / 1000., visual);
         let s = self.arrange.as_mut().unwrap();
-        s.point = point;
+        s.point = Some(point);
         let port = s.mapping.port;
         let g = self.host.runner().reorder_geometry(b.list).unwrap();
         let y = point.1 as f64 - port.1 as f64 + g.scroll_top;
@@ -458,7 +458,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let id = self.host.kernel().node_by_key(s.binding.list)?.id;
         let g = self.host.runner().reorder_geometry(s.binding.list)?;
-        let offset = s.point.1 as f64 - s.mapping.port.1 as f64;
+        let offset = s.point?.1 as f64 - s.mapping.port.1 as f64;
         let direction = if offset < 32. {
             -1.
         } else if offset > g.port_height - 32. {

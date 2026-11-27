@@ -26,12 +26,16 @@ final class Flight {
     let source: FlightSource
     var progress: CGFloat = 0
     weak var view: NodeView?
+    weak var parent: NSView?
     var slot: NSView?
     var container: NSView?
     /// A view that is not an image flies scaled inside this: the shown box,
     /// its radius and its clip (D4.4).
     var clip: NSView?
     var frame: NSRect?
+    /// Tree position snapshotted before lifting so nested flights order outer-to-inner (LLP 1156.008.001 A2).
+    var ancestorDepth: Int = 0
+    var preOrder: [Int] = []
     init(id: UInt32, source: FlightSource) { self.id = id; self.source = source }
 }
 
@@ -56,6 +60,15 @@ final class BuiltInFlights: FlightHosting {
     func landInside(_ view: NSView) { presenter?.landFlights(inside: view) }
     func reset() { presenter?.resetFlights() }
     func isFlying(_ view: NodeView) -> Bool { presenter?.isFlying(view) ?? false }
+    func hasFlyingAncestor(_ view: NSView) -> Bool {
+        guard !flights.isEmpty else { return false }
+        var current: NSView? = view
+        while let c = current {
+            if flights.values.contains(where: { $0.view === c || $0.clip === c || $0.container === c }) { return true }
+            current = c.superview
+        }
+        return false
+    }
     func regridSlots() { presenter?.regridSlots() }
     func slot(of view: NodeView) -> NSView? { flights[view.id].flatMap { $0.view === view ? $0.slot : nil } }
     func owns(_ view: NSView) -> Bool { flights.values.contains { $0.container === view || $0.slot === view } }
@@ -133,9 +146,53 @@ extension Presenter {
 
     func isFlying(_ view: NodeView) -> Bool { flights[view.id]?.view === view && view.flightLook != nil }
 
+    private func flightTreeKey(_ view: NSView) -> (depth: Int, path: [Int]) {
+        var reversed: [Int] = []
+        var current: NSView = view
+        while let parent = current.superview {
+            reversed.append(parent.subviews.firstIndex(of: current) ?? 0)
+            if parent === root || parent === view.window?.contentView { break }
+            current = parent
+        }
+        return (reversed.count, reversed.reversed())
+    }
+
+    private static func outerBeforeInner(_ a: Flight, _ b: Flight) -> Bool {
+        let ra = a.view?.paintRank ?? 0, rb = b.view?.paintRank ?? 0
+        if ra != rb { return ra < rb }
+        if a.ancestorDepth != b.ancestorDepth { return a.ancestorDepth < b.ancestorDepth }
+        if a.preOrder != b.preOrder { return a.preOrder.lexicographicallyPrecedes(b.preOrder) }
+        return a.id < b.id
+    }
+
+    private func orderFlightLayer(_ layer: NSView) {
+        let ordered = flights.values.filter { $0.container === layer }.sorted(by: Self.outerBeforeInner)
+            .compactMap { $0.clip ?? $0.view }.filter { $0.superview === layer }
+        for item in ordered {
+            item.removeFromSuperview()
+            layer.addSubview(item)
+        }
+        PaintOrder.changed(layer)
+    }
+
     func flightsBatchApplied() {
-        for f in Array(flights.values) {
-            if f.view == nil, f.slot == nil { liftFlight(f) }
+        let pending = flights.values.filter { $0.view == nil && $0.slot == nil }
+        for f in pending {
+            if let view = views[f.id] {
+                let key = flightTreeKey(view)
+                f.ancestorDepth = key.depth
+                f.preOrder = key.path
+            }
+        }
+        for f in pending.sorted(by: Self.outerBeforeInner) {
+            liftFlight(f)
+        }
+        var layers: [NSView] = []
+        for f in flights.values {
+            if let layer = f.container, !layers.contains(where: { $0 === layer }) { layers.append(layer) }
+        }
+        for layer in layers { orderFlightLayer(layer) }
+        for f in flights.values.sorted(by: Self.outerBeforeInner) {
             showFlight(f)
         }
     }
@@ -143,15 +200,16 @@ extension Presenter {
     func landFlight(_ f: Flight) {
         flights.removeValue(forKey: f.id)
         guard let view = f.view, let slot = f.slot, let parent = slot.superview else {
-            // Its place went (a roots change): it gets its own look back.
-            // Still in its clip, it stands at the clip's top left, unscaled,
-            // at its own size.
+            // Its slot went (e.g. a roots change): never leave a landed view
+            // orphaned inside the pass-through FlightLayer (LLP 1156.008.001 A2).
             if let view = f.view {
                 view.flightLook = nil
-                if let clip = f.clip, view.superview === clip, let layer = clip.superview {
+                if view.superview === f.clip || view.superview === f.container {
                     view.removeFromSuperview()
-                    layer.addSubview(view, positioned: .above, relativeTo: clip)
-                    view.frame = NSRect(origin: clip.frame.origin, size: view.frame.size)
+                    if views[f.id] === view, let original = f.parent, original.window != nil {
+                        original.addSubview(view)
+                        view.frame = f.frame ?? view.grid?.drawn ?? view.frame
+                    }
                 }
                 restore(view, f)
                 view.applyTransform()
@@ -241,6 +299,7 @@ extension Presenter {
             return l
         }()
         f.view = view
+        f.parent = parent
         f.slot = slot
         f.container = layer
         view.removeFromSuperview()
@@ -263,12 +322,38 @@ extension Presenter {
         PaintOrder.changed(layer)
     }
 
+    /// Resolve `slot`'s resting destination rectangle in `layer`: when an
+    /// ancestor view is itself currently flying inside a moving/scaled
+    /// `FlightClip`, remap through that ancestor's resting `slot` instead
+    /// (LLP 1156.008.001 A2).
+    private func restingRect(of slot: NSView, in layer: NSView) -> NSRect {
+        var rect = slot.bounds
+        var current: NSView = slot
+        for _ in 0..<64 {
+            var host: NSView? = current.superview
+            var flyingAncestor: Flight?
+            while let h = host, h !== layer {
+                if let match = flights.values.first(where: { $0.view === h && $0.slot != nil }) {
+                    flyingAncestor = match
+                    break
+                }
+                host = h.superview
+            }
+            guard let match = flyingAncestor, let ancestorView = match.view, let ancestorSlot = match.slot else {
+                return current.layer.flatMap { s in layer.layer.map { s.convert(rect, to: $0) } } ?? current.convert(rect, to: layer)
+            }
+            rect = current.convert(rect, to: ancestorView)
+            current = ancestorSlot
+        }
+        return current.layer.flatMap { s in layer.layer.map { s.convert(rect, to: $0) } } ?? current.convert(rect, to: layer)
+    }
+
     private func showFlight(_ f: Flight) {
         guard let view = f.view, let slot = f.slot, let layer = f.container, let content = layer.superview else { return }
         let p = f.progress
         // Through the layers, as the source was: ancestors' transforms count.
         let from = layer.layer.flatMap { l in content.layer.map { l.convert(f.source.rect, from: $0) } } ?? layer.convert(f.source.rect, from: content)
-        let to = slot.layer.flatMap { s in layer.layer.map { s.convert(s.bounds, to: $0) } } ?? slot.convert(slot.bounds, to: layer)
+        let to = restingRect(of: slot, in: layer)
         func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
         let shown = NSRect(x: mix(from.minX, to.minX), y: mix(from.minY, to.minY),
                            width: max(0, mix(from.width, to.width)), height: max(0, mix(from.height, to.height)))

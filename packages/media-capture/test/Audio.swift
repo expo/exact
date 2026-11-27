@@ -64,6 +64,180 @@ private final class Probe: ExactTrackConsumer {
     func ended() {}
 }
 
+private final class FakeCaptureEngine: CaptureAudioEngine {
+    let token = NSObject()
+    var notificationObject: AnyObject? { token }
+    var format: AVAudioFormat
+    var hatchFormat: AVAudioFormat?
+    var voiceProcessingEnabled: Bool = false
+    var voiceProcessingHistory: [Bool] = []
+    var startCount = 0
+    var stopCount = 0
+    var removeTapCount = 0
+    var installTapFormats: [AVAudioFormat] = []
+    var startError: Error?
+    var onStart: ((FakeCaptureEngine) -> Void)?
+    var tapBlock: ((AVAudioPCMBuffer, AVAudioTime) -> Void)?
+
+    init(format: AVAudioFormat, hatchFormat: AVAudioFormat? = nil) {
+        self.format = format
+        self.hatchFormat = hatchFormat
+    }
+
+    func setVoiceProcessing(_ enabled: Bool) throws {
+        voiceProcessingEnabled = enabled
+        voiceProcessingHistory.append(enabled)
+    }
+    func inputFormat() -> AVAudioFormat { format }
+    func installInputTap(format: AVAudioFormat, block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) {
+        installTapFormats.append(format)
+        tapBlock = block
+    }
+    func removeInputTap() {
+        removeTapCount += 1
+        tapBlock = nil
+    }
+    func start() throws {
+        startCount += 1
+        onStart?(self)
+        if let error = startError { throw error }
+    }
+    func stop() {
+        stopCount += 1
+        tapBlock = nil
+    }
+    func emit(_ frames: AVAudioFrameCount = 512) {
+        guard let tapBlock, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
+        buffer.frameLength = frames
+        tapBlock(buffer, AVAudioTime(sampleTime: 0, atRate: format.sampleRate))
+    }
+}
+
+private func runMain(until condition: () -> Bool, timeout: TimeInterval = 2.0) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline {
+        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+    }
+    return condition()
+}
+
+private func testProcessCaptureReopen() throws {
+    let f48 = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+    let f44 = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+    let fZero = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 0, channels: 0, interleaved: false)!
+    var activeClaims = 0
+    let session = ExactAudioSession { _, _, _, _ in
+        activeClaims += 1
+        return { activeClaims -= 1 }
+    }
+    var inCallNow = false
+    var created: [FakeCaptureEngine] = []
+    var nextEngine: (() throws -> FakeCaptureEngine)?
+    let capture = ProcessCapture(makeEngine: { _ in
+        let engine = try nextEngine!()
+        created.append(engine)
+        return engine
+    }, isInCall: { inCallNow })
+    let options = CaptureOptions(constraints: ["deviceId": "built-in-mic"], apple: [:])
+
+    // 1. Configuration change posted during initial start() is observed and triggers one in-place restart.
+    let first = FakeCaptureEngine(format: f48)
+    var postedDuringStart = false
+    first.onStart = { engine in
+        if !postedDuringStart {
+            postedDuringStart = true
+            NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: engine.token)
+        }
+    }
+    nextEngine = { first }
+    var receivedFormats: [AVAudioFormat] = []
+    let tap = capture.tap { buffer, _ in receivedFormats.append(buffer.format) }
+    try capture.lease(options, session: session, log: { _ in })
+    check(runMain(until: { first.startCount == 2 }), "configuration change posted inside start() is observed and restarts in place")
+    check(created.count == 1 && first.stopCount == 0 && capture.format == f48, "startup config change keeps the same engine")
+
+    // 2. Configuration change burst coalesces into one in-place restart on the new input format.
+    first.format = f44
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: first.token)
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: first.token)
+    check(runMain(until: { first.startCount == 3 }), "configuration change burst coalesces into one in-place restart")
+    RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+    check(created.count == 1 && first.startCount == 3 && first.stopCount == 0, "reopen keeps the same engine without rebuilding or looping")
+    check(first.removeTapCount == 2 && first.installTapFormats == [f48, f48, f44] && capture.format == f44, "reopen reinstalls tap on the new input format")
+    first.emit()
+    check(receivedFormats.last == f44, "restarted engine delivers audio at the new format")
+
+    // 3. In-place restart reevaluates call voice-processing policy when entering and leaving a call.
+    inCallNow = true
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: first.token)
+    check(runMain(until: { first.startCount == 4 }), "entering a call restarts in place")
+    check(first.voiceProcessingEnabled && first.voiceProcessingHistory == [true], "entering a call enables voice processing on restart")
+    inCallNow = false
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: first.token)
+    check(runMain(until: { first.startCount == 5 }), "leaving a call restarts in place")
+    check(!first.voiceProcessingEnabled && first.voiceProcessingHistory == [true, false], "leaving a call disables voice processing on restart")
+
+    // 4. Explicit echoCancellation=false keeps voice processing off even while in a call.
+    let noEchoCapture = ProcessCapture(makeEngine: { _ in FakeCaptureEngine(format: f48) }, isInCall: { true })
+    let noEchoEngine = FakeCaptureEngine(format: f48)
+    let noEchoCapture2 = ProcessCapture(makeEngine: { _ in noEchoEngine }, isInCall: { true })
+    let noEchoOptions = CaptureOptions(constraints: ["echoCancellation": false], apple: [:])
+    try noEchoCapture2.lease(noEchoOptions, session: session, log: { _ in })
+    noEchoCapture2.reopen()
+    check(!noEchoEngine.voiceProcessingEnabled && noEchoEngine.voiceProcessingHistory.isEmpty, "echoCancellation=false keeps voice processing disabled during a call")
+    noEchoCapture2.unlease()
+    _ = noEchoCapture
+
+    // 5. Synchronized interleaving: a late callback from retired engine A cannot suppress engine B's notification.
+    let second = FakeCaptureEngine(format: f48, hatchFormat: f48)
+    nextEngine = { second }
+    let bgEntered = DispatchSemaphore(value: 0), bgRelease = DispatchSemaphore(value: 0), bgDone = DispatchSemaphore(value: 0)
+    let probeObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: first.token, queue: nil) { _ in
+        bgEntered.signal()
+        _ = bgRelease.wait(timeout: .now() + 5)
+    }
+    DispatchQueue.global().async {
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: first.token)
+        bgDone.signal()
+    }
+    check(bgEntered.wait(timeout: .now() + 5) == .success, "background notification on engine A entered")
+    // Force rebuild to engine B while A's notification delivery is still in flight on the background thread.
+    first.format = fZero
+    capture.reopen()
+    check(created.count == 2 && first.stopCount == 1 && second.startCount == 1, "0 Hz input format rebuilds to engine B")
+    // Release A's in-flight notification, then immediately notify B; B must still restart!
+    bgRelease.signal()
+    check(bgDone.wait(timeout: .now() + 5) == .success, "background notification on engine A finished")
+    NotificationCenter.default.removeObserver(probeObserver)
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: second.token)
+    check(runMain(until: { second.startCount == 2 }), "late callback from retired engine A does not suppress engine B's reopen")
+
+    // 6. A connected hatch mixer whose format no longer matches the input falls back to rebuilding.
+    let third = FakeCaptureEngine(format: f44)
+    nextEngine = { third }
+    second.format = f44
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: second.token)
+    check(runMain(until: { created.count == 3 }), "mismatched hatch mixer format triggers engine rebuild")
+    check(second.stopCount == 1 && third.startCount == 1 && capture.format == f44, "hatch mismatch rebuilds cleanly")
+
+    // 7. A throwing in-place start falls back to rebuilding a new engine.
+    let fourth = FakeCaptureEngine(format: f48)
+    nextEngine = { fourth }
+    third.startError = CaptureError("start failed")
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: third.token)
+    check(runMain(until: { created.count == 4 }), "throwing in-place restart falls back to rebuild")
+    check(third.stopCount == 1 && fourth.startCount == 1 && capture.format == f48, "fallback rebuild recovers from throwing start")
+
+    // 8. When both in-place restart and rebuild fail, the session claim is cancelled.
+    fourth.startError = CaptureError("in-place failed")
+    nextEngine = { throw CaptureError("rebuild failed") }
+    NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: fourth.token)
+    check(runMain(until: { activeClaims == 0 }), "failed rebuild cancels the audio session claim")
+
+    tap.cancel()
+    capture.unlease()
+}
+
 @main
 private struct AudioTests {
     static func main() throws {
@@ -206,6 +380,7 @@ private struct AudioTests {
         capture.destroy {}
         check(pcm.queue.sync { pcm.taps.isEmpty }, "session destruction removes all audio subscriptions")
         replacementLease.cancel()
+        try testProcessCaptureReopen()
         print("audio tracks: \(failures) failures")
         exit(failures == 0 ? 0 : 1)
     }

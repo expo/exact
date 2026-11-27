@@ -14,11 +14,11 @@ import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespac
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
 import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
-import { checkPreloadBackend, checkerOutput, declaredSettings, envReads, inlineSettings, moduleResolution, orderImportEdges, packageOrigin, recordSourceInputs, resolutionCandidates, settingSources } from './__exact_env.mjs';
+import { checkPreloadBackend, checkerOutput, declaredSettings, envReads, inlineSettings, moduleResolution, orderImportEdges, packageOrigin, productionManifest, recordSourceInputs, resolutionCandidates, settingSources } from './__exact_env.mjs';
 import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
 export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
-import { compilerOptions, builtin, nodeNote, bare, lineColumn, packageRefusals, propertyName, walkRuntime, moduleSpecifiers } from './__exact_portable.mjs';
+import { compilerOptions, builtin, nodeNote, bare, lineColumn, packageRefusals, propertyName, walkRuntime, moduleSpecifiers, virtualBuiltinModule, applyPackageMarkers, settlePackageMarkers } from './__exact_portable.mjs';
 
 import { freezeGrants, grantsInitializer, moduleMetadata, nativeModuleEntry, recordedConstants, staticFacts } from './__exact_facts.mjs';
 export { moduleBinding, compilerOptions, nodeNote, staticFacts };
@@ -642,8 +642,9 @@ export const dataBundle=(stage)=>({...bundleOptions, transform:{...bundleOptions
  * is refused by file and line, into `refusals` when given, else thrown. */
 export function capturedSources(stage, refusals=null, discovery=false) {
   stage=realpathSync.native(stage);
-  const files=new Map(), roots=new Map(), edges=new Map(), stray=new Map(), area=join(stage,'node_modules','.packages');
-  // Each site that runs code from a string, once (`packageRefusals`): written beside the stage at the build's end.
+  const files=new Map(), roots=new Map(), edges=new Map(), stray=new Map(), pkgSites=new Map(), nodeBuiltins=new Map(), builtinIds=new Map(), area=join(stage,'node_modules','.packages');
+  const nodeRequire=createRequire(import.meta.url);
+  // Each site that runs code from a string or surviving package DOM/Node global: written beside the stage.
   const warned=new Set();
   let total=0;
   const resolution=new Map();
@@ -743,7 +744,16 @@ export function capturedSources(stage, refusals=null, discovery=false) {
       const real=await resolving(place).catch(() => null);
       const who=label(importer);
       if (!real || real.external) {
-        if (builtin(source)) throw new Error(`${who} imports Node's built-in '${source}': a data module runs on Hermes and in the browser, which have no Node modules; import a part of the package that needs none, or another package`);
+        if (builtin(source)) {
+          const why=`${who} imports Node's built-in '${source}': a data module runs on Hermes and in the browser, which have no Node modules; import a part of the package that needs none, or another package`;
+          if (!from) throw new Error(why);
+          // Defer unresolved Node built-ins in packages past tree-shaking (LLP 1195.000 D1.2).
+          const marker=`__exact_node${nodeBuiltins.size.toString(36)}`, vid=`\0exact-builtin:${nodeBuiltins.size}:${kind}:${source}`;
+          nodeBuiltins.set(marker,why);
+          builtinIds.set(vid,{source,marker,isRequire:kind==='require'});
+          record(null);
+          return { id:vid, moduleSideEffects:false };
+        }
         throw new Error(`${who} imports '${source}', which is not installed`);
       }
       // A `browser` field's `false`: Rolldown's empty module.
@@ -753,35 +763,31 @@ export function capturedSources(stage, refusals=null, discovery=false) {
       return { ...real, id };
     },
     load(id) {
+      const stub=builtinIds.get(id);
+      if (stub) return virtualBuiltinModule(stub.source,stub.marker,stub.isRequire,nodeRequire);
       id=physicalId(id);
       if (!files.has(id) && !id.startsWith('\0rolldown/empty.js')) assertCapturedModule(stage, id);
       return null;
     },
     transform(code, id) {
-      if (discovery) return null;
+      if (discovery || builtinIds.has(id)) return null;
       id=physicalId(id);
       const parse=(c,o)=>this.parse(c,o), js=/\.[cm]?js$/.test(id) && within(id,stage), inPackage=files.has(id);
       const reads=envReads(id,code,parse,(at)=>label(id,at),inPackage);
-      // The app's own JavaScript is checked as package code is, and for the clock as the app's TypeScript is. Every other
-      // module that runs, the app's TypeScript and a package's TypeScript or JSX, is checked only for code from a string.
-      const fromStrings=[], other=!js && within(id,stage) && /\.[cm]?[jt]sx?$/.test(id) && !/\.d\.[cm]?ts$/.test(id);
+      const fromStrings=[], sites=[], other=!js && within(id,stage) && /\.[cm]?[jt]sx?$/.test(id) && !/\.d\.[cm]?ts$/.test(id);
       if (other) packageRefusals(code,(at)=>label(id,at),parse,fromStrings,/\.[cm]?tsx$/.test(id) ? 'tsx' : /\.jsx$/.test(id) ? 'jsx' : 'ts',(at)=>place(id,at));
-      report([...(inPackage ? [] : ambientRefusals(stage,id,code,parse)), ...(inPackage ? [] : reads.map(r=>r.why)), ...(js ? packageRefusals(code,(at)=>label(id,at),parse,fromStrings,'js',(at)=>place(id,at)) : [])]);
+      const pkgRefused=js ? packageRefusals(code,(at)=>label(id,at),parse,fromStrings,'js',(at)=>place(id,at),inPackage ? sites : null) : [];
+      report([...(inPackage ? [] : ambientRefusals(stage,id,code,parse)), ...(inPackage ? [] : reads.map(r=>r.why)), ...(inPackage ? [] : pkgRefused)]);
       for (const why of fromStrings) warned.add(why);
-      if (!inPackage || !reads.length) return null;
-      // A package's read of a setting is a read only if the bundle keeps it: each becomes a global of the same length,
-      // which tree-shaking drops with the code around it, and `renderChunk` refuses any the output still holds. A
-      // global's read may throw, so the bundle keeps at least the code the read would have kept.
-      for (const {start,end,why} of reads) {
-        const marker=`__exact_env${stray.size.toString(36)}`;
-        stray.set(marker,why);
-        code=code.slice(0,start)+marker.padEnd(end-start)+code.slice(end);
-      }
-      return {code,map:null};
+      if (!inPackage) return null;
+      const patched=applyPackageMarkers(code,reads,sites,stray,pkgSites);
+      return patched===null ? null : {code:patched,map:null};
     },
     renderChunk(code) {
-      report([...stray].filter(([marker])=>new RegExp(`\\b${marker}\\b`).test(code)).map(([,why])=>why));
-      return null;
+      const settled=settlePackageMarkers(code,stray,pkgSites,nodeBuiltins,warned);
+      writeFileSync(resolve(stage,CODE_WARNINGS),JSON.stringify([...warned].sort()));
+      report(settled.refusals);
+      return settled.code===null ? null : {code:settled.code,map:null};
     },
     buildEnd() {
       const listed=[...files.values()].map(({real,package:{key,root},sha256})=>[key,slash(relative(root,real)),real,sha256])
@@ -857,33 +863,22 @@ export function replayCaptured(stage, allowed=[]) {
   };
 }
 
-// Time and seeds are source arguments (LLP 1027.000): every executor refuses the clock, randomness and every
-// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/time.js,
-// js/src/crypto.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
-// build, by file and line, so a test that runs the module under Bun, which has no such guard, cannot hide it.
-const ambient=(api)=>api+' is unavailable in data sources; pass time or a random seed as an argument';
+// Non-answer timers (`setInterval`, `requestAnimationFrame`, `requestIdleCallback`) stay refused in Exact2
+// (LLP 1195.000 D2.8, D6); clock and `Math.random()` refusals are retired in favor of virtualized builtins.
 const timers=(api)=>api+' is unavailable in data sources: an answer waits with setTimeout; pass time as an argument';
 const TIMERS=['setInterval','requestAnimationFrame','requestIdleCallback'];
 const GLOBALS=['globalThis','self','window','global'];
-// The global `name`: the bare identifier, or a global object's property.
 const ambientGlobal=(node,name,local)=>{
   node=bare(node);
   if (node?.type==='Identifier') return node.name===name && !local.has(name);
   return propertyName(node)===name
     && bare(node.object)?.type==='Identifier' && GLOBALS.includes(bare(node.object).name) && !local.has(bare(node.object).name);
 };
-const member=(node,object,property,local)=>{ node=bare(node); return propertyName(node)===property && ambientGlobal(node.object,object,local); };
 function refusal(node,local) {
   if (node.type==='CallExpression') {
-    const callee=node.callee;
-    if (member(callee,'Date','now',local)) return ambient('Date.now()');
-    if (member(callee,'performance','now',local)) return ambient('performance.now()');
-    if (member(callee,'Math','random',local)) return 'Math.random() is unavailable in data sources; seed from crypto.getRandomValues in a source (docs/recipes/random-and-shuffle.md), or pass a seed as an argument; a roll in the view needs no source (docs/recipes/random-rolls.md)';
-    if (ambientGlobal(callee,'Date',local)) return ambient('Date()');
-    const timer=TIMERS.find(name=>ambientGlobal(callee,name,local));
+    const timer=TIMERS.find(name=>ambientGlobal(node.callee,name,local));
     if (timer) return timers(timer+'()');
   }
-  if (node.type==='NewExpression' && ambientGlobal(node.callee,'Date',local) && !node.arguments.length) return ambient('new Date()');
   return null;
 }
 /** The direct uses of the global clock, randomness and timers where no enclosing
@@ -928,7 +923,7 @@ export function snapbackMutationTypes(declarations) {
 
 /** With `web`, for the web's bundles: a setting a launch may give is inlined as any other, as no launch gives one
  * there (LLP 1153.002 D2). */
-export async function configure(stage, incremental=false, parse, web=false, build, discoveryEntry='app.ts') {
+export async function configure(stage, incremental=false, parse, web=false, build, discoveryEntry='app.ts', production=!developmentTrust(process.env)) {
   const app=capturedOrigins(stage).at(-1)[1];
   const inside = (path) => {
     if (path !== stage && !path.startsWith(stage+sep)) throw new Error('tsconfig: path outside captured app: '+path);
@@ -1006,6 +1001,11 @@ export async function configure(stage, incremental=false, parse, web=false, buil
   if (existsSync(modulePath)) {
     const original=resolve(stage,'__exact_backend_source.json');
     const modules=existsSync(original) ? new Map(Object.entries(JSON.parse(readFileSync(original,'utf8')))) : settingSources(stage);
+    // Check and bundle the same JSON. A whole-manifest import must not carry development values into the app.
+    if (production) for (const file of ['app.json', '.shells/app.json']) {
+      const path = resolve(stage, file);
+      if (existsSync(path)) modules.set(file, productionManifest(modules.get(file) ?? readFileSync(path, 'utf8')));
+    }
     for (const [file,code] of modules) if (readFileSync(resolve(stage,file),'utf8')!==code) writeFileSync(resolve(stage,file),code);
     build ??= createRequire(import.meta.url)('rolldown').rolldown;
     try {
@@ -1079,6 +1079,23 @@ export async function configure(stage, incremental=false, parse, web=false, buil
 // declaration says, an error as `{code, message}` (D1).
 // Members other interfaces declare on `name`'s names, by name, with their interface's shapes (LLP 1133.014 D10 item 1).
 const membersOf=(name, interfaces)=>interfaces.flatMap(i=>Object.entries(i.declaration.members ?? {}).filter(([o])=>o.split('#')[0]===name).flatMap(([o,m])=>Object.entries(m ?? {}).map(([option,spec])=>[o.split('#')[1],{ option, type: spec.type, answers: spec.answers, shapes: i.declaration.shapes ?? {} }]))).reduce((out,[fn,m])=>((out[fn] ??= []).push(m), out),{});
+// Resolve type-only records from the declaring package's installation. A Bun file:
+// dependency can link each file separately, so start at the real manifest.
+function importedRecords(root, imports) {
+  const records = {};
+  for (const [source, names] of Object.entries(imports ?? {})) {
+    const require = createRequire(realpathSync(join(root, 'package.json')));
+    const file = require.resolve(source), declaration = JSON.parse(readFileSync(file, 'utf8'));
+    for (const name of names) {
+      const fields = declaration.shapes?.[name];
+      if (basename(file) !== 'exact.json' || declaration.kind !== 'interface' || !fields
+          || !Object.values(fields).every(type => ['number', 'string', 'bool'].includes(type)))
+        throw new Error(`${source}'s ${name} must be a record of numbers, strings or booleans`);
+      records[name] = fields;
+    }
+  }
+  return records;
+}
 function moduleBindings(stage, app) {
   // The target the build compiles, as an implementation's `targets` names it, or none (a loop serving several).
   const mapping=resolve(stage,'__exact_paths.json'), named=existsSync(mapping) ? JSON.parse(readFileSync(mapping,'utf8')).target : null;
@@ -1092,7 +1109,8 @@ function moduleBindings(stage, app) {
     const own=Array.isArray(declaration.executor) && typeof declaration.binding==='string' ? readFileSync(resolve(root,declaration.binding),'utf8') : null;
     const iface=declaration.kind==='implementation' ? interfaces.find(i=>i.name===String(declaration.implements).replace(/@[^@]*$/,'')) : null;
     const spec=iface ? {...declaration,shapes:Object.assign({},iface.declaration.shapes,...iface.implementations.map(i=>i.json.shapes),declaration.shapes)} : declaration;
-    const text=own ?? moduleBinding(name,spec,declaration.kind==='implementation' ? [declaration] : implementations.map(i=>i.json),names=>domDeclarations(app,names),membersOf(name,interfaces),target), at=resolve(stage,file);
+    const imported=importedRecords(iface?.root ?? root, (iface?.declaration ?? declaration).shapeImports);
+    const text=own ?? moduleBinding(name,{...spec,shapes:{...imported,...spec.shapes}},declaration.kind==='implementation' ? [declaration] : implementations.map(i=>i.json),names=>domDeclarations(app,names),membersOf(name,interfaces),target), at=resolve(stage,file);
     if (!existsSync(at) || readFileSync(at,'utf8')!==text) writeFileSync(at,text);
     out.set(name,'./'+file);
   }
@@ -1124,7 +1142,7 @@ function modulePackages(app) {
         const declaration=read(resolve(root,main));
         if (!['interface','implementation'].includes(declaration?.kind)) continue;
         const implementations=Object.keys(pkg.exports).filter(k=>k.startsWith('./')).map(k=>({name:name+k.slice(1),file:entry(pkg.exports,k)}))
-          .filter(i=>i.file && /\/exact\.json$/.test(i.file)).map(i=>({name:i.name,dir:dirname(resolve(root,i.file)),json:read(resolve(root,i.file))})).filter(d=>d.json?.kind==='implementation');
+          .filter(i=>i.file && /\/exact\.json$/.test(i.file)).map(i=>({name:i.name,root,dir:dirname(resolve(root,i.file)),json:read(resolve(root,i.file))})).filter(d=>d.json?.kind==='implementation');
         out.set(name,{name,root,declaration,implementations});
       }
     }
@@ -1147,7 +1165,7 @@ export function implementationFor(app, iface, target) {
       const root=join(dir,'node_modules',packageName), pkg=read(join(root,'package.json'));
       const main=typeof pkg?.exports==='string' && key==='.' ? pkg.exports : pkg?.exports?.[key];
       const at=typeof main==='string' ? main : main?.contract ?? main?.default;
-      if (pkg && typeof at==='string' && /(^|\/)exact\.json$/.test(at)) { const json=read(resolve(root,at)); return json && {name,dir:dirname(resolve(root,at)),json}; }
+      if (pkg && typeof at==='string' && /(^|\/)exact\.json$/.test(at)) { const json=read(resolve(root,at)); return json && {name,root,dir:dirname(resolve(root,at)),json}; }
       if (dirname(dir)===dir) return null;
     }
   };
@@ -1263,11 +1281,16 @@ export function appleImplementations(app, target, extensions, contractSources = 
       return [tag, Object.entries(view?.props ?? {}).filter(([, prop]) =>
         prop?.binds === true && ['handle<track>', 'option<handle<track>>'].includes(prop.type)).map(([name]) => name)];
     }));
+    const objc = (impl.json.sources?.objc ?? []).map(f => resolve(impl.dir, f));
+    const objcModule = impl.json.sources?.objcModule ? {
+      name: impl.json.sources.objcModule.name,
+      header: resolve(impl.dir, impl.json.sources.objcModule.header),
+    } : null;
     return [{
-      swiftPackages: impl.json.swiftPackages, swiftPackagesSource: resolve(impl.dir, 'exact.json'),
+      swiftPackages: impl.json.swiftPackages, swiftPackagesSource: resolve(impl.dir, 'exact.json'), swiftPackageRoot: impl.root, swiftPackageInterface: i.name, swiftPackageTarget: target,
       privacyManifest: resolve(impl.dir, 'PrivacyInfo.xcprivacy'), extension,
       module: 'ExactPkg_' + extension.replace(/\W/g, '_'), className: impl.json.class,
-      sources: files.map(f => resolve(impl.dir, f)), plist, plistKeys: impl.json.plistKeys ?? null,
+      sources: files.map(f => resolve(impl.dir, f)), objc, objcModule, plist, plistKeys: impl.json.plistKeys ?? null,
       hostEvents: impl.json.hostEvents ?? null, views, trackProps, authenticator,
       start: i.declaration?.start === 'load', credentialMembers, frameworks: impl.json.frameworks ?? {},
       activity: impl.json.apple?.activity ?? null,
@@ -1288,7 +1311,7 @@ export function androidImplementations(app, extensions) {
   return moduleInterfaces(app).filter(i=>extensions[i.name.split('/').at(-1)] === i.name).flatMap(i=>{
     const impl=implementationFor(app,i,'android'), dirs=impl?.json.platform==='android' && impl.json.sources?.kotlin;
     if (!impl || !dirs?.length || !impl.json.class) return [];
-    return [{extension:i.name.split('/').at(-1),className:impl.json.class,dirs:dirs.map(d=>resolve(impl.dir,d)),views:packageViewTags(i,impl),mavenSource:resolve(impl.dir,'exact.json'),maven:impl.json.maven === undefined ? [] : impl.json.maven,manifest:impl.json.manifest ?? null,start:i.declaration?.start==='load'}];
+    return [{extension:i.name.split('/').at(-1),className:impl.json.class,reader:impl.json.reader === true,dirs:dirs.map(d=>resolve(impl.dir,d)),views:packageViewTags(i,impl),mavenSource:resolve(impl.dir,'exact.json'),maven:impl.json.maven === undefined ? [] : impl.json.maven,manifest:impl.json.manifest ?? null,start:i.declaration?.start==='load'}];
   });
 }
 

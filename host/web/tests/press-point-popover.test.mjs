@@ -82,5 +82,24 @@ test('chromium: a popover whose author wrote left and top opens at that point, a
     await tab.mouse.click(560, 375);
     await tab.waitForFunction(() => document.getElementById('menu').matches(':popover-open'));
     expect(await tab.evaluate(() => document.getElementById('menu').style.getPropertyValue('--exact-inset-x'))).toBe('');
+    await box();
+    // Explicit right/bottom without position-area opts out of position-area and places at the viewport edges (LLP 1156.008.000 D5.3).
+    await tab.evaluate(() => {
+      const m = document.getElementById('menu');
+      m.style.removeProperty('position-area');
+      m.style.left = m.style.top = '';
+      m.style.right = '24px';
+      m.style.bottom = '18px';
+      m.showPopover({ source: document.getElementById('open') });
+    });
+    await tab.waitForFunction(() => document.getElementById('menu').matches(':popover-open'));
+    expect(await tab.evaluate(() => ({
+      attr: document.getElementById('menu').hasAttribute('data-exact-inset-author'),
+      insetX: document.getElementById('menu').style.getPropertyValue('--exact-inset-x'),
+      area: getComputedStyle(document.getElementById('menu')).positionArea,
+    }))).toEqual({ attr: true, insetX: '', area: 'none' });
+    const [, , explicitRight, explicitBottom] = await box();
+    expect([Math.round(explicitRight), Math.round(explicitBottom)]).toEqual([600 - 24, 400 - 18]);
+    await tab.waitForFunction(() => !document.getElementById('menu').hasAttribute('data-exact-inset-author'));
   } finally { await browser.close(); }
 }, 30000);

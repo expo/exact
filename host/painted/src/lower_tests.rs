@@ -923,7 +923,8 @@ fn a_boots_play_waits_for_the_present_and_its_start_owes_a_picture() {
     let play = |h: &Host<()>| h.engine.animation_plays(node)[0].clone();
     assert_eq!(play(&h).pending, Some(0.0), "waits for the present");
     let epoch = h.lowered_epoch;
-    let (paint, _) = h.picture_presented(h.engine.sample_time(), 300.);
+    let carried = h.picture_carried(false);
+    let (paint, _) = h.picture_presented(carried, 300.);
     assert!(paint, "the started play owes the reader its track");
     assert!(h.lowered_changed[&node] > epoch);
     assert_eq!((play(&h).pending, play(&h).start), (None, 0.3));

@@ -148,6 +148,7 @@ extension NodeView {
         if holds("active") { return }
         if !inside { paintPress(false); aimPress(false) }
         #if os(iOS)
+        if presenter?.groupedLists?.press(self, down: inside) == true { return }
         if presenter?.rowCells.press(self, inside) == true { return }
         if platformPressDims { dimPress(inside); return }
         #elseif os(macOS)
@@ -349,7 +350,7 @@ extension NodeView {
             .applying(hostPlacement).offsetBy(dx: center.x, dy: center.y)
         return NativeGeometry.convert(box, from: parent, to: viewport).offsetBy(dx: -viewport.pageOrigin.x, dy: -viewport.pageOrigin.y)
     }
-    /// Whether a touch is inside the box as it stands unpressed. The pressed
+    /// Whether a touch is inside the hit area as it stands unpressed. The pressed
     /// box is smaller, so testing against it would release a finger resting
     /// between the two edges, which re-grows the box under it, which presses
     /// again: a flicker. The unpressed point is the pressed one scaled back
@@ -358,7 +359,7 @@ extension NodeView {
     /// The same for a point in the window (the agent's recognized finger).
     func pressInside(at windowPoint: CGPoint) -> Bool {
         let p = local(windowPoint), f = pressModelFactor, o = transformOriginPoint
-        return bounds.contains(CGPoint(x: o.x + (p.x - o.x) * f, y: o.y + (p.y - o.y) * f))
+        return hitBounds.contains(CGPoint(x: o.x + (p.x - o.x) * f, y: o.y + (p.y - o.y) * f))
     }
     #else
     /// The one place the layer's anchor moves. Core Animation's transform
@@ -386,7 +387,10 @@ extension NodeView {
     /// scale takes them off until it lands.
     package func applyTransform() {
         let flying = flightLook?.scale != nil
-        anchorLayer(centre: presenter?.boxAnimations.playsTransform(id, flying: flying, clock: presenter?.session?.clock) == true)
+        routeGlassTransform()
+        let ownsTransform = presenter?.boxAnimations.playsTransform(id, flying: flying, clock: presenter?.session?.clock) == true
+        layerOwnsTransform = ownsTransform
+        anchorLayer(centre: ownsTransform)
         defer { refreshPressTranslation() }
         defer { overflowClipGeometryChanged() }
         let before = layer?.transform ?? CATransform3DIdentity
@@ -395,6 +399,8 @@ extension NodeView {
         defer { if !backdropOperations.isEmpty { applyBackdrop() } }
         // A frame's web view takes its scale by geometry (`FrameScaleMac.swift`).
         defer { if web != nil { placeWeb() } }
+        // A grouped glass takes the transform by geometry (`GlassGeometryMac.swift`).
+        defer { if materialView != nil { sizeMaterial() } }
         // Flying scaled whole in its clip (LLP 1013.000 D4.4): the flight's
         // scale only, about the layer's origin, the clip's top left.
         if let s = flightLook?.scale {
@@ -418,6 +424,10 @@ extension NodeView {
         let anchor = layer?.anchorPoint ?? .zero
         let origin = transformOriginPoint
         let o = CGPoint(x: origin.x - bounds.width * anchor.x, y: origin.y - bounds.height * anchor.y)
+        if glassGeometry != nil {
+            applyGlassPress()
+            return
+        }
         let geometry = frameGeometryScale
         let s = CGPoint(x: scale.x / geometry.x * pressFactor, y: scale.y / geometry.y * pressFactor)
         if let space = spaceTransform(origin: o, scale: s, shift: lift) {
@@ -439,7 +449,7 @@ extension NodeView {
     /// once. An untransformed box has no press in it to undo.
     func pressInside(_ windowPoint: NSPoint) -> Bool {
         let p = local(windowPoint), f = plane == nil ? 1 : pressFactor, o = transformOriginPoint
-        let area = drawsRowBezel ? rowBezelRect ?? bounds : bounds
+        let area = drawsRowBezel ? rowBezelRect ?? hitBounds : hitBounds
         return area.contains(CGPoint(x: o.x + (p.x - o.x) * f, y: o.y + (p.y - o.y) * f))
     }
     #endif
@@ -470,18 +480,24 @@ extension NodeView {
     /// How long a dim shows at least, so a quick tap still flashes.
     static let dimHold: CFTimeInterval = 0.1
 
-    /// Whether a press shows the platform's dim: a node the host presses
-    /// (a `press` handler, a link's `href` or a custom invoker's visual contact),
-    /// with no pressed look written (a
+    /// Whether the author left this node's press to the platform: a node
+    /// the host presses (a `press` handler, a link's `href` or a custom
+    /// invoker's visual contact), with no pressed look written (a
     /// `-exact-press-scale` or pressed paint, any value, 1 included, is the
-    /// author's: `authorsPress`), no `pointerdown` or `pointerup` of its own
-    /// (the author paints its pressed state), and not a scrim covering the
-    /// window (a backdrop that closes a sheet shows nothing in UIKit). A
-    /// native button is UIKit's own and never comes here.
+    /// author's: `authorsPress`) and no `pointerdown` or `pointerup` of its
+    /// own (the author paints its pressed state). A native button is UIKit's
+    /// own and never comes here. A list's row then shows its cell's ground.
+    package var platformOwnsPress: Bool {
+        !authorsPress && !isNativeButton && !isSurfaceControl
+            && (handlers.contains("press") || defaultLink != nil || pressContact?.invokerLook == true || overlayHoldsPress)
+            && !handlers.contains("pointerdown") && !handlers.contains("pointerup")
+    }
+
+    /// Whether a press shows the platform's dim: one the platform owns
+    /// (`platformOwnsPress`), unless the node is a scrim covering the window
+    /// (a backdrop that closes a sheet shows nothing in UIKit).
     package var platformPressDims: Bool {
-        guard !authorsPress, !isNativeButton, !isSurfaceControl,
-              handlers.contains("press") || defaultLink != nil || pressContact?.invokerLook == true || overlayHoldsPress,
-              !handlers.contains("pointerdown"), !handlers.contains("pointerup") else { return false }
+        guard platformOwnsPress else { return false }
         if let w = window {
             let r = convert(bounds, to: w)
             if r.width >= w.bounds.width, r.height >= w.bounds.height * 0.9 { return false }

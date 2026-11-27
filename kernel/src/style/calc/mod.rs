@@ -170,14 +170,16 @@ pub enum Family {
     /// `--exact-system-minimum-layout-margins-inset-*`: the owner controller's
     /// `systemMinimumLayoutMargins`.
     SystemMinimum = 9,
+    /// The width of navigation chrome beside the route, on the reading box’s inline side.
+    Bar = 10,
 }
 
 /// A reader's components, a bit each ([`Observe::component`]).
 pub(crate) type Components = u64;
 
 impl Family {
-    /// Every family, in wire order.
-    pub const ALL: [Family; 10] = [
+    /// Every family, in component order.
+    pub const ALL: [Family; 11] = [
         Family::SafeArea,
         Family::Keyboard,
         Family::KeyboardUndocked,
@@ -188,6 +190,7 @@ impl Family {
         Family::ReadableContentCorners,
         Family::ReadableContentGuide,
         Family::SystemMinimum,
+        Family::Bar,
     ];
 
     /// The families D8's margins rule gives a box, which a host that reports
@@ -214,10 +217,11 @@ impl Family {
             Family::ReadableContentCorners => "readable-content-corners-inset-",
             Family::ReadableContentGuide => "readable-content-guide-inset-",
             Family::SystemMinimum => "system-minimum-layout-margins-inset-",
+            Family::Bar => "bar-inset-",
         }
     }
 
-    /// The family by wire index.
+    /// The family by its component group index.
     pub fn from_index(i: u8) -> Option<Family> {
         Family::ALL.get(i as usize).copied()
     }
@@ -231,7 +235,12 @@ impl Family {
         let observed = name.strip_prefix("--exact-")?;
         Family::ALL.into_iter().find_map(|family| {
             let side = Side::from_name(observed.strip_prefix(family.infix())?)?;
-            (family != Family::SafeArea || !side.logical()).then_some((family, side))
+            let admitted = match family {
+                Family::Bar => side.logical(),
+                Family::SafeArea => !side.logical(),
+                _ => true,
+            };
+            admitted.then_some((family, side))
         })
     }
 
@@ -257,9 +266,9 @@ impl Family {
 
     /// Whether an observation of `self` on `target` is raw, which a reservation
     /// may not read (LLP 1123 D5, "Provenance"): every native target's, and the
-    /// owner controller's system minimum.
+    /// owner controller's system minimum and the width of the bar beside the route.
     pub fn raw(self, target: &Target) -> bool {
-        *target != Target::Box || self == Family::SystemMinimum
+        *target != Target::Box || matches!(self, Family::SystemMinimum | Family::Bar)
     }
 
     /// Its components' bits among a reader's inputs ([`Observe::component`]).
@@ -562,9 +571,9 @@ pub(crate) fn narrow(v: f64) -> f32 {
     }
 }
 
-/// Whether `v` is an `f32` exactly, so a compact form loses nothing.
+/// Whether `v` is a finite `f32` exactly, so a compact form loses nothing.
 fn exact(v: f64) -> bool {
-    f64::from(v as f32).to_bits() == v.to_bits()
+    v.is_finite() && f64::from(v as f32).to_bits() == v.to_bits()
 }
 
 /// A simplified tree as the dimension that holds it: a compact form where
@@ -837,8 +846,8 @@ fn text_observations(text: &str) -> Components {
 /// Each name a text's `var()`s read, fallbacks included, by CSS's tokens: a
 /// function's name in any case, a property's as written.
 fn text_vars(text: &str, each: &mut dyn FnMut(&str)) {
-    use cssparser::{Parser, ParserInput, Token};
-    fn walk(p: &mut Parser<'_, '_>, each: &mut dyn FnMut(&str)) {
+    use cssparser::{Parser, Token};
+    fn walk(p: &mut Parser<'_>, each: &mut dyn FnMut(&str)) {
         while let Ok(token) = p.next() {
             let var = matches!(token, Token::Function(name) if name.eq_ignore_ascii_case("var"));
             if !matches!(token, Token::Function(_) | Token::ParenthesisBlock) {
@@ -851,12 +860,11 @@ fn text_vars(text: &str, each: &mut dyn FnMut(&str)) {
                     }
                 }
                 walk(p, each);
-                Ok::<_, cssparser::ParseError<'_, ()>>(())
+                Ok::<_, cssparser::ParseError<()>>(())
             });
         }
     }
-    let mut input = ParserInput::new(text);
-    walk(&mut Parser::new(&mut input), each);
+    walk(&mut Parser::new(text), each);
 }
 
 /// A calculation a row holds: a handle to its interned entry.
@@ -1237,6 +1245,35 @@ impl Comparison {
     pub(crate) fn has_percent(&self) -> bool {
         self.tree(|t| t.any(&|n| matches!(n, Node::Value(_, Unit::Percent))))
             .unwrap_or(false)
+    }
+
+    /// Whether a simplified tree is valid as `line-height` length math: no
+    /// percentages, `env()`, `var()`, observations, or segments (LLP 1035.000.000).
+    pub(crate) fn is_line_height_math(&self) -> bool {
+        self.tree(|t| {
+            !t.any(&|n| {
+                matches!(
+                    n,
+                    Node::Value(_, Unit::Percent)
+                        | Node::Env(_)
+                        | Node::Var(_)
+                        | Node::Observe(_)
+                        | Node::Segment(_)
+                )
+            })
+        })
+        .unwrap_or(false)
+    }
+
+    /// Whether any viewport unit read by this tree has a different basis in
+    /// `new` than in `old`.
+    pub(crate) fn reads_viewport_change(&self, old: &Env, new: &Env) -> bool {
+        self.tree(|t| {
+            t.any(
+                &|n| matches!(n, Node::Value(_, Unit::Viewport(u)) if u.basis(old) != u.basis(new)),
+            )
+        })
+        .unwrap_or(false)
     }
 }
 

@@ -8,7 +8,7 @@
 // (emit.rs, LLP 1047.002 D1), so a command no action names is never linked.
 // The compiler reads this file's `export const` names as it is built.
 import { modalCommand, popoverCommand, appRootFontSize, liveById, declaredScheme, setFieldSelection, setFieldRangeText } from "./navigation.js";
-import { Kept, DEVELOPMENT_STORE, Hosts, KeyEvent, Propagating } from './rt.js';
+import { Kept, DEVELOPMENT_STORE, Hosts, KeyEvent, Propagating, clock } from './rt.js';
 // A launch service can install its handlers before app() links the commands (LLP 1172.011 E1).
 export const observe = say => Hosts.observe ?? (name => say(`observe ${name}`));
 export const observeAttributes = () => Hosts.observeAttributes ?? (() => {});
@@ -52,7 +52,9 @@ export const setScheme = say => {
   };
 };
 // Never the person's clipboard under the agent (LLP 1133.006 §7).
-export const copyText = (_say, agentMode) => t => { if (!agentMode()) navigator.clipboard?.writeText(t); };
+export const copyText = (_say, agentMode) => t => {
+  if (agentMode()) (clock.clipboard ??= {}).item = { "text/plain": t }; else navigator.clipboard?.writeText(t);
+};
 // LLP 1077 D14: vibration where the browser has it.
 export const haptic = () => k => navigator.vibrate?.(k === "selection" ? 5 : 12);
 // The field's own method, by its id (x2apps codeedit #2); commands run
@@ -83,7 +85,8 @@ export const openURL = (say, agentMode) => (u, id) => {
   else if (to) open(to, "_blank", "noopener,noreferrer");
   // The app's own settings page (LLP 1133.002 D11): a browser has none to open.
   else if (u === "app-settings:") say("openURL refused: app-settings: has no page on the web; a site's permissions are the browser's own (its address bar, its settings)");
-  else say(`openURL refused: ${JSON.stringify(String(u).slice(0, 80))} is not an absolute http, https, mailto or tel URL, nor of a scheme app.json's open_url.schemes declares`);
+  // The URL's path and query can carry a token, so the journal names only its scheme, as the painted host's does.
+  else say(`openURL refused: ${/^[a-z][a-z0-9+.-]*:/i.exec(String(u).trim())?.[0].toLowerCase() ?? "a URL with no scheme"} is not an absolute http, https, mailto or tel URL, nor of a scheme app.json's open_url.schemes declares`);
   if (id != null) queueMicrotask(() => liveById(String(id))?.dispatchEvent(new CustomEvent("change", { detail: to ? "opened" : "failed" })));
 };
 // The inverse of `message=`: text into the named surface, every post in
@@ -104,6 +107,7 @@ export const postMessage = say => (text, name, kind) => {
 export const setRootFontSize = say => v => v === "medium" || (typeof v === "number" && Math.fround(v) > 0 && Number.isFinite(Math.fround(v))) || (typeof v === "string" && /^[+-]?(\d+|\d*\.\d+)(e[+-]?\d+)?%$/i.test(v) && ((h) => Math.fround(parseFloat(v) / 100 * h) > 0 && Number.isFinite(Math.fround(parseFloat(v) / 100 * h)))(parseFloat(getComputedStyle(document.documentElement).fontSize) || 16)) ? asked('rootFontSize', v, () => appRootFontSize(v, say)) : appRootFontSize(v, say);
 // The document's own full screen ends, as `document.exitFullscreen()`; a page cannot fade its window (LLP 1069.010).
 export const exitFullscreen = say => () => { if (document.fullscreenElement) document.exitFullscreen().catch(e => say(`exitFullscreen: refused: ${e.name}`)); };
+export const panel = say => () => say("panel unsupported: route panels are available on macOS only");
 export const setBounds = say => () => say("setBounds refused: a browser page cannot set its outer frame atomically");
 export const setAspectRatio = say => () => say("setAspectRatio refused: a browser page cannot constrain its window's aspect ratio");
 export const setWindowAlwaysOnTop = say => () => say("setWindowAlwaysOnTop refused: a browser page cannot set its window level");
@@ -152,9 +156,58 @@ export const deliveryActivate = say => () => say("delivery: nothing is staged");
 // queues them for the web host's media glue (media-glue.js `run`).
 export const fastSeek = say => (id, seconds) => media(say, id, "fastSeek", seconds);
 export const load = say => id => media(say, id, "load");
-// An image's pictures in the browser's floating window (picture-in-picture.js, LLP 1042 §9).
-export const requestPictureInPicture = say => (id, presentation, title, width, height) => { const e = liveById(String(id ?? "")); import("./picture-in-picture.js").then(m => m.float(e, id, say, { presentation, title, width, height })); };
-export const exitPictureInPicture = say => () => import("./picture-in-picture.js").then(m => m.exit(say));
+// Call the video API while the browser still has the press's transient activation.
+// Only an image needs the canvas or Document Picture-in-Picture adapter.
+let images, requestedImage, videoTransition;
+
+// Start the first request during the press. Later commands observe the browser's
+// answer to the preceding command, including a rejection or a completed exit.
+function afterVideoTransition(command) {
+  const result = videoTransition ? videoTransition.then(command) : command();
+  if (!result?.then) return result;
+  const done = videoTransition = result.finally(() => {
+    if (videoTransition === done) videoTransition = null;
+  });
+  return done;
+}
+export const requestPictureInPicture = say => (id, presentation, title, width, height) => {
+  const e = liveById(String(id ?? ""));
+  const refuse = reason => {
+    say(`requestPictureInPicture "${id}" refused: ${reason}`);
+    e?.dispatchEvent(new CustomEvent("pictureinpictureerror", { detail: reason }));
+  };
+  const options = { presentation, title, width, height };
+  if (e?.localName === "img") {
+    const request = requestedImage = {};
+    return afterVideoTransition(() => import("./picture-in-picture.js").then(module => {
+      images = module;
+      if (!e.isConnected) return refuse("the image left the document");
+      if (requestedImage === request) images.float(e, id, say, options);
+    }));
+  }
+  if (e?.localName !== "video") return refuse(e ? "not an image or video" : "no live node with that id");
+  requestedImage = null;
+  return afterVideoTransition(() => {
+    const option = Object.keys(options).find(name => options[name] != null);
+    if (option) return refuse(`${option} is an image-only option`);
+    if (e.srcObject || e.hasAttribute("srcobject")) return refuse("picture in picture requires a URL-backed video");
+    if (!document.pictureInPictureEnabled || typeof e.requestPictureInPicture !== "function")
+      return refuse("video picture in picture is unavailable in this browser");
+    if (!e.isConnected || e.$media?.retired) return refuse("the video left the document");
+    images?.cancelOpening();
+    return e.requestPictureInPicture().catch(error => refuse(error.name));
+  });
+};
+export const exitPictureInPicture = say => () => {
+  requestedImage = null;
+  return afterVideoTransition(() => closePicture(say));
+};
+function closePicture(say) {
+  if (images) return images.exit(say);
+  if (document.pictureInPictureElement && !document.pictureInPictureElement.srcObject)
+    return document.exitPictureInPicture().catch(error => say(`exitPictureInPicture refused: ${error.name}`));
+  say("exitPictureInPicture ignored: nothing is in the picture-in-picture window");
+}
 
 function frame(say, name, args) {
   import("./frame-navigation.js").then(m => m.command(name, args, say));
