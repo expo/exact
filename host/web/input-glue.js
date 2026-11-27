@@ -243,7 +243,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       if (activates && focus !== el && (event.key === "Enter" || event.key === " ") && !(event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)) continue;
       // A hidden Back control takes its shortcut through the visible bar button, in a header or in content.
       const target = backButton(el) ?? el;
-      if (!target.isConnected || !(target.getClientRects().length || target.hasAttribute("data-exact-bar-back")) || inertAncestor(el) || getComputedStyle(target).visibility !== "visible") continue;
+      if (!target.isConnected || !(target.getClientRects().length || target.getAttribute("data-exact-bar-back") === "") || inertAncestor(el) || getComputedStyle(target).visibility !== "visible") continue;
       if (!(el.getAttribute("aria-keyshortcuts") ?? "").split(/\s+/).some(matches)) continue;
       event.preventDefault();
       event.stopImmediatePropagation();

@@ -293,7 +293,9 @@
   /* LLP 1116.000 D4: the Back control a pushed route's header holds is pressed through the Back its bar draws
      (navigation.js), which stands for it, so it is not shown. A tap the agent aims at it lands on that Back
      (agent-input.js `viewBox`), where the hit is the header holding it: the driver's check that no ancestor takes the
-     press (scripts/agent.mjs, the tap's `why`) passes such a hit only for a target with `pointer-events: none`. */
+     press (scripts/agent.mjs, the tap's `why`) passes such a hit only for a target with `pointer-events: none`. At a
+     split's first detail, which has no Back (LLP 1116.004 D1), the control its bar holds is marked `suppressed` and
+     shows nowhere. */
   #exact-root [data-exact-bar-back] { display: none !important; pointer-events: none; }
   /* A dialog's padding is its author's (LLP 1115.000 D4.14): the user agent's own `1em` is a box the kernel does not
      know, so a plain `dialog` has none; the alert's is the page's, below. */

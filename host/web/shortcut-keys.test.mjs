@@ -8,11 +8,17 @@ import { glueDeclarations, hostFixtureFile, inputFixtureSource } from './tests/g
 import { Script } from 'node:vm';
 
 const inputScript = new Script(`${await inputFixtureSource()}\nexact.createInputHandlers({ root, views: new Map(), retiredViews: new WeakSet(), ready: () => true, inertAncestor: () => false, dispatch() {} });`, { filename: 'input-glue.js' });
-// `shown`: the buttons have boxes; `marked`: each is a Back control its route's bar stands for (navigation.js).
-function page(chords, { shown = true, marked = false } = {}) {
+// `shown`: the buttons have boxes; `marked`: each is a Back control's mark (navigation.js): `""` where its route's bar
+// stands for it, `"suppressed"` where it has no Back. A chord given as `[chord, options]` sets them for its button alone,
+// and `name` is what its click records in place of the chord.
+function page(chords, { shown = true, marked = null } = {}) {
   const clicks = [], listeners = [];
-  const buttons = chords.map(chord => ({ isConnected: true, disabled: false, getClientRects: () => (shown ? [{}] : []),
-    hasAttribute: name => marked && name === 'data-exact-bar-back', getAttribute: () => chord, click() { clicks.push(chord); } }));
+  const buttons = chords.map(given => {
+    const [chord, own] = Array.isArray(given) ? given : [given, {}], { shown: boxed = shown, marked: mark = marked, name = chord } = own;
+    const attributes = { 'aria-keyshortcuts': chord, 'data-exact-bar-back': mark };
+    return { isConnected: true, disabled: false, getClientRects: () => (boxed ? [{}] : []),
+      hasAttribute: key => attributes[key] != null, getAttribute: key => attributes[key] ?? null, click() { clicks.push(name); } };
+  });
   const querySelectorAll = selector => selector === 'button[aria-keyshortcuts]' ? buttons : [];
   const context = { exact: {},
     document: { querySelectorAll, addEventListener(kind, fn, capture) { if (kind === 'keydown' && capture) listeners.push(fn); }, activeElement: { closest: () => null },
@@ -60,8 +66,16 @@ test('the fallback keeps the chord\'s modifiers and refuses keys it cannot name'
 // LLP 1116.000 D4: a Back control the bar stands for is not shown, and its chord still presses it; a button that is
 // not shown otherwise takes none.
 test('a Back control the bar stands for keeps its chord', () => {
-  const hidden = page(['Meta+['], { shown: false }), marked = page(['Meta+['], { shown: false, marked: true });
+  const hidden = page(['Meta+['], { shown: false }), marked = page(['Meta+['], { shown: false, marked: '' });
   expect([hidden.key('[', 'BracketLeft'), hidden.clicks, marked.key('[', 'BracketLeft'), marked.clicks]).toEqual([false, [], true, ['Meta+[']]);
+});
+
+// A split's first detail has no Back (LLP 1116.004 D1): its control takes no chord, which a shown button with it keeps.
+test('a suppressed Back control leaves its chord to a shown button', () => {
+  const p = page([['Meta+[', { shown: false, marked: 'suppressed', name: 'back' }], 'Meta+[']);
+  expect([p.key('[', 'BracketLeft'), p.clicks]).toEqual([true, ['Meta+[']]);
+  const alone = page([['Meta+[', { shown: false, marked: 'suppressed', name: 'back' }]]);
+  expect([alone.key('[', 'BracketLeft'), alone.clicks]).toEqual([false, []]);
 });
 
 test('the Wasm prop writer resolves a portable list when setting and updating it', () => {

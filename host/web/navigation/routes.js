@@ -734,9 +734,19 @@ function watchClearBars() {
 function readProjections(root, log) {
   const projections = [...root.querySelectorAll("[navigationBack]")].map((nav) => {
     const [list, panels] = tabsOf(nav);
-    if (TABS) placeTabBar(nav, list, wide());
     return { nav, list, panels, stacks: panels.length ? panels.map(routesIn) : [routesIn(nav)], leaving: [] };
   });
+  // A mark is its header's while that header holds it and is its route's, above the root of a stack this pass projects;
+  // any other (a portal moved the control, a header took its place, the route became the root) goes before any read
+  const declares = ({ stacks }, k) => stacks.some((routes) => routes.some((route) => route.getAttribute("navigationKey") === k));
+  const roots = new Set(projections.filter((p) => declares(p, p.nav.getAttribute("navigationKey")) || (shown.get(p.nav) ?? []).some((k) => declares(p, k))).flatMap(({ stacks }) => stacks.map((routes) => routes[0])));
+  for (const el of BARS ? root.querySelectorAll("[data-exact-bar-back]") : []) {
+    const header = barOwners.get(el), route = header?.parentElement?.closest("[navigationKey]");
+    if (!(header?.contains(el) && route && headerOf(route) === header && !roots.has(route)) && live(el)) {
+      el.removeAttribute("data-exact-bar-back");
+    }
+  }
+  for (const { nav, list } of TABS ? projections : []) placeTabBar(nav, list, wide());
   // Placing a root's bar restyles the page, so every root is placed before any computed style is read.
   for (const projection of projections) {
     const { nav, panels, stacks } = projection, named = (k) => (route) => route.getAttribute("navigationKey") === k;
@@ -783,26 +793,11 @@ function readProjections(root, log) {
   }
   return projections;
 }
-function appBarBack(nav, routes, index, split, shown, headerShown) {
-  if (!BARS) {
-    return;
-  }
-  const route = routes[index], header = headerOf(route);
-  if (!header) {
-    return;
-  }
-  // In a split, a detail its list's row pushed has none: the list beside it is its way back (LLP 1116.004 D1). Nor has a route whose shown header is drawn as written, wherever it stands in the route (LLP 1153 D8): its author wrote `appearance: none`, keeping the bar they drew (HeaderRule.swift `keepsAuthoredHeader`), or it is a site's.
-  const pushed = index > 0 && !sheet(route) && route.getAttribute("data-navigationbar") !== "none" && !(split && (index === 1 || rowOf.has(route))) && !(asWritten(header) && headerShown);
-  // A header iOS makes no bar of draws Back when it does not show a visible Back control (iOS draws it either way).
-  // Discount the bar's own hiding mark. In a header not shown, the Back stays hidden with it.
-  const control = pushed ? backControl(nav, route) : null, inShownHeader = headerShown && !!control && header.contains(control) && !header.contains(control.closest("[popover], dialog"));
-  const items = headerShown && (inShownHeader || shown) ? barItems(route, header) : null;
-  const held = inShownHeader && !!items?.includes(control);
-  for (const el of route.querySelectorAll("[data-exact-bar-back]")) {
-    if (el !== control || !held) {
-      el.removeAttribute("data-exact-bar-back");
-    }
-  }
+function appBarBack(nav, routes, index, shown, headerShown, bar) {
+  if (!bar) return;
+  const route = routes[index], { header, pushed, control, inShownHeader } = bar;
+  // A header iOS makes no bar of draws Back where its Back control does not show, as the settled marks leave it (iOS draws it either way)
+  const items = bar.items !== undefined ? bar.items : headerShown && shown ? barItems(route, header) : null;
   const drawn = pushed && !(inShownHeader && header.contains(control.closest(authored))) && (!inShownHeader || !!items || !control.checkVisibility({ visibilityProperty: true }));
   // a control its author wrote `appearance: none` on, or an item holding it, is their Back, with no bar's beside it (iOS's `authoredBack`)
   if (shown) {
@@ -818,9 +813,6 @@ function appBarBack(nav, routes, index, split, shown, headerShown) {
       event.stopPropagation();
       appBack(viewParent(header));
     });
-  }
-  for (const el of [...route.querySelectorAll("[data-exact-bar-back]"), control]) {
-    el?.toggleAttribute("data-exact-bar-back", el === control && held && !!button);
   }
   // A control the author disabled, or made inert in its route, leaves no Back, as `pressBack` refuses it. The glue's own
   // disabling until the page is interactive (`aria-busy`) and the inert it gives a route a sheet covers are not theirs.
@@ -844,6 +836,34 @@ function appBarBack(nav, routes, index, split, shown, headerShown) {
   } else {
     button.removeAttribute("aria-keyshortcuts");
   }
+}
+/** The header whose bar marked each control (`data-exact-bar-back`), which `readProjections` checks each mark against. */
+const barOwners = new WeakMap();
+/** Settle `routes[index]`'s header to its bar's Back mark before the projection writes or measures anything, and return
+* what the bar does, or null with no header: whether it draws a Back (`pushed`), and the control's mark, `""` where the
+* bar's Back stands for it, `"suppressed"` where it has none. A leaving view keeps what was last written. */
+function settleBar(nav, routes, index, split, headerShown) {
+  const route = routes[index], header = headerOf(route);
+  if (!header) return null;
+  // A route above its stack's root can hold its Back control in its bar, unless its shown header is drawn as written, wherever it stands in the route (LLP 1153 D8): its author wrote `appearance: none`, keeping the bar they drew (HeaderRule.swift `keepsAuthoredHeader`), or it is a site's. Whether the bar holds it is the header's: the control in it and one of its items.
+  const barred = index > 0 && !sheet(route) && route.getAttribute("data-navigationbar") !== "none" && !(asWritten(header) && headerShown);
+  // At the detail column's first route the bar draws no Back: the list beside it is its way back (LLP 1116.004 D1), and the control the bar holds shows nowhere, as iOS's bar draws no Back at N1's root. A deeper detail a row pushed has no bar Back either, but keeps its authored control, since its Back leads to the detail beneath, which nothing shows.
+  const first = barred && split && index === 1, pushed = barred && !(split && (index === 1 || rowOf.has(route)));
+  const control = pushed || first ? backControl(nav, route) : null, inShownHeader = headerShown && !!control && header.contains(control) && !header.contains(control.closest("[popover], dialog"));
+  const items = inShownHeader ? barItems(route, header) : undefined, held = !!items?.includes(control);
+  // The bar's Back stands for a held control where the header has that Back or a shadow root free to hold it
+  const drawable = !!header.shadowRoot?.querySelector("button[part=\"back\"]") || !header.shadowRoot && !!header.attachShadow;
+  const mark = !held ? null : first ? "suppressed" : pushed && drawable ? "" : null;
+  for (const el of header.querySelectorAll("[data-exact-bar-back]")) {
+    if ((el !== control || mark === null) && live(el)) {
+      el.removeAttribute("data-exact-bar-back");
+    }
+  }
+  if (mark !== null) {
+    if (control.getAttribute("data-exact-bar-back") !== mark) control.setAttribute("data-exact-bar-back", mark);
+    barOwners.set(control, header);
+  }
+  return { header, pushed, control, inShownHeader, items };
 }
 /** The app bar's Back on `route`, pressed: the browser's Back from its route (`popped`), applied at once: the route's control
 * pressed, else the root's `navigate` with the location beneath, else the runner's own `back` (LLP 1115 D5). The
@@ -1266,6 +1286,17 @@ export const navigation = {
       document.activeElement.blur();
       projections = readProjections(root, log);
     }
+    // Each projected stack's rows and bars, settled before the pass writes, so what it reads (an anchor, a control) is this pass's
+    const bars = new Map();
+    for (const { nav, stacks, facts } of projections.filter(({ key }) => key !== undefined)) {
+      for (const [stack, routes] of stacks.entries()) {
+        const { found, headers } = facts[stack];
+        detailRows(routes, found);
+        for (const index of BARS ? routes.keys() : []) {
+          bars.set(routes[index], settleBar(nav, routes, index, found.width > 0, headers[index]));
+        }
+      }
+    }
     const marked = SPLITS ? new Map() : null; // each box a root route marked in this projection, and that root
     for (const { nav, key, at, list, panels, stacks, facts } of projections) {
       if (TABS) {
@@ -1321,7 +1352,6 @@ export const navigation = {
         if (SHEETS) {
           setScrim(panels[stack] ?? nav, shownAs(routes[presented]) === "modal" && !popover);
         }
-        detailRows(routes, found);
         if (stack === at && list) {
           setInert(list, sheet(routes[presented]) && !popover || !!list.authoredInert);
         }
@@ -1343,7 +1373,7 @@ export const navigation = {
           route.style.setProperty("--exact-split", column ? `${split}px` : "");
           route.style.setProperty("--exact-split-detail", column ? `${found.detail}px` : "");
           sheetFrame(routes, index, shownIn, inUse, selected);
-          appBarBack(nav, routes, index, split > 0, active || covered, headers[index]);
+          appBarBack(nav, routes, index, active || covered, headers[index], bars.get(route));
           clearBar(route);
         }
         if (!SPLITS) {
