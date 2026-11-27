@@ -30,15 +30,18 @@ link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l
     grant for it in `app.json`, and the web cannot carry one;
   - not an element's `"#id"`: a drag carries a file, so name the file the
     element shows.
-- **`names`** gives the name each file is offered under, at the same place
-  as the file: the landmark's name above, so Finder or Files saves
-  `Mount Fuji.jpg`, not `1016-thumb.jpg`. A missing or empty name keeps the
-  file's own. A name without the file's suffix gets it (`Mount Fuji`
-  becomes `Mount Fuji.jpg`; `Fuji.jpeg` stays, the same type). A name is a
-  file name every system can write: 1 to 255 bytes of UTF-8, with no
-  control character, none of `< > : " / \ | ? *`, no space at either end,
-  no dot at the end, and not a name Windows keeps for a device (`CON`,
-  `NUL`, `COM1`, …). The type stays the file's. Where the platform takes a
+- **`names`**, which needs `files`, gives the name each file is offered
+  under, at the same place as the file: the landmark's name above, so
+  Finder or Files saves `Mount Fuji.jpg`, not `1016-thumb.jpg`. A missing or
+  empty name keeps the file's own. A name whose suffix is not the file's, or
+  another spelling of its type, gets the file's suffix (`Mount Fuji` becomes
+  `Mount Fuji.jpg`, `Fuji.png` becomes `Fuji.png.jpg`; `Fuji.jpeg` stays).
+  Exact's rule for a name, so that every system can write it: 1 to 255
+  bytes of UTF-8, with no control character, none of `< > : " / \ | ? *`,
+  no space at either end, no dot at the end, and not a name Windows keeps
+  for a device (`CON`, `NUL`, `COM1`, …). The compiler refuses a literal
+  name that breaks it; the runner journals a bound one and offers the file
+  under its own name. The type stays the file's. Where the platform takes a
   name: the item's suggested name on iOS, the promised file on the Mac, the
   provider's display name on Android, Chrome's download name for the first
   file on the web, and the copy's name on Linux.
@@ -60,8 +63,9 @@ D8).
 The runner admits each file, name and `url` for the host: a file outside the
 grants, an `app:/` file on the web, a name that breaks the rule above, or a
 `url` that is not absolute is refused and journaled as `drag: refused: …`
-(a refused name leaves the file its own), and `tree` shows the node's
-`draggable` and `dataTransfer…` props as admitted. An authored test asserts
+(a refused name leaves the file its own), and `tree` shows on each node's
+line what its drag carries as admitted, a named file with its name
+(`drag{image/jpeg assets/apple/1016-thumb.jpg as "Mount Fuji.jpg", …}`). An authored test asserts
 them, the same on every host:
 
 ```contract-test

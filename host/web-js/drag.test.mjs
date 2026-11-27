@@ -60,6 +60,15 @@ test('the hooks write what is admitted, remove an empty prop and journal a refus
   url(el, 'https://example.com/1016');
   expect(attrs.get('data-datatransferurl')).toBe('https://example.com/1016');
   expect(journal).toEqual(['drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web']);
+  // A refusal is known by what was refused: a second of the same file, or another URL refused for the same reason, is journaled
+  files(el, 'app:/data/b.pdf\napp:/data/b.pdf');
+  url(el, '/one');
+  url(el, '/two');
+  expect(journal.slice(1)).toEqual([
+    'drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web',
+    "drag: refused: url is not an absolute http: or https: URL: another app cannot open this app's path",
+    "drag: refused: url is not an absolute http: or https: URL: another app cannot open this app's path",
+  ]);
 });
 
 test('a name is a portable basename and keeps the file’s suffix, as the plan’s rule has it', () => {
@@ -79,6 +88,7 @@ test('a name is a portable basename and keeps the file’s suffix, as the plan�
     ['assets/apple/1016.jpg', 'Mount Fuji', 'Mount Fuji.jpg'], ['assets/apple/1016.jpg', 'St. Paul', 'St. Paul.jpg'],
     ['assets/apple/1016.jpg', 'Fuji.png', 'Fuji.png.jpg'], ['assets/apple/1016.jpg', '.profile', '.profile.jpg'],
     ['assets/README', 'Read me.txt', 'Read me.txt'], ['assets/.profile', 'Profile', 'Profile'],
+    ['assets/a.md', 'Notes.mar\u212adown', 'Notes.mar\u212adown.md'],
   ]) expect(offeredName(file, name)).toBe(offered);
   expect(decodeEntries('')).toEqual({ files: [], names: undefined });
   expect(decodeEntries('a\n\u001e')).toEqual({ files: ['a'], names: [] });

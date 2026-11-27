@@ -2699,13 +2699,17 @@ an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…], 
 declares what the drag carries, by `DataTransfer`'s names: `text` as
 `text/plain`, `url` (absolute `http:` or `https:`) as `text/uri-list`, and
 each file as itself, a shipped `assets/` file or an `app:/` path behind
-`fs.read`. `names` gives the name a destination is offered for the file at
-the same place; a missing or empty name keeps the file's own, and a name
-without the file's suffix gets it (`Mount Fuji` for a `.jpg` file is
-offered as `Mount Fuji.jpg`). A name is 1 to 255 bytes of UTF-8 with no
-control character, none of `< > : " / \ | ? *`, no space at either end, no
-dot at the end, and not a name Windows keeps for a device (`CON`, `NUL`,
-`COM1`, …). Each needs the other. A file the app opens as a database is not
+`fs.read`. `names`, which needs `files`, gives the name a destination is
+offered for the file at the same place; a missing or empty name keeps the
+file's own. A name whose suffix is the file's, or another spelling of its
+type (`.jpeg` for a `.jpg` file), is offered as written; any other gets the
+file's suffix added (`Mount Fuji` for a `.jpg` file is offered as
+`Mount Fuji.jpg`, `Fuji.png` as `Fuji.png.jpg`). Exact accepts a name of 1
+to 255 bytes of UTF-8 with no control character, none of
+`< > : " / \ | ? *`, no space at either end, no dot at the end, and not a
+name Windows keeps for a device (`CON`, `NUL`, `COM1`, …); a bound name it
+refuses is journaled, and the file keeps its own. `draggable` and
+`dataTransfer` each need the other. A file the app opens as a database is not
 one to drag: on Apple and Android the host opens and closes the file as a
 destination asks for it, which drops SQLite's locks on it
 ([How To Corrupt An SQLite Database File, §2.2](https://sqlite.org/howtocorrupt.html#_posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)),

@@ -20,7 +20,7 @@ pub(super) fn of(a: &AttrTarget) -> Option<Hoisted> {
             does: "claims the media session (LLP 1098 D1)",
         }),
         AttrTarget::DataTransfer => Some(Hoisted {
-            construct: "DataTransfer(text=, url=, files=[…], names=[…]), each optional, one of text, url and files required: text a string, url an absolute http: or https: URL, files shipped assets/ files or app:/ paths, names the name each file at the same place is offered under (empty keeps the file's own; the file's suffix is added unless the name has it)",
+            construct: "DataTransfer(text=, url=, files=[…], names=[…]), each optional, one of text, url and files required: text a string, url an absolute http: or https: URL, files shipped assets/ files or app:/ paths, names, only with files, the name each file at the same place is offered under (empty keeps the file's own; a name whose suffix is not the file's or another spelling of its type gets the file's suffix added)",
             props: &["dataTransferText", "dataTransferUrl", "dataTransferEntries"],
             does: "what a `draggable=true` node's drag into another app carries (LLP 1094.000 D1, D14)",
         }),

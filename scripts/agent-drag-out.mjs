@@ -25,10 +25,16 @@ const offered = (drag) => [
 ];
 
 /** Each offer as `tree` reads it: a file by its path, and the name it is offered under when it has one of its own. */
-const describe = (drag) => offered(drag).map((o) => {
+export const describe = (drag) => offered(drag).map((o) => {
   if (o.path == null) return `${o.type} ${JSON.stringify(o.value)}`;
   return `${o.type} ${o.path}${o.named ? ` as ${JSON.stringify(o.name)}` : ''}`;
 }).join(', ') || 'nothing';
+
+/** A `tree` row's note of what its node's drag carries, empty when it carries nothing now (D10, D14). */
+export const dragNote = (node) => {
+  const drag = dragOf(node);
+  return drag ? ` drag{${describe(drag)}}` : '';
+};
 
 /** `expect drag <target> (none | has <kind> [== <value>] [name <name>] | missing <kind>)` of the `tree` node the
  * target names (agent-test.mjs `targetNode`): null when it holds, else `{ message }`. */

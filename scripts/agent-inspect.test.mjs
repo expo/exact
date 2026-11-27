@@ -961,6 +961,15 @@ test("tree shows Exact's picture-in-picture window on the floating image's row (
   expect(text.split('\n')[1]).toBe('Image#7 [pip] pictureInPicture{window "t3code://app" open at 1051,683,284,178 controls minimize,back,close shown}');
 });
 
+test('tree shows what a node\'s drag carries, each named file with its name (LLP 1094.000 D10, D14)', () => {
+  const props = { testId: 'card-1016', draggable: true, dataTransferFiles: 'assets/apple/1016.jpg\nassets/apple/1017.jpg', dataTransferNames: 'Mount Fuji.jpg\n', dataTransferText: 'Mount Fuji' };
+  const text = render('tree', { epoch: 1, incarnation: 1, clock: 0, nodes: [{ id: 7, depth: 0, type: 'View', props }, { id: 8, depth: 1, type: 'View', props: { testId: 'off', draggable: false, dataTransferText: 'x' } }] });
+  expect(text.split('\n').slice(1)).toEqual([
+    'View#7 [card-1016] drag{image/jpeg assets/apple/1016.jpg as "Mount Fuji.jpg", image/jpeg assets/apple/1017.jpg, text/plain "Mount Fuji"}',
+    '  View#8 [off]',
+  ]);
+});
+
 test("a world's perf prints its counters; only `state <canvas> draws` is a draw list (#207)", () => {
   // `state world.0.perf`: there `draws` is the last frame's draw count.
   const perf = { wallClock: true, pixels: [1280, 720], draws: 15, instances: 11, triangles: 5425 };

@@ -7,10 +7,10 @@
 //! node that has a drag or gesture of its own or is a run of text, a gesture
 //! that claims the same movement, and anything inside a grouped list.
 use crate::{err, expr, tags, LowerError, Lowerer};
-use contract_syntax::{Attr, Expr, TemplatePart};
+use contract_syntax::{Attr, Expr};
 use contract_types::{Scope, Ty};
 use exact_kernel::{NodeType, PropId};
-use exact_plan::{asm::Asm, BindingsRow};
+use exact_plan::{asm::Asm, BindingsRow, Opcode, Stdlib};
 
 /// Gestures that claim the movement a drag's lift does, on one node (D8).
 const GESTURES: [&str; 5] = [
@@ -58,8 +58,8 @@ impl Lowerer<'_> {
                 "text" => self.data_transfer_row(PropId::DataTransferText, value, scope, locals, a.written, bindings)?,
                 "url" => self.data_transfer_row(PropId::DataTransferUrl, value, scope, locals, a.written, bindings)?,
                 "files" => {
-                    let entries = drag_entries(value, named("names"));
-                    self.data_transfer_row(PropId::DataTransferEntries, &entries, scope, locals, a.written, bindings)?;
+                    let code = self.drag_entries(value, named("names"), scope, locals)?;
+                    bindings.push(crate::prop_row(PropId::DataTransferEntries, code, a.written));
                 }
                 _ => {}
             }
@@ -85,37 +85,46 @@ impl Lowerer<'_> {
     }
 }
 
-/// `files` and `names` as one string (LLP 1094.000 D14): each file
-/// percent-encoded and followed by a line feed, then, with `names`, U+001E
-/// and each name likewise, so no line break in a bound value can shift an
-/// entry and an empty name keeps its place.
-fn drag_entries(files: &Expr, names: Option<&Expr>) -> Expr {
-    let encoded = |list: &Expr| {
-        let span = list.span();
-        let each = Expr::Arrow {
-            params: vec!["dragEntry".into()],
-            body: Box::new(Expr::Template(
-                vec![
-                    TemplatePart::Expr(Expr::Call(
-                        "encodeURIComponent".into(),
-                        vec![Expr::Ident("dragEntry".into(), span)],
-                        span,
-                    )),
-                    TemplatePart::Text("\n".into()),
-                ],
-                span,
-            )),
-            span,
-        };
-        let mapped = Expr::Call("map".into(), vec![list.clone(), each], span);
-        TemplatePart::Expr(Expr::Call("join".into(), vec![mapped, Expr::Str(String::new(), span)], span))
-    };
-    let mut parts = vec![encoded(files)];
-    if let Some(names) = names {
-        parts.push(TemplatePart::Text(exact_plan::DRAG_NAMES_MARK.to_string()));
-        parts.push(encoded(names));
+impl Lowerer<'_> {
+    /// `files` and `names` as one string (LLP 1094.000 D14): each file
+    /// percent-encoded and followed by a line feed, then, with `names`,
+    /// U+001E and each name likewise, so no line break in a bound value can
+    /// shift an entry and an empty name keeps its place. The plan's own
+    /// operations, not calls by name, so an app's `fn map` or `fn join`
+    /// cannot stand in for them.
+    fn drag_entries(
+        &mut self,
+        files: &Expr,
+        names: Option<&Expr>,
+        scope: &Scope,
+        locals: u16,
+    ) -> Result<exact_plan::Code, LowerError> {
+        let (mut asm, mut depth) = (Asm::new(), locals);
+        self.drag_encoded(&mut asm, files, scope, &mut depth)?;
+        if let Some(names) = names {
+            asm.str(self.b.str(&exact_plan::DRAG_NAMES_MARK.to_string()));
+            asm.simple(Opcode::Concat);
+            self.drag_encoded(&mut asm, names, scope, &mut depth)?;
+            asm.simple(Opcode::Concat);
+        }
+        Ok(self.b.code(asm))
     }
-    Expr::Template(parts, files.span())
+
+    /// `list`, each entry percent-encoded and followed by a line feed, joined.
+    fn drag_encoded(&mut self, asm: &mut Asm, list: &Expr, scope: &Scope, locals: &mut u16) -> Result<(), LowerError> {
+        expr::compile(self, asm, list, scope, locals)?;
+        // The VM binds each item and its index to the next two locals (`expr::callback_body`)
+        let (end, item) = (asm.label(), *locals);
+        asm.each_item(Opcode::Map, end);
+        asm.load_local(item);
+        asm.call(Stdlib::EncodeURIComponent);
+        asm.str(self.b.str("\n"));
+        asm.simple(Opcode::Concat);
+        asm.place(end);
+        asm.str(self.b.str(""));
+        asm.call(Stdlib::Join);
+        Ok(())
+    }
 }
 
 /// The node's own rules: where `draggable` goes, that it carries something,

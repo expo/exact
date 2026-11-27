@@ -6,17 +6,27 @@
 //! `dataTransferFiles` a plan compiled before D14 binds is admitted alone; a
 //! `url` that is not absolute `http:` or `https:` is refused, since no other
 //! app can open it. A prop left with nothing is cleared. A refusal is
-//! journaled once while it stands on its node, so a list changed beside it
-//! does not repeat it.
+//! journaled once while it stands on its node: each is known by what was
+//! refused, not by its message, so a list changed beside it does not repeat
+//! it, and a second refusal of the same kind is journaled as its own.
 
 use super::*;
 use exact_kernel::{Op, PropId, PropValue, ViewId};
 
 /// A node's admitted files, newline-joined, and their names, one line per
 /// file, empty for a file's own; both empty for none.
+#[derive(Default)]
 pub(super) struct AdmittedFiles {
     pub files: String,
     pub names: String,
+}
+
+/// A refusal: what was refused, which tells one refusal from another, and
+/// the journal's line for it, which may leave that out (a URL may hold a
+/// password or a token).
+pub(super) struct Refusal {
+    what: String,
+    line: String,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -26,97 +36,109 @@ impl<D: DataSource> Runner<D> {
             let kernel = &self.kernel;
             self.drag_refused.retain(|(id, _), _| kernel.node(*id).is_some());
         }
-        let mut at = 0;
-        while at < ops.len() {
-            let (id, prop) = match &ops[at] {
-                Op::SetProp { id, prop, .. } | Op::ClearProp { id, prop } => (*id, *prop),
+        // Each node's names, written after its files once the pass is done
+        let mut names_after = Vec::new();
+        for at in 0..ops.len() {
+            let (id, prop, value) = match &ops[at] {
                 Op::CreateView { id, .. } => {
                     // A node made in this batch has refused nothing yet, whatever its id held before
-                    self.drag_refused.retain(|(view, _), _| view != id);
-                    at += 1;
+                    self.drag_refused.remove(&(*id, true));
+                    self.drag_refused.remove(&(*id, false));
                     continue;
                 }
-                _ => {
-                    at += 1;
-                    continue;
-                }
+                Op::SetProp { id, prop, value } if is_drag(*prop) => match value {
+                    PropValue::Str(value) => (*id, *prop, Some(&**value)),
+                    _ => continue,
+                },
+                Op::ClearProp { id, prop } if is_drag(*prop) => (*id, *prop, None),
+                _ => continue,
             };
-            let value = match &ops[at] {
-                Op::SetProp { value: PropValue::Str(value), .. } => Some(value.to_string()),
-                Op::ClearProp { .. } => None,
-                _ => {
-                    at += 1;
-                    continue;
-                }
-            };
-            match prop {
+            let (replaced, names) = match prop {
                 PropId::DataTransferUrl => {
-                    let (kept, refused) = match &value {
-                        Some(value) => self.admitted_url(value),
-                        None => (String::new(), Vec::new()),
-                    };
+                    let (kept, refused) = value.map(|v| self.admitted_url(v)).unwrap_or_default();
                     self.journal_drag(id, true, refused);
-                    ops[at] = set_or_clear(id, prop, kept);
+                    (set_or_clear(id, prop, kept), None)
                 }
                 PropId::DataTransferFiles => {
-                    let (kept, refused) = match &value {
-                        Some(value) => self.admitted_files(value),
-                        None => (AdmittedFiles { files: String::new(), names: String::new() }, Vec::new()),
-                    };
+                    let (kept, refused) = value.map(|v| self.admitted_files(v)).unwrap_or_default();
                     self.journal_drag(id, false, refused);
-                    ops[at] = set_or_clear(id, prop, kept.files);
+                    (set_or_clear(id, prop, kept.files), None)
                 }
-                PropId::DataTransferEntries => {
-                    let (kept, refused) = match &value {
-                        Some(value) => self.admitted_entries(value),
-                        None => (AdmittedFiles { files: String::new(), names: String::new() }, Vec::new()),
-                    };
+                _ => {
+                    let (kept, refused) = value.map(|v| self.admitted_entries(v)).unwrap_or_default();
                     self.journal_drag(id, false, refused);
-                    ops[at] = set_or_clear(id, PropId::DataTransferFiles, kept.files);
-                    at += 1;
-                    ops.insert(at, set_or_clear(id, PropId::DataTransferNames, kept.names));
+                    let names = set_or_clear(id, PropId::DataTransferNames, kept.names);
+                    (set_or_clear(id, PropId::DataTransferFiles, kept.files), Some(names))
                 }
-                _ => {}
+            };
+            ops[at] = replaced;
+            if let Some(names) = names {
+                names_after.push((at, names));
             }
-            at += 1;
+        }
+        if names_after.is_empty() {
+            return;
+        }
+        let before = std::mem::take(ops);
+        ops.reserve(before.len() + names_after.len());
+        let mut names = names_after.into_iter().peekable();
+        for (at, op) in before.into_iter().enumerate() {
+            ops.push(op);
+            if let Some((_, op)) = names.next_if(|(after, _)| *after == at) {
+                ops.push(op);
+            }
         }
     }
 
     /// Journals the refusals of `id`'s url (`url`) or files that did not
-    /// stand before, and keeps the ones that stand now.
-    fn journal_drag(&mut self, id: ViewId, url: bool, refused: Vec<String>) {
-        let before = self.drag_refused.remove(&(id, url)).unwrap_or_default();
-        for why in refused.iter().filter(|why| !before.contains(why)) {
-            self.log(format!("drag: refused: {why}"));
+    /// stand before, matched one for one by what was refused, and keeps the
+    /// ones that stand now.
+    fn journal_drag(&mut self, id: ViewId, url: bool, refused: Vec<Refusal>) {
+        let mut before = self.drag_refused.remove(&(id, url)).unwrap_or_default();
+        let mut now = Vec::with_capacity(refused.len());
+        for Refusal { what, line } in refused {
+            match before.iter().position(|stood| *stood == what) {
+                Some(at) => {
+                    before.swap_remove(at);
+                }
+                None => self.log(format!("drag: refused: {line}")),
+            }
+            now.push(what);
         }
-        if !refused.is_empty() {
-            self.drag_refused.insert((id, url), refused);
+        if !now.is_empty() {
+            self.drag_refused.insert((id, url), now);
         }
     }
 
     /// The `url` this host carries, or none, and why it is refused.
-    pub(super) fn admitted_url(&self, value: &str) -> (String, Vec<String>) {
+    pub(super) fn admitted_url(&self, value: &str) -> (String, Vec<Refusal>) {
         match exact_plan::http_url_refusal(value).filter(|_| !value.is_empty()) {
             None => (value.to_owned(), Vec::new()),
             // The URL itself stays out of the journal: it may hold a password or a token.
-            Some(why) => (String::new(), vec![format!("url is not an absolute http: or https: URL: {why}")]),
+            Some(why) => (
+                String::new(),
+                vec![Refusal { what: value.to_owned(), line: format!("url is not an absolute http: or https: URL: {why}") }],
+            ),
         }
     }
 
     /// The newline-joined files a plan compiled before D14 binds, as this
     /// host carries them, and why each it leaves out is refused.
-    pub(super) fn admitted_files(&self, value: &str) -> (AdmittedFiles, Vec<String>) {
+    pub(super) fn admitted_files(&self, value: &str) -> (AdmittedFiles, Vec<Refusal>) {
         let files: Vec<String> = value.split('\n').filter(|e| !e.is_empty()).map(str::to_owned).collect();
         self.admitted_pairs(&files, None)
     }
 
     /// `dataTransferEntries`, decoded and admitted pair by pair.
-    pub(super) fn admitted_entries(&self, value: &str) -> (AdmittedFiles, Vec<String>) {
+    pub(super) fn admitted_entries(&self, value: &str) -> (AdmittedFiles, Vec<Refusal>) {
         match exact_plan::decode_drag_entries(value) {
             Some((files, names)) => self.admitted_pairs(&files, names.as_deref()),
             None => (
-                AdmittedFiles { files: String::new(), names: String::new() },
-                vec!["the drag's files could not be read: rebuild the app with this Exact".into()],
+                AdmittedFiles::default(),
+                vec![Refusal {
+                    what: value.to_owned(),
+                    line: "the drag's files could not be read: rebuild the app with this Exact".into(),
+                }],
             ),
         }
     }
@@ -124,7 +146,7 @@ impl<D: DataSource> Runner<D> {
     /// Each file this host carries with the name it is offered under, a
     /// refused file taking its name with it, and why each part left out is
     /// refused.
-    fn admitted_pairs(&self, files: &[String], names: Option<&[String]>) -> (AdmittedFiles, Vec<String>) {
+    fn admitted_pairs(&self, files: &[String], names: Option<&[String]>) -> (AdmittedFiles, Vec<Refusal>) {
         let web = self.platform == crate::page::Platform::Web;
         let (mut kept, mut offered, mut refused) = (Vec::new(), Vec::new(), Vec::new());
         for (at, file) in files.iter().enumerate() {
@@ -138,25 +160,33 @@ impl<D: DataSource> Runner<D> {
             } else {
                 crate::transfer::drag_file(self, file, web)
             };
-            if let Err(why) = admitted {
-                refused.push(why);
+            if let Err(line) = admitted {
+                refused.push(Refusal { what: format!("file\0{file}"), line });
                 continue;
             }
             kept.push(file.as_str());
             offered.push(match offered_name(file, name) {
                 Ok(name) => name,
-                Err(why) => {
-                    refused.push(why);
+                Err(line) => {
+                    refused.push(Refusal { what: format!("name\0{file}\0{name}"), line });
                     String::new()
                 }
             });
         }
         for name in names.unwrap_or_default().iter().skip(files.len()) {
-            refused.push(format!("name {name:?}: there is no file in files= for it"));
+            refused.push(Refusal {
+                what: format!("surplus\0{name}"),
+                line: format!("name {name:?}: there is no file in files= for it"),
+            });
         }
         let names = if offered.iter().all(String::is_empty) { String::new() } else { offered.join("\n") };
         (AdmittedFiles { files: kept.join("\n"), names }, refused)
     }
+}
+
+/// Whether the commit pass admits `prop`.
+fn is_drag(prop: PropId) -> bool {
+    matches!(prop, PropId::DataTransferUrl | PropId::DataTransferFiles | PropId::DataTransferEntries)
 }
 
 /// The name `file` is offered under for `name`, empty for its own, or why

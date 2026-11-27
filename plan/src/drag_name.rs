@@ -159,6 +159,8 @@ mod tests {
             ("assets/apple/1016.jpg", ".profile", ".profile.jpg"),
             ("assets/README", "Read me.txt", "Read me.txt"),
             ("assets/.profile", "Profile", "Profile"),
+            // A Kelvin sign is no `k`: only ASCII letters fold, here and in the JS port
+            ("assets/a.md", "Notes.mar\u{212a}down", "Notes.mar\u{212a}down.md"),
         ] {
             assert_eq!(offered_drag_name(file, name), offered, "{file} {name}");
         }

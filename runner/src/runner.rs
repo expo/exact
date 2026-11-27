@@ -603,7 +603,8 @@ pub struct Runner<D: DataSource> {
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     platform: crate::page::Platform,
     // @ref LLP 1094.000 D2 — each node's standing drag refusals, by its url
-    // or its files, so a refusal is journaled once while it stands.
+    // or its files, each by what was refused, so a refusal is journaled once
+    // while it stands.
     drag_refused: std::collections::HashMap<(exact_kernel::ViewId, bool), Vec<String>>,
     page: crate::page::Page,
     presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)

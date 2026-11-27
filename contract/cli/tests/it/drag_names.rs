@@ -151,6 +151,20 @@ fn each_list_changed_or_cleared_alone_admits_both_again() {
     assert_eq!(refusals(&r).len(), 1);
 }
 
+/// A refusal is known by what was refused, not by its message: a second
+/// refusal of the same file, or another URL refused for the same reason, is
+/// journaled, and none repeats while it stands.
+#[test]
+fn each_refusal_is_known_by_what_was_refused() {
+    let src = "component A\n  state files: string[] = [\"app:/data/../x.pdf\"]\n  state link = \"/one\"\n  action more\n    files = [\"app:/data/../x.pdf\", \"app:/data/../x.pdf\"]\n    link = \"/two\"\n  view\n    column\n      column draggable=true dataTransfer=DataTransfer(files=files, url=link) testId=\"card\"\n        text \"a\"\n      button press=more testId=\"more\"\n        text \"b\"\n";
+    let mut r = boot(src, Platform::Ios, Kernel::with_monospace());
+    let file = "drag: refused: app:/data/../x.pdf is not a plain app:/ path";
+    let url = "drag: refused: url is not an absolute http: or https: URL: another app cannot open this app's path";
+    assert_eq!(refusals(&r), [file, url]);
+    r.dispatch(view(&r, "more"), Event::Press).unwrap();
+    assert_eq!(refusals(&r), [file, url, file, url]);
+}
+
 #[test]
 fn a_node_built_again_journals_its_refusal_again() {
     let src = "component A\n  state shown = true\n  action toggle\n    shown = not shown\n  view\n    column\n      if shown\n        column draggable=true dataTransfer=DataTransfer(files=[\"app:/data/../x.pdf\", \"app:/data/a.jpg\"], names=[\"\", \"A\"]) testId=\"card\"\n          text \"a\"\n      button press=toggle testId=\"toggle\"\n        text \"b\"\n";
@@ -213,6 +227,19 @@ fn a_render_with_no_kernel_folds_the_same_names() {
     assert_eq!(props.str(PropId::DataTransferFiles), Some("app:/data/a.jpg\napp:/data/b.jpg"));
     assert_eq!(props.str(PropId::DataTransferNames), Some("\nMount Fuji.jpg"));
     assert_eq!(props.str(PropId::DataTransferEntries), None);
+}
+
+/// The encoding is the plan's own operations: an app's `fn` named `map`,
+/// `join` or `encodeURIComponent` does not stand in for them.
+#[test]
+fn an_apps_own_functions_do_not_change_the_encoding() {
+    let src = format!(
+        "fn map(n: number): number = n\nfn join(a: string, b: string): string = \"joined\"\nfn encodeURIComponent(s: string): string = \"x\"\n{}",
+        card(r#"["app:/data/a b.jpg", "app:/data/c.jpg"]"#, r#"["Mount Fuji", ""]"#, "[]")
+    );
+    let r = boot(&src, Platform::Ios, Kernel::with_monospace());
+    assert_eq!(held(&r, "card"), ("app:/data/a b.jpg\napp:/data/c.jpg".into(), "Mount Fuji.jpg\n".into()));
+    assert!(refusals(&r).is_empty(), "{:?}", refusals(&r));
 }
 
 #[test]
