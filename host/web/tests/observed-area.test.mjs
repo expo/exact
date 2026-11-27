@@ -127,6 +127,26 @@ const MORE = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-
       bottom: $('grows').style.getPropertyValue('--exact-safe-area-inset-bottom'), padding: getComputedStyle($('grows')).paddingBottom };
   </script>`;
 
+// Three 100-point boxes that clip, under a 47-point band at the top and the left: one turned a quarter, one flipped
+// upside down, one stretched by 0.9% down; each holds a reader 30 into its content, which reads the band's top and left.
+// A script scrolls each, by 20 and the stretched one by 800, and each reader reads what it read at no scroll
+const TURNED = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box }
+  .t { position: absolute; top: 0; width: 100px; height: 100px } .port { overflow: hidden; width: 100px; height: 100px }
+  .tr { height: 10px; width: 10px; margin-left: 5px; outline-offset: calc(var(--exact-safe-area-inset-top, 0px) + var(--exact-safe-area-inset-left, 0px)) }</style>
+  <div class="t" style="left:0;transform:rotate(90deg)"><div class="port"><div style="height:30px"></div><div class="tr"></div><div style="height:2000px"></div></div></div>
+  <div class="t" style="left:120px;transform:scaleY(-1)"><div class="port"><div style="height:30px"></div><div class="tr"></div><div style="height:2000px"></div></div></div>
+  <div class="t" style="left:240px;transform:scaleY(1.009);transform-origin:0 0"><div class="port"><div style="height:30px"></div><div class="tr"></div><div style="height:2000px"></div></div></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const readers = [...document.querySelectorAll('.tr')], ports = [...document.querySelectorAll('.port')];
+    const read = () => readers.map((el) => ['top', 'left'].map((e) => parseFloat(el.style.getPropertyValue('--exact-safe-area-inset-' + e)) || 0));
+    observe(readers, [47, 0, 0, 47]);
+    const still = read();
+    ports.forEach((p, i) => { p.scrollTop = i === 2 ? 800 : 20; });
+    observe(readers, [47, 0, 0, 47]);
+    window.result = { still, scrolled: read(), offsets: ports.map((p) => p.scrollTop) };
+  </script>`;
+
 let server;
 beforeAll(() => {
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
@@ -135,7 +155,7 @@ beforeAll(() => {
     if (/^\/[\w-]+\.js$/.test(path)) {
       return new Response(Bun.file(resolve(import.meta.dir, '../navigation' + path)), { headers: { 'content-type': 'text/javascript' } });
     }
-    return new Response(path === '/more' ? MORE : PAGE, { headers: { 'content-type': 'text/html' } });
+    return new Response(path === '/more' ? MORE : path === '/turned' ? TURNED : PAGE, { headers: { 'content-type': 'text/html' } });
   } });
 });
 afterAll(() => server?.stop(true));
@@ -189,6 +209,23 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`scrollers keep the
       overlaid: '300px', scrollcut: '0px', scrollkept: '47px', popped: '47px', onedge: '20px', negative: '20px',
       uachild: '0px', hreader: '280px', fchild: '47px', abschild: '0px' });
     expect(r.sreader).toBeCloseTo(17, 0);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a transformed scroller's offset comes off as it draws it, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}turned`);
+    await page.waitForFunction(() => window.result);
+    const r = await page.evaluate(() => window.result);
+    expect(r.offsets).toEqual([20, 20, 800]);
+    // Each reader reads, scrolled, what it read at no scroll, within D9's tolerance
+    r.scrolled.forEach((pair, i) => pair.forEach((v, e) => expect(Math.abs(v - r.still[i][e])).toBeLessThan(0.6)));
+    // And the readings are of the band, not nothing
+    expect(r.still.flat().some((v) => v > 0)).toBe(true);
   } finally {
     await browser.close();
   }

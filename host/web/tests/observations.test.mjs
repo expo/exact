@@ -158,9 +158,11 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader is measur
 // new reader's first input, 0, and the rounds' before 20 leave too little to scroll to 500, but the settled one enough.
 // Beside it the same reader around a scroller of its own content, scrolled by 500, which only the reader's input sizes;
 // one around a box a class clips, which the JS compiler marks and a script scrolled by 500; and one whose text area is
-// 900 tall at a first input of 0 and 100 once settled, over 1,200 of text scrolled by 500
+// 900 tall at a first input of 0 and 100 once settled, over 1,200 of text scrolled by 500; a list box the same; and a
+// route header's heading, which the host's sheet clips, scrolled 500 across a line the reader's input makes 1,000 wide
 const CLAMPED = `<!doctype html><style>body { margin: 0 } .hid { overflow: hidden; height: 100px }
-  textarea { display: block; width: 100px; padding: 0; border: 0; line-height: 20px; resize: none; height: var(--tall) }</style>
+  textarea, select { display: block; width: 100px; padding: 0; border: 0; line-height: 20px; resize: none; height: var(--tall) }
+  header h1 { overflow: hidden; width: 100px; margin: 0; white-space: nowrap }</style>
   <div id="port" style="overflow:auto;height:100px;width:100px;margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));--content:calc(50 * var(--exact-safe-area-inset-top, 20px))">
     <div style="height:var(--content)"></div></div>
   <div id="holder" style="position:absolute;left:150px;top:0;width:100px;margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));--content:calc(50 * var(--exact-safe-area-inset-top, 20px))">
@@ -169,15 +171,22 @@ const CLAMPED = `<!doctype html><style>body { margin: 0 } .hid { overflow: hidde
     <div id="hidden" class="hid" data-exact-safe-area="scroller"><div style="height:var(--content)"></div></div></div>
   <div id="writer" style="position:absolute;left:450px;top:0;width:100px;margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));--tall:calc(100px + 40 * (20px - var(--exact-safe-area-inset-top, 20px)))">
     <textarea id="text"></textarea></div>
+  <div id="chooser" style="position:absolute;left:600px;top:0;width:100px;margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));--tall:calc(100px + 40 * (20px - var(--exact-safe-area-inset-top, 20px)))">
+    <select multiple id="list"></select></div>
+  <div id="headed" style="position:absolute;left:750px;top:0;width:100px;margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));--content:calc(50 * var(--exact-safe-area-inset-top, 20px))">
+    <header><h1 id="heading"><span style="display:inline-block;width:var(--content)">Title</span></h1></header></div>
   <script type="module">
     import { observe } from '/observe.js';
     const $ = (id) => document.getElementById(id), port = $('port'), reader = port, inner = $('inner');
     $('text').value = Array.from({ length: 60 }, (_, i) => 'line ' + i).join('\\n');
-    for (const el of [port, inner, $('hidden'), $('text')]) el.scrollTop = 500;
-    const { rounds, unsettled } = observe([reader, $('holder'), $('clipper'), $('writer')], [47, 0, 34, 0]);
+    $('list').append(...Array.from({ length: 60 }, (_, i) => Object.assign(document.createElement('option'), { textContent: 'option ' + i })));
+    for (const el of [port, inner, $('hidden'), $('text'), $('list')]) el.scrollTop = 500;
+    $('heading').scrollLeft = 500;
+    const listed = $('list').scrollTop;
+    const { rounds, unsettled } = observe([reader, $('holder'), $('clipper'), $('writer'), $('chooser'), $('headed')], [47, 0, 34, 0]);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     window.result = { rounds, unsettled: unsettled.length, input: reader.style.getPropertyValue('--exact-safe-area-inset-top'), scrolled: port.scrollTop, inner: inner.scrollTop,
-      hidden: $('hidden').scrollTop, text: $('text').scrollTop, tall: $('text').getBoundingClientRect().height };
+      hidden: $('hidden').scrollTop, text: $('text').scrollTop, tall: $('text').getBoundingClientRect().height, list: $('list').scrollTop, listed, heading: $('heading').scrollLeft };
   </script>`;
 
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's clamped scroll offset is not kept, in ${engine}`, async () => {
@@ -197,6 +206,10 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's clamped 
     expect(r.hidden).toBe(500);
     expect(r.tall).toBeCloseTo(100, 0);
     expect(r.text).toBe(500);
+    // A list box and a clipped heading
+    expect(r.list).toBe(r.listed);
+    expect(r.listed).toBeGreaterThan(400);
+    expect(r.heading).toBe(500);
   } finally {
     await browser.close();
   }
@@ -318,10 +331,21 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`the rounds follow 
 // A reader an animation moves up from 200 to 20 in 0.3 s, under the 47-point band, and one after an element whose width
 // animates for 1.2 s: the first's move ends while the second animation still runs. Before both in the document, a
 // positioned block whose first child, a reader, is pinned to its bottom, its height its second child's, which shrinks
-// from 100 to 20: the reader rises from 90 to 10, under 37 of the band. First of all, a reader in a centred block of its
-// content's width, in a 165-point box, whose later child widens from 10 to 100: the block widens from 20 to 100, so the
-// reader moves from 72.5 to 32.5, under 37.5 of a 70-point left band
+// from 100 to 20: the reader rises from 90 to 10, under 37 of the band. First of all, a reader in a centred block of
+// its content's width, in a 165-point box, whose later child widens from 10 to 100: the block widens from 20 to 100, so
+// the reader moves from 72.5 to 32.5, under 37.5 of a 70-point left band. In a 390-point right-to-left box, a block of
+// its content's width, wider than the box, widening from 420 to 480: its reader, 100 into it, moves from 70 to 10,
+// under 110 of a 120-point left band. And a block as wide as the page that centres its content (`align-content`), 200
+// tall from -20, whose reader comes first and whose later child grows from 20 to 100: the reader rises from 60 to 20,
+// under 27 of the band. The boxes come in the document in the order their animations end (0.2, 0.5, 0.8 and 1 s), so
+// only its own animation moves each reader at its end
 const HANDOFF = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; width: 100px }</style>
+  <div style="top:-20px;left:0;width:390px;height:200px;align-content:center">
+    <div id="aligned" style="position:static;width:20px;height:20px;outline-offset:var(--exact-safe-area-inset-top, 0px)"></div>
+    <div id="grows" style="position:static;width:20px;height:20px"></div></div>
+  <div dir="rtl" style="top:740px;left:0;width:390px"><div dir="ltr" style="position:static;width:max-content">
+    <div id="ruled" style="position:static;width:20px;height:20px;margin-left:100px;outline-offset:var(--exact-safe-area-inset-left, 0px)"></div>
+    <div id="widens" style="position:static;width:420px;height:10px"></div></div></div>
   <div style="top:700px;left:0;width:165px"><div style="position:static;width:max-content;margin:0 auto">
     <div id="centred" style="position:static;width:20px;height:20px;outline-offset:var(--exact-safe-area-inset-left, 0px)"></div>
     <div id="wide" style="position:static;width:10px;height:10px"></div></div></div>
@@ -336,14 +360,19 @@ const HANDOFF = `<!doctype html><style>body { margin: 0 } div { box-sizing: bord
     const el = (id) => document.getElementById(id);
     el('mover').animate([{ top: '200px' }, { top: '20px' }], { duration: 300 });
     el('long').animate([{ width: '10px' }, { width: '60px' }], { duration: 1200 });
-    el('tall').animate([{ height: '100px' }, { height: '20px' }], { duration: 400, fill: 'forwards' });
-    el('wide').animate([{ width: '10px' }, { width: '100px' }], { duration: 400, fill: 'forwards' });
-    const stop = follow(['mover', 'rider', 'pinned'].map(el), [47, 0, 34, 0], 0), across = follow([el('centred')], [0, 0, 0, 70], 0);
+    el('tall').animate([{ height: '100px' }, { height: '20px' }], { duration: 1000, fill: 'forwards' });
+    el('wide').animate([{ width: '10px' }, { width: '100px' }], { duration: 800, fill: 'forwards' });
+    el('widens').animate([{ width: '420px' }, { width: '480px' }], { duration: 500, fill: 'forwards' });
+    el('grows').animate([{ height: '20px' }, { height: '100px' }], { duration: 200, fill: 'forwards' });
+    const stop = follow(['mover', 'rider', 'pinned', 'aligned'].map(el), [47, 0, 34, 0], 0), across = follow([el('centred')], [0, 0, 0, 70], 0);
+    const wider = follow([el('ruled')], [0, 0, 0, 120], 0);
     await new Promise((r) => setTimeout(r, 1500));
     stop();
     across();
+    wider();
     const top = (id) => el(id).style.getPropertyValue('--exact-safe-area-inset-top');
-    window.result = { mover: top('mover'), rider: top('rider'), pinned: top('pinned'), centred: parseFloat(el('centred').style.getPropertyValue('--exact-safe-area-inset-left')) || 0 };
+    const left = (id) => parseFloat(el(id).style.getPropertyValue('--exact-safe-area-inset-left')) || 0;
+    window.result = { mover: top('mover'), rider: top('rider'), pinned: top('pinned'), centred: left('centred'), ruled: left('ruled'), aligned: top('aligned') };
   </script>`;
 
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader whose move ends while another runs is measured where it rests, in ${engine}`, async () => {
@@ -354,7 +383,9 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader whose mov
     await page.waitForFunction(() => window.result, null, { timeout: 10_000 });
     // At rest at 20 under 27 of the band; the other clear of it; the pinned child at 10 under 37
     const r = await page.evaluate(() => window.result);
-    expect(r).toMatchObject({ mover: '27px', rider: '0px', pinned: '37px' });
+    expect(r).toMatchObject({ mover: '27px', rider: '0px', pinned: '37px', aligned: '27px' });
+    // The right-to-left block's reader, moved left as its block widens past the box
+    expect(r.ruled).toBeCloseTo(110, 0);
     // The centred block's reader, moved by its later sibling's widening
     expect(r.centred).toBeCloseTo(37.5, 1);
   } finally {
