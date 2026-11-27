@@ -10,8 +10,8 @@
 // edges a box names otherwise.
 
 import { own, register } from "./inputs.js";
-import { area, atRest, depth, documentBand, edgesOf, laid, over, reservations, scrolling, styles } from "./observe.js";
-import { keyboardInset } from "./environment.js";
+import { area, atRest, depth, documentBand, edgesOf, framing, laid, over, scrolling, shaping, styles } from "./observe.js";
+import { keyboardInset, keyboardPolicy } from "./environment.js";
 
 const EDGES = ["top", "right", "bottom", "left"], ALL = [true, true, true, true], NONE = [0, 0, 0, 0];
 
@@ -22,17 +22,16 @@ export function reach(boxes, band = documentBand(), { reaches } = {}) {
   return new Map([...measure(boxes, band, styles(), { reaches })].map(([el, m]) => [el, m.reach]));
 }
 
-/** Each of `boxes` with, on each edge, its reach (`reach`), how far past its border box its stopping ancestors leave it
- * room (`room`, at most `Infinity`), its laid-out box (`rect`), the area it lies in (`sides`) and whether a scroller
- * above it takes the keyboard (`taken`). Reads only. */
-function measure(boxes, band, box, { reaches = () => ALL, cut = () => false } = {}) {
-  const held = over(boxes, box), out = new Map();
+/** Each of `boxes` with, on each edge, its reach (`reach`), its laid-out box (`rect`), the area it lies in (`sides`) and
+ * whether a scroller above it takes the keyboard (`taken`, under `policy`). Reads only. */
+function measure(boxes, band, box, { reaches = () => ALL, policy } = {}) {
+  const held = over(boxes, box, policy), out = new Map();
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
   const tolerance = 0.5 / (globalThis.devicePixelRatio || 1);
-  return atRest(boxes, box, () => {
+  return atRest([...boxes, ...shaping(held)], box, () => {
     // A box is unscrolled through its containing blocks only where an ancestor is scrolled, as one that scrolls nothing
     // has offsets of 0; whether one is, once an ancestor, since boxes share them
-    const scrolled = new Map(), seen = new Map(), pads = new Map(), reserved = reservations();
+    const scrolled = new Map(), seen = new Map(), pads = new Map(), framed = framing();
     const under = (a) => {
       if (!a) return false;
       let s = scrolled.get(a);
@@ -54,22 +53,23 @@ function measure(boxes, band, box, { reaches = () => ALL, cut = () => false } = 
     for (const el of boxes) {
       const r = at(el);
       if (!r) {
-        out.set(el, { reach: NONE, room: NONE, rect: null, sides: null });
+        out.set(el, { reach: NONE, rect: null, sides: null });
         continue;
       }
-      const sides = area(held.get(el), band, width, height, at, box, tolerance, reserved), may = reaches(el);
+      const sides = area(held.get(el), band, width, height, at, framed, tolerance), may = reaches(el);
       const reached = edgesOf(r, width, height).map((d, e) => may[e] && d <= sides[e][1] + tolerance && sides[e][1] > sides[e][0] ? Math.max(0, d - sides[e][0]) : 0);
-      // The furthest in of the stopping ancestors' padding edges
+      // The furthest in of the stopping ancestors' padding edges, up to the top layer, whose box is the last that stops it;
+      // a box that generates none (`display: contents`) has no edge to stop at
       const room = [Infinity, Infinity, Infinity, Infinity];
-      if (reached.some((d) => d > 0) || cut(el)) {
-        for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
-          const stops = box(a).stops;
+      if (reached.some((d) => d > 0)) {
+        for (let a = box(el).top ? null : el.parentElement; a && a !== document.documentElement; a = box(a).top ? null : a.parentElement) {
+          const stops = box(a).display === "contents" ? NONE : box(a).stops;
           if (!stops.some(Boolean)) continue;
           const pad = padding(a), left = [r.top - pad[0], pad[1] - r.right, pad[2] - r.bottom, r.left - pad[3]];
           stops.forEach((stop, e) => { if (stop) room[e] = Math.min(room[e], Math.max(0, left[e])); });
         }
       }
-      out.set(el, { reach: reached.map((d, e) => Math.min(d, room[e])), room, rect: r, sides, taken: !!held.get(el)?.keys });
+      out.set(el, { reach: reached.map((d, e) => Math.min(d, room[e])), rect: r, sides, taken: !!held.get(el)?.keys });
     }
     return out;
   });
@@ -95,10 +95,10 @@ export const EXTENT = EDGES.map((e) => `--exact-extend-${e}`);
 
 /** How far each of `boxes` extends its colour past its border box (D13, "The extension's bounds"), written on the box
  * (`EXTENT`): on an edge with an `auto` bound, the distance its reach would have there, whatever its own reach; with a
- * length, that length, which a stopping ancestor's clip still cuts; else 0. No strip shows, so every edge is 0, where the
- * box clips its overflow on either axis, where it or an ancestor is drawn through a filter, a clip path or a mask, and
- * while a transition or animation of its background colour runs, which one colour cannot follow (D13, "Without an
- * extension view"). Every box is read before any is written. */
+ * length, that length, as the kernel takes it, which a clipping ancestor cuts as the browser paints it; else 0. No strip
+ * shows, so every edge is 0, where the box clips its overflow on either axis, where it or an ancestor below the top layer
+ * is drawn through a filter, a clip path or a mask, and while a transition or animation of its background colour runs,
+ * which one colour cannot follow (D13, "Without an extension view"). Every box is read before any is written. */
 export function extension(boxes, band = documentBand()) {
   register(BOUNDS, "none | auto | <length>", "none");
   register(EXTENT);
@@ -108,19 +108,20 @@ export function extension(boxes, band = documentBand()) {
   const drawn = (a) => {
     if (!a || a === document.documentElement) return false;
     let d = through.get(a);
-    if (d === undefined) through.set(a, (d = box(a).drawn || drawn(a.parentElement)));
+    if (d === undefined) through.set(a, (d = box(a).drawn || (!box(a).top && drawn(a.parentElement))));
     return d;
   };
   const said = new Map(live.map((el) => {
     const s = getComputedStyle(el), bounds = BOUNDS.map((name) => s.getPropertyValue(name).trim());
     const clips = s.overflowX !== "visible" || s.overflowY !== "visible";
-    const playing = el.getAnimations().some((a) => a.transitionProperty === "background-color" || (a.effect?.getKeyframes?.() ?? []).some((k) => "backgroundColor" in k));
+    const playing = el.getAnimations().some((a) => a.playState === "running"
+      && (a.transitionProperty === "background-color" || (a.effect?.getKeyframes?.() ?? []).some((k) => "backgroundColor" in k)));
     return [el, { bounds, shows: !clips && !playing && !drawn(el) }];
   }));
-  const measured = measure(live, band, box, { cut: (el) => said.get(el).bounds.some((v) => v && v !== "none" && v !== "auto") });
+  const measured = measure(live, band, box);
   const writes = live.map((el) => {
-    const { bounds, shows } = said.get(el), { reach: d, room } = measured.get(el);
-    return [el, bounds.map((bound, e) => !shows || !bound || bound === "none" ? 0 : bound === "auto" ? d[e] : Math.min(Math.max(0, parseFloat(bound) || 0), room[e]))];
+    const { bounds, shows } = said.get(el), { reach: d } = measured.get(el);
+    return [el, bounds.map((bound, e) => !shows || !bound || bound === "none" ? 0 : bound === "auto" ? d[e] : Math.max(0, parseFloat(bound) || 0))];
   });
   for (const [el, extents] of writes) extents.forEach((x, e) => own(el, EXTENT[e], `${x}px`));
 }
@@ -130,27 +131,25 @@ export function extension(boxes, band = documentBand()) {
 export const OCCUPIED = EDGES.map((e) => `--exact-scroll-occupied-${e}`);
 
 /** Write on each of `scrollers` how deep the unsafe area occupies it on each edge (D14's occupied terms): how far the
- * area a box there observes reaches into the scroller's frame as its reach carries it (`reaches`, as `reach` takes it),
- * at most that area's depth, and on the bottom edge of a vertical scroller that no other vertical scroller holds the
- * docked keyboard's overlap with that frame (`keyboard`, the depth up from the viewport's bottom; the caller gives 0 where the
- * keyboard policy is not `resizes-visual`) where that is deeper. The web has no platform adjustment, so the whole
- * occupied depth is the scroller's (D14's P is 0). Every scroller is read before any is written. */
-export function insets(scrollers, band = documentBand(), keyboard = keyboardInset(), { reaches } = {}) {
+ * area a box there observes reaches past the scroller's edge as its reach carries it (`reaches`, as `reach` takes it),
+ * at most that area's depth; and on the bottom edge of a vertical scroller that no other vertical scroller holds, under
+ * `resizes-visual` (`policy`, D7), how far the docked keyboard reaches past that edge (`keyboard`, its depth up from the
+ * viewport's bottom), at most its depth, where that is deeper, as the kernel's `taken`. The web has no platform
+ * adjustment, so the whole occupied depth is the scroller's (D14's P is 0). Every scroller is read before any is
+ * written. */
+export function insets(scrollers, band = documentBand(), keyboard = keyboardInset(), { reaches, policy = keyboardPolicy() } = {}) {
   register(OCCUPIED);
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
   const writes = [], box = styles();
-  for (const [el, { reach: d, rect, sides, taken }] of measure(scrollers, band, box, { reaches })) {
+  for (const [el, { reach: d, rect, sides, taken }] of measure(scrollers, band, box, { reaches, policy })) {
     if (!el.isConnected) continue;
     if (!rect) {
       writes.push([el, NONE]);
       continue;
     }
-    const occupied = edgesOf(rect, width, height).map((x, e) => depth(sides[e], x - d[e]));
+    const edges = edgesOf(rect, width, height), occupied = edges.map((x, e) => depth(sides[e], x - d[e]));
     // Only a vertical scroller takes the keyboard, and none under another vertical one, which takes it already (D7)
-    if (box(el).scrollsY && !taken) {
-      const top = rect.top - d[0], bottom = rect.bottom + d[2];
-      occupied[2] = Math.max(occupied[2], Math.max(0, Math.min(bottom, height) - Math.max(top, height - keyboard)));
-    }
+    if (policy === "resizes-visual" && box(el).scrollsY && !taken) occupied[2] = Math.max(occupied[2], depth([0, keyboard], edges[2] - d[2]));
     writes.push([el, occupied]);
   }
   for (const [el, occupied] of writes) occupied.forEach((x, e) => own(el, OCCUPIED[e], `${x}px`));

@@ -6,8 +6,9 @@
 // with a 2-point top border and one with a transform stop reach at their padding edges (17, 35 and 27); a box under a
 // route's transparent bar, at the bar's bottom, reaches the viewport's top (91); a box out of the document reaches
 // nothing; a box at the inner side of a 10-point reservation that joins the band reaches the viewport's top (57); and
-// `reached` writes a box's reach on it, as its surface reads it. A sticky box at the band's inner side reaches it as laid
-// out, the page scrolled or not.
+// `reached` writes a box's reach on it, as its surface reads it; a box under a `display: contents` wrapper whose overflow
+// is hidden, which has no padding edge to stop it, reaches the viewport's top (47), the boxes after it measured too. A
+// sticky box at the band's inner side reaches it as laid out, the page scrolled or not.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
@@ -25,9 +26,10 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
   <div class="b" style="top:20px;left:300px;height:100px;transform:translateX(0)"><div class="b" id="moved" style="top:27px;left:0"></div></div>
   <div data-navigationbar="transparent" style="left:350px"><header data-exact-clear></header><div class="b" id="barred" style="top:91px;left:0"></div></div>
   <div class="b" style="top:47px;left:0;height:100px;width:10px;--exact-additional-safe-area-top:10px"><div class="b" id="joined" style="top:10px;left:0;width:10px"></div></div>
+  <div style="display:contents;overflow:hidden"><div class="b" id="wrapped" style="top:47px;left:150px"></div></div>
   <script type="module">
     import { reach, reached } from '/reach.js';
-    const ids = ['inner', 'clear', 'into', 'foot', 'reserved', 'clipped', 'bordered', 'moved', 'barred', 'joined'], gone = document.createElement('div');
+    const ids = ['wrapped', 'inner', 'clear', 'into', 'foot', 'reserved', 'clipped', 'bordered', 'moved', 'barred', 'joined'], gone = document.createElement('div');
     const out = reach([...ids.map((id) => document.getElementById(id)), gone], [47, 0, 34, 0]);
     const round = (v) => v.map((x) => Math.round(x * 10) / 10);
     // As written on the box, the inputs its surface reads
@@ -65,7 +67,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a box's reach is m
     await page.goto(server.url.href);
     await page.waitForFunction(() => window.result);
     expect(await page.evaluate(() => window.result)).toEqual({
-      inner: [47, 0, 0, 0], clear: [0, 0, 0, 0], into: [46.8, 0, 0, 0], foot: [0, 0, 34, 0], reserved: [8, 0, 0, 0],
+      wrapped: [47, 0, 0, 0], inner: [47, 0, 0, 0], clear: [0, 0, 0, 0], into: [46.8, 0, 0, 0], foot: [0, 0, 34, 0], reserved: [8, 0, 0, 0],
       clipped: [17, 0, 0, 0], bordered: [35, 0, 0, 0], moved: [27, 0, 0, 0], barred: [91, 0, 0, 0], joined: [57, 0, 0, 0], gone: [0, 0, 0, 0],
       written: ['47px', '0px', '0px', '0px'],
     });

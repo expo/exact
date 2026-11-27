@@ -41,11 +41,22 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
 // says `overflow: auto`, which scrolls nothing; a scroller and a reader the classes style, found by their marks; under a
 // 300-point keyboard, a reader in a vertical scroller at the bottom, which takes the keyboard, one in a sideways one,
 // which does not, and one in a sideways scroller inside a vertical one, which does; a reader that comes to read its bottom
-// edge too; and a class-held reader whose inline style reads another edge, which reads every input
+// edge too; a class-held reader whose inline style reads another edge, which reads every input; a `scroll` the host's
+// sheet makes scroll, which cuts, and one an author's `overflow: visible` keeps from scrolling, which does not; an open
+// popover inside a scroller, which lies in the document's space and observes the band; a box at 100 reserving 20 whose
+// top border reads its left input, 10 under a 10-point left band, so its child at 110 lies on its padding edge and
+// observes 20; a box at the band's inner side whose safe-area padding resolves to -10, taken as 0, so its child at 27
+// observes 20 of the band; and the vertical scroller's reader again under `overlays-content`, where nothing takes the keys
 const MORE = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box }
   .r { height: 20px; outline-offset: var(--exact-safe-area-inset-top, 0px) } .at { position: absolute; top: 0; left: 0; width: 20px }
   .classed { overflow-y: auto } .classreader { outline-offset: var(--exact-safe-area-inset-top, 0px) }
-  .k { position: absolute; bottom: 0; width: 40px; height: 100px } .kr { height: 20px; outline-offset: var(--exact-keyboard-inset-bottom, 0px); margin-top: 80px }</style>
+  .k { position: absolute; bottom: 0; width: 40px; height: 100px } .kr { height: 20px; outline-offset: var(--exact-keyboard-inset-bottom, 0px); margin-top: 80px }
+  [data-scroll="true"] { overflow: auto }</style>
+  <div data-scroll="true" style="position:absolute;top:0;left:200px;width:40px;height:100px"><div class="r at" id="scrollcut"></div></div>
+  <div data-scroll="true" style="position:absolute;top:0;left:250px;width:40px;height:100px;overflow:visible"><div class="r at" id="scrollkept"></div></div>
+  <div style="position:absolute;top:400px;left:0;width:100px;height:100px;overflow:auto"><div popover id="pop" style="margin:0;inset:0 auto auto 0;width:40px;height:40px;padding:0;border:0;overflow:visible"><div class="r at" id="popped"></div></div></div>
+  <div style="position:absolute;top:100px;left:0;width:40px;height:60px;border-top:var(--exact-safe-area-inset-left, 0px) solid;--exact-safe-area-padding-top:20px" id="bordered"><div class="r" id="onedge"></div></div>
+  <div style="position:absolute;top:47px;left:100px;width:40px;height:60px;--exact-safe-area-padding-top:calc(10px - 20px)"><div class="r at" id="negative" style="top:-20px"></div></div>
   <div style="position:absolute;top:300px;left:0;width:40px;height:100px;overflow:auto;--exact-safe-area-padding-top:20px"><div class="r at" id="ownreserve"></div></div>
   <div style="position:absolute;top:0;left:50px;width:40px;height:100px"><div style="display:contents;overflow:auto"><div class="r at" id="contents"></div></div></div>
   <div class="classed" data-exact-safe-area="scroller" style="position:absolute;top:0;left:100px;width:40px;height:100px"><div class="r at" id="classcut"></div></div>
@@ -59,14 +70,21 @@ const MORE = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-
     import { observe, readers } from '/observe.js';
     const $ = (id) => document.getElementById(id), top = (el) => el.style.getPropertyValue('--exact-safe-area-inset-top');
     const found = readers(document).map((el) => el.id).filter(Boolean);
-    observe(['ownreserve', 'contents', 'classcut', 'classreader', 'grows', 'mixed'].map($), [47, 0, 0, 0]);
-    observe(['vertical', 'sideways', 'deep'].map($), [47, 0, 0, 0], 300);
+    observe(['ownreserve', 'contents', 'classcut', 'classreader', 'grows', 'mixed', 'scrollcut', 'scrollkept', 'negative'].map($), [47, 0, 0, 0]);
+    observe(['vertical', 'sideways', 'deep'].map($), [47, 0, 0, 0], 300, 'resizes-visual');
+    const keys = (el) => el.style.getPropertyValue('--exact-keyboard-inset-bottom'), taken = keys($('vertical'));
+    observe([$('vertical')], [47, 0, 0, 0], 300, 'overlays-content');
+    $('pop').showPopover();
+    observe([$('popped')], [47, 0, 0, 0]);
+    const popped = top($('popped'));
+    $('pop').hidePopover();
+    observe([$('bordered'), $('onedge')], [47, 0, 0, 10]);
     // The reader comes to read its bottom edge, which nothing obstructs
     $('grows').style.paddingBottom = 'var(--exact-safe-area-inset-bottom, 30px)';
     observe([$('grows')], [47, 0, 0, 0]);
     window.result = { found, ownreserve: top($('ownreserve')), contents: top($('contents')), classcut: top($('classcut')), classreader: top($('classreader')),
-      vertical: $('vertical').style.getPropertyValue('--exact-keyboard-inset-bottom'), sideways: $('sideways').style.getPropertyValue('--exact-keyboard-inset-bottom'),
-      deep: $('deep').style.getPropertyValue('--exact-keyboard-inset-bottom'), mixed: top($('mixed')),
+      vertical: taken, overlaid: keys($('vertical')), sideways: keys($('sideways')), deep: keys($('deep')), mixed: top($('mixed')),
+      scrollcut: top($('scrollcut')), scrollkept: top($('scrollkept')), popped, onedge: top($('onedge')), negative: top($('negative')),
       bottom: $('grows').style.getPropertyValue('--exact-safe-area-inset-bottom'), padding: getComputedStyle($('grows')).paddingBottom };
   </script>`;
 
@@ -128,7 +146,8 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`scrollers keep the
     await page.waitForFunction(() => window.result);
     const r = await page.evaluate(() => window.result);
     expect(r.found).toContain('classreader');
-    expect(r).toMatchObject({ ownreserve: '20px', contents: '47px', classcut: '0px', classreader: '47px', vertical: '0px', sideways: '300px', deep: '0px', bottom: '0px', padding: '0px', mixed: '47px' });
+    expect(r).toMatchObject({ ownreserve: '20px', contents: '47px', classcut: '0px', classreader: '47px', vertical: '0px', sideways: '300px', deep: '0px', bottom: '0px', padding: '0px', mixed: '47px',
+      overlaid: '300px', scrollcut: '0px', scrollkept: '47px', popped: '47px', onedge: '20px', negative: '20px' });
   } finally {
     await browser.close();
   }

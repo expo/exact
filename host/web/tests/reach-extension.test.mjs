@@ -1,9 +1,10 @@
 // @ref LLP 1123 D13, D17 — how far a box's colour extends past its border box on the web, measured, in Chromium, WebKit
 // and Firefox, under a 47-point top band, each box's bounds in the registered properties the emitter writes them in: an
 // `auto` bound at the band's inner side extends to the viewport's top (47) and on an edge the box does not extend on
-// nothing; `auto` clear of the band nothing; a length is taken as given (30), `calc(10px + 1rem)` resolved (26), and an
-// ancestor's clip cuts it at its padding edge (20); a box that clips its own overflow, on either axis, one whose
-// background colour is transitioning, and one under a filtered ancestor extend nothing.
+// nothing; `auto` clear of the band nothing; a length is taken as given (30), `calc(10px + 1rem)` resolved (26), and as
+// given under an ancestor that clips (30, which the browser's clip cuts as it paints) or has a border but clips nothing
+// (30); a box that clips its own overflow, on either axis, one whose background colour is transitioning, and one under
+// a filtered ancestor extend nothing; one whose colour animation has finished, held at its end, extends again (47).
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
@@ -18,9 +19,12 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-
   <div class="b" id="fading" style="top:47px;left:300px;background-color:red;transition:background-color 10s linear;--exact-safe-area-extend-bounds-top:auto"></div>
   <div class="b" style="top:0;left:350px;height:100px;filter:brightness(.8)"><div class="b" id="filtered" style="top:47px;left:0;--exact-safe-area-extend-bounds-top:auto"></div></div>
   <div class="b" id="xclip" style="top:47px;left:200px;overflow-x:clip;--exact-safe-area-extend-bounds-top:auto"></div>
+  <div class="b" style="top:100px;left:0;height:100px;border-top:2px solid"><div class="b" id="framed" style="top:5px;left:0;--exact-safe-area-extend-bounds-top:30px"></div></div>
+  <div class="b" id="done" style="top:47px;left:50px;--exact-safe-area-extend-bounds-top:auto"></div>
   <script type="module">
     import { extension } from '/reach.js';
-    const ids = ['auto', 'clear', 'length', 'calc', 'cut', 'clips', 'fading', 'filtered', 'xclip'], els = ids.map((id) => document.getElementById(id));
+    const ids = ['auto', 'clear', 'length', 'calc', 'cut', 'clips', 'fading', 'filtered', 'xclip', 'framed', 'done'], els = ids.map((id) => document.getElementById(id));
+    await document.getElementById('done').animate([{ backgroundColor: 'red' }, { backgroundColor: 'blue' }], { duration: 1, fill: 'forwards' }).finished;
     getComputedStyle(document.body).color;
     document.getElementById('fading').style.backgroundColor = 'blue';
     getComputedStyle(document.getElementById('fading')).backgroundColor;
@@ -50,8 +54,8 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a box's colour ext
     await page.waitForFunction(() => window.result);
     const none = ['0px', '0px', '0px'];
     expect(await page.evaluate(() => window.result)).toEqual({
-      auto: ['47px', ...none], clear: ['0px', ...none], length: ['30px', ...none], calc: ['26px', ...none], cut: ['20px', ...none],
-      clips: ['0px', ...none], fading: ['0px', ...none], filtered: ['0px', ...none], xclip: ['0px', ...none],
+      auto: ['47px', ...none], clear: ['0px', ...none], length: ['30px', ...none], calc: ['26px', ...none], cut: ['30px', ...none],
+      clips: ['0px', ...none], fading: ['0px', ...none], filtered: ['0px', ...none], xclip: ['0px', ...none], framed: ['30px', ...none], done: ['47px', ...none],
     });
   } finally {
     await browser.close();

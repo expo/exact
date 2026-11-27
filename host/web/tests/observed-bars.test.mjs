@@ -33,6 +33,24 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
     window.result = Object.fromEntries(ids.map((id) => [id, document.getElementById(id).style.getPropertyValue('--exact-safe-area-inset-top')]));
   </script>`;
 
+// A transparent bar whose header is sticky at the top, as the host's sheet makes a route's header, over a reader 47 down
+// a scrolling page: the reader reads 44 to the bar's bottom at 91, and the same once the page scrolls by 140, the header
+// measured where layout puts it
+const STICKY = `<!doctype html><style>body { margin: 0; height: 3000px } div, header { box-sizing: border-box }
+  [data-navigationbar] { position: relative; width: 100px }
+  header[data-exact-clear] { display: block; height: 91px; margin-bottom: -91px; position: sticky; top: 0 }
+  .r { height: 20px; outline-offset: var(--exact-safe-area-inset-top, 0px) }</style>
+  <div data-navigationbar="transparent"><header data-exact-clear></header><div style="height:47px"></div><div class="r" id="reader"></div><div style="height:2000px"></div></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const reader = document.getElementById('reader'), read = () => reader.style.getPropertyValue('--exact-safe-area-inset-top');
+    observe([reader], [47, 0, 0, 0]);
+    const resting = read();
+    scrollTo(0, 140);
+    observe([reader], [47, 0, 0, 0]);
+    window.result = { resting, scrolled: read(), at: scrollY };
+  </script>`;
+
 let server;
 beforeAll(() => {
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
@@ -41,7 +59,7 @@ beforeAll(() => {
     if (/^\/[\w-]+\.js$/.test(path)) {
       return new Response(Bun.file(resolve(import.meta.dir, '../navigation' + path)), { headers: { 'content-type': 'text/javascript' } });
     }
-    return new Response(PAGE, { headers: { 'content-type': 'text/html' } });
+    return new Response(path === '/sticky' ? STICKY : PAGE, { headers: { 'content-type': 'text/html' } });
   } });
 });
 afterAll(() => server?.stop(true));
@@ -55,6 +73,18 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a route's transpar
     expect(await page.evaluate(() => window.result)).toEqual({
       route: '47px', inbar: '0px', top: '91px', mid: '31px', below: '0px', nested: '131px', plain: '47px',
     });
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a sticky bar's header is measured where layout puts it, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}sticky`);
+    await page.waitForFunction(() => window.result);
+    expect(await page.evaluate(() => window.result)).toEqual({ resting: '44px', scrolled: '44px', at: 140 });
   } finally {
     await browser.close();
   }

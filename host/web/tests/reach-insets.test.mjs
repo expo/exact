@@ -7,7 +7,9 @@
 // a scroller below the viewport with no bottom band is occupied nothing, one at the band's inner side whose reach is
 // none nothing, and one inside another scroller nothing, as the outer one takes the area (its overflow inline, as the
 // emitter writes it); and under a 300-point keyboard a sideways scroller and one inside a vertical one take none of it, only
-// a vertical scroller no other vertical one holds taking the keyboard, one inside a sideways scroller among them.
+// a vertical scroller no other vertical one holds taking the keyboard, one inside a sideways scroller among them: 100 tall
+// at the viewport's bottom, it is occupied by the keyboard's whole 300 past that edge, as the kernel's `taken` measures
+// it, and under `overlays-content`, where no scroller takes the keyboard, by none.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
@@ -39,8 +41,10 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
     insets([nested], [47, 0, 34, 0], 0);
     const [sideways, nestedbottom, insideways] = ['sideways', 'nestedbottom', 'insideways'].map((id) => document.getElementById(id));
     insets([sideways, nestedbottom, insideways], [47, 0, 0, 0], 300);
+    const taking = read(insideways);
+    insets([insideways], [47, 0, 0, 0], 300, { policy: 'overlays-content' });
     window.result = { ...result, keyboard: read(els[0]), below: read(below), held: read(held), nested: read(nested), sideways: read(sideways), nestedbottom: read(nestedbottom),
-      insideways: read(insideways) };
+      insideways: taking, overlaid: read(insideways) };
   </script>`;
 
 let server;
@@ -66,7 +70,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a scroller's occup
       whole: ['47px', '0px', '34px', '0px'], inner: ['47px', '0px', '0px', '0px'], clear: ['0px', '0px', '0px', '0px'],
       barred: ['91px', '0px', '0px', '0px'], reserved: ['8px', '0px', '0px', '0px'], keyboard: ['47px', '0px', '300px', '0px'],
       below: ['0px', '0px', '0px', '0px'], held: ['0px', '0px', '0px', '0px'], nested: ['0px', '0px', '0px', '0px'],
-      sideways: ['0px', '0px', '0px', '0px'], nestedbottom: ['0px', '0px', '0px', '0px'], insideways: ['0px', '0px', '100px', '0px'],
+      sideways: ['0px', '0px', '0px', '0px'], nestedbottom: ['0px', '0px', '0px', '0px'], insideways: ['0px', '0px', '300px', '0px'], overlaid: ['0px', '0px', '0px', '0px'],
     });
   } finally {
     await browser.close();

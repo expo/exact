@@ -74,10 +74,16 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a commit's sample 
 }, 30_000);
 
 // A box in full view inside a clipping box, sampled; then the clip shrinks to 40 of its 100, which changes the box's
-// intersection though its own box stays where it was, a change from outside the commit
+// intersection though its own box stays where it was, a change from outside the commit. The same inside a 50-point clip
+// that an ancestor scales by 2, half of its 100-point box showing, the clip then narrowed to 25: the sample cannot tell a
+// scaled clip, so the crossing is outside. And a fixed box under a clipping ancestor that does not contain it, which
+// does not clip it: the sample taken where it was first delivered accounts for that delivery
 const CLIPPED = `<!doctype html><style>body { margin: 0 }</style>
   <div id="clip" style="position:absolute;top:0;left:0;width:200px;height:200px;overflow:hidden">
     <div id="box" style="position:absolute;top:0;left:0;width:100px;height:100px"></div></div>
+  <div style="position:absolute;top:300px;left:0;transform:scale(2);transform-origin:0 0">
+    <div id="scaledclip" style="width:50px;height:50px;overflow:hidden"><div id="scaled" style="width:100px;height:50px"></div></div></div>
+  <div style="position:absolute;top:500px;left:0;width:50px;height:50px;overflow:hidden"><div id="escaped" style="position:fixed;top:500px;left:0;width:100px;height:50px"></div></div>
   <script type="module">
     import { account } from '/accounting.js';
     const box = document.getElementById('box'), books = account(), frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -89,7 +95,18 @@ const CLIPPED = `<!doctype html><style>body { margin: 0 }</style>
     books.sample([box], 1);
     document.getElementById('clip').style.height = '40px';
     await frame();
-    window.result = { crossed: crossed.map((e) => Math.round(e.intersectionRatio * 10) / 10), outside: books.outside(crossed, io).length };
+    const result = { crossed: crossed.map((e) => Math.round(e.intersectionRatio * 10) / 10), outside: books.outside(crossed, io).length };
+    const $ = (id) => document.getElementById(id), seen = [], at = [];
+    const watching = new IntersectionObserver((entries) => seen.push(...entries), { threshold: [0, 0.4, 1] });
+    watching.observe($('scaled'));
+    watching.observe($('escaped'));
+    await frame();
+    books.sample([$('scaled'), $('escaped')], 2);
+    const first = seen.splice(0).filter((e) => e.target === $('escaped'));
+    $('scaledclip').style.width = '25px';
+    await frame();
+    window.result = { ...result, scaled: seen.map((e) => Math.round(e.intersectionRatio * 100) / 100), scaledOutside: books.outside(seen, watching).length,
+      escaped: books.outside(first, watching).length };
   </script>`;
 
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`a clip's change of a box's intersection is outside the commit, in ${engine}`, async () => {
@@ -98,7 +115,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a clip's change of
     const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
     await page.goto(`${server.url.href}clipped`);
     await page.waitForFunction(() => window.result);
-    expect(await page.evaluate(() => window.result)).toEqual({ crossed: [0.4], outside: 1 });
+    expect(await page.evaluate(() => window.result)).toEqual({ crossed: [0.4], outside: 1, scaled: [0.25], scaledOutside: 1, escaped: 0 });
   } finally {
     await browser.close();
   }

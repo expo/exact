@@ -1,6 +1,6 @@
 //! @ref LLP 1123 D17 — what the JS compiler marks a node by for the web's safe-area executor: the classes hold its
-//! static rows and enumerated arms, which the executor's inline-style selectors cannot see. A node is marked once, for
-//! all its rows (`marks`), the static and the enumerated together.
+//! static rows and enumerated arms, which the executor's inline-style selectors cannot see. The node's static rows mark
+//! it as it is made, and where its arms add to that the lowering's write replaces the mark with both (`marks`).
 
 /// Whether a style text reads an observation, a family's `var(--exact-…)`.
 pub(crate) fn reads(css: &str) -> bool {

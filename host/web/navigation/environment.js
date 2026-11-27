@@ -42,14 +42,21 @@ export function resolveShortcuts(chords, nav = globalThis.navigator) {
     return shortcutParts(resolved) ? [resolved] : [];
   }).join(" ") || null;
 }
-/** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
+/** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom while something takes the screen below it. A pinch zoom shrinks the visual viewport by its scale with nothing below it, so only what the scaled visual viewport leaves of the layout viewport's height counts as keys, at most that. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
 export function keyboardInset(platform = globalThis) {
   const rect = platform.navigator?.virtualKeyboard?.boundingRect;
   if (rect?.height > 0) {
     return r2(rect.height);
   }
   const vv = platform.visualViewport;
-  return vv ? r2(Math.max(0, platform.innerHeight - vv.height - vv.offsetTop)) : 0;
+  if (!vv) return 0;
+  const keys = (platform.innerHeight - vv.height * vv.scale) / vv.scale;
+  return keys > 0 ? r2(Math.min(keys, Math.max(0, platform.innerHeight - vv.height - vv.offsetTop))) : 0;
+}
+/** The page's keyboard policy (D7): its root's `interactiveWidget`, as the page's viewport says it (`resizes-visual`, `resizes-content` or `overlays-content`), and `overlays-content` while the VirtualKeyboard API overlays it; `resizes-visual` unsaid, as browsers take it. */
+export function keyboardPolicy(platform = globalThis) {
+  if (platform.navigator?.virtualKeyboard?.overlaysContent) return "overlays-content";
+  return platform.document?.querySelector("[interactiveWidget]")?.getAttribute("interactiveWidget") ?? "resizes-visual";
 }
 /** `changed` when the keyboard moves without a resize: the VirtualKeyboard API's `geometrychange`. */
 export function onKeyboard(changed, platform = globalThis) {
