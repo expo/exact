@@ -11,7 +11,8 @@
       "category": "option<enum<homepage|article|video|audio>>",
       "icons": "option<ContentIcon[]>",
       "url": "string",
-      "apple": "option<AppleContentDescription>"
+      "apple": "option<AppleContentDescription>",
+      "within": "option<string[]>"
     },
     "ContentIcon": {
       "src": "string",

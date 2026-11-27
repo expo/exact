@@ -132,6 +132,9 @@ function patchBook(storage: Storage, id: string, patch: Partial<Book>) {
 }
 
 // Shelf's own NDEF record: an external type whose data is the book's id.
+const SHELVES: Record<string, string> = { want: 'Want to Read', reading: 'Reading', done: 'Finished' };
+const statusTitle = (shelf: string) => SHELVES[shelf] ?? shelf;
+
 const BOOK_RECORD = 'com.exact.shelf:book';
 
 /** A failed write's cause: the module's (D3 puts it after the error's name), else ours. */
@@ -152,6 +155,20 @@ const sources: Sources = {
     const { books } = await load(storage);
     const shown = books.find((b) => b.id === book) ?? [...books].sort((a, b) => b.addedAt - a.addedAt)[0];
     return [{ date, props: { count: books.length, latest: shown?.title ?? 'Add your first book' } }];
+  },
+
+  widgetProgress: async ([date, { shelf, book }], _store, storage) => {
+    const { books } = await load(storage);
+    const shown = books.find((b) => b.id === book);
+    const title = shown?.title ?? (shelf ? `Choose a book on ${statusTitle(shelf)}` : 'Choose a shelf and a book');
+    return [{ date, props: { title, percent: shown?.pages ? Math.round((shown.currentPage / shown.pages) * 100) : 0 } }];
+  },
+
+  widgetCover: async ([date, { shelf, book }], _store, storage) => {
+    const { books } = await load(storage);
+    const shown = books.find((b) => b.id === book);
+    const title = shown?.title ?? (shelf ? `Choose a book on ${statusTitle(shelf)}` : 'Choose a shelf and a book');
+    return [{ date, props: { title, author: shown?.author ?? '' } }];
   },
 
   library: async (_args, _store, storage) => {

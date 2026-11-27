@@ -191,8 +191,10 @@ component Shelf
   task index when lib.ready key=indexKey
     after(1, reindex)
   action reindex
+    setContentIndex(kind="shelf", entries=["want", "reading", "done"].map(s => ContentDescription(id=s, kind=none, title=statusLabel(s), description=none,
+      category=none, icons=none, url="/", apple=none, within=none)))
     setContentIndex(kind="book", entries=lib.books.map(b => ContentDescription(id=b.id, kind=none, title=b.title, description=some(b.author),
-      category=none, icons=none, url=`/book/${b.id}`, apple=none)))
+      category=none, icons=none, url=`/book/${b.id}`, apple=none, within=some([b.status]))))
     setAppShortcuts(shortcuts=inProgress.slice(0, 1).map(b => ShortcutItem(name=`Continue ${b.title}`,
       short_name=some(b.title), description=none, url=`/book/${b.id}`, icons=none, apple=none, android=none)))
   derive canScan = formats.tracks and formats.formats.includes("ean_13") and camera.available
@@ -1291,3 +1293,40 @@ component ShelfWidget
         text "On your shelf" role="heading" aria-level=2
         text `${count}` font-variant-numeric="tabular-nums"
         text latest line-clamp=2
+
+shape ProgressWidgetProps
+  title: string
+  percent: number
+
+shape BookChoice
+  shelf: option<string>
+  book: option<string>
+
+component ProgressWidget
+  props
+    title: string
+    percent: number
+  inject
+    snapshot_configuration: BookChoice
+  view
+    link href="/stats"
+      column gap=8
+        text "Reading Progress" role="heading" aria-level=2
+        text title line-clamp=2
+        text `${percent}%` font-variant-numeric="tabular-nums"
+
+shape CoverWidgetProps
+  title: string
+  author: string
+
+component CoverWidget
+  props
+    title: string
+    author: string
+  inject
+    snapshot_configuration: BookChoice
+  view
+    link href="/"
+      column gap=8
+        text title role="heading" aria-level=2 line-clamp=2
+        text author line-clamp=2

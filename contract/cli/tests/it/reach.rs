@@ -25,9 +25,9 @@ component App
   resource entries = contentIndexEntries() as shape ContentDescription[]
   mutation done as shape PinShortcutResult
   action index(ids: string[])
-    setContentIndex(kind="book", entries=ids.map(i => ContentDescription(id=i, kind=none, title=`Bök ${i}`, description=some("Le Guin"), category=none, icons=none, url=`/book/${i}`, apple=none)))
+    setContentIndex(kind="book", entries=ids.map(i => ContentDescription(id=i, kind=none, title=`Bök ${i}`, description=some("Le Guin"), category=none, icons=none, url=`/book/${i}`, apple=none, within=none)))
   action add(i: string, url: string)
-    addContentIndexEntry(description=ContentDescription(id=i, kind=some("author"), title=i, description=none, category=none, icons=none, url=url, apple=none))
+    addContentIndexEntry(description=ContentDescription(id=i, kind=some("author"), title=i, description=none, category=none, icons=none, url=url, apple=none, within=none))
   action remove(i: string)
     deleteContentIndexEntry(id=i)
   action shortcut(url: string)

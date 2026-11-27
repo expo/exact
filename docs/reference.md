@@ -956,9 +956,44 @@ TypeScript) and decides what to show for `none` and for an id it does not know.
 Exact keeps a saved id when the published list no longer has it, so a list
 cleared at sign-out does not turn a chosen widget into an unchosen one.
 
+A kind may be declared `within` another, so that a row of it lists only the
+entries within the choice of a row of the other kind (LLP 1126.005 D2):
+
+```json
+"intents": {"entities": {"shelf": {"title": "Shelf"}, "book": {"title": "Book", "within": "shelf"}}},
+"widgets": [{"kind": "progress", "configuration": {"title": "Reading Progress", "parameters": [
+  {"name": "shelf", "type": "entity", "title": "Shelf", "entity": "shelf"},
+  {"name": "book", "type": "entity", "title": "Book", "entity": "book"}]}}]
+```
+
+Each entry of the inner kind names the parent entries it belongs to with
+`ContentDescription.within`: `none` for every parent, `some([])` for none, or
+the parents' ids, one or several:
+
+```
+setContentIndex(kind="book", entries=lib.books.map(b => ContentDescription(id=b.id, kind=none, title=b.title,
+  description=some(b.author), category=none, icons=none, url=`/book/${b.id}`, apple=none, within=some([b.status]))))
+```
+
+In a widget with both rows, the Book row's list and its search have only the
+entries within the chosen shelf; with no shelf chosen, or in a widget with no
+Shelf row, they have all. When the person chooses another shelf, Edit Widget
+clears the Book row. When the app later publishes the chosen book within
+another shelf, the refresh and the render receive `none` for the book until the
+person chooses again; a chosen id the list no longer has still passes, as above.
+The relation is the kind's, so every widget that offers both kinds gets it. The
+parent row comes first, and a widget has at most one row of the parent kind;
+the build refuses otherwise, and refuses a `within` that names an undeclared
+kind or makes a cycle. `setContentIndex` and `addContentIndexEntry` refuse a
+`within` with an empty id (`TypeError`); they do not check that the parent ids
+exist, since the parent kind may be published later. On Apple the inner kind's
+query reads the parent row through
+[`IntentParameterDependency`](https://developer.apple.com/documentation/appintents/intentparameterdependency).
+A tool parameter of the inner kind lists every entry.
+
 Edit Widget on iOS and macOS offers the entries. watchOS and Android offer none:
 the field is `none` there, and a widget whose parameters are all entities has no
-choices on those hosts.
+choices on those hosts. Android keeps `within` in its mirror and does not use it.
 
 A configured widget's refresh receives the configuration too, as its second
 argument: a record with one field per parameter, in the order the injected shape
@@ -977,9 +1012,11 @@ identifiers stable across updates; changing a title does not change a choice.
 A removed or renamed parameter is ignored, and a missing or removed value uses
 that parameter's current default. Other valid choices are retained. Reordering
 entries, parameters or values does not reassign a saved choice. The refresh
-receives a saved choice by the same rules. Not supported: choices computed when
-Edit Widget opens, entities that are not content-index entries, an image for an
-entry, and a parameter whose choices depend on another's.
+receives a saved choice by the same rules. A kind's `within` is generated Swift
+too; adding it keeps saved choices. Not supported: choices computed when Edit
+Widget opens, entities that are not content-index entries, an image for an
+entry, a parameter whose choices depend on a fixed `enum` row, and a default
+entry for an entity row.
 
 `component` and the `props` shape are declared or imported by `app.contract`;
 every component prop must match a field of that shape. `preview` supplies all

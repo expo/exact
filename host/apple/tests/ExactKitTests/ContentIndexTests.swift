@@ -82,6 +82,40 @@ final class ContentIndexTests: XCTestCase {
         XCTAssertEqual(published("book"), [], "an index the app clears clears the list")
     }
 
+    func testAWidgetRowWithinAParentListsTheEntriesWithinItsChoice() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        ExactContentIndex.widgetKinds = ["book", "shelf"]
+        ExactContentIndex.widgetRoot = directory
+        defer { ExactContentIndex.widgetKinds = []; ExactContentIndex.widgetRoot = nil }
+        func within(_ entry: [String: JSONValue], _ parents: Any?) -> [String: JSONValue] {
+            var entry = entry
+            entry["within"] = JSONValue.from(parents)
+            return entry
+        }
+        for refused in [["reading", ""], ["reading", 7], "reading"] as [Any] {
+            XCTAssertEqual(ExactContentIndex.set(kind: "book", [within(book("1", "Piranesi", "Susanna Clarke"), refused)]), "TypeError", "\(refused)")
+        }
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [
+            within(book("1", "Piranesi", "Susanna Clarke"), ["reading"]),
+            within(book("2", "Dune", "Frank Herbert"), ["done", "want"]),
+            within(book("3", "Atlas", "Anyone"), nil),
+            within(book("4", "Nowhere", "Nobody"), []),
+        ]))
+        func published(within parent: String?, matching: String? = nil) -> [String] {
+            ContentIndexEntries.published(kind: "book", matching: matching, within: parent, root: directory).map(\.id)
+        }
+        XCTAssertEqual(published(within: nil), ["1", "2", "3", "4"], "no parent chosen: every entry")
+        XCTAssertEqual(published(within: "reading"), ["1", "3"], "an entry with no parents belongs to every one")
+        XCTAssertEqual(published(within: "want"), ["2", "3"])
+        XCTAssertEqual(published(within: "done", matching: "pir"), [], "search follows the parent too")
+        XCTAssertEqual(query("book"), ["1", "2", "3", "4"], "a tool's parameter lists every entry")
+        XCTAssertEqual(ContentIndexEntries.published(kind: "book", ids: ["1"], within: "done", root: directory).map(\.id), ["1"], "a saved id is answered whatever the parent")
+        XCTAssertNil(ContentIndexEntries.child(kind: "book", id: "1", parent: "done", root: directory), "a saved child the list places elsewhere reaches the refresh as none")
+        XCTAssertEqual(ContentIndexEntries.child(kind: "book", id: "1", parent: "reading", root: directory), "1")
+        XCTAssertEqual(ContentIndexEntries.child(kind: "book", id: "1", parent: nil, root: directory), "1")
+        XCTAssertEqual(ContentIndexEntries.child(kind: "book", id: "9", parent: "done", root: directory), "9", "an id the list lacks passes")
+    }
+
     func testSetReplacesOneKindAndKeepsTheOthers() {
         XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke")]))
         XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("s", "Reading", "")]))

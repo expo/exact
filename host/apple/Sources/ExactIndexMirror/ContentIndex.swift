@@ -117,7 +117,9 @@ public enum ExactContentIndex {
         let offered = widgetKinds.reduce(into: [String: [ContentIndexEntries.Entry]]()) { lists, kind in
             lists[kind] = m.entries.filter { $0["kind"]?.string == kind }.compactMap { entry in
                 guard let id = entry["id"]?.string, let title = entry["title"]?.string else { return nil }
-                return ContentIndexEntries.Entry(id: id, title: title, description: entry["description"]?.string)
+                var within: [String]?
+                if case .array(let parents)? = entry["within"] { within = parents.compactMap(\.string) }
+                return ContentIndexEntries.Entry(id: id, title: title, description: entry["description"]?.string, within: within)
             }
         }
         guard offered != published else { return }
@@ -136,6 +138,11 @@ public enum ExactContentIndex {
         if entries.count > most { return "QuotaExceededError" }
         for e in entries {
             guard e["id"]?.string?.isEmpty == false, e["title"]?.string?.isEmpty == false, e["url"]?.string?.hasPrefix("/") == true else { return "TypeError" }
+            switch e["within"] {
+            case nil, .null?: break
+            case .array(let parents)? where parents.allSatisfy({ $0.string?.isEmpty == false }): break
+            default: return "TypeError"
+            }
             let text = ["title", "description", "url"].compactMap { e[$0]?.string }.joined()
             if text.utf8.count > textBytes { return "QuotaExceededError" }
         }

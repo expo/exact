@@ -50,6 +50,10 @@ class SearchIndexModule(context: ExtensionContext) : ExactExtension(context) {
         for (e in entries) {
             val url = e.optString("url")
             if (e.optString("id").isEmpty() || e.optString("title").isEmpty() || !url.startsWith("/") || url.startsWith("//")) return "TypeError"
+            if (e.has("within") && !e.isNull("within")) {
+                val parents = e.optJSONArray("within") ?: return "TypeError"
+                if ((0 until parents.length()).any { parents.optString(it).isEmpty() || parents.get(it) !is String }) return "TypeError"
+            }
             val text = listOf("title", "description", "url").joinToString("") { e.optString(it) }
             if (text.toByteArray(Charsets.UTF_8).size > TEXT_BYTES) return "QuotaExceededError"
         }

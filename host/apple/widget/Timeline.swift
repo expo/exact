@@ -215,13 +215,17 @@ extension ExactConfigurationEntity {
     private init(_ entry: ContentIndexEntries.Entry) {
         self.init(id: entry.id, title: entry.title, subtitle: entry.description)
     }
-    static func exactPublished(matching text: String? = nil) -> [Self] {
-        ContentIndexEntries.published(kind: exactKind, matching: text).map(Self.init)
+    static func exactPublished(matching text: String? = nil, within parent: String? = nil) -> [Self] {
+        ContentIndexEntries.published(kind: exactKind, matching: text, within: parent).map(Self.init)
     }
     static func exactChosen(_ ids: [String]) -> [Self] {
         ContentIndexEntries.chosen(kind: exactKind, ids: ids, title: exactTitle).map(Self.init)
     }
+    static func exactChild(_ id: String?, parent: String?) -> String? {
+        ContentIndexEntries.child(kind: exactKind, id: id, parent: parent)
+    }
 }
+func exactEntityID<E: ExactConfigurationEntity>(_ entity: E?) -> String? { entity?.id }
 
 // SwiftUI has no public gamut environment key. The configuration seeds this
 // from UIKit traits or the Mac screen; the archived view carries it.

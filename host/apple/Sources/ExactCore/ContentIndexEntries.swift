@@ -10,8 +10,13 @@ public enum ContentIndexEntries {
         public let id: String
         public let title: String
         public let description: String?
-        public init(id: String, title: String, description: String?) {
-            self.id = id; self.title = title; self.description = description
+        public let within: [String]?
+        public init(id: String, title: String, description: String?, within: [String]? = nil) {
+            self.id = id; self.title = title; self.description = description; self.within = within
+        }
+        public func isWithin(_ parent: String?) -> Bool {
+            guard let parent, let within else { return true }
+            return within.contains(parent)
         }
     }
 
@@ -37,10 +42,16 @@ public enum ContentIndexEntries {
     }
 
     /// The published entries of `kind` that answer the query; none before the app publishes.
-    public static func published(kind: String, ids: [String]? = nil, matching text: String? = nil, root: URL? = WidgetContainer.root) -> [Entry] {
+    public static func published(kind: String, ids: [String]? = nil, matching text: String? = nil, within parent: String? = nil, root: URL? = WidgetContainer.root) -> [Entry] {
         guard let root, let data = try? Data(contentsOf: file(root)),
               let kinds = try? JSONDecoder().decode([String: [Entry]].self, from: data) else { return [] }
-        return answer(kinds[kind] ?? [], ids: ids, matching: text, id: \.id, texts: { [$0.title, $0.description] })
+        let entries = (kinds[kind] ?? []).filter { ids != nil || $0.isWithin(parent) }
+        return answer(entries, ids: ids, matching: text, id: \.id, texts: { [$0.title, $0.description] })
+    }
+
+    public static func child(kind: String, id: String?, parent: String?, root: URL? = WidgetContainer.root) -> String? {
+        guard let id, let entry = published(kind: kind, ids: [id], root: root).first else { return id }
+        return entry.isWithin(parent) ? id : nil
     }
 
     /// A placement's saved choices: each of `ids` as published, else a stand-in that

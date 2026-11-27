@@ -191,6 +191,40 @@ fn widget_gallery_labels_require_a_new_binary_cohort() {
 }
 
 #[test]
+fn an_entity_kinds_relations_require_a_new_binary_cohort() {
+    let dir = app("entity-cohort");
+    let mut manifest = Manifest::read(&dir).unwrap();
+    manifest.json["intents"] =
+        serde_json::json!({"entities":{"shelf":{"title":"Shelf"},"book":{"title":"Book"}}});
+    manifest.json["widgets"] = serde_json::json!([{"kind":"card","families":["systemSmall"],
+        "component":"Card","props":"Props","refresh":"refresh","preview":{},
+        "configuration":{"title":"Card","parameters":[
+            {"name":"shelf","type":"entity","title":"Shelf","entity":"shelf"},
+            {"name":"book","type":"entity","title":"Book","entity":"book"}]}}]);
+    let build = |manifest: &Manifest| {
+        compatibility_with_trust(
+            &dir,
+            "ios",
+            "aarch64-apple-ios",
+            manifest,
+            Some(""),
+            "development",
+        )
+        .unwrap()
+        .id
+    };
+    let original = build(&manifest);
+    let mut within = manifest.clone();
+    within.json["intents"]["entities"]["book"]["within"] = serde_json::json!("shelf");
+    assert_ne!(
+        original,
+        build(&within),
+        "a row that follows another is a generated query"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn activity_state_rides_the_bundle_and_capabilities_require_a_binary() {
     let dir = app("activity-cohort");
     let mut m = Manifest::read(&dir).unwrap();
