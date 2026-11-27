@@ -624,6 +624,10 @@ impl<D: DataSource> Host<D> {
         }
         let mut mounted = Vec::new();
         for head in self.runner.collections_shallow() {
+            // A list still opening, restoring or new rides nothing: its rows have not shown settled yet (LLP 1010 §6.12)
+            if !self.runner.collection_live(head.view) {
+                continue;
+            }
             self.runner.collection_mounted(head.view, &mut mounted);
             if mounted.iter().any(|(wrapper, _)| moved.contains(wrapper)) {
                 batch.rides.push(head.view);

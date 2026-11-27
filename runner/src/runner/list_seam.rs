@@ -35,6 +35,10 @@ pub trait Lists<D: DataSource> {
     }
     /// List `view`'s mounted rows into `out`.
     fn collection_mounted(&self, _: &Tree, _view: ViewId, _out: &mut Vec<(ViewId, u64)>) {}
+    /// Whether list `view` has shown its settled first rows.
+    fn collection_live(&self, _: &Tree, _view: ViewId) -> bool {
+        false
+    }
     /// Each mounted list's view, data generation and axis.
     fn collection_data(&self, _: &Tree) -> Vec<(ViewId, u64, bool)> {
         Vec::new()
@@ -415,6 +419,12 @@ impl<D: DataSource> Runner<D> {
         if let Some(tree) = &self.tree {
             self.seams.lists.collection_mounted(tree, view, out);
         }
+    }
+    /// [`Tree::collection_live`]: whether list `view` has shown its settled first rows.
+    pub fn collection_live(&self, view: ViewId) -> bool {
+        self.tree
+            .as_ref()
+            .is_some_and(|tree| self.seams.lists.collection_live(tree, view))
     }
     /// [`Runner::collections`] with only each list's first mounted row
     /// ([`Tree::collections_shallow`]).
