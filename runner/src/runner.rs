@@ -295,9 +295,8 @@ struct PendingReq {
     sent: bool,
     /// A stream's: the grant line that admits it (`state.streams`).
     grant: Option<String>,
-    /// A topic its resource watches changed while it was in flight: its
-    /// reply lands, then the resource is asked again (LLP 1016.002 D4).
-    ask_again: bool,
+    /// Changes owed one ask when this answer lands (LLP 1054.000.000 D3).
+    ask_again: resources::AskAgain,
     /// Module work wrote the store while it was in flight, leaving this store
     /// revision: until another write, its answer stands (LLP 1146 §2.3).
     module_again: Option<u64>,

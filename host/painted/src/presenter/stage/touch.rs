@@ -26,7 +26,7 @@
 //! from a source runs its container's return (`zoom.rs`). One whose pop
 //! flies names stays in place while the gesture seeks them (LLP 1013.004 D4).
 use super::*;
-use exact_motion::{gesture, Value, VelocityTracker};
+use exact_motion::{gesture, Transition, Value, VelocityTracker};
 
 /// A slop of Android's (`ViewConfiguration`'s touch slop, 8 dp).
 const SLOP: f32 = 8.0;
@@ -869,40 +869,4 @@ impl<D: DataSource> Presenter<D> {
             _ => None,
         }
     }
-}
-
-/// Whether `detent` names `fit-content`.
-pub(super) fn fits(detent: Option<&str>) -> bool {
-    detent.is_some_and(|d| d.split_whitespace().any(|w| w == "fit-content"))
-}
-
-/// The sheet heights `detent` asks for on a page `tallest` high below the
-/// status bar, the bar under the foot `foot` high, its route's content
-/// `fit` high with that bar; unreadable words are left out, and none left
-/// is the tallest.
-pub(super) fn heights(detent: Option<&str>, tallest: f32, foot: f32, fit: f32) -> Vec<f32> {
-    let mut out: Vec<f32> = (detent.unwrap_or("large").split_whitespace())
-        .filter_map(|d| match d {
-            "large" => Some(tallest),
-            "medium" => Some(tallest / 2.0 + foot),
-            "fit-content" => Some(fit),
-            d => match d.strip_suffix('%') {
-                Some(p) => p.parse::<f32>().ok().filter(|p| *p > 0.0).map(|p| {
-                    if p >= 100.0 {
-                        tallest
-                    } else {
-                        tallest * p / 100.0 + foot
-                    }
-                }),
-                None => d.parse::<f32>().ok().filter(|v| *v > 0.0).map(|v| v + foot),
-            },
-        })
-        .map(|v| v.clamp(1.0, tallest.max(1.0)))
-        .collect();
-    out.sort_by(f32::total_cmp);
-    out.dedup_by(|a, b| (*a - *b).abs() < 0.5);
-    if out.is_empty() {
-        out.push(tallest.max(1.0));
-    }
-    out
 }

@@ -86,6 +86,9 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     var sideSafeArea: (left: CGFloat, right: CGFloat) = (0, 0) {
         didSet {
             guard sideSafeArea != oldValue else { return }
+            let safe = safeAreaInsets
+            guard max(safe.left, sideSafeArea.left) != max(safe.left, oldValue.left)
+                || max(safe.right, sideSafeArea.right) != max(safe.right, oldValue.right) else { return }
             safeIndicators.sync(self)
             collectionViewLayout.invalidateLayout()
         }
@@ -98,12 +101,14 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
     /// What `sideSafeArea` adds on each side to the safe area UIKit gives the collection, which the sections take.
     var sideBand: (left: CGFloat, right: CGFloat) {
-        (max(0, sideSafeArea.left - safeAreaInsets.left), max(0, sideSafeArea.right - safeAreaInsets.right))
+        let safe = safeAreaInsets
+        return (max(0, sideSafeArea.left - safe.left), max(0, sideSafeArea.right - safe.right))
     }
     /// The depth the cards are inset from on each side, UIKit's safe area or `sideSafeArea`, whichever is deeper, top
     /// right bottom left, which D14's writer leaves to the layout.
     package var consumedBand: [CGFloat] {
-        [0, max(safeAreaInsets.right, sideSafeArea.right), 0, max(safeAreaInsets.left, sideSafeArea.left)]
+        let safe = indicatorSafeArea
+        return [0, safe.right, 0, safe.left]
     }
 
     /// UIKit changed the margins it gives the list's cells, or showed the

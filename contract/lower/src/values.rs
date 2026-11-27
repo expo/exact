@@ -1069,11 +1069,8 @@ pub(crate) fn check_prop_value(
     // of the sheet's maximum (§9.13).
     if prop == PropId::NavigationDetent {
         if let Expr::Str(s, _) = value {
-            if let Some(word) = s
-                .split(' ')
-                .filter(|w| !w.is_empty())
-                .find(|w| !vocab::detent_word(w))
-            {
+            let words: Vec<&str> = s.split(' ').filter(|w| !w.is_empty()).collect();
+            if let Some(word) = words.iter().find(|w| !vocab::detent_word(w)) {
                 return err(
                     "lower-attr-value",
                     format!(
@@ -1083,15 +1080,13 @@ pub(crate) fn check_prop_value(
                     span,
                 );
             }
-            // UIKit's detents go from shortest to tallest; the content's
-            // height changes, so only `large` is always above it.
-            let words: Vec<&str> = s.split(' ').filter(|w| !w.is_empty()).collect();
-            if words.contains(&"fit-content")
-                && !matches!(words[..], ["fit-content"] | ["fit-content", "large"])
-            {
+            if !vocab::detent_fit_content_valid(&words) {
                 return err(
                     "lower-attr-value",
-                    format!("`navigationDetent` accepts {}: a content height can pass any other detent, and UIKit's go from shortest to tallest; given \"{s}\"", vocab::accepts(prop).unwrap()),
+                    format!(
+                        "`navigationDetent` accepts {}; given \"{s}\"",
+                        vocab::accepts(prop).unwrap()
+                    ),
                     span,
                 );
             }

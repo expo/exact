@@ -81,27 +81,34 @@ function measure(el) {
 }
 
 /** What of `rect`, `el`'s box, shows in the viewport through the boxes that clip their overflow in its containing
- * blocks' chain, which are those that clip it (`visible`, null for none), and whether it intersects them, edges included,
- * as an `IntersectionObserver` takes a box of no area that touches its root (`intersecting`). The sample is `exact` only
- * where those clips are its padding boxes in the viewport's coordinates, the viewport is the observer's: in the top
- * document, no clip widened by `overflow-clip-margin`, and no ancestor, contained or not, that transforms what it holds,
- * clips it by a clip path or contains its paint. */
+ * blocks' chain, which are those that clip it (`visible`, null for none), each clip its padding box to the fraction of
+ * a point, and whether it intersects them, edges included, as an `IntersectionObserver` takes a box of no area that
+ * touches its root (`intersecting`). The sample is `exact` only where those clips are all that clip it and the viewport
+ * is the observer's: in the top document, no clip widened by `overflow-clip-margin`, and neither the box nor any
+ * ancestor, containing or not, transforms what it holds, clips by a clip path or by `clip`, or contains its paint, as
+ * `contain` and `content-visibility` do. */
 function shown(el, rect, [width, height]) {
   let x0 = Math.max(rect.left, 0), y0 = Math.max(rect.top, 0), x1 = Math.min(rect.right, width), y1 = Math.min(rect.bottom, height);
-  const view = el.ownerDocument.defaultView;
+  const view = el.ownerDocument.defaultView, px = (v) => parseFloat(v) || 0;
   let exact = !!view && view === view.top;
   for (const a of chain(el, styles())) {
     if (a === document.scrollingElement || a === document.documentElement) continue;
     const s = getComputedStyle(a);
     if (s.overflowX === "visible" && s.overflowY === "visible") continue;
     if ((s.overflowClipMargin ?? "0px") !== "0px" && s.overflowClipMargin !== "") exact = false;
-    const b = a.getBoundingClientRect(), left = b.left + a.clientLeft, top = b.top + a.clientTop;
-    if (s.overflowX !== "visible") { x0 = Math.max(x0, left); x1 = Math.min(x1, left + a.clientWidth); }
-    if (s.overflowY !== "visible") { y0 = Math.max(y0, top); y1 = Math.min(y1, top + a.clientHeight); }
+    // The padding box from the border box and the borders, as fractional as layout, less a scrollbar's whole-point gutter
+    const b = a.getBoundingClientRect(), edge = [px(s.borderTopWidth), px(s.borderRightWidth), px(s.borderBottomWidth), px(s.borderLeftWidth)];
+    // A gutter of two points or less is the whole-point sizes' rounding, not a scrollbar
+    const bar = (v) => (v > 2 ? v : 0);
+    const gutter = [bar(a.offsetWidth - a.clientWidth - Math.round(edge[1] + edge[3])), bar(a.offsetHeight - a.clientHeight - Math.round(edge[0] + edge[2]))];
+    const left = b.left + edge[3], top = b.top + edge[0], right = b.right - edge[1] - gutter[0], bottom = b.bottom - edge[2] - gutter[1];
+    if (s.overflowX !== "visible") { x0 = Math.max(x0, left); x1 = Math.min(x1, right); }
+    if (s.overflowY !== "visible") { y0 = Math.max(y0, top); y1 = Math.min(y1, bottom); }
   }
-  for (let a = el.parentElement; a && exact; a = a.parentElement) {
+  for (let a = el; a && exact; a = a.parentElement) {
     const s = getComputedStyle(a);
-    exact = !transformed(s) && (s.clipPath ?? "none") === "none" && !/\b(paint|strict|content)\b/.test(s.contain ?? "");
+    exact = (a === el || !transformed(s)) && (s.clipPath ?? "none") === "none" && (s.clip ?? "auto") === "auto"
+      && !/\b(paint|strict|content)\b/.test(s.contain ?? "") && (s.contentVisibility ?? "visible") === "visible";
   }
   return { visible: x1 > x0 && y1 > y0 ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null, intersecting: x1 >= x0 && y1 >= y0, exact };
 }

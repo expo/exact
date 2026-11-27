@@ -409,7 +409,7 @@ impl<D: DataSource> Runner<D> {
 /// One commit's receipt for two renders, `a` then `b`: what a host reads
 /// of the commit as if it had been one batch. A node made by `a` and
 /// destroyed by `b` is in neither list.
-fn merged(mut a: CommitReceipt, b: CommitReceipt) -> CommitReceipt {
+pub(super) fn merged(mut a: CommitReceipt, b: CommitReceipt) -> CommitReceipt {
     use std::collections::BTreeSet;
     let gone: BTreeSet<_> = b.destroyed.iter().copied().collect();
     let made: BTreeSet<_> = a.created.iter().copied().collect();

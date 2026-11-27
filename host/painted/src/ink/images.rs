@@ -1,10 +1,15 @@
 use super::*;
 use exact_ink::device::TextureDesc;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Weak;
+
+const IDLE_BYTES: u64 = 8 << 20;
+const IDLE_BITMAPS: usize = 64;
 
 #[derive(Default)]
 pub(super) struct Images {
     bitmaps: HashMap<(usize, [u32; 2]), (Arc<Bitmap>, TextureId)>,
+    idle: IdleBitmaps,
     pixmaps: HashMap<usize, Uploaded>,
     /// A recorded revision keeps its texture without holding the CPU pixels.
     frames: HashMap<(u64, bool), TextureId>,
@@ -14,6 +19,86 @@ pub(super) struct Images {
     spare: Vec<Spare>,
     pins: HashMap<TextureId, usize>,
     used: std::collections::HashSet<TextureId>,
+}
+
+#[derive(Default)]
+struct IdleBitmaps {
+    /// Full-size bitmap textures kept in the order they left the frame.
+    entries: VecDeque<(Weak<Bitmap>, TextureId, u64)>,
+    bytes: u64,
+}
+
+impl IdleBitmaps {
+    fn mip_bytes(width: u32, height: u32) -> u64 {
+        let desc = TextureDesc {
+            mipmapped: true,
+            ..TextureDesc::rgba(width, height)
+        };
+        (0..desc.levels())
+            .map(|level| {
+                u64::from((desc.width >> level).max(1))
+                    * u64::from((desc.height >> level).max(1))
+                    * u64::from(desc.format.channels())
+            })
+            .sum()
+    }
+
+    fn remove(&mut self, index: usize) -> TextureId {
+        let (_, texture, bytes) = self.entries.remove(index).unwrap();
+        self.bytes -= bytes;
+        texture
+    }
+
+    fn take(&mut self, image: &Arc<Bitmap>, size: [u32; 2]) -> Option<TextureId> {
+        if size != [image.width(), image.height()] {
+            return None;
+        }
+        // A Weak keeps its allocation address reserved even after the decoded pixels drop.
+        let i = self
+            .entries
+            .iter()
+            .position(|(owner, _, _)| owner.as_ptr() == Arc::as_ptr(image))?;
+        Some(self.remove(i))
+    }
+
+    fn take_texture(&mut self, texture: TextureId) -> Option<Arc<Bitmap>> {
+        let i = self.entries.iter().position(|(_, t, _)| *t == texture)?;
+        let image = self.entries[i].0.upgrade()?;
+        self.remove(i);
+        Some(image)
+    }
+
+    fn sweep(&mut self, device: &mut impl Device, all: bool) -> Result<()> {
+        for i in (0..self.entries.len()).rev() {
+            if all || self.entries[i].0.strong_count() == 0 {
+                device.retire_texture(self.remove(i))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn keep(
+        &mut self,
+        device: &mut impl Device,
+        image: Arc<Bitmap>,
+        texture: TextureId,
+    ) -> Result<()> {
+        let (w, h) = (image.width(), image.height());
+        if Arc::strong_count(&image) == 1 || w == 0 || h == 0 {
+            return device.retire_texture(texture);
+        }
+        let bytes = Self::mip_bytes(w, h);
+        if bytes > IDLE_BYTES {
+            return device.retire_texture(texture);
+        }
+        self.entries
+            .push_back((Arc::downgrade(&image), texture, bytes));
+        self.bytes += bytes;
+        while self.entries.len() > IDLE_BITMAPS || self.bytes > IDLE_BYTES {
+            device.retire_texture(self.remove(0))?;
+        }
+        Ok(())
+    }
 }
 
 struct Uploaded {
@@ -34,6 +119,13 @@ impl Images {
             || self.pixmaps.values().any(|u| u.texture == texture)
             || self.frames.values().any(|&t| t == texture)
         {
+            *self.pins.entry(texture).or_default() += 1;
+        } else if let Some(image) = self.idle.take_texture(texture) {
+            let key = (
+                Arc::as_ptr(&image) as usize,
+                [image.width(), image.height()],
+            );
+            self.bitmaps.insert(key, (image, texture));
             *self.pins.entry(texture).or_default() += 1;
         }
     }
@@ -66,6 +158,7 @@ impl Images {
         {
             device.retire_texture(texture)?;
         }
+        self.idle.sweep(device, false)?;
         for unused in self.spare.drain(..) {
             device.retire_texture(unused.texture)?;
         }
@@ -84,17 +177,39 @@ impl Images {
     }
 
     pub(super) fn end(&mut self, device: &mut impl Device) -> Result<()> {
+        self.release_unused(device, true)
+    }
+
+    pub(super) fn trim(&mut self, device: &mut impl Device) -> Result<()> {
+        self.used.clear();
+        self.idle.sweep(device, true)?;
+        self.release_unused(device, false)
+    }
+
+    fn release_unused(&mut self, device: &mut impl Device, keep_idle: bool) -> Result<()> {
         for (_, texture) in self
             .frames
             .extract_if(|_, t| !self.used.contains(t) && !self.pins.contains_key(t))
         {
             device.retire_texture(texture)?;
         }
-        for (_, (_, texture)) in self
-            .bitmaps
-            .extract_if(|_, (_, t)| !self.used.contains(t) && !self.pins.contains_key(t))
-        {
-            device.retire_texture(texture)?;
+        let unused =
+            |texture: &TextureId| !self.used.contains(texture) && !self.pins.contains_key(texture);
+        if keep_idle {
+            // Release unused reduced variants first so their Arcs do not keep a full-size bitmap eligible.
+            for (_, (_, texture)) in self.bitmaps.extract_if(|(_, size), (image, t)| {
+                unused(t) && *size != [image.width(), image.height()]
+            }) {
+                device.retire_texture(texture)?;
+            }
+            self.idle.sweep(device, false)?;
+        }
+        for (_, (image, texture)) in self.bitmaps.extract_if(|_, (_, t)| unused(t)) {
+            if keep_idle {
+                self.idle.keep(device, image, texture)?;
+            } else {
+                device.retire_texture(texture)?;
+            }
         }
         for (_, u) in self.pixmaps.extract_if(|_, u| {
             !self.used.contains(&u.texture) && !self.pins.contains_key(&u.texture)
@@ -105,11 +220,6 @@ impl Images {
             device.retire_texture(unused.texture)?;
         }
         Ok(())
-    }
-
-    pub(super) fn trim(&mut self, device: &mut impl Device) -> Result<()> {
-        self.used.clear();
-        self.end(device)
     }
 
     pub fn bitmap(
@@ -123,19 +233,9 @@ impl Images {
             self.used.insert(*texture);
             return Ok(*texture);
         }
-        #[cfg(target_os = "macos")]
-        let _trace =
-            exact_ink::device::apple::Trace::with_value(c"picture upload", image.trace_source());
-        let texture = if size == [image.width(), image.height()] {
-            upload(device, image.pixels(), true)?
-        } else {
-            let pixels = exact_ink::image::reduce(
-                image.pixels().data(),
-                [image.width(), image.height()],
-                size,
-            );
-            let pixels = tiny_skia::PixmapRef::from_bytes(&pixels, size[0], size[1]).unwrap();
-            upload(device, pixels, true)?
+        let texture = match self.idle.take(image, size) {
+            Some(texture) => texture,
+            None => upload_bitmap(device, image, size)?,
         };
         self.used.insert(texture);
         self.bitmaps.insert(key, (image.clone(), texture));
@@ -197,7 +297,9 @@ impl Images {
         let texture = match self.spare.iter().position(fits) {
             Some(i) => {
                 let texture = self.spare.swap_remove(i).texture;
-                fill(device, texture, pixels, mipmapped)?;
+                if let Err(error) = fill(device, texture, pixels, mipmapped) {
+                    return Err(retire_after_error(device, texture, error));
+                }
                 texture
             }
             None => upload(device, pixels, mipmapped)?,
@@ -215,6 +317,20 @@ impl Images {
     }
 }
 
+fn upload_bitmap(device: &mut impl Device, image: &Bitmap, size: [u32; 2]) -> Result<TextureId> {
+    #[cfg(target_os = "macos")]
+    let _trace =
+        exact_ink::device::apple::Trace::with_value(c"picture upload", image.trace_source());
+    if size == [image.width(), image.height()] {
+        upload(device, image.pixels(), true)
+    } else {
+        let pixels =
+            exact_ink::image::reduce(image.pixels().data(), [image.width(), image.height()], size);
+        let pixels = tiny_skia::PixmapRef::from_bytes(&pixels, size[0], size[1]).unwrap();
+        upload(device, pixels, true)
+    }
+}
+
 fn upload(
     device: &mut impl Device,
     pixels: tiny_skia::PixmapRef<'_>,
@@ -226,8 +342,18 @@ fn upload(
         mipmapped,
         ..TextureDesc::rgba(pixels.width(), pixels.height())
     })?;
-    fill(device, texture, pixels, mipmapped)?;
+    if let Err(error) = fill(device, texture, pixels, mipmapped) {
+        return Err(retire_after_error(device, texture, error));
+    }
     Ok(texture)
+}
+
+fn retire_after_error(device: &mut impl Device, texture: TextureId, error: Error) -> Error {
+    match (error, device.retire_texture(texture)) {
+        (error @ Error::DeviceLost(_), _) => error,
+        (_, Err(lost @ Error::DeviceLost(_))) => lost,
+        (error, _) => error,
+    }
 }
 
 fn fill_area(

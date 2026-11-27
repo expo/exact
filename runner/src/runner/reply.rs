@@ -177,6 +177,7 @@ impl<D: DataSource> Runner<D> {
         }
         let what = super::lines::fulfilling(ticket, &self.target_name(p.target), &summary);
         let target = p.target;
+        let again = p.ask_again;
         // An answer lands as a commit of its request's origin (LLP 1133.002
         // D12), with every cause the request has (LLP 1133.035 D16 item 6).
         let cause = self.ticket_cause(ticket);
@@ -211,7 +212,8 @@ impl<D: DataSource> Runner<D> {
                 );
             }
         }
-        result.map(Some)
+        self.as_cause(cause, |r| r.after_kept_read(target, ticket, again, result))
+            .map(Some)
     }
 
     /// One message of the open stream at `pos` (LLP 1016.000 D1): parsed
@@ -504,8 +506,13 @@ impl<D: DataSource> Runner<D> {
                     let end = super::UploadEnd::Answered(value.clone());
                     self.upload_over(p.ticket, p.sent || !failed_end, end);
                 }
-                if p.ask_again {
-                    self.log(super::lines::asked_again(p.ticket, &name));
+                if p.ask_again.context {
+                    self.resources[i].landing_read = true;
+                }
+                if p.ask_again.refresh {
+                    if !p.ask_again.context {
+                        self.log(super::lines::asked_again(p.ticket, &name, false));
+                    }
                     self.force_refresh(i);
                 }
                 self.resources[i].state = Some(ResourceState {
@@ -579,7 +586,9 @@ impl<D: DataSource> Runner<D> {
             .iter_mut()
             .filter(|n| n.target == previous.target)
         {
-            next.ask_again |= previous.ask_again;
+            next.ask_again.refresh |= previous.ask_again.refresh;
+            next.ask_again.context |=
+                previous.ask_again.context && next.stream.is_none() && !next.upload;
             next.module_again = next.module_again.or(previous.module_again);
             next.origin = previous.origin;
             next.inspection_generation = previous.inspection_generation;

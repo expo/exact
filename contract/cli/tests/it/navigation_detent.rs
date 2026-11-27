@@ -18,6 +18,11 @@ fn the_detent_words_lower_and_others_are_refused() {
         "300 large",
         "fit-content",
         "fit-content large",
+        "medium fit-content",
+        "50% fit-content",
+        "25% 50% fit-content",
+        "300 fit-content",
+        "200 400 fit-content",
         "128.5",
         "45%",
         "45% large",
@@ -43,6 +48,8 @@ fn the_detent_words_lower_and_others_are_refused() {
         // `100%` is `large`: the same height, so one of them.
         ("100% large", "large"),
         ("45% 100% large", "large"),
+        ("300 50% fit-content", "50%"),
+        ("500 300 fit-content", "300"),
     ] {
         let error = compile(value).unwrap_err().to_string();
         assert!(
@@ -67,9 +74,16 @@ fn the_detent_words_lower_and_others_are_refused() {
         ("NaN%", "NaN%"),
         ("45 %", "%"),
         ("fit-content 300", "fit-content 300"),
-        ("300 fit-content", "300 fit-content"),
         ("fit-content medium", "fit-content medium"),
+        ("medium fit-content large", "medium fit-content large"),
         ("large fit-content", "large fit-content"),
+        ("100% fit-content", "100% fit-content"),
+        ("45% 100% fit-content", "45% 100% fit-content"),
+        ("fit-content fit-content", "fit-content fit-content"),
+        (
+            "medium fit-content fit-content",
+            "medium fit-content fit-content",
+        ),
     ] {
         let error = compile(value).unwrap_err().to_string();
         assert!(

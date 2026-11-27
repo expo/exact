@@ -39,7 +39,7 @@ function measure(boxes, band, box, { reaches = () => ALL, policy } = {}) {
       return s;
     };
     const at = (el) => {
-      if (!seen.has(el)) seen.set(el, el.isConnected && el.getClientRects().length ? laid(el, under(el.parentElement) ? scrolling(el, box) : []) : null);
+      if (!seen.has(el)) seen.set(el, el.isConnected && el.getClientRects().length ? laid(el, under(el.parentElement) ? scrolling(el, box) : [], box) : null);
       return seen.get(el);
     };
     const padding = (a) => {

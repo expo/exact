@@ -27,6 +27,13 @@ fn main() {
     )
     .expect("general shader constants");
 
+    let [vertex, fragment] = ["vs_main", "fs_main"].map(|name| {
+        module
+            .entry_points
+            .iter()
+            .position(|e| e.name == name)
+            .expect(name)
+    });
     let mut metal = msl::Options {
         lang_version: (2, 0),
         fake_missing_bindings: false,
@@ -83,7 +90,7 @@ fn main() {
         out.join("metal_entries.rs"),
         format!(
             "const VERTEX: &str = {:?};\nconst FRAGMENT: &str = {:?};\n",
-            entries[0], entries[1]
+            entries[vertex], entries[fragment]
         ),
     )
     .unwrap();
@@ -101,7 +108,7 @@ fn main() {
         .map(|entry| entry.expect("HLSL entry point"))
         .collect();
     fs::write(out.join("ink.hlsl"), fixed_sampler_hlsl(&hlsl_source)).unwrap();
-    build_dxbc(&out, &entries);
+    build_dxbc(&out, [&entries[vertex], &entries[fragment]]);
 
     for entry in &module.entry_points {
         let pipeline = spv::PipelineOptions {
@@ -257,7 +264,7 @@ fn fixed_sampler_hlsl(source: &str) -> String {
 
 // The cross-check has no Windows SDK. Empty binaries refuse at device creation.
 // @ref LLP 1149 D6.1.
-fn build_dxbc(out: &Path, entries: &[String]) {
+fn build_dxbc(out: &Path, entries: [&str; 2]) {
     println!("cargo:rerun-if-env-changed=PATH");
     let windows = std::env::var("TARGET").unwrap().contains("windows");
     let mut fxc = None;
@@ -290,15 +297,7 @@ fn build_dxbc(out: &Path, entries: &[String]) {
             continue;
         }
         let result = Command::new(fxc.as_ref().unwrap())
-            .args([
-                "/nologo",
-                "/O3",
-                "/T",
-                profile,
-                "/E",
-                &entries[entry],
-                "/Fo",
-            ])
+            .args(["/nologo", "/O3", "/T", profile, "/E", entries[entry], "/Fo"])
             .arg(&path)
             .arg(out.join("ink.hlsl"))
             .output()

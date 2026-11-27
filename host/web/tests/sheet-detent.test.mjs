@@ -94,6 +94,13 @@ check('a narrow sheet opens at its first detent, or the one navigationInitialDet
   for (const said of [null, '', 'large']) expect(await open(evaluate, said)).toEqual([12, 832]);
   // A word the detents do not hold is no initial detent (the compiler refuses a literal one); the first stands.
   expect(await open(evaluate, 'medium large', 'fit-content')).toEqual([428, 416]);
+  // Terminal `fit-content` ceiling (LLP 1075.003 §9.11, expo/exact#2023): short content shrinks to fit,
+  // tall content caps at the initial stop without JS measurement.
+  const [, fitHeight] = await open(evaluate, 'fit-content');
+  expect(await open(evaluate, 'medium fit-content')).toEqual([844 - fitHeight, fitHeight]);
+  expect(await evaluate(`document.getElementById('sheet').getAttribute('data-exact-detent')`)).toBe('fit-capped');
+  expect(await open(evaluate, '100 fit-content')).toEqual([744, 100]);
+  expect(await open(evaluate, 'medium fit-content', 'fit-content')).toEqual([844 - fitHeight, fitHeight]);
 }), 60000);
 
 check('the detent is read as the sheet is presented and when its detents change, and each sheet keeps its own', () => inChrome(async (evaluate) => {
@@ -144,6 +151,9 @@ check('a bound value keeps the detents UIKit keeps: a word it cannot read or one
   expect(await open(evaluate, '100% 300')).toEqual([12, 832]);
   // The initial detent names a kept word: a dropped one is none, and the first kept stands.
   expect(await open(evaluate, '300 200 large', '200')).toEqual([544, 300]);
+  // Terminal `fit-content` rejects a following `large`, and `large` rejects a following `fit-content`.
+  expect(await open(evaluate, 'medium fit-content large', 'large')).toEqual([844 - (await open(evaluate, 'fit-content'))[1], (await open(evaluate, 'fit-content'))[1]]);
+  expect(await open(evaluate, 'large fit-content', 'fit-content')).toEqual([12, 832]);
 }), 60000);
 
 check("an update that replaces a sheet's inline style keeps its height", () => inChrome(async (evaluate) => {

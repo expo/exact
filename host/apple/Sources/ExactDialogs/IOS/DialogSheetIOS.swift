@@ -57,6 +57,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     private var authoredDetents: String?
     private var grabber: String?
     private var fitContentHeight: CGFloat?
+    private var lastTerminalSync: (CGFloat?, CGFloat?, CGFloat, UIUserInterfaceSizeClass, UIUserInterfaceSizeClass)?
     #endif
     /// A content-fitted sheet measures against its maximum. A sheet with
     /// authored detents lays out the dialog in the currently visible area.
@@ -145,25 +146,75 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         grabber = nextGrabber
         fitContentHeight = dialog.fitContentHeight
         let configure = {
+            var activeCount: Int?
+            let owner = "dialog \"\(dialog.props["id"] ?? "")\""
             if newHeights {
                 if value != nil {
-                    SheetDetents.select(on: sheet, node: dialog, owner: "dialog \"\(dialog.props["id"] ?? "")\"") { [weak self] in self?.barHeight ?? 0 }
+                    SheetDetents.select(
+                        on: sheet,
+                        node: dialog,
+                        owner: owner,
+                        maximum: self.maximumDetentHeight,
+                        observedMaximum: { [weak self] max in self?.maximumDetentHeight = max }
+                    ) { [weak self] in self?.barHeight ?? 0 }
+                    activeCount = SheetDetents.activeSummary(for: dialog, on: sheet, maximum: self.maximumDetentHeight, above: self.barHeight).activeCount
                 } else {
                     if !initial.isEmpty, initial != "fit-content" {
-                        dialog.presenter?.session?.log("navigationInitialDetent \"\(initial)\" on dialog \"\(dialog.props["id"] ?? "")\" names no height of its content-fitted sheet")
+                        dialog.presenter?.session?.log("navigationInitialDetent \"\(initial)\" on \(owner) names no height of its content-fitted sheet")
                     }
                     sheet.detents = [self.fittedDetent()]
                     sheet.selectedDetentIdentifier = sheet.detents.first?.identifier
                 }
             } else if newContentHeight && value != nil {
+                if SheetDetents.hasTerminalContent(value) {
+                    SheetDetents.syncTerminalContent(
+                        on: sheet,
+                        node: dialog,
+                        owner: owner,
+                        maximum: self.maximumDetentHeight,
+                        grabber: nextGrabber,
+                        syncUndimmed: false,
+                        above: self.barHeight
+                    )
+                    activeCount = SheetDetents.activeSummary(for: dialog, on: sheet, maximum: self.maximumDetentHeight, above: self.barHeight).activeCount
+                }
                 sheet.invalidateDetents()
+            } else if value != nil {
+                activeCount = SheetDetents.activeSummary(for: dialog, on: sheet, maximum: self.maximumDetentHeight, above: self.barHeight).activeCount
             }
-            SheetDetents.updateGrabber(nextGrabber, on: sheet)
+            SheetDetents.updateGrabber(nextGrabber, on: sheet, activeCount: activeCount)
             // In `animateChanges`, the surface moves with the sheet.
             self.paintSurface()
         }
         if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges(configure) }
         else { configure() }
+    }
+    private func scheduleTerminalSyncIfNeeded() {
+        guard !topLayer, let sheet = presentedSheet, let value = authoredDetents,
+              SheetDetents.hasTerminalContent(value), let dialog else { return }
+        let maxH = maximumDetentHeight ?? sheet.containerView?.safeAreaLayoutGuide.layoutFrame.height
+        let key = (maxH, dialog.fitContentHeight, barHeight, traitCollection.horizontalSizeClass, traitCollection.verticalSizeClass)
+        if let prev = lastTerminalSync, prev.0 == key.0, prev.1 == key.1, prev.2 == key.2, prev.3 == key.3, prev.4 == key.4 { return }
+        lastTerminalSync = key
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let sheet = self.presentedSheet, let dialog = self.dialog,
+                  let value = self.authoredDetents, SheetDetents.hasTerminalContent(value) else { return }
+            let update = {
+                SheetDetents.syncTerminalContent(
+                    on: sheet,
+                    node: dialog,
+                    owner: "dialog \"\(dialog.props["id"] ?? "")\"",
+                    maximum: self.maximumDetentHeight,
+                    grabber: self.grabber,
+                    syncUndimmed: false,
+                    above: self.barHeight
+                )
+                sheet.invalidateDetents()
+                self.paintSurface()
+            }
+            if self.viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges(update) }
+            else { update() }
+        }
     }
     #endif
     package required init?(coder: NSCoder) { nil }
@@ -220,7 +271,10 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         if let tint = ThemeRoles.color("AccentColor", in: view) { view.tintColor = tint }
         self.view = view
         paintSurface()
-        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (controller: DialogSheetController, _: UITraitCollection) in controller.paintSurface() }
+        registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) { (controller: DialogSheetController, _: UITraitCollection) in
+            controller.paintSurface()
+            controller.scheduleTerminalSyncIfNeeded()
+        }
         scroller.keyboardDismissMode = .interactive
         #endif
         scroller.delegate = self
@@ -235,6 +289,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         #if os(iOS)
         // The bar came, went or changed height: a fitted sheet holds it above the dialog.
         if authoredDetents == nil, barHeight != fittedBar, let sheet = presentedSheet { sheet.invalidateDetents() }
+        scheduleTerminalSyncIfNeeded()
         #endif
         place()
         host?.containingBlockChanged()

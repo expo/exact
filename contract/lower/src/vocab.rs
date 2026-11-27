@@ -19,7 +19,7 @@ use exact_kernel::{PropId, StyleCodec, StyleId};
 pub fn accepts(prop: PropId) -> Option<&'static str> {
     match prop {
         PropId::ToolbarPlacement => Some("window (Mac window toolbar), keyboard (keyboard accessory), navigation (Mac item group), or bottom. A row role=\"toolbar\" toolbarPlacement=\"bottom\" must be a direct child of the route's column. Put a scroller with flex=1 and min-height=0 before the row. The compiler refuses two unconditional bottom toolbar rows and warns when an unconditional sibling follows a toolbar. On iOS and iPadOS the source row leaves the page. The route owns its buttons and flexible spaces in the native toolbar, which UIKit includes in the safe area. If several rows are live, UIKit uses the first in document order, omits all source rows and journals one line naming the route. Every other host lays out each live row as written"),
-        PropId::NavigationDetent => Some("space-separated large, medium, finite positive point heights, or percentages of the sheet's maximum height above 0% and at most 100%; fit-content alone or as fit-content large; otherwise ascending, point heights and percentages (or medium) not mixed, large last"),
+        PropId::NavigationDetent => Some("space-separated large, medium, finite positive point heights, or percentages of the sheet's maximum height above 0% and at most 100%; fit-content alone, as fit-content large, or last after ascending stops below large as a content-height ceiling; otherwise ascending, point heights and percentages (or medium) not mixed, large last"),
         PropId::Target => Some("empty, _blank, _self, _parent or _top (HTML's keywords, in any case), or a window's name, which does not start with _ and is not window-<n> (the agent's label for a window without a name)"),
         PropId::Portal => Some("the `id` of the element it is shown in, after that element's own children (LLP 1013.002): the first element with that id in the app root, which must be a plain box (box, view, column, row, main, section, article, aside, nav or footer with no role, navigationKey or popover) that its parent lays out; empty, it stays where it is written. With no such element it is alive and not shown. The same element moves, keeping its state; its press, pointer-button and key events bubble through where it is written"),
         PropId::ParagraphDirs => Some("ltr, rtl or auto, HTML's dir words: written, one word for every line; bound, one per source line in order, separated by white space, a line past the last word taking the last"),
@@ -37,6 +37,26 @@ pub fn detent_word(word: &str) -> bool {
             p.parse::<f64>()
                 .is_ok_and(|p| p.is_finite() && p > 0.0 && p <= 100.0)
         })
+}
+
+fn is_large_detent(word: &str) -> bool {
+    word == "large"
+        || word
+            .strip_suffix('%')
+            .and_then(|p| p.parse::<f64>().ok())
+            .is_some_and(|p| p >= 100.0)
+}
+
+/// Whether `fit-content` stands in a legal place in `words`: alone, as
+/// `fit-content large`, or last after ascending stops below `large` as a
+/// content-height ceiling (LLP 1075.003 §9.11, amended 2026-11-27).
+pub fn detent_fit_content_valid(words: &[&str]) -> bool {
+    let count = words.iter().filter(|&&w| w == "fit-content").count();
+    count == 0
+        || matches!(words, ["fit-content"] | ["fit-content", "large"])
+        || (count == 1
+            && words.last() == Some(&"fit-content")
+            && !words[..words.len() - 1].iter().any(|w| is_large_detent(w)))
 }
 
 /// The first of a `navigationDetent`'s valid words that is not taller than

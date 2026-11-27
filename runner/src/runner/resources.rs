@@ -1,6 +1,12 @@
 //! Runtime resource rows; the compiled plan contains declarations only.
 use super::*;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct AskAgain {
+    pub(super) context: bool,
+    pub(super) refresh: bool,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct ResourceRow {
     pub(super) state: Option<ResourceState>,
@@ -8,6 +14,8 @@ pub(crate) struct ResourceRow {
     /// Failed arguments suppress another ask until they change or refresh.
     pub(super) failed_args: Option<Vec<Value>>,
     pub(super) failed_why: Option<crate::failure::Failure>,
+    /// Hold this reply through settlement and the render that updates its owner's props.
+    pub(super) landing_read: bool,
     pub(super) pending: bool,
     pub(super) current: bool,
     pub(super) overlay: Option<writes::OverlayCache>,

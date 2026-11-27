@@ -379,7 +379,7 @@ pub fn pattern_fills(
     styles: [BorderStyle; 4],
 ) -> Vec<BorderFill> {
     let (x, y, w, h) = shape.rect;
-    if w <= 0.0 || h <= 0.0 {
+    if w <= 0.0 || h <= 0.0 || !styles.into_iter().any(patterned) {
         return Vec::new();
     }
     let wd = widths.map(|v| v.max(0.0));

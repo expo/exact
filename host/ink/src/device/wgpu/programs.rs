@@ -28,7 +28,11 @@ impl Class {
 }
 
 // Unlisted kinds, brushes and flags use the general program.
-pub(super) const CLASSES: [Class; 8] = [
+pub(super) const CLASSES: [Class; 12] = [
+    Class::new(Kind::RoundedRect, Brush::Solid, 0),
+    Class::new(Kind::RoundedRect, Brush::Image, flags::CLIP0),
+    Class::new(Kind::Glyph, Brush::Solid, 0),
+    Class::new(Kind::Layer, Brush::Image, 0),
     Class::new(Kind::RoundedRect, Brush::Solid, CLIPS),
     Class::new(Kind::Ring, Brush::Solid, CLIPS),
     Class::new(Kind::Shadow, Brush::Solid, CLIPS),
@@ -52,10 +56,13 @@ mod tests {
     #[test]
     fn uncommon_flags_and_brushes_use_the_general_program() {
         let mut i = Instance::rounded([0.; 4], [0.; 4], [1.; 4]);
-        assert_eq!(class(&i), Some(0));
+        assert_eq!(CLASSES[class(&i).unwrap()].flags, 0);
         for bit in 0..32 {
             i.flags = 1 << bit;
-            assert_eq!(class(&i), (i.flags & !CLIPS == 0).then_some(0));
+            assert_eq!(
+                class(&i).map(|p| CLASSES[p].flags),
+                (i.flags & !CLIPS == 0).then_some(CLIPS)
+            );
         }
         for brush in [Brush::Gradient, Brush::Pattern] {
             i = Instance::new(Kind::RoundedRect, brush, [0.; 4]);
@@ -71,7 +78,7 @@ fn every_fixed_program_matches_the_general_program_pixel_for_pixel() {
     let mut d = Wgpu::new().expect("wgpu device for program parity");
     assert_eq!(d.programs.len(), CLASSES.len());
     eprintln!(
-        "Ink: {} fixed + 2 general pipelines, device {:.3} ms, shaders {:.3} ms, cached {}",
+        "Ink: {} fixed material programs, device {:.3} ms, shaders {:.3} ms, cached {}",
         d.programs.len(),
         d.info.device_ms,
         d.info.shaders_ms,
@@ -98,6 +105,7 @@ fn every_fixed_program_matches_the_general_program_pixel_for_pixel() {
         mask: alpha,
         ..Default::default()
     };
+    let mut visited = [false; CLASSES.len()];
     for (index, class) in CLASSES.iter().enumerate() {
         let bits: Vec<_> = (0..32).filter(|b| class.flags & (1 << b) != 0).collect();
         for combination in 0..(1 << bits.len()) {
@@ -119,13 +127,17 @@ fn every_fixed_program_matches_the_general_program_pixel_for_pixel() {
             i.flags = clips;
             i.uv = [0., 0., 1., 1.];
             i.param = [0.7, 0., 0., 0.];
-            if index == 1 {
+            let kind = i.kind_brush & 65535;
+            let brush = i.kind_brush >> 16;
+            if kind == Kind::Ring as u32 {
                 i.uv = [8., 8., 43., 27.];
                 i.param = [4.; 4];
             }
-            if index == 2 {
+            if kind == Kind::Shadow as u32 && brush == Brush::Solid as u32 {
                 i.uv = [13., 12., 32., 23.];
                 i.param = [3., 0., 0., 0.];
+            }
+            if i.kind_brush & 65535 == Kind::Shadow as u32 {
                 i.flags |= flags::CLIP1;
             }
             for slot in 0..2 {
@@ -147,7 +159,13 @@ fn every_fixed_program_matches_the_general_program_pixel_for_pixel() {
                     uv: [0., 0., 1., 1.],
                 });
             }
-            assert_eq!(super::programs::class(&i), Some(index));
+            // A narrower fixed program owns the overlapping flag combinations.
+            let selected = super::programs::class(&i).expect("a fixed program");
+            if selected != index {
+                assert!(selected < index);
+                continue;
+            }
+            visited[index] = true;
             e.push(i, bindings).unwrap();
             let frame = e.finish();
             d.general_only = true;
@@ -163,4 +181,5 @@ fn every_fixed_program_matches_the_general_program_pixel_for_pixel() {
             );
         }
     }
+    assert!(visited.into_iter().all(|v| v));
 }

@@ -1488,7 +1488,11 @@ are of one kind, points or percentages (`medium` is half), each taller than the
 one before, and `large` goes last; a literal that breaks this is refused. A point
 height that a small screen's tallest reaches, with a taller detent after it, is
 left out there, so `"900 large"` on a phone is `large` alone.
-`fit-content` goes alone or as `"fit-content large"`.
+`fit-content` goes alone, as `"fit-content large"`, or last after ascending stops
+below `large` (e.g. `"medium fit-content"`) as a content-height ceiling: stops at
+or above the sheet's natural content height are omitted, so short content opens
+fitted and taller content opens at the preceding stop and expands to fit its
+content up to the available height.
 It measures the route laid out on its own with its height left to its
 content, as CSS's `fit-content` does, so nothing the sheet gives it counts:
 rows do not shrink into it, and a percentage `height` or `flex-grow` takes

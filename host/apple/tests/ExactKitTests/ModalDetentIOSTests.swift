@@ -22,9 +22,12 @@ final class ModalDetentIOSTests: XCTestCase {
     }
 
     private final class Context: NSObject, UISheetPresentationControllerDetentResolutionContext {
-        let containerTraitCollection = UITraitCollection()
+        let containerTraitCollection: UITraitCollection
         let maximumDetentValue: CGFloat
-        init(_ maximum: CGFloat) { maximumDetentValue = maximum }
+        init(_ maximum: CGFloat, verticalSizeClass: UIUserInterfaceSizeClass = .regular) {
+            maximumDetentValue = maximum
+            containerTraitCollection = UITraitCollection(verticalSizeClass: verticalSizeClass)
+        }
     }
 
     func testTheWordsBecomeDetentsInOrder() {
@@ -121,6 +124,115 @@ final class ModalDetentIOSTests: XCTestCase {
         XCTAssertEqual(detent.resolvedValue(in: Context(700)), 700)
         content = 0
         XCTAssertEqual(detent.resolvedValue(in: Context(700)), 700)
+    }
+
+    /// LLP 1075.003 §9.11 (amended 2026-11-27, expo/exact#2023): a terminal
+    /// `fit-content` acts as a content-height ceiling for preceding stops.
+    func testTerminalFitContentCeilingResolvesAndOmitsStops() {
+        var content: CGFloat? = 220
+        let detents = SheetDetents.detents("medium fit-content") { content }
+        XCTAssertEqual(detents.map(\.identifier.rawValue), ["authored-0", "fit-content-1"])
+        let ctx = Context(800)
+        // Short content (<= medium): medium omits itself (nil), fit-content settles at 220.
+        XCTAssertNil(detents[0].resolvedValue(in: ctx))
+        XCTAssertEqual(detents[1].resolvedValue(in: ctx), 220)
+        // Medium-tall content (between medium and max): both active, ceiling at 520.
+        content = 520
+        XCTAssertEqual(detents[0].resolvedValue(in: ctx), 400)
+        XCTAssertEqual(detents[1].resolvedValue(in: ctx), 520)
+        // Overflowing content (> max): both active, ceiling clamps to max on its custom id.
+        content = 1000
+        XCTAssertEqual(detents[0].resolvedValue(in: ctx), 400)
+        XCTAssertEqual(detents[1].resolvedValue(in: ctx), 800)
+        XCTAssertNotEqual(detents[1].identifier, .large)
+
+        // Compact vertical size class (landscape phone) omits `medium`, while `50%` stays active.
+        let compact = Context(360, verticalSizeClass: .compact)
+        content = 300
+        XCTAssertNil(detents[0].resolvedValue(in: compact), "medium is inactive in compact height")
+        XCTAssertEqual(detents[1].resolvedValue(in: compact), 300)
+        let pct = SheetDetents.detents("50% fit-content") { content }
+        XCTAssertEqual(pct[0].resolvedValue(in: compact), 180)
+        XCTAssertEqual(pct[1].resolvedValue(in: compact), 300)
+
+        // Unrounded 0.5-point cutoff: 300.4 pt content omits 300, even though fit-content rounds up to 301.
+        content = 300.4
+        let fractional = SheetDetents.detents("300 fit-content") { content }
+        XCTAssertNil(fractional[0].resolvedValue(in: ctx), "300 >= 300.4 - 0.5 omits 300 before rounding")
+        XCTAssertEqual(fractional[1].resolvedValue(in: ctx), 301)
+
+        // Multi-stop prefix and point prefix.
+        content = 360
+        let shares = SheetDetents.detents("25% 50% fit-content") { content }
+        XCTAssertEqual(shares[0].resolvedValue(in: ctx), 200)
+        XCTAssertNil(shares[1].resolvedValue(in: ctx), "50% (400) >= 360 - 0.5 is omitted")
+        XCTAssertEqual(shares[2].resolvedValue(in: ctx), 360)
+
+        // Bound invalid shapes with terminal fit-content refuse out-of-order words.
+        for (value, dropped) in [
+            ("medium fit-content large", ["large"]),
+            ("large fit-content", ["fit-content"]),
+            ("100% fit-content", ["fit-content"]),
+            ("fit-content fit-content", ["fit-content"]),
+        ] as [(String, [Substring])] {
+            var refused: [Substring] = []
+            _ = SheetDetents.detents(value, refused: { word, reason in
+                XCTAssertEqual(reason, .order, value)
+                refused.append(word)
+            }) { 300 }
+            XCTAssertEqual(refused, dropped, value)
+        }
+    }
+
+    @MainActor func testTerminalFitContentSyncsGrabberUndimmedAndClampsSelection() throws {
+        let controller = UIViewController()
+        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let presenter = Presenter()
+        let node = NodeView(id: 1, kind: "column", presenter: presenter)
+        node.props["navigationDetent"] = "medium fit-content"
+        node.props["navigationInitialDetent"] = "medium"
+        node.fitContentHeight = 220
+
+        // Short content: medium omitted -> single active detent, no grabber, selection + undimmed clamp to fit-content.
+        SheetDetents.select(on: sheet, node: node, owner: "route \"a\"", maximum: 800)
+        SheetDetents.syncTerminalContent(
+            on: sheet, node: node, owner: "route \"a\"",
+            maximum: 800, grabber: "auto", scrollExpands: nil, undimmed: "medium"
+        )
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .init("fit-content-1"))
+        XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .init("fit-content-1"))
+        XCTAssertFalse(sheet.prefersGrabberVisible)
+        XCTAssertFalse(sheet.prefersScrollingExpandsWhenScrolledToEdge)
+
+        // Growing past medium restores 2 active stops, keeps fit-content selected, and honors explicit scrollExpands=false.
+        node.fitContentHeight = 560
+        SheetDetents.syncTerminalContent(
+            on: sheet, node: node, owner: "route \"a\"",
+            maximum: 800, grabber: "auto", scrollExpands: "false", undimmed: "medium"
+        )
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .init("fit-content-1"))
+        XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .init("authored-0"))
+        XCTAssertTrue(sheet.prefersGrabberVisible)
+        XCTAssertFalse(sheet.prefersScrollingExpandsWhenScrolledToEdge)
+
+        // A user drag to fit-content is preserved across subsequent content changes even when navigationSelectedDetent is set (LLP 1123 D7).
+        node.props["navigationSelectedDetent"] = "medium"
+        node.fitContentHeight = 620
+        SheetDetents.syncTerminalContent(
+            on: sheet, node: node, owner: "route \"a\"",
+            maximum: 800, grabber: "auto", scrollExpands: nil, undimmed: "medium"
+        )
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .init("fit-content-1"))
+
+        // Resting at medium and shrinking below medium clamps selection back to fit-content.
+        sheet.selectedDetentIdentifier = .init("authored-0")
+        node.fitContentHeight = 200
+        SheetDetents.syncTerminalContent(
+            on: sheet, node: node, owner: "route \"a\"",
+            maximum: 800, grabber: "auto", scrollExpands: nil, undimmed: "medium"
+        )
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .init("fit-content-1"))
+        XCTAssertFalse(sheet.prefersGrabberVisible)
     }
 
     private func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }

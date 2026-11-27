@@ -386,6 +386,84 @@ fn allocation_errors_are_results_and_the_device_remains_usable() {
 }
 
 #[test]
+fn each_mip_matches_an_area_draw_of_the_previous_level() {
+    let mut d = Wgpu::new().unwrap();
+    d.general_only = true;
+    for [width, height] in [[1, 1], [1, 17], [15, 1], [33, 22], [480, 640]] {
+        let desc = TextureDesc {
+            mipmapped: true,
+            ..TextureDesc::rgba(width, height)
+        };
+        let image = d.create_texture(desc).unwrap();
+        let mut previous = d.create_texture(TextureDesc::rgba(width, height)).unwrap();
+        let bytes: Vec<_> = (0..width * height)
+            .flat_map(|n| {
+                let alpha = (n * 113 + n / width * 17) as u8;
+                [alpha, (n as u8) & alpha, alpha / 2, alpha]
+            })
+            .collect();
+        for t in [image, previous] {
+            d.upload_texture(t, [0, 0], [width, height], &bytes)
+                .unwrap();
+        }
+        d.generate_mips(image).unwrap();
+        assert_eq!(d.readback(image).unwrap(), bytes);
+        for level in 1..desc.levels() {
+            let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+            let next = d.create_target(w, h).unwrap();
+            let mut e = Encoder::new(w, h);
+            e.push(
+                Instance::new(Kind::Downsample, Brush::Solid, [0., 0., w as f32, h as f32]),
+                Bindings {
+                    image: previous,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            d.render(&e.finish(), next, Some([0.; 4])).unwrap();
+            let expected = d.readback(next).unwrap();
+            let actual = block_on(d.readback_async(image, level)).unwrap();
+            assert!(actual == expected, "{width}x{height}, level {level}");
+            previous = next;
+        }
+    }
+    // Half-byte boundary block: [0, 128, 133, 253] averages to 128.5 in byte units.
+    // Confirm the 4-load mip shader matches `Kind::Downsample` rounding exactly.
+    let desc = TextureDesc {
+        mipmapped: true,
+        ..TextureDesc::rgba(2, 2)
+    };
+    let image = d.create_texture(desc).unwrap();
+    let previous = d.create_texture(TextureDesc::rgba(2, 2)).unwrap();
+    let bytes = [
+        0, 0, 0, 255, // (0, 0)
+        128, 128, 128, 255, // (1, 0)
+        133, 133, 133, 255, // (0, 1)
+        253, 253, 253, 255, // (1, 1)
+    ];
+    for t in [image, previous] {
+        d.upload_texture(t, [0, 0], [2, 2], &bytes).unwrap();
+    }
+    d.generate_mips(image).unwrap();
+    let next = d.create_target(1, 1).unwrap();
+    let mut e = Encoder::new(1, 1);
+    e.push(
+        Instance::new(Kind::Downsample, Brush::Solid, [0., 0., 1., 1.]),
+        Bindings {
+            image: previous,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    d.render(&e.finish(), next, Some([0.; 4])).unwrap();
+    assert_eq!(
+        block_on(d.readback_async(image, 1)).unwrap(),
+        d.readback(next).unwrap(),
+        "half-byte 2x2 boundary block"
+    );
+}
+
+#[test]
 fn odd_mip_levels_average_every_source_pixel() {
     let mut d = Wgpu::new().unwrap();
     let texture = d

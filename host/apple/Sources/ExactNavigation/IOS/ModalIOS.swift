@@ -83,6 +83,10 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         return BorderPaint.radii(route.style, in: route.bounds)[0].width
     }
     private var detentValue: String?, cornerRadius: CGFloat?, grabberValue: String?
+    #if !os(tvOS)
+    private var observedMaximum: CGFloat?
+    private var lastTerminalSync: (CGFloat?, CGFloat?, UIUserInterfaceSizeClass, UIUserInterfaceSizeClass)?
+    #endif
     /// The route's other sheet choices as last applied (LLP 1123 D7): the detent it holds the sheet at, its edge
     /// attachment in a compact height, whether it then takes its content's preferred width, and its scroll expansion.
     private var choices = SheetChoices()
@@ -116,14 +120,24 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         grabberValue = grabber
         choices = next
         let configure = {
+            var activeCount: Int?
             if let route = self.route {
                 let owner = "route \"\(route.props["navigationKey"] ?? "")\""
-                if newDetents || released { SheetDetents.select(on: sheet, node: route, owner: owner) }
-                if let held { SheetDetents.hold(sheet, at: held, node: route, owner: owner) }
-                sheet.largestUndimmedDetentIdentifier = SheetDetents.undimmed(next.undimmed, node: route, owner: owner)
+                if newDetents || released {
+                    SheetDetents.select(
+                        on: sheet,
+                        node: route,
+                        owner: owner,
+                        maximum: self.observedMaximum,
+                        observedMaximum: { [weak self] max in self?.observedMaximum = max }
+                    )
+                }
+                let active = SheetDetents.activeSummary(for: route, on: sheet, maximum: self.observedMaximum)
+                activeCount = active.activeCount
+                if let held { SheetDetents.hold(sheet, at: held, node: route, owner: owner, active: active) }
+                sheet.largestUndimmedDetentIdentifier = SheetDetents.undimmed(next.undimmed, node: route, owner: owner, active: active)
             }
-            SheetDetents.updateGrabber(grabber, on: sheet)
-            if let expands = next.scrollExpands { sheet.prefersScrollingExpandsWhenScrolledToEdge = expands == "true" }
+            SheetDetents.updateGrabber(grabber, on: sheet, activeCount: activeCount, scrollExpands: next.scrollExpands)
             sheet.prefersEdgeAttachedInCompactHeight = next.edgeAttached == "true"
             sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = next.widthFollows == "true"
             sheet.preferredCornerRadius = radius
@@ -140,10 +154,37 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         #if !os(tvOS)
         guard isSheet, let sheet = sheetPresentationController,
               (detentValue ?? "").split(separator: " ").contains("fit-content") else { return }
-        if viewIfLoaded?.window != nil { sheet.animateChanges { sheet.invalidateDetents() } }
-        else { sheet.invalidateDetents() }
+        let update = {
+            if let route = self.route, SheetDetents.hasTerminalContent(self.detentValue) {
+                let owner = "route \"\(route.props["navigationKey"] ?? "")\""
+                SheetDetents.syncTerminalContent(
+                    on: sheet,
+                    node: route,
+                    owner: owner,
+                    maximum: self.observedMaximum,
+                    grabber: self.grabberValue,
+                    scrollExpands: self.choices.scrollExpands,
+                    undimmed: self.choices.undimmed
+                )
+            }
+            sheet.invalidateDetents()
+            self.paintSurface()
+        }
+        if viewIfLoaded?.window != nil { sheet.animateChanges(update) }
+        else { update() }
+        host?.syncSheetEffects(for: self)
         #endif
     }
+    #if !os(tvOS)
+    private func scheduleTerminalSyncIfNeeded() {
+        guard isSheet, let sheet = sheetPresentationController, SheetDetents.hasTerminalContent(detentValue) else { return }
+        let maxH = observedMaximum ?? sheet.containerView?.safeAreaLayoutGuide.layoutFrame.height
+        let key = (maxH, route?.fitContentHeight, traitCollection.horizontalSizeClass, traitCollection.verticalSizeClass)
+        if let prev = lastTerminalSync, prev.0 == key.0, prev.1 == key.1, prev.2 == key.2, prev.3 == key.3 { return }
+        lastTerminalSync = key
+        DispatchQueue.main.async { [weak self] in self?.contentChanged() }
+    }
+    #endif
     required init?(coder: NSCoder) { nil }
     #if os(iOS)
     // LLP 1105 D6: UIKit asks a presented controller that covers the screen;
@@ -199,7 +240,10 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         // Its presenter's tint, as the root's (LLP 1095 D4): a sheet sits outside it.
         if let tint = ThemeRoles.color("AccentColor", in: view) { view.tintColor = tint }
         paintSurface()
-        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (controller: ModalController, _: UITraitCollection) in controller.paintSurface() }
+        registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) { (controller: ModalController, _: UITraitCollection) in
+            controller.paintSurface()
+            controller.scheduleTerminalSyncIfNeeded()
+        }
         let probe = UIView()
         probe.isHidden = true
         probe.translatesAutoresizingMaskIntoConstraints = false
@@ -260,6 +304,9 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         // The keyboard probe lays the sheet out as its keyboard layout guide
         // moves, where its routes end (`OwnerBlocks.block`)
         host?.presenter.owners.publish()
+        #if !os(tvOS)
+        scheduleTerminalSyncIfNeeded()
+        #endif
     }
     #if os(iOS)
     override func viewWillAppear(_ animated: Bool) {
@@ -600,6 +647,14 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     func contentChanged(_ node: NodeView) {
         for layer in layers where layer.route === node { layer.controller.contentChanged() }
     }
+
+    #if !os(tvOS)
+    func syncSheetEffects(for controller: ModalController) {
+        guard let layer = layers.first(where: { $0.controller === controller }) else { return }
+        syncBackground(layer)
+        presenter.resolveStatusBar()
+    }
+    #endif
 
     /// The image a zoom's end shows: the node itself, or the first image
     /// among its authored descendants (each node's children are in its

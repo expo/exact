@@ -1068,7 +1068,10 @@ impl<D: DataSource> Runner<D> {
         let single =
             requests.len() == 1 && self.pending.iter().filter(|p| p.target == target).count() == 1;
         let request = &requests[0];
-        if single && Self::keepable(target, request) && !forced {
+        if let (Target::Resource(i), true) =
+            (target, single && Self::keepable(target, request) && !forced)
+        {
+            let identity_len = self.identity_len(i);
             if let Some(p) = self.pending.iter_mut().find(|p| {
                 p.target == target
                     && !p.refused
@@ -1085,16 +1088,17 @@ impl<D: DataSource> Runner<D> {
                             }
                     })
             }) {
+                // An upload's status read still belongs to the upload.
+                if !p.upload
+                    && request.is_plain_http()
+                    && p.args.get(identity_len..) != args.get(identity_len..)
+                {
+                    p.ask_again.context = true;
+                }
                 p.args = args;
                 // (new arguments: a new streak after a turn over its budget)
                 p.reasks = 0;
-                if let Target::Resource(i) = target {
-                    p.inspection_generation = self
-                        .resources
-                        .get(i)
-                        .map(|row| &row.inspection)
-                        .map_or(0, |w| w.request);
-                }
+                p.inspection_generation = self.resources[i].inspection.request;
                 let (ticket, upload) = (p.ticket, p.upload);
                 // An upload kept for newer arguments is asked at them too (D10).
                 if upload {
@@ -1207,7 +1211,7 @@ impl<D: DataSource> Runner<D> {
                 })
                 .flatten()
                 .map(str::to_string),
-            ask_again: false,
+            ask_again: Default::default(),
             module_again: None,
             effects: request.has_effects(),
             replay_unsafe: request.has_effects(),

@@ -1,16 +1,21 @@
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
+import { engineTests } from '../../scripts/coverage.mjs';
 import { existsSync } from 'node:fs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 
-function runtimeServer() {
+const { chromium: test } = await engineTests(['chromium']);
+
+function runtimeServer(development = false) {
   return Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === '/favicon.ico') { return new Response(null, { status: 204 }); }
     if (path.endsWith('/names.js')) { return new Response('export default [[], [], []]; export const types = [[], [], []], sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } }); }
     if (path === '/') { return new Response('<div id="exact-root"></div>', { headers: { 'content-type': 'text/html' } }); }
     const local = new URL('../..' + path, import.meta.url), file = existsSync(local) ? local : new URL('../web/' + path.split('/').pop(), import.meta.url);
-    return new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } });
+    const code = hostFixtureFile(file);
+    return new Response(development && path.endsWith('/rt.js')
+      ? String(code).replace('const DEVELOPMENT_STORE = null', 'const DEVELOPMENT_STORE = "fixture"') : code, { headers: { 'content-type': 'text/javascript' } });
   } });
 }
 
@@ -434,6 +439,426 @@ test.each([false, true])('a non-finite resource argument refuses before activati
   } finally {
     await page?.close();
     await browser?.close();
+    server.stop(true);
+  }
+});
+
+test.each(['one', 'mixed', 'burst', 'continuous', 'held', 'empty', 'continuation', 'identity', 'failure', 'refusal', 'topic-refusal', 'store', 'topic-store', 'binary', 'idle', 'unmount'])(
+  'a read kept during a change of arguments: %s', async scenario => {
+    const server = runtimeServer();
+    let browser, page;
+    try {
+      browser = await suiteBrowser();
+      page = await browser.newPage();
+      await page.goto(server.url.href);
+      const result = await page.evaluate(async scenario => {
+        const rt = await import('/host/web-js/rt.js');
+        const seq = rt.sig(0), topic = rt.sig('a'), active = rt.sig(true), reads = [], frames = [];
+        const args = Object.assign(() => [topic(), seq()], { context: 1, gate: active });
+        const store = ['store', 'topic-store'].includes(scenario);
+        let value, region, state = 0;
+        rt.clock.agent = true;
+        let refuse = false, continued = false;
+        rt.data.answer = () => {
+          if (refuse) {
+            rt.Store.set('attempted', 'yes');
+            throw Object.assign(Error('offline'), { refuse: true });
+          }
+          if (scenario === 'binary') {
+            const raw = Uint8Array.of(255 - state);
+            return { req: { method: 'POST', url: '/state', raw, body: new TextDecoder().decode(raw) } };
+          }
+          const req = { method: 'GET', url: scenario === 'empty' ? '' : '/state', cancel: true };
+          if (scenario === 'held') Object.assign(req, { held: true, http: 'ordered held' });
+          return { req, store };
+        };
+        rt.data.fetch = req => new Promise(resolve => reads.push({ resolve, snapshot: state, forced: req.forced, origin: req.origin, url: req.url }));
+        rt.data.parse = (_, [topic, seq], reply) => {
+          if (reply.failed) throw Error('offline');
+          if (scenario === 'continuation' && !continued) {
+            continued = true;
+            return { req: { storage: 'read' } };
+          }
+          if (store) rt.Store.set('seen', 'yes');
+          return { v: `${reply.snapshot}@${topic}/${seq}` };
+        };
+        rt.mount(() => {
+          region = rt.scope(() => {
+            value = rt.res('view', 'load', args, undefined, undefined, 's', 'waiting');
+            rt.effect(() => { frames.push([value(), value.c(), value.p(), value.f()]); });
+          });
+        });
+        const event = (mixed = false) => {
+          state++;
+          rt.Origin.run('action', () => rt.commit(() => { rt.W(seq, state); if (mixed) rt.W(topic, 'b'); }));
+        };
+        if (scenario === 'identity') rt.commit(() => rt.W(topic, 'b'));
+        else event(scenario === 'mixed');
+        if (scenario === 'burst') { event(); event(); }
+        if (scenario.startsWith('topic-')) rt.commit(() => rt.sourceChanged(value.r, 'topic'));
+        refuse = ['refusal', 'topic-refusal'].includes(scenario);
+        if (scenario === 'idle') rt.commit(() => rt.W(active, false));
+        if (scenario === 'unmount') rt.commit(() => rt.end(region));
+        // The transport returns its snapshot even if an idle or removed view let it go.
+        for (let i = 0; i < reads.length && i < 5; i++) {
+          // Two events per 200 ms snapshot, in delivery order, through the second read.
+          if (scenario === 'continuous' && i < 2) {
+            if (i === 1) event();
+            event();
+          }
+          if (reads[i].url === undefined) reads[i].snapshot = reads[0].snapshot;
+          reads[i].resolve(scenario === 'failure' && i === 0 ? { failed: 1 } : { snapshot: reads[i].snapshot });
+          await Promise.resolve();
+          await Promise.resolve();
+        }
+        return { frames, snapshots: reads.filter(r => r.url !== undefined).map(r => r.snapshot), forced: reads.some(r => r.forced), origin: reads.at(-1)?.origin, attempted: rt.Store.get('attempted'),
+          follows: rt.journal.filter(l => l.includes('with') && l.includes('asked again')).length };
+      }, scenario);
+      const inactive = ['idle', 'unmount'].includes(scenario), identity = scenario === 'identity';
+      const snapshots = scenario === 'continuous' ? [0, 2, 4] : scenario === 'burst' ? [0, 3]
+        : inactive || identity || scenario.endsWith('refusal') ? [0] : [0, 1];
+      expect(result.snapshots).toEqual(snapshots);
+      expect(result.attempted).toBeUndefined();
+      expect(result.forced).toBe(scenario === 'topic-store');
+      if (snapshots.length > 1) expect(result.origin).toBe('action');
+      const replaced = scenario === 'binary';
+      expect(result.follows).toBe(replaced ? 0 : scenario.endsWith('refusal') ? 1 : snapshots.length - 1);
+      if (inactive) {
+        expect(result.frames.every(([text]) => text === 'waiting')).toBe(true);
+      } else if (scenario.endsWith('refusal')) {
+        expect(result.frames.at(-1)).toEqual(['0@a/1', true, false, true]);
+      } else {
+        const latest = snapshots.at(-1), topic = identity || scenario === 'mixed' ? 'b' : 'a';
+        expect(result.frames.at(-1)).toEqual([`${latest}@${topic}/${latest}`, true, false, false]);
+        if (snapshots.length > 1 && !replaced && scenario !== 'failure') {
+          expect(result.frames).toContainEqual([`0@${topic}/${snapshots[1]}`, true, true, false]);
+          expect(result.frames.slice(result.frames.findIndex(f => f[1])).every(f => f[1])).toBe(true);
+        }
+      }
+    } finally {
+      await page?.close();
+      await browser?.close();
+      server.stop(true);
+    }
+  });
+
+test.each(['argument', 'unmount', 'refusal', 'persist'])("a parser's store write settles before its kept read follows up (%s)", async mode => {
+  const server = runtimeServer();
+  let browser, page;
+  try {
+    browser = await suiteBrowser();
+    page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async mode => {
+      const rt = await import('/host/web-js/rt.js');
+      const seq = rt.sig(0), asks = [], reads = [], writes = [];
+      let revision, child, snapshot;
+      rt.clock.agent = true;
+      rt.data.answer = (source, args, store) => {
+        if (source === 'revision') return { v: Number(store.get('revision') ?? 0), store: true };
+        if (source === 'persist') return args[0] === 'waiting' ? { v: 0 } : { req: { storage: args[0] } };
+        if (source === 'guard') {
+          if (args[0] === 'refused') throw Object.assign(Error('dependent refused'), { refuse: true });
+          return { v: 0 };
+        }
+        asks.push(args);
+        if (mode === 'persist' && store.get('revision')) return { v: 'new' };
+        if (mode === 'refusal' && store.get('revision')) return { v: 'refused' };
+        return { req: { method: 'GET', url: '/snapshot' } };
+      };
+      rt.data.fetch = req => {
+        if (req.storage) { writes.push(req.storage); return Promise.resolve({}); }
+        return new Promise(resolve => reads.push(resolve));
+      };
+      rt.data.parse = source => {
+        if (source === 'persist') return { v: 0 };
+        rt.Store.set('revision', '2');
+        return { v: 'snapshot' };
+      };
+      rt.mount(() => {
+        revision = rt.res('revision', 'revision', () => [], undefined, undefined, 'n', 0);
+        child = rt.scope(() => {
+          const args = Object.assign(() => [seq(), mode === 'argument' ? revision() : 0], { context: 2 });
+          snapshot = rt.res('snapshot', 'load', args, undefined, undefined, 's', 'waiting');
+          rt.effect(() => snapshot());
+          if (mode === 'persist') {
+            const saved = rt.res('saved', 'persist', () => [snapshot()], undefined, undefined, 'n', 0);
+            rt.effect(() => saved());
+          }
+          if (mode === 'refusal') {
+            const guard = rt.res('guard', 'guard', () => [snapshot()], undefined, undefined, 'n', 0);
+            rt.effect(() => guard());
+          }
+        });
+        if (mode === 'unmount') rt.effect(() => { if (revision()) rt.end(child); });
+      });
+      rt.commit(() => rt.W(seq, 1));
+      for (let i = 0; i < reads.length && i < 4; i++) {
+        reads[i]({});
+        await Promise.resolve();
+        await Promise.resolve();
+      }
+      rt.commit(() => {});
+      return { asks, writes, reads: reads.length, value: snapshot.r.value, failure: snapshot.r.error };
+    }, mode);
+    expect(result.reads).toBe(mode === 'argument' ? 2 : 1);
+    const asks = [[0, 0], [1, 0]];
+    if (mode !== 'unmount') asks.push([1, mode === 'argument' ? 2 : 0]);
+    expect(result.asks).toEqual(asks);
+    if (mode === 'persist') {
+      expect(result.writes).toEqual(['snapshot', 'new']);
+      expect(result.value).toBe(result.writes.at(-1));
+    }
+    if (mode === 'refusal') {
+      expect(result.value).toBe('snapshot');
+      expect(result.failure).toContain('dependent refused');
+    }
+  } finally {
+    await page?.close();
+    await browser?.close();
+    server.stop(true);
+  }
+});
+
+test.each(['refresh', 'topic', 'store', 'handoff'])('the refresh policy survives a deferred kept reply (%s)', async mode => {
+  const server = runtimeServer(true), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const { asks, transports } = await page.evaluate(async mode => {
+      const rt = await import('/host/web-js/rt.js');
+      const seq = rt.sig(0), asks = [], transports = [], deferred = [];
+      let read, view, update, frozen = false;
+      rt.clock.agent = true;
+      rt.data.answer = (_, args, store, name, mutation, forced) => {
+        asks.push([args[0], forced, rt.Origin.now()]);
+        return { req: { method: 'GET', url: '/state', cancel: true }, store: mode === 'store' };
+      };
+      rt.data.fetch = req => new Promise(resolve => { read = resolve; transports.push(req.forced); });
+      rt.data.parse = () => ({ v: 5 });
+      rt.mount(() => {
+        view = rt.res('view', 'load', Object.assign(() => [seq()], { context: 1 }), undefined, undefined, 'n', 0);
+        rt.effect(() => view());
+      });
+      const change = () => rt.commit(() => rt.W(seq, 1));
+      if (mode !== 'handoff') {
+        change();
+        if (mode === 'topic') rt.commit(() => rt.sourceChanged(view.r, 'topic'));
+        if (mode === 'store') rt.Store.peer('key', 'new');
+        document.startViewTransition = cb => { update = cb; return { ready: new Promise(() => {}), finished: new Promise(() => {}) }; };
+        rt.pr(); await rt.pieces(); rt.useCommands({ startViewTransition: () => () => {} });
+        rt.commit(() => rt.C('startViewTransition', []));
+      } else {
+        globalThis.__exactDevReplacement = { defer(f) { if (frozen) deferred.push(f); return frozen; } };
+        frozen = true;
+        deferred.push(change);
+      }
+      read({});
+      await Promise.resolve();
+      if (mode !== 'handoff') {
+        if (mode === 'refresh') {
+          for (const origin of ['action', 'tool']) rt.Origin.run(origin, () => rt.commit(() => rt.R(view)));
+        } else rt.commit(() => rt.W(seq, 2));
+        update();
+      } else {
+        frozen = false;
+        for (const f of deferred) f();
+      }
+      return { asks, transports };
+    }, mode);
+    if (mode === 'topic' || mode === 'store') {
+      expect(transports).toEqual([false, true]);
+      expect(asks.at(-1).slice(0, 2)).toEqual([2, true]);
+    } else expect(asks).toEqual([[0, false, 'app'], [1, false, 'app'], ...(mode === 'refresh'
+      ? [[1, true, 'action'], [1, true, 'tool']] : [[1, false, 'app']])]);
+  } finally {
+    await page.close();
+    await browser.close();
+    server.stop(true);
+  }
+});
+
+test('a refused argument rolls back immediately while a kept reply waits on a deferred tree update', async () => {
+  const server = runtimeServer(true), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const seq = rt.sig(0), asks = [], reads = [];
+      let view, update;
+      rt.clock.agent = true;
+      rt.data.answer = (_, args) => {
+        asks.push(args[0]);
+        if (args[0] < 0) throw Object.assign(Error('negative counter'), { refuse: true });
+        return { req: { method: 'GET', url: '/state', cancel: true } };
+      };
+      rt.data.fetch = () => new Promise(resolve => reads.push(resolve));
+      rt.data.parse = (_, [s]) => ({ v: s * 10 });
+      rt.mount(() => {
+        view = rt.res('view', 'load', Object.assign(() => [seq()], { context: 1 }), undefined, undefined, 'n', 0);
+        rt.effect(() => view());
+      });
+      rt.commit(() => rt.W(seq, 1));
+      document.startViewTransition = cb => { update = cb; return { ready: new Promise(() => {}), finished: new Promise(() => {}) }; };
+      rt.pr(); await rt.pieces(); rt.useCommands({ startViewTransition: () => () => {} });
+      rt.commit(() => rt.C('startViewTransition', []));
+      reads[0]({});
+      await Promise.resolve();
+      const refusedCommit = rt.commit(() => rt.W(seq, -1));
+      const afterRefusal = { committed: refusedCommit, seq: seq(), error: rt.refused()?.message, value: view(), pending: view.p() };
+      update();
+      await Promise.resolve();
+      const afterUpdate = { reads: reads.length, asks: [...asks], seq: seq(), value: view(), pending: view.p() };
+      reads[1]({});
+      await Promise.resolve();
+      return { afterRefusal, afterUpdate, final: { seq: seq(), value: view(), pending: view.p(), failed: view.f() } };
+    });
+    expect(result).toEqual({
+      afterRefusal: { committed: false, seq: 1, error: 'resource view: negative counter', value: 10, pending: false },
+      afterUpdate: { reads: 2, asks: [0, 1, -1, 1], seq: 1, value: 10, pending: true },
+      final: { seq: 1, value: 10, pending: false, failed: false },
+    });
+  } finally {
+    await page.close();
+    await browser.close();
+    server.stop(true);
+  }
+});
+
+test('deferred follow-up preserves joined origin, forced store re-ask, peer-store refresh on rollback, non-kept refusal, and unmount cleanup', async () => {
+  const server = runtimeServer(true), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const Origin = rt.Origin;
+      const { sourceChanged } = await import('/host/web-js/resources.js');
+      rt.clock.agent = true;
+      let update;
+      document.startViewTransition = cb => { update = cb; return { ready: new Promise(() => {}), finished: new Promise(() => {}), skipTransition() {} }; };
+      rt.pr(); await rt.pieces(); rt.useCommands({ startViewTransition: () => () => {} });
+
+      // 1. Joined origin survives an intervening app commit superseding a deferred follow-up.
+      const seq1 = rt.sig(0), seen1 = [], reads1 = [];
+      let v1;
+      rt.data.answer = () => ({ req: { method: 'GET', url: '/o', cancel: true } });
+      rt.data.fetch = req => { seen1.push({ forced: req.forced, origin: req.origin }); return new Promise(r => reads1.push(r)); };
+      rt.data.parse = (_, [s]) => ({ v: s });
+      rt.mount(() => {
+        v1 = rt.res('v1', 'load', Object.assign(() => [seq1()], { context: 1 }), undefined, undefined, 'n', 0);
+        rt.effect(() => v1());
+      });
+      Origin.run('tool', () => rt.commit(() => rt.W(seq1, 1)));
+      sourceChanged(v1.r, 't');
+      rt.commit(() => rt.C('startViewTransition', []));
+      reads1[0]({});
+      await Promise.resolve();
+      // Intervening app commit supersedes deferred follow-up: must keep both forced=true AND origin='tool'.
+      Origin.run('app', () => rt.commit(() => rt.W(seq1, 2)));
+      update();
+      await Promise.resolve();
+      reads1[1]({});
+      await Promise.resolve();
+
+      // 2. Store write inside forced follow-up's source keeps forced=true across dirty-store pass.
+      const seq2 = rt.sig(0), seen2 = [], reads2 = [];
+      let v2, wroteOnce = false;
+      rt.data.answer = (_, [s], _n, _m, forced) => {
+        const val = rt.Store.get('k');
+        if (forced && !wroteOnce) { wroteOnce = true; rt.Store.set('k', 'v2'); }
+        return { req: { method: 'GET', url: `/s?v=${val ?? ''}`, cancel: true }, store: true };
+      };
+      rt.data.fetch = req => { seen2.push(req.forced); return new Promise(r => reads2.push(r)); };
+      rt.data.parse = (_, [s]) => ({ v: s });
+      rt.mount(() => {
+        v2 = rt.res('v2', 'load', Object.assign(() => [seq2()], { context: 1 }), undefined, undefined, 'n', 0);
+        rt.effect(() => v2());
+      });
+      rt.commit(() => rt.W(seq2, 1));
+      sourceChanged(v2.r, 't');
+      reads2[0]({});
+      await Promise.resolve();
+      const forcedDuringDirtyStore = [...seen2];
+
+      // 3. Peer-store write while deferred follow-up waits survives an unrelated reader's rollback.
+      const seq3 = rt.sig(0), seen3 = [], reads3 = [];
+      let v3, refuseGuard = false;
+      rt.data.answer = (name) => {
+        if (name === 'guard') {
+          rt.Store.get('peer');
+          if (refuseGuard) throw Object.assign(Error('guard refused'), { refuse: true });
+          return { v: 1, store: true };
+        }
+        rt.Store.get('peer');
+        return { req: { method: 'GET', url: '/p', cancel: true }, store: true };
+      };
+      rt.data.fetch = req => { seen3.push(req.forced); return new Promise(r => reads3.push(r)); };
+      rt.data.parse = (_, [s]) => ({ v: s });
+      rt.mount(() => {
+        v3 = rt.res('v3', 'load', Object.assign(() => [seq3()], { context: 1 }), undefined, undefined, 'n', 0);
+        const g = rt.res('guard', 'guard', () => [], undefined, undefined, 'n', 0);
+        rt.effect(() => { v3(); g(); });
+      });
+      rt.commit(() => rt.W(seq3, 1));
+      rt.commit(() => rt.C('startViewTransition', []));
+      reads3[0]({});
+      await Promise.resolve();
+      refuseGuard = true;
+      rt.Store.peer('peer', 'changed');
+      refuseGuard = false;
+      update();
+      await Promise.resolve();
+      const peerAfterRollback = [...seen3];
+
+      // 4. Admission-refused ticket is never kept when `with` changes at the same URL.
+      const seq4 = rt.sig(0), reads4 = [];
+      let v4, firstRefuse = true;
+      rt.data.answer = () => ({ req: { method: 'GET', url: '/refused', cancel: true } });
+      rt.data.fetch = () => {
+        if (firstRefuse) { firstRefuse = false; return Promise.resolve({ refused: 'outside render grants' }); }
+        return new Promise(r => reads4.push(r));
+      };
+      rt.data.parse = (_, [s]) => ({ v: s });
+      rt.mount(() => {
+        v4 = rt.res('v4', 'load', Object.assign(() => [seq4()], { context: 1 }), undefined, undefined, 'n', 0);
+        rt.effect(() => v4());
+      });
+      await Promise.resolve();
+      rt.commit(() => rt.W(seq4, 1));
+      const newReadsAfterRefusal = reads4.length;
+
+      // 5. Unmount clears r.landing.
+      const seq5 = rt.sig(0), reads5 = [];
+      let r5, child5;
+      rt.data.answer = () => ({ req: { method: 'GET', url: '/u', cancel: true } });
+      rt.data.fetch = () => new Promise(r => reads5.push(r));
+      rt.data.parse = (_, [s]) => { rt.end(child5); return { v: s }; };
+      rt.mount(() => {
+        child5 = rt.scope(() => {
+          const m = rt.res('v5', 'load', Object.assign(() => [seq5()], { context: 1 }), undefined, undefined, 'n', 0);
+          r5 = m.r;
+          rt.effect(() => m());
+        });
+      });
+      rt.commit(() => rt.W(seq5, 1));
+      rt.commit(() => rt.C('startViewTransition', []));
+      reads5[0]({});
+      await Promise.resolve();
+      update();
+      await Promise.resolve();
+      const landingAfterUnmount = r5.landing;
+
+      return { seen1, forcedDuringDirtyStore, peerAfterRollback, newReadsAfterRefusal, landingAfterUnmount };
+    });
+    expect(result).toEqual({
+      seen1: [{ forced: false, origin: 'app' }, { forced: true, origin: 'tool' }],
+      forcedDuringDirtyStore: [false, true],
+      peerAfterRollback: [false, true],
+      newReadsAfterRefusal: 1,
+      landingAfterUnmount: null,
+    });
+  } finally {
+    await page.close();
+    await browser.close();
     server.stop(true);
   }
 });

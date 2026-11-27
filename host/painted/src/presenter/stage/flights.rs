@@ -1,6 +1,7 @@
 //! Shared elements across a route change on the stage (LLP 1013.004 D4).
 use super::*;
 use exact_kernel::handoff::pair_routes;
+use exact_motion::Transition;
 
 /// Compose's default `boundsTransform` for a shared element, `spring()`
 /// with damping ratio 1 and stiffness 400 (LLP 1013.004 D4).
@@ -162,26 +163,26 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Fly the names a crossing from `old` to `new` pairs; `kind`: whether
-    /// it is a fade through, and a container.
+    /// it is a fade through, and its container.
     pub(super) fn fly_shift(
         &mut self,
         forward: bool,
         (old, new): (NodeKey, NodeKey),
-        kind: (bool, bool),
+        kind: (bool, Option<zoom::Container>),
         seeked: f32,
     ) {
         // The names both routes hold fly on the crossing's own timing,
         // whatever their authored curve (LLP 1013.004 D2, D4).
         match kind {
             (true, _) => {}
-            (false, true) => {
+            (false, Some(_)) => {
                 let pairs = self.pairs(forward, (old, new));
                 self.host.seek_flights(&pairs, seeked);
                 if let Some(s) = self.stage.shift.as_mut() {
                     s.names = Some((pairs, seeked));
                 }
             }
-            (false, false) => self.fly_routes(forward, (old, new), &bounds_spring()),
+            (false, None) => self.fly_routes(forward, (old, new), &bounds_spring()),
         }
     }
 }

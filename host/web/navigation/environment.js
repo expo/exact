@@ -57,7 +57,9 @@ export function keyboardInset(platform = globalThis) {
 export function keyboardPolicy(platform = globalThis) {
   if (platform.navigator?.virtualKeyboard?.overlaysContent) return "overlays-content";
   const meta = platform.document?.querySelector?.('meta[name="viewport"]')?.content ?? "";
-  return /(?:^|,)\s*interactive-widget\s*=\s*([\w-]+)/.exec(meta)?.[1] ?? "resizes-visual";
+  // A value CSS does not define is `resizes-visual`, as the browser takes it (CSS Viewport, "interactive-widget")
+  const said = /(?:^|,)\s*interactive-widget\s*=\s*([\w-]+)/.exec(meta)?.[1];
+  return said === "resizes-content" || said === "overlays-content" ? said : "resizes-visual";
 }
 /** `changed` when the keyboard moves without a resize: the VirtualKeyboard API's `geometrychange`. */
 export function onKeyboard(changed, platform = globalThis) {

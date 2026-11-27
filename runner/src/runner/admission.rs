@@ -34,6 +34,15 @@ impl<D: DataSource> Runner<D> {
         which: Vec<usize>,
         what: &str,
     ) -> Result<CommitReceipt, RunnerError> {
+        self.commit_asks(which, what, None)
+    }
+
+    fn commit_asks(
+        &mut self,
+        which: Vec<usize>,
+        what: &str,
+        kept: Option<(usize, bool)>,
+    ) -> Result<CommitReceipt, RunnerError> {
         let what = format!("{what} ({} asked again)", which.len());
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
@@ -41,7 +50,7 @@ impl<D: DataSource> Runner<D> {
         let result = if self.poisoned {
             Err(RunnerError::Poisoned)
         } else {
-            self.settle(false)
+            self.settle_with_read(false, kept.and_then(|(i, refresh)| (!refresh).then_some(i)))
                 .and_then(|_| self.gate_step())
                 .and_then(|_| self.update())
         };
@@ -49,9 +58,16 @@ impl<D: DataSource> Runner<D> {
         self.arm_next(result.is_ok());
         self.log_outcome(&what, &result, was_poisoned);
         match result {
-            Err(e) if !self.poisoned && !self.reconciling.is_empty() => {
+            Err(e) if !self.poisoned && (kept.is_some() || !self.reconciling.is_empty()) => {
+                if let Some((i, _)) = kept {
+                    self.owe(&[i]);
+                }
                 let owed = std::mem::take(&mut self.reconciling);
                 self.give_up(&owed, &e);
+                if let Some((i, _)) = kept {
+                    self.resources[i].failed_args =
+                        self.settled.as_ref().map(|s| s.resource_args[i].clone());
+                }
                 self.commit_again(Vec::new(), "the reads a refused commit owed")
             }
             result => result,
@@ -367,7 +383,9 @@ impl<D: DataSource> Runner<D> {
                 // Unless a watched topic changed while it was in flight: the
                 // answer may differ now, so it is asked once more, forced
                 // (LLP 1016.002 D4).
-                if ask_again {
+                if ask_again.context {
+                    self.resources[i].landing_read = true;
+                } else if ask_again.refresh {
                     again.push(i);
                 }
                 "it keeps its last value"
@@ -392,10 +410,41 @@ impl<D: DataSource> Runner<D> {
             format!("{request} failed and is no longer pending: {next}: {reason}"),
             overrun,
         );
-        if ask_again {
-            self.log(super::lines::asked_again(ticket, &name));
+        if ask_again.refresh && !ask_again.context {
+            self.log(super::lines::asked_again(ticket, &name, false));
         }
-        self.commit_again(again, "a failed request").map(Some)
+        let receipt = self.commit_again(again, "a failed request");
+        self.after_kept_read(target, ticket, ask_again, receipt)
+            .map(Some)
+    }
+
+    /// The kept reply has committed, including any change to its owner's props or lifetime.
+    pub(super) fn after_kept_read(
+        &mut self,
+        target: Target,
+        ticket: u64,
+        again: super::resources::AskAgain,
+        landed: Result<CommitReceipt, RunnerError>,
+    ) -> Result<CommitReceipt, RunnerError> {
+        let Target::Resource(i) = target else {
+            return landed;
+        };
+        if !again.context || !std::mem::take(&mut self.resources[i].landing_read) {
+            return landed;
+        }
+        let landed = landed?;
+        self.log(super::lines::asked_again(
+            ticket,
+            &self.target_name(target),
+            true,
+        ));
+        match self.commit_asks(vec![i], "a kept read", Some((i, again.refresh))) {
+            Ok(next) => Ok(super::owned::merged(landed, next)),
+            // Even publication of the follow-up's failure can be refused. Its
+            // journal reports that refusal; the host still needs the kept reply.
+            Err(_) if !self.poisoned => Ok(landed),
+            Err(e) => Err(e),
+        }
     }
 
     /// The host must keep later ordered admissions behind these refusals.

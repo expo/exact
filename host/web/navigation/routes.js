@@ -144,9 +144,7 @@ function keptDetents(said) {
       : word.endsWith("%") ? share > 0 && share <= 100 ? share === 100 ? ["large", 100] : ["share", share] : []
       : Number.isFinite(points) && points > 0 ? ["points", points] : [];
     const last = kept.at(-1);
-    if (kind && !(last && (last.kind === "large" || kind !== "large" && (last.kind !== kind || height <= last.height)))) {
-      kept.push({ word, kind, height });
-    }
+    if (kind && (!last || last.kind !== "large" && (kind === "large" ? !(last.kind === "content" && kept.length > 1) : kind === "content" ? last.kind !== "content" : last.kind === kind && height > last.height))) kept.push({ word, kind, height });
   }
   return kept;
 }
@@ -157,7 +155,8 @@ function selectedDetent(route) {
     const kept = keptDetents(said), initial = route.getAttribute("data-navigationinitialdetent");
     const { kind = "large", height = 100, word } = kept.find((d) => d.word === initial) ?? kept[0] ?? {};
     const css = kind === "share" ? `calc(${TALLEST} * ${word === "medium" ? ".5" : height / 100})` : kind === "points" ? `${height}px` : "";
-    sheetDetents.set(route, chosen = { said, canGrow: word !== kept.at(-1)?.word, kind: kind === "content" ? "fit-content" : css ? "height" : null, css });
+    const kindAttr = kind === "content" ? "fit-content" : kept.length > 1 && kept.at(-1)?.kind === "content" && css ? "fit-capped" : css ? "height" : null;
+    sheetDetents.set(route, chosen = { said, canGrow: word !== kept.at(-1)?.word, kind: kindAttr, css });
   }
   return chosen;
 }

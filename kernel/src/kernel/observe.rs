@@ -42,6 +42,12 @@ use crate::style::calc::{Components, Family, COMPONENTS};
 /// still off unsettled (D9).
 const MAX_ROUNDS: usize = 24;
 
+/// The round from which a reader the secant has not settled takes half a step toward its measurement (D9): a third of
+/// the bound, by when the secant has settled a reader alone, so what is left reads others' inputs as well as its own.
+/// Half a step settles a reading whose slope against its input lies between -3 and 1, plain substitution's -1 to 1
+/// and the steeper falls past it, where coupled readers' secants can swing between a range's ends.
+const DAMPED_FROM: usize = MAX_ROUNDS / 3;
+
 /// What a reader observes, each family on each edge top right bottom left
 /// (`Observe::component`); `None` where it is unavailable, which makes the
 /// observation guaranteed-invalid.
@@ -544,7 +550,7 @@ impl Kernel {
                     continue;
                 }
                 let samples = solving.entry(s).or_default();
-                let next = samples.step(input, measured, caps, tolerance, components);
+                let next = samples.step(input, measured, caps, tolerance, components, round);
                 if next != input {
                     self.arena.observations.inputs.insert(s, next);
                     moved.push(s);
@@ -926,6 +932,8 @@ impl Samples {
     /// does a residual that repeats while the input moved: the measurement
     /// moves one for one with the input, as a box's reading does where its
     /// own edge moves by it, and stops only at that end.
+    /// From [`DAMPED_FROM`] on, a component not within `tolerance` takes
+    /// half a step toward its measurement instead, within the same range.
     /// Telling a round that crosses a layout breakpoint (a wrap, a track
     /// change), which D9 also has substitute, needs a signal from layout
     /// that it does not give yet.
@@ -936,6 +944,7 @@ impl Samples {
         caps: [f32; COMPONENTS],
         tolerance: f32,
         components: Components,
+        round: usize,
     ) -> Observed {
         let mut next = input;
         for e in (0..COMPONENTS).filter(|e| components & 1 << e != 0) {
@@ -949,6 +958,7 @@ impl Samples {
             next[e] = Some(match self.last[e] {
                 // Keep a settled edge's input while another moves
                 _ if r.abs() <= tolerance => x,
+                _ if round >= DAMPED_FROM => (x + 0.5 * r).clamp(0.0, caps[e]),
                 Some((x0, r0)) if x != x0 && r == r0 => match r > 0.0 {
                     true => caps[e],
                     false => 0.0,
@@ -1123,6 +1133,10 @@ fn merge(into: &mut LayoutReceipt, round: LayoutReceipt) {
 #[cfg(test)]
 #[path = "observe_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "observe_step_tests.rs"]
+mod step_tests;
 
 /// Why an owner's band and Exact's contributions to it are refused, if they are:
 /// nonfinite insets, a nonfinite effect, or a contribution's identity twice. A negative

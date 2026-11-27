@@ -656,10 +656,13 @@ can still appear in an ordinary assignment.
 
 A resource's optional `with` supplies one or more request context expressions,
 after its call arguments and before `as shape`. The source receives both lists
-in order; a change to either asks again. Only admission of an eligible persisted
-answer at boot compares the call arguments alone (LLP 1027.005), and so does
-`current` (below). An empty call is valid; an empty `with` is not. `else` keeps
-its place after the shape.
+in order. A change to either asks again. If the source returns the same single
+request it has in flight, its reply is parsed with the newest arguments. Any
+change to `with`, including one alongside a changed call argument, earns one
+ordinary follow-up when a kept plain HTTP read lands or fails. A change confined to
+call arguments earns none. Uploads and streams follow their existing rules. Admission of an eligible persisted answer at boot
+(LLP 1027.005) and `current` (below) compare the call arguments alone. The call
+may be empty. `with` requires at least one expression. `else` follows the shape.
 
 A resource's optional `when cond`, before `as shape`, asks it only while `cond`, a
 `bool`, holds (LLP 1161.002; `type-when-not-bool`). While it is false the resource

@@ -30,6 +30,10 @@ const INHERITED = new Set(["font", "font-size", "line-height", "letter-spacing",
   "tab-size", "text-underline-offset", "-webkit-text-stroke-width"]);
 /** D9's bound on the rounds of one transaction. */
 export const ROUNDS = 24;
+/** The round from which a reader the secant has not settled takes half a step toward its measurement, as the kernel's
+ * `DAMPED_FROM`: a third of the bound. Half a step settles a reading whose slope against its input lies between -3 and
+ * 1, where coupled readers' secants can swing between a range's ends. */
+const DAMPED_FROM = ROUNDS / 3;
 
 /** How far the unsafe area `band` (top right bottom left, from the viewport's edges, `width` by `height`) reaches into
  * the border box `r` (viewport coordinates) from each of its edges, at most that area's depth there. */
@@ -94,7 +98,13 @@ export function observe(readers, band, keyboard, policy) {
       for (const el of result.changed) reads.get(el).inputs.forEach((i, k) => before.get(el)[k] ? own(el, NAMES[i], before.get(el)[k]) : drop(el, NAMES[i]));
       sticky.forEach((a) => a.removeAttribute(REST));
       root.getBoundingClientRect();
-      for (const [a, [x, y]] of scrollers ?? []) if (a.scrollLeft !== x || a.scrollTop !== y) a.scrollTo({ left: x, top: y, behavior: "instant" });
+      // WebKit's list box ignores `scrollTo`, so where it leaves a box short the offsets are set as they are read
+      for (const [a, [x, y]] of scrollers ?? []) {
+        if (a.scrollLeft === x && a.scrollTop === y) continue;
+        a.scrollTo({ left: x, top: y, behavior: "instant" });
+        if (a.scrollTop !== y) a.scrollTop = y;
+        if (a.scrollLeft !== x) a.scrollLeft = x;
+      }
     }
   } finally {
     sticky.forEach((a) => a.removeAttribute(REST));
@@ -163,15 +173,15 @@ export function readers(root = document) {
  * where it lies in a flex or grid container, the outermost such container's whole subtree; and a reader positioned, or
  * inside a box positioned, against a containing block that holds the animated element, whose size it can change. */
 export function moving(readers, animations = document.getAnimations()) {
-  // In a flex or grid container an item moves its earlier siblings too, as a centred row's first item moves as the second
-  // widens, and a box whose width is its content's (inline-level, or narrower than its parent, as a centred
-  // `max-content` block is) moves what it holds as it resizes; a change inside either can resize it, so the
-  // animated element stands for the outermost such box above it
+  // In a flex or grid container, or a block that aligns its content (`align-content`), an item moves its earlier
+  // siblings too, as a centred row's first item moves as the second widens, and a box whose width is its content's
+  // (inline-level, or of a width other than its parent's, as a centred `max-content` block is) moves what it holds as
+  // it resizes; a change inside either can resize it, so the animated element stands for the outermost such box above it
   const context = (el) => {
     let scope = el;
     for (let a = el; a.parentElement; a = a.parentElement) {
-      const p = a.parentElement;
-      if (/flex|grid/.test(getComputedStyle(p).display)) scope = p;
+      const p = a.parentElement, s = getComputedStyle(p);
+      if (/flex|grid/.test(s.display) || !/^(normal|start|flex-start|)$/.test(s.alignContent)) scope = p;
       else if (a !== el && sized(a)) scope = a;
     }
     return scope;
@@ -271,7 +281,7 @@ function rounds(readers, reads, before, chains, held, band, keyboard, save) {
   const read = () => {
     const seen = new Map(), framed = framing();
     const at = (el) => {
-      if (!seen.has(el)) seen.set(el, el.isConnected && el.getClientRects().length ? laid(el, chains.get(el) ?? scrolling(el, box)) : null);
+      if (!seen.has(el)) seen.set(el, el.isConnected && el.getClientRects().length ? laid(el, chains.get(el) ?? scrolling(el, box), box) : null);
       return seen.get(el);
     };
     return readers.map((el, i) => {
@@ -292,7 +302,7 @@ function rounds(readers, reads, before, chains, held, band, keyboard, save) {
       // The first round takes the measurement exactly and keeps its residual, from which the next takes the secant
       const input = written.get(el), m = measured[i], only = reads.get(el).inputs, exact = round ? tolerance : 0;
       if (m == null || settled(input, m, exact, only)) return;
-      const next = input == null ? m : step(input, m, samples[i], caps[i], exact);
+      const next = input == null ? m : step(input, m, samples[i], caps[i], exact, round);
       written.set(el, next);
       save();
       write(el, only, next);
@@ -325,8 +335,8 @@ export function atRest(boxes, box, measure) {
 }
 
 /** A box as laid out with every scroll offset at zero, given the scroll containers that move it (`unscrolled`). */
-export function laid(el, scrollers) {
-  const b = el.getBoundingClientRect(), [dx, dy] = unscrolled(scrollers);
+export function laid(el, scrollers, box) {
+  const b = el.getBoundingClientRect(), [dx, dy] = unscrolled(scrollers, box);
   return { top: b.top + dy, right: b.right + dx, bottom: b.bottom + dy, left: b.left + dx };
 }
 
@@ -341,12 +351,14 @@ const settled = (input, measured, tolerance, only) =>
 /** D9's step on each input, as the kernel's solve takes it: where the residual `measured - input` is within `tolerance`
  * the input holds; with the last round's sample on that input, the secant through both, clamped to 0 and the input's
  * most `caps`, or that range's end where the line's root lies behind the input or the residual repeats while the input
- * moved; else the measurement. `last` keeps each input's sample for the next round. */
-function step(input, measured, last, caps, tolerance) {
+ * moved; else the measurement; and from `DAMPED_FROM` on, half a step toward the measurement within the same range.
+ * `last` keeps each input's sample for the next round. */
+function step(input, measured, last, caps, tolerance, round) {
   return input.map((x, e) => {
     const m = measured[e], r = m - x, prior = last[e];
     last[e] = [x, r];
     if (Math.abs(r) <= tolerance) return x;
+    if (round >= DAMPED_FROM) return Math.min(Math.max(x + 0.5 * r, 0), caps[e]);
     if (!prior || prior[0] === x) return m;
     const [x0, r0] = prior;
     if (r === r0) return r > 0 ? caps[e] : 0;
@@ -440,14 +452,18 @@ const SCROLLING = ['[style*="overflow"]', '[data-exact-safe-area~="scroller"]'];
  * and an alert's message. `host-scrollers.test.mjs` keeps it in step with the sheets. */
 export const HOST_SCROLLERS = ['[data-scroll="true"]', '[role="tablist"][data-exact-sidebar-tabs]', '[role="tablist"][data-exact-tab-bar]',
   "[data-exact-route-popover]", 'dialog[role="alertdialog"] > [data-alertpart="message"]'];
+/** The boxes the host's sheets give an `overflow` of `hidden`, which a script can scroll: a route header's heading.
+ * `host-scrollers.test.mjs` keeps it in step with the sheets. */
+export const HOST_CLIPPED = ['header :is(h1, h2, h3, h4, h5, h6, [role="heading"])'];
 const SCROLLER = [...SCROLLING, ...HOST_SCROLLERS].join(", ");
 /** A scroller, or the top layer, which ends the search for one above. */
 const BOUNDED = [SCROLLER, TOP].filter(Boolean).join(", ");
 /** What may hold a scroll offset a round can clamp, found by selector: a scroller, a box the JS target marks for a class
- * that clips or scrolls, and a popover, which the top layer can hold; and by tag, from the document's own collections,
- * which cost no walk, a dialog and a text control, which scrolls its text (`SCROLLED_TAGS`), with the fullscreen element. */
-const SCROLLED = `${SCROLLER}, [popover]`;
-const SCROLLED_TAGS = ["dialog", "textarea", "input"];
+ * that clips or scrolls, the boxes the host's sheets clip (`HOST_CLIPPED`), and a popover, which the top layer can hold;
+ * and by tag, from the document's own collections, which cost no walk, a dialog and a control that scrolls what it
+ * holds, a text field, a text area or a list box (`SCROLLED_TAGS`), with the fullscreen element. */
+const SCROLLED = [SCROLLER, ...HOST_CLIPPED, "[popover]"].join(", ");
+const SCROLLED_TAGS = ["dialog", "textarea", "input", "select"];
 /** The boxes that can shape a reader's area, and the top layer, past which none does. */
 const HOLDS = [TRANSPARENT, RESERVING, SCROLLER, TOP].filter(Boolean).join(", ");
 
@@ -485,24 +501,41 @@ export const depth = ([outer, inner], at) => Math.min(Math.max(0, inner - at), M
 /** A box's edges as distances in from the viewport's edges, top right bottom left. */
 export const edgesOf = (r, width, height) => [r.top, width - r.right, height - r.bottom, r.left];
 
-/** How far `scrollers`' offsets move what they hold on the screen, x then y: each offset at its scroller's scale, as a
- * transform on it or above it draws it (its drawn size over its laid-out size; the document's scroller at 1). */
-export function unscrolled(scrollers) {
+/** How far `scrollers`' offsets move what they hold on the screen, x then y: each offset carried through the linear
+ * part of every transform from its scroller up (`carried`), so a scaled, rotated or flipped scroller moves its content
+ * as it draws it; one with no transformed ancestor, the document's scroller among them, by its offset alone. */
+export function unscrolled(scrollers, box = styles()) {
   let dx = 0, dy = 0;
   for (const a of scrollers) {
     const x = a.scrollLeft, y = a.scrollTop;
     if (!x && !y) continue;
-    let sx = 1, sy = 1;
-    if (a !== document.scrollingElement && a.offsetWidth && a.offsetHeight) {
-      const r = a.getBoundingClientRect();
-      // A laid-out size within a point of the drawn one is the same box, its offset size rounded
-      if (Math.abs(r.width - a.offsetWidth) > 1) sx = r.width / a.offsetWidth;
-      if (Math.abs(r.height - a.offsetHeight) > 1) sy = r.height / a.offsetHeight;
-    }
-    dx += x * sx;
-    dy += y * sy;
+    const m = a === document.scrollingElement ? null : carried(a, box);
+    dx += m ? m.a * x + m.c * y : x;
+    dy += m ? m.b * x + m.d * y : y;
   }
   return [dx, dy];
+}
+
+/** The linear part of the transforms that draw what `a` holds, from `a` up (CSS Transforms 2: each box's `rotate`, then
+ * `scale`, then `transform`, its translation and origin moving nothing a scroll moves), or null where none transforms;
+ * each box's once a transaction. */
+function carried(a, box) {
+  let m = null;
+  for (let x = a; x && x !== document.documentElement; x = x.parentElement) {
+    if (!box(x).turned) continue;
+    const s = getComputedStyle(x), own = new DOMMatrix();
+    if (s.rotate && s.rotate !== "none") {
+      const r = s.rotate.trim().split(/\s+/);
+      own.multiplySelf(new DOMMatrix(r.length === 1 ? `rotate(${r[0]})` : r.length === 2 ? `rotate${r[0].toUpperCase()}(${r[1]})` : `rotate3d(${r.slice(0, 3).join(",")},${r[3]})`));
+    }
+    if (s.scale && s.scale !== "none") {
+      const k = s.scale.trim().split(/\s+/);
+      own.multiplySelf(new DOMMatrix(`scale(${k[0]}, ${k[1] ?? k[0]})`));
+    }
+    if (s.transform && s.transform !== "none") own.multiplySelf(new DOMMatrix(s.transform));
+    m = m ? own.multiply(m) : own;
+  }
+  return m;
 }
 
 /** The elements whose scrolling moves `el` (CSS Positioned Layout 3, "Containing Blocks"): each ancestor that is its
@@ -541,9 +574,10 @@ export function styles() {
     let b = known.get(el);
     if (!b) {
       const s = getComputedStyle(el);
-      let fixed, scrolls, scrollView, transitions, borders, stops, drawn, top;
+      let fixed, scrolls, scrollView, transitions, borders, stops, drawn, top, turned;
       b = { position: s.position, display: s.display, get fixed() { return fixed ??= fixedContainer(s); },
         get top() { return top ??= !!TOP && el.matches(TOP); },
+        get turned() { return turned ??= ["transform", "rotate", "scale"].some((p) => (s[p] ?? "none") !== "none" && s[p] !== ""); },
         get scrollView() { return scrollView ??= [s.overflowX, s.overflowY].some((o) => o === "auto" || o === "scroll"); },
         get scrollsY() { return s.overflowY === "auto" || s.overflowY === "scroll"; },
         get borders() { return borders ??= ["Top", "Right", "Bottom", "Left"].map((e) => parseFloat(s[`border${e}Width`]) || 0); },
@@ -609,16 +643,16 @@ const fixedContainer = (s) => ["transform", "translate", "rotate", "scale", "per
   || s.transformStyle === "preserve-3d" || s.contentVisibility === "auto" || /\b(layout|paint|strict|content)\b/.test(s.contain ?? "")
   || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(s.willChange ?? "");
 
-/** Whether a box's width can follow its content: an inline-level or table box, or any other narrower than its parent's
- * content box (a float, a positioned box or a block of its content's width, as one that fills its parent, a route at
- * `inset: 0` among them, takes its width from there). */
+/** Whether a box's width can follow its content: an inline-level or table box, or any other whose width is not its
+ * parent's content box's, narrower or wider (a float, a positioned box or a block of its content's width, as one that
+ * fills its parent, a route at `inset: 0` among them, takes its width from there). */
 function sized(el) {
   const s = getComputedStyle(el), p = el.parentElement;
   if (/^inline|table/.test(s.display)) return true;
   if (!p) return false;
   const ps = getComputedStyle(p), room = p.clientWidth - (parseFloat(ps.paddingLeft) || 0) - (parseFloat(ps.paddingRight) || 0);
   // Its own width, as a used `auto` margin would make a centred block's margin box fill the parent
-  return el.offsetWidth < room - 1;
+  return Math.abs(el.offsetWidth - room) > 1;
 }
 
 /** `el` and its ancestors. */

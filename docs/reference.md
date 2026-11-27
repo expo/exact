@@ -3978,6 +3978,18 @@ it. An upload that must finish after the person leaves the app is a
 background transfer instead ([recipe](recipes/background-transfers.md), LLP
 1133.017), whose progress a live source reports at most once a second.
 
+For an event feed that signals a separate snapshot, write
+`resource view = load() with live.seq`. If `load` returns the same single
+plain HTTP read in flight, its reply lands with the newest arguments. One ordinary
+ask follows its success or failure, however many times `seq` changed.
+The view keeps its last answer while that read runs. A change confined to
+call arguments keeps the equal request without a follow-up. Use `refresh`
+to replace the read immediately. Keep the signal out of the request itself
+so a source returning a constant `Later(GET /state)` lets slow reads land.
+A plain TypeScript `fetch` produces a fresh promise and can still replace
+the pending read (LLP 1054.000.000 D3). Uploads keep their once-per-identity
+record. Streams follow their existing transport rules.
+
 A **long poll** (LLP 1016.000 D8) is a stream with `exactLongPoll: {cursor,
 from}` beside `exactStream`, for an endpoint that holds each request until it
 has news: `fetch('https://sync.example/changes?since=0&wait=25', {

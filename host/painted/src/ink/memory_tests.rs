@@ -239,3 +239,81 @@ fn large_layers_keep_one_set_of_targets_across_submitted_frames() {
     assert_eq!(report(&mut ink, "layers hidden"), 0);
     assert_eq!(targets, 6);
 }
+
+#[test]
+fn idle_bitmaps_stay_bounded_drop_with_their_decodes_and_clear_on_trim() {
+    let session = exact_raster::Gate::new().session();
+    let make = || {
+        let [w, h] = [256u32, 192];
+        let charge = u64::from(w) * u64::from(h) * 4;
+        let reservation = session.reserve_allocation(charge).unwrap();
+        let picture = Arc::new(Bitmap::new(
+            Pixmap::new(w, h).unwrap(),
+            (w, h),
+            reservation.charge(),
+        ));
+        reservation.commit(charge).unwrap();
+        picture
+    };
+    let mip_bytes = bytes(TextureDesc {
+        mipmapped: true,
+        ..TextureDesc::rgba(256, 192)
+    });
+    let mut ink = Ink::from_device(Selected::Counted(Box::new(Counted::open())));
+    let mut pictures: Vec<_> = (0..36).map(|_| make()).collect();
+    for picture in &pictures {
+        ink.begin(64., 48., 1.);
+        ink.image(
+            picture,
+            (0., 0., 64., 48.),
+            &[],
+            Transform::identity(),
+            None,
+            exact_kernel::ImageRendering::Auto,
+        );
+        ink.finish().unwrap();
+    }
+    let compose = 64 * 48 * 4;
+    // Empty frame moves the last active bitmap into idle, capped at 8 MiB (32 x 256x192 mips).
+    ink.begin(64., 48., 1.);
+    ink.finish().unwrap();
+    let capped = report(&mut ink, "idle capped");
+    assert_eq!(capped, compose + 32 * mip_bytes);
+
+    // Dropping external Arcs retires their idle GPU textures on the next frame begin.
+    pictures.clear();
+    ink.begin(64., 48., 1.);
+    ink.finish().unwrap();
+    assert_eq!(report(&mut ink, "after decode drop"), compose);
+
+    // Visible and hidden trims both clear idle textures immediately.
+    let kept = make();
+    ink.begin(64., 48., 1.);
+    ink.image(
+        &kept,
+        (0., 0., 64., 48.),
+        &[],
+        Transform::identity(),
+        None,
+        exact_kernel::ImageRendering::Auto,
+    );
+    ink.finish().unwrap();
+    ink.begin(64., 48., 1.);
+    ink.finish().unwrap();
+    assert_eq!(report(&mut ink, "one idle"), compose + mip_bytes);
+    ink.trim(false);
+    assert_eq!(report(&mut ink, "visible trim"), compose);
+
+    ink.begin(64., 48., 1.);
+    ink.image(
+        &kept,
+        (0., 0., 64., 48.),
+        &[],
+        Transform::identity(),
+        None,
+        exact_kernel::ImageRendering::Auto,
+    );
+    ink.finish().unwrap();
+    ink.trim(true);
+    assert_eq!(report(&mut ink, "hidden trim"), 0);
+}

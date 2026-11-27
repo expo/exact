@@ -43,41 +43,27 @@ use crate::paint::stage::{destination_path, Cross, Item, Stage};
 use crate::paint::tape::Tape;
 use crate::paint::{Rect4, Shape};
 use exact_kernel::{BlockAxis, HostBlock, Kernel, NodeKey};
-use exact_motion::Transition;
 use std::rc::Rc;
 use tiny_skia::Transform;
 
 mod authored;
+mod detents;
 mod flights;
 use flights::bounds_spring;
 #[cfg(test)]
 pub(super) mod tests;
 mod touch;
-use touch::{fits, heights};
 mod zoom;
 
 use authored::{Authored, Top};
+pub use detents::SHEET_HANDLE;
+use detents::{fits, initial_rest, reconcile_index, resolve_sheet_stops};
+pub(crate) use detents::{sheet_handle, sheet_span};
 use exact_kernel::StyleId;
 
-/// The room a sheet's drag handle takes at its top, points: Material's
-/// handle, 4 tall with 22 above and below.
-pub const SHEET_HANDLE: f32 = 48.0;
-pub(crate) fn sheet_handle(route: &exact_kernel::NodeRef<'_>) -> f32 {
-    if route.props.str(PropId::NavigationGrabber) == Some("hidden") {
-        0.0
-    } else {
-        SHEET_HANDLE
-    }
-}
-/// Material 3's sheet: its widest, its top corners, and its scrim.
-const SHEET_MAX_WIDTH: f32 = 640.0;
+/// Material 3's sheet top corners and scrim.
 const SHEET_CORNER: f32 = 28.0;
 const SCRIM: f32 = 0.32;
-/// A centered Material sheet's left margin and width in the page.
-pub(crate) fn sheet_span(page_width: f32) -> (f32, f32) {
-    let width = page_width.min(SHEET_MAX_WIDTH);
-    ((page_width - width) / 2.0, width)
-}
 
 /// Material's motion: a sheet's entrance (emphasized decelerate), its exit
 /// (emphasized accelerate), a settle between detents, and the shared axis.
@@ -191,6 +177,9 @@ struct Sheet {
     /// Its resting heights, shortest first, the bar under its foot
     /// included; points.
     heights: Vec<f32>,
+    /// The detent word(s) each entry in `heights` came from, in matching order
+    /// (collapsed ties keep every word that resolved to the same height).
+    words: Vec<Vec<String>>,
     at: usize,
     /// Its top edge in the page, points.
     top: Glide,
@@ -247,9 +236,7 @@ struct Shift {
     /// Only that route is drawn: the other is a sheet's, drawn as the sheet.
     alone: bool,
     container: Option<zoom::Container>,
-    /// A container's names and where they start: they move on its clock,
-    /// as Compose drives a container and the names in it on one
-    /// transition (LLP 1013.004 D4).
+    /// A container's names and where they start, on its clock (LLP 1013.004 D4).
     names: Option<(Vec<(NodeKey, NodeKey)>, f32)>,
     /// A switch between stacks uses Material's fade through.
     through: bool,
@@ -346,16 +333,15 @@ pub(super) struct State {
     /// The routes given a block of the stage's.
     blocks: Vec<ViewId>,
     zooms: Vec<zoom::Source>,
-    /// The pairs a pop of the top route would fly (LLP 1013.004 D1), with
-    /// the kernel epoch and the top route they were found at: a pop has
-    /// removed the route by the time its crossing starts.
+    /// The pairs a pop of the top route would fly, with the kernel epoch and
+    /// top route they were found at (`remember_pops`).
     pops: (u64, Option<NodeKey>, Vec<(NodeKey, NodeKey)>),
 }
 
 /// What a sheet's heights are computed from: its `navigationDetent`, the
 /// page's height and the tallest, whether the keyboard is up, and its
-/// `fit-content` height.
-type Said = (Option<String>, (f32, f32), bool, Option<f32>);
+/// natural and IME-lifted `fit-content` heights.
+type Said = (Option<String>, (f32, f32), bool, Option<(f32, f32)>);
 
 impl<D: DataSource> Presenter<D> {
     /// Whether this presenter places sheets and moves routes itself: its
@@ -492,15 +478,48 @@ impl<D: DataSource> Presenter<D> {
             None => 0.0,
         };
         for (i, last) in wanted {
-            let kernel = self.host.kernel();
-            let node = kernel.node(stack[i]).expect("a live route");
-            let handle = sheet_handle(&node);
-            let detent = node.props.str(PropId::NavigationDetent).map(str::to_owned);
-            let initial = node
-                .props
-                .str(PropId::NavigationInitialDetent)
-                .map(str::to_owned);
-            let stamp = kernel.layout_stamp();
+            let (handle, detent, initial) = {
+                let kernel = self.host.kernel();
+                let node = kernel.node(stack[i]).expect("a live route");
+                (
+                    sheet_handle(&node),
+                    node.props.str(PropId::NavigationDetent).map(str::to_owned),
+                    node.props
+                        .str(PropId::NavigationInitialDetent)
+                        .map(str::to_owned),
+                )
+            };
+            // Measure `fit-content` at the sheet's actual width (capped at 640 dp)
+            // even on frame 1 before `place_sheets` runs. Only `.width` is checked
+            // because `Kernel::fit_content_height` depends only on the block's width
+            // axis, avoiding redundant re-layout once `place_sheets` sets final height.
+            if presents && fits(detent.as_deref()) {
+                let route_id = stack[i];
+                if self.host.kernel().host_block(route_id).map(|b| b.width)
+                    != Some(BlockAxis::Is(width))
+                {
+                    let block = HostBlock {
+                        tactic: Default::default(),
+                        width: BlockAxis::Is(width),
+                        height: BlockAxis::Is(tallest.round()),
+                    };
+                    if self
+                        .host
+                        .runner_mut()
+                        .kernel_mut()
+                        .set_host_block(route_id, Some(block))
+                        .is_ok()
+                    {
+                        if !self.stage.blocks.contains(&route_id) {
+                            self.stage.blocks.push(route_id);
+                        }
+                        if let Err(e) = self.host.layout_unauthored() {
+                            self.host.log(e);
+                        }
+                    }
+                }
+            }
+            let stamp = self.host.kernel().layout_stamp();
             let kept = (self.stage.sheets.iter())
                 .find(|s| s.modal == keys[i])
                 .and_then(|s| s.measured);
@@ -509,31 +528,31 @@ impl<D: DataSource> Presenter<D> {
                 (true, Some(m)) if m.0 == stamp => Some(m),
                 (true, _) => self.fit_content(keys[i]),
             };
-            // A `fit-content` sheet rests on the keyboard, as Compose's
-            // `ModalBottomSheet` rises with the IME inset.
-            let fit = measured.map(|(_, content)| (content + foot.max(lift)).clamp(1.0, tallest));
-            let said = (detent.clone(), (h, tallest), keyboard, fit);
-            let mut found = heights(detent.as_deref(), tallest, foot, fit.unwrap_or(tallest));
-            if !presents {
-                found = vec![h];
-            }
-            let fit_at = |found: &[f32]| {
-                fit.and_then(|fit| found.iter().position(|v| (v - fit).abs() < 0.5))
-            };
-            // While the keyboard is up a sheet rests at its tallest, but
-            // for one resting at `fit-content`, which keeps that height
-            // above the keys (the tallest, where it does not fit there).
-            let rest = |found: &[f32]| -> usize {
-                let first = heights(initial.as_deref(), tallest, foot, fit.unwrap_or(tallest));
-                let at = (initial.is_some())
-                    .then(|| found.iter().position(|v| (v - first[0]).abs() < 0.5))
-                    .flatten()
-                    .unwrap_or(0);
-                match keyboard && fit_at(found) != Some(at) {
-                    true => found.len() - 1,
-                    false => at,
-                }
-            };
+            let window_bottom = self.window().map(|w| {
+                (
+                    self.chrome().frame[1],
+                    w.size.1 - w.bars[2].max(w.cutout[2]),
+                )
+            });
+            let resolved = resolve_sheet_stops(
+                presents,
+                detent.as_deref(),
+                h,
+                tallest,
+                status,
+                foot,
+                lift,
+                self.window.keyboard,
+                window_bottom,
+                measured.map(|(_, content)| content),
+            );
+            let said = (detent.clone(), (h, tallest), keyboard, resolved.fit_pair);
+            let (words, found, dropped, fit_idx) = (
+                resolved.words,
+                resolved.heights,
+                resolved.dropped,
+                resolved.fit_idx,
+            );
             let covered = kinds[i..]
                 .iter()
                 .any(|k| matches!(k, Presented::Over | Presented::Full));
@@ -552,20 +571,22 @@ impl<D: DataSource> Presenter<D> {
                         sheet.top = Glide::still(h - sheet.heights[sheet.at]);
                     }
                     if sheet.said != said {
-                        let was = (sheet.said.3)
-                            .filter(|fit| (sheet.heights[sheet.at] - fit).abs() < 0.5);
-                        sheet.at = match (was.and(fit_at(&found)), keyboard) {
-                            (Some(at), _) => at,
-                            (None, true) => found.len() - 1,
-                            (None, false) => sheet.at.min(found.len() - 1),
-                        };
+                        sheet.at = reconcile_index(
+                            sheet.at,
+                            sheet.words.get(sheet.at),
+                            &words,
+                            &dropped,
+                            fit_idx,
+                            keyboard,
+                        );
                         sheet.top = Glide::still(h - found[sheet.at]);
                         sheet.heights = found;
+                        sheet.words = words;
                         sheet.said = said;
                     }
                 }
                 None => {
-                    let at = rest(&found);
+                    let at = initial_rest(initial.as_deref(), &words, &dropped, fit_idx, keyboard);
                     let to = h - found[at];
                     let top = match still {
                         true => Glide::still(to),
@@ -575,6 +596,7 @@ impl<D: DataSource> Presenter<D> {
                         modal: keys[i],
                         shown: keys[last],
                         heights: found,
+                        words,
                         at,
                         top,
                         said,
@@ -813,12 +835,7 @@ impl<D: DataSource> Presenter<D> {
             through,
             left,
         });
-        self.fly_shift(
-            forward,
-            (*old, *new),
-            (through, container.is_some()),
-            seeked,
-        );
+        self.fly_shift(forward, (*old, *new), (through, container), seeked);
     }
 
     /// Whether anything on the stage moves on its own: frames are owed.
