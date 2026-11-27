@@ -110,6 +110,8 @@ impl Painter {
         if changes.full
             || self.alert.is_some()
             || self.damage.unsupported
+            // A symbol's effect moves outside any flow damage.
+            || self.symbol_effects.moving(self.numerals.now)
             || !self.overlays.is_empty()
             || (!changes.flow && (self.split.is_none() || changes.keys.is_empty()))
             || self.damage.dark != self.dark

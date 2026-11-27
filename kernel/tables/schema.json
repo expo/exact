@@ -4865,9 +4865,9 @@
       "bit": 165,
       "field": "symbol_effect",
       "codec": "enum:SymbolEffect",
-      "_comment": "@ref LLP 1077 D12: not CSS. An SF Symbol effect. With `symbolEffectValue`, one with a discrete form (all but scale) plays once each time the value changes; without it, one with an indefinite form runs while set (bounce, wiggle, breathe and rotate from iOS 18 and macOS 15); replace plays when the source changes. The web stands in for bounce, pulse and scale.",
+      "_comment": "@ref LLP 1077 D12: not CSS. An SF Symbol effect. With `symbolEffectValue`, one with a discrete form (all but scale) plays once each time the value changes; without it, one with an indefinite form runs while set (bounce, wiggle, breathe and rotate from iOS 18 and macOS 15); replace plays when the source changes. The web and the painted hosts stand in for bounce, pulse and scale.",
       "hosts": [
-        { "host": "painted", "fidelity": "none", "why": "no symbol effect is drawn; the symbol stays still" }
+        { "host": "painted", "fidelity": "best-effort", "why": "it stands in for bounce, pulse and scale as the web does (scale and opacity about the box's centre); the other effects stay still" }
       ],
       "cold": true
     },
