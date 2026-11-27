@@ -704,7 +704,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/jni_start.rs", "Java_dev_exact_canvas_Native_endSession"],
     ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::requests"],
     ["painted:host/painted/src/host.rs", "Host::dispatch_work Host::has_ordered_request_refusals Host::has_request_refusals Host::native_work Host::refuse_request Host::release_work Host::take_request_refusal Host::take_requests"],
-    ["painted:host/painted/src/presenter/commands.rs", "Presenter::run_commands"],
+    ["painted:host/painted/src/presenter/commands.rs", "Presenter::run_commands Presenter::start_view_transition"],
     ["painted:host/painted/src/presenter/requests.rs",
       "Presenter::end_auth Presenter::end_packages Presenter::install_shell_handlers Presenter::modules_replaced Presenter::orientation_applied Presenter::orientation_lock " +
       "Presenter::pick Presenter::serve_packages Presenter::serve_requests Presenter::take_requests Presenter::tell_shell Presenter::wakelock_moved"],
@@ -1337,7 +1337,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/history.rs", "Presenter::history_action"],
     ["painted:host/painted/src/presenter/stage.rs",
       "Presenter::back_sheets Presenter::desktop_stage Presenter::place_sheets Presenter::stage_page_route Presenter::stage_paint Presenter::stage_sheets Presenter::stage_shows " +
-      "Presenter::sync_stage Presenter::top_sheet"],
+      "Presenter::land_shift Presenter::sync_stage Presenter::top_sheet"],
   ]),
   group("picture results", ["one-shot"], "pending image/picture source, decode generation and current presentation consumers", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. host/painted/src/image.rs and image/{workers,remote,package}.rs own pending image/decode work and current consumers; canvas picture/stream adapters target the reader. Cache bytes surviving a view do not make its presentation continuation durable.", [
@@ -1376,7 +1376,7 @@ export const classifications = [
     ["runner:runner/src/uses/apple.rs", "apple_grant_uses apple_uses data_url image_sources ImageSource::bundled ImageSource::can_be_svg lays_out_grid"],
     ["runner:runner/src/uses.rs",
       "Capability::from_name Capability::name chooses_locale keeps_midi runs_sounds svg_filters svg_islands uses uses_background_video uses_midi uses_picture_in_picture Uses::beyond " +
-      "Uses::has Uses::is_empty Uses::iter Uses::with Uses::with_grants portals zoomable zooms"],
+      "Uses::has Uses::is_empty Uses::iter Uses::with Uses::with_grants portals transitions_window zoomable zooms"],
   ]),
   group("holds", ["one-shot"], "held request/node until answer, cancellation or node retirement", "UI-owned",
     "The named public runner-crate source is the holds API or its value/admission helper. runner/src/runner/device.rs:1-12 retires holds with the requesting node or ticket and refuses duplicate answers; the agent hold is not an executor request. runner/auth.rs arm_with_fixture admits or holds the current auth request by ticket, as arm does.", [

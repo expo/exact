@@ -812,6 +812,20 @@ impl Painter {
         offset: PaintOffset,
         refer: bool,
     ) -> Tape {
+        self.record_with(walk, refer, |painter, walk| {
+            painter.node_at(walk, id, ts, offset, None)
+        })
+    }
+
+    /// What `draw` paints in a walk of its own into a tape: its boxes, text
+    /// and scrollbars left out of the frame's, and retained rows held by
+    /// reference when `refer`.
+    pub(super) fn record_with(
+        &mut self,
+        walk: &mut Walk<'_, '_>,
+        refer: bool,
+        draw: impl FnOnce(&mut Self, &mut Walk<'_, '_>),
+    ) -> Tape {
         let recorder = Recorder::portable(&*self.backend);
         let real = std::mem::replace(&mut self.backend, Box::new(recorder.clone()));
         let rows = self.rows_pause(refer.then(|| (recorder.clone(), (1.0, 1.0))));
@@ -822,7 +836,7 @@ impl Painter {
         let scrollbars = std::mem::take(&mut self.scrollbars.enabled);
         let scrollbar_cover = std::mem::take(&mut walk.scrollbar_cover);
         let recording = self.kept.recording.replace(recorder.clone());
-        self.node_at(walk, id, ts, offset, None);
+        draw(self, walk);
         self.kept.recording = recording;
         self.scrollbars.enabled = scrollbars;
         walk.scrollbar_cover = scrollbar_cover;

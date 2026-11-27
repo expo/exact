@@ -110,6 +110,8 @@ impl Painter {
         if changes.full
             || self.alert.is_some()
             || self.damage.unsupported
+            // A drawing fading over the window changes every pixel.
+            || self.window.fading()
             || !self.overlays.is_empty()
             || (!changes.flow && (self.split.is_none() || changes.keys.is_empty()))
             || self.damage.dark != self.dark

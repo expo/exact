@@ -258,10 +258,8 @@ impl<D: DataSource> Presenter<D> {
                 "hideWindow" => self.host.log(
                     "hideWindow refused: a window that hides while the app keeps running is on the Mac and Windows hosts only",
                 ),
-                // The commit is already drawn: it cuts, as a browser without view transitions runs the update.
-                "startViewTransition" => self
-                    .host
-                    .log("startViewTransition: cut: this host plays no view transition"),
+                // The window fades from its last drawing into the commit.
+                "startViewTransition" => self.start_view_transition(),
                 // A page zoom is the Mac's so far (LLP 1021 §5.3.1).
                 "setPageZoom" => self
                     .host
@@ -286,6 +284,27 @@ impl<D: DataSource> Presenter<D> {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// `startViewTransition()` (LLP 1013.003): the window fades from the
+    /// last frame it showed into the commit, which has not been painted,
+    /// over 0.25 s (`paint/window_fade.rs`). The commit's own push or pop
+    /// lands without its own motion, as on iOS; a sheet it opens or closes
+    /// keeps its own under the fade. While the person asks for less motion
+    /// it cuts, as the web's does, and as the stage moves nothing then.
+    pub(super) fn start_view_transition(&mut self) {
+        if self.host.runner().viewport().preferences.reduced_motion {
+            self.host
+                .log("startViewTransition: cut: the person asked for less motion");
+            return;
+        }
+        if !self.brush.window.begin(self.host.now()) {
+            self.host
+                .log("startViewTransition: cut: no frame was shown before the commit");
+            return;
+        }
+        self.land_shift();
+        self.dirty = true;
+    }
+
     /// `requestPictureInPicture(id)` refused: the image's `pictureinpictureerror`, with the reason.
     fn refuse_picture_in_picture(&mut self, id: &str, reason: &str) {
         self.host.log(format!(

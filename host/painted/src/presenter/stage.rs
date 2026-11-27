@@ -833,6 +833,12 @@ impl<D: DataSource> Presenter<D> {
         });
     }
 
+    /// A view transition's commit lands its push or pop without the stage's
+    /// own motion, as on iOS (`commands.rs`).
+    pub(super) fn land_shift(&mut self) {
+        self.stage.shift = None;
+    }
+
     /// Whether anything on the stage moves on its own: frames are owed.
     pub(crate) fn stage_moving(&self) -> bool {
         let now = self.host.now();
