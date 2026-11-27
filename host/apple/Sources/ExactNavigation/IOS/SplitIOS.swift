@@ -16,14 +16,9 @@ import ExactKit
 /// laid out wide from the start sends its delegate no expansion.
 private final class SplitController: UISplitViewController {
     var laidOut: () -> Void = {}
-    var willResize: () -> Void = {}
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         laidOut()
-    }
-    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
-        willResize()
-        super.viewWillTransition(to: size, with: coordinator)
     }
 }
 
@@ -253,12 +248,11 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #endif
         controller.delegate = self
         #if os(iOS)
-        // On a phone, the open iPhone Duo, the sidebar shown lies beside the detail, never over it, and a turn keeps
-        // it shown or hidden as it was, where UIKit's automatic mode hides it in portrait and shows it in landscape
-        // (James Ide, 2026-11-27, LLP 1127 D3). An iPad keeps UIKit's automatic behavior.
-        if UIDevice.current.userInterfaceIdiom == .phone, let split = controller as? SplitController {
-            controller.preferredSplitBehavior = .tile
-            split.willResize = { [weak self] in self?.keepSidebarAcrossTurn() }
+        // On a phone, the open iPhone Duo, the detail fits the narrowest iPhone's width, so UIKit's automatic mode finds
+        // room for the sidebar beside it in portrait too, where by default it lays the sidebar over the detail there
+        // (LLP 1127 D3). An iPad keeps UIKit's defaults.
+        if #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .phone {
+            controller.minimumSecondaryColumnWidth = 320
         }
         // The list's column is a sidebar, in UIKit's style for one, as SwiftUI's split sets it (LLP 1127 D7)
         controller.primaryBackgroundStyle = .sidebar
@@ -569,14 +563,6 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         case .secondaryOnly: return ([], top == nil ? [root] : [])
         default: return ([root], [])
         }
-    }
-
-    /// As a turn begins, asks UIKit for the sidebar as it shows now, beside the detail or hidden, at the new size.
-    private func keepSidebarAcrossTurn() {
-        guard !controller.isCollapsed, move == nil else { return }
-        let shown: Bool
-        if #available(iOS 26.0, *) { shown = controller.isShowing(.primary) } else { shown = controller.displayMode != .secondaryOnly }
-        controller.preferredDisplayMode = shown ? .oneBesideSecondary : .secondaryOnly
     }
 
     /// N1's routes UIKit keeps out of sight while the collapsed split shows its list, which the router keeps too and
