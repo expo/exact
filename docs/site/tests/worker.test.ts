@@ -140,6 +140,12 @@ test('Accept delimiters inside quoted parameters stay in the parameter', async (
   expect(await get('/nope', { Accept: 'text/markdown;note="a;q=0;b", text/html;q=0.8' })).toMatchObject({ status: 404, type: MARKDOWN['Content-Type'] });
 });
 
+test('an Accept range for another charset does not apply, and one with parameters outranks one without', async () => {
+  expect(await get('/nope', { Accept: 'text/html;charset=iso-8859-1;q=0, text/html, application/json;q=0.5' })).toMatchObject({ status: 404, type: HTML['Content-Type'] });
+  expect(await get('/nope', { Accept: 'text/html, text/html;charset="UTF-8";q=0, application/json;q=0.5' })).toMatchObject({ status: 404, type: JSON_TYPE });
+  expect(await get('/start', { Accept: 'text/markdown;variant=GFM, text/html;q=0.8' })).toMatchObject({ status: 200, type: MARKDOWN['Content-Type'] });
+});
+
 test('JSON quality comes from the most specific matching Accept range', async () => {
   expect(await get('/nope', { Accept: 'application/*, text/html;q=0' })).toMatchObject({ status: 404, type: JSON_TYPE });
   expect(await get('/nope', { Accept: 'application/*, application/json;q=0, text/html;q=0.5' })).toMatchObject({ status: 404, type: HTML['Content-Type'] });

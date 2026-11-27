@@ -9,6 +9,7 @@ export type Env = { ASSETS: { fetch(request: Request): Promise<Response> } };
 
 const HOST = site.origin && new URL(site.origin).host;
 const MARKDOWN = 'text/markdown; charset=utf-8';
+const UTF8 = 'charset=utf-8';
 // Product names and versions are HTTP tokens (RFC 9110 §§5.6.2, 10.1.5).
 const AI_USER_AGENTS = /(?<![\w!#$%&'*+.^`|~/-])(?:ChatGPT-User|Claude-User|Perplexity-User)(?![\w!#$%&'*+.^`|~-])/i;
 
@@ -24,18 +25,20 @@ function preferences(accept: string) {
     if (!quoted && c === ';') { range.push([]); continue; }
     param.push(c);
   }
-  const qualities = new Map<string, number>();
-  for (const range of ranges) {
-    const [media, ...params] = range.map(part => part.join('').trim().toLowerCase());
-    const q = params.find(param => param.startsWith('q='));
-    if (!qualities.has(media)) qualities.set(media, q === undefined ? 1 : Math.max(0, Math.min(1, Number(q.slice(2)) || 0)));
-  }
+  const parsed = ranges.map(range => {
+    const [type, ...params] = range.map(part => part.join('').trim().toLowerCase());
+    const weight = params.findIndex(param => param.startsWith('q='));
+    const q = weight < 0 ? 1 : Math.max(0, Math.min(1, Number(params[weight].slice(2)) || 0));
+    return { type, params: (weight < 0 ? params : params.slice(0, weight)).map(param => param.replace(/="(.*)"$/, '=$1')), q };
+  });
+  const quality = (...types: string[]) => parsed
+    .filter(range => types.includes(range.type) && range.params.every(param => !param.startsWith('charset=') || param === UTF8))
+    .sort((a, b) => types.indexOf(a.type) - types.indexOf(b.type) || b.params.length - a.params.length)[0]?.q;
   // Use the most specific matching range (RFC 9110 §12.5.1). Markdown requires an explicit range.
-  const wildcard = qualities.get('*/*') ?? 0;
-  const html = qualities.get('text/html') ?? qualities.get('text/*') ?? wildcard;
-  const markdown = qualities.get('text/markdown') ?? 0;
-  const jsonRange = qualities.get('application/json') ?? qualities.get('application/*');
-  const json = jsonRange ?? wildcard;
+  const html = quality('text/html', 'text/*', '*/*') ?? 0;
+  const markdown = quality('text/markdown') ?? 0;
+  const jsonRange = quality('application/json', 'application/*');
+  const json = jsonRange ?? quality('*/*') ?? 0;
   return {
     markdown: markdown > 0 && markdown >= html,
     // HTML wins a tie when the client accepts JSON through */* alone.
