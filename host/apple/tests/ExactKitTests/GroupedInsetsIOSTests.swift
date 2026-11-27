@@ -64,6 +64,33 @@ final class GroupedInsetsIOSTests: GroupedListFixture {
         XCTAssertEqual(try cell(p, 10).frame.maxX, card.maxX, accuracy: 0.5, "and back")
     }
 
+    func testSideReachOnlyInvalidatesLayoutWhenItChangesTheEffectiveInset() {
+        final class Layout: UICollectionViewFlowLayout {
+            var invalidations = 0
+            override func invalidateLayout() {
+                invalidations += 1
+                super.invalidateLayout()
+            }
+        }
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let root = UIViewController()
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        root.additionalSafeAreaInsets.right = 84
+        let layout = Layout()
+        let collection = GroupedCollectionView(frame: root.view.bounds, collectionViewLayout: layout)
+        root.view.addSubview(collection)
+        window.layoutIfNeeded()
+        let safe = collection.safeAreaInsets.right
+        XCTAssertGreaterThanOrEqual(safe, 84)
+        let originalInvalidations = layout.invalidations
+        collection.sideSafeArea = (0, safe - 1)
+        XCTAssertEqual(layout.invalidations, originalInvalidations)
+        collection.sideSafeArea = (0, safe + 1)
+        XCTAssertGreaterThan(layout.invalidations, originalInvalidations)
+    }
+
     func testARowsMarginsAndBackgroundInsetsReachItsCellThroughItsUpdates() throws {
         let p = presenter { self.model() }
         defer { window.isHidden = true }

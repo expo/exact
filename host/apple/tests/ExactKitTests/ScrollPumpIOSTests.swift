@@ -124,6 +124,34 @@ final class ScrollPumpIOSTests: XCTestCase {
         XCTAssertTrue(p.scrollPump.observingTurns)
     }
 
+    func testTextInARowBeyondItsOuterScrollportsLeadDoesNotAskForFrames() throws {
+        let session = fixture("pump-clipped-row")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter
+        p.apply(wireBatch([
+            ["op": "style", "id": 1, "style": ["overflow_y": "scroll"]],
+            ["op": "content", "id": 1, "w": 400.0, "h": 1400.0],
+            ["op": "create", "id": 3, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
+            ["op": "create", "id": 4, "kind": "text", "props": ["text": "A title inside the row"], "style": ["font_size": 16.0]],
+            ["op": "children", "id": 1, "ids": [2, 3]],
+            ["op": "children", "id": 3, "ids": [4]],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 1000.0, "w": 400.0, "h": 120.0],
+            ["op": "content", "id": 3, "w": 600.0, "h": 120.0],
+            ["op": "frame", "id": 4, "x": 20.0, "y": 10.0, "w": 250.0, "h": 32.0],
+        ]))
+        window.layoutIfNeeded()
+        p.scrollPump.reset()
+        let title = try XCTUnwrap(p.views[4]), scroll = try XCTUnwrap(p.views[1]?.scrollView)
+        title.dropTextRaster()
+        XCTAssertTrue(p.owedText.contains(title.id))
+        p.scrollPump.scrolled(p.views[1])
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertFalse(title.textRasterReady)
+        scroll.contentOffset.y = 800
+        p.scrollPump.scrolled(p.views[1])
+        XCTAssertTrue(title.textRasterReady)
+    }
+
     func testFallbackTextSkipsTheRasterPassAndReturnsWhenItCanRasterAgain() throws {
         let session = fixture("pump-fallback-text")
         defer { session.destroy(); window.isHidden = true }
