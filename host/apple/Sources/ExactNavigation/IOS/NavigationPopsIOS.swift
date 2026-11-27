@@ -72,12 +72,24 @@ extension NavigationHost {
     /// the app pushed meanwhile, or on a tab the router has left and UIKit
     /// does not select) is not followed, and the router's stack is written
     /// back.
+    /// While UIKit collapses or expands a split its calls only record the
+    /// pops (`recordPops`), and a fresh turn (`fresh`) reports them, outside
+    /// UIKit's adaptation (LLP 1127 D15).
     @discardableResult
-    func followPops() -> Bool {
+    func followPops(fresh: Bool = false) -> Bool {
         guard !syncing else { return false }
-        let popped = poppedByUIKit()
-        guard !popped.isEmpty else { return false }
-        for route in popped where route.search?.endEditing(completion: { [weak self] in self?.followPops() }) == true { return false }
+        if !fresh, splitsMoving {
+            recordPops()
+            return false
+        }
+        var popped = owedPops.filter(\.held)
+        for route in poppedByUIKit() where !popped.contains(where: { $0 === route }) { popped.append(route) }
+        guard !popped.isEmpty else {
+            owedPops = []
+            return false
+        }
+        for route in popped where route.search?.endEditing(completion: { [weak self] in self?.followPops(fresh: true) }) == true { return false }
+        owedPops = []
         for shown in popped.compactMap({ $0.lastStack?.topViewController }) { followSelection(showing: shown) }
         for route in popped { route.held = false }
         guard let top = selectedKey, let target = NavigationRules.backTarget(shownKeys: shownKeys, popped: Set(popped.map(\.key)), selected: top) else {
@@ -154,14 +166,34 @@ extension NavigationHost {
         }
     }
 
+    /// UIKit's push or pop on `nav`, while it runs: its coordinator presents
+    /// nothing (a sheet's has a presentation style; a rotation's is not the
+    /// stack's) and moves the stack's top controller in or out. The top is
+    /// the destination until a cancelled swipe's rollback ends, then the
+    /// source again in its `didShow`.
+    static func pushOrPop(on nav: UINavigationController) -> UIViewControllerTransitionCoordinator? {
+        guard let transition = nav.transitionCoordinator, transition.presentationStyle == .none else { return nil }
+        let top = nav.topViewController
+        return transition.viewController(forKey: .to) === top || transition.viewController(forKey: .from) === top ? transition : nil
+    }
+
     /// Follow in the next turn a pop UIKit committed that no call reported.
     func followPopsNextTurn() {
         guard !followOwed else { return }
         followOwed = true
         DispatchQueue.main.async { [weak self] in
             self?.followOwed = false
-            self?.followPops()
+            self?.followPops(fresh: true)
         }
+    }
+
+    /// Read the pops UIKit committed and keep them for a fresh turn to report:
+    /// at a split's question, before UIKit's move makes a detail the person
+    /// popped off the list's column look shown again (`SplitIOS.showsDetail`),
+    /// and from UIKit's calls while it moves.
+    func recordPops() {
+        for route in poppedByUIKit() where !owedPops.contains(where: { $0 === route }) { owedPops.append(route) }
+        if !owedPops.isEmpty { followPopsNextTurn() }
     }
 
     func prepare(_ batch: Batch) {
@@ -199,7 +231,9 @@ extension NavigationHost {
         // Leave each hold for its own release while a projection is running, or for the sync owed in the next turn: UIKit
         // reports its own move of a tab's routes as a transition's end, from within the move, where a layout of the tab
         // container can leave it a More that UIKit let go, as a tab
-        guard !syncing, !resyncOwed else { return }
+        // While UIKit moves a split, inside its question or a column's transition that D23 ends, the move's settling
+        // runs what is held (`splitChanged`)
+        guard !syncing, !resyncOwed, !splitsMoving else { return }
         guard pendingSync || tabsHeld || stackWritesOwed else {
             settleScrollEdges()
             return

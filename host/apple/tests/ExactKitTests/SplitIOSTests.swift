@@ -15,7 +15,7 @@ import ExactCore
 /// sets it, so each test runs the same on any simulator:
 /// bun host/apple/build.mjs --test --ios --only SplitIOSTests
 final class SplitIOSTests: XCTestCase {
-    private var window: UIWindow?
+    var window: UIWindow?
     private var session: ExactSession?
     /// The view booted out of the window (`boot(mounted: false)`), which nothing else holds.
     private var unmounted: ExactView?
@@ -31,7 +31,7 @@ final class SplitIOSTests: XCTestCase {
 
     /// `fixture` booted in a window of `size` at the size class `width`
     /// (compact collapses the split, regular expands it).
-    private func boot(_ fixture: String = "SPLIT_BACK", size: CGSize = CGSize(width: 402, height: 874),
+    func boot(_ fixture: String = "SPLIT_BACK", size: CGSize = CGSize(width: 402, height: 874),
                       width: UIUserInterfaceSizeClass = .compact, mounted: Bool = true) throws -> ExactSession {
         if ExactEnv.authoredChrome { throw XCTSkip("under the agent's chrome the stack is not split") }
         let plan = try fixturePlan(fixture)
@@ -53,24 +53,24 @@ final class SplitIOSTests: XCTestCase {
         return session
     }
 
-    private func until(_ what: String, _ done: () -> Bool) { waitFor(what, cap: 20, done) }
+    func until(_ what: String, _ done: () -> Bool) { waitFor(what, cap: 20, done) }
 
     /// The split, once installed and at rest.
-    private func split(_ session: ExactSession) throws -> SplitIOS {
+    func split(_ session: ExactSession) throws -> SplitIOS {
         let navigation = session.presenter.navigationHost, agent = Agent(session: session)
         until("a list whose rows push is a split") { navigation.split != nil && !agent.nativeInFlight() }
         return try XCTUnwrap(navigation.split)
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, testId)
     }
 
-    private func has(_ session: ExactSession, _ testId: String) -> Bool {
+    func has(_ session: ExactSession, _ testId: String) -> Bool {
         session.presenter.views.values.contains { $0.props["testId"] == testId }
     }
 
-    private func tap(_ session: ExactSession, _ testId: String) throws {
+    func tap(_ session: ExactSession, _ testId: String) throws {
         let target = try node(session, testId)
         if let lists = session.presenter.groupedLists as? GroupedListHost, lists.draws(target.id) {
             until("the row \(testId) is in the window") {
@@ -955,12 +955,14 @@ final class SplitIOSTests: XCTestCase {
     }
 
     /// An iPhone Duo unfolding: UIKit asks which display mode to expand to
-    /// while the split still reads compact, then takes N1 out of N0, its
+    /// while the split still reads collapsed, then takes N1 out of N0, its
     /// `didShow` arriving before the split says it expanded. That is no Back:
-    /// the router keeps the book and its notes. The order is UIKit's on the
-    /// Duo simulator, replayed here.
+    /// the router keeps the book and its notes, and N1 shows them beside the
+    /// list. Driven by UIKit's own expansion at a regular width (a replay that
+    /// asked the question at a compact one read as a move UIKit abandoned).
     func testTheDetailLeavingTheListAsUIKitExpandsIsNoBack() throws {
-        let session = try boot()
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit expands a split only in a window a scene holds") }
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .compact)
         let agent = Agent(session: session)
         let split = try split(session)
         try tap(session, "row-a")
@@ -968,12 +970,14 @@ final class SplitIOSTests: XCTestCase {
         try tap(session, "notes-a")
         until("its notes are pushed") { split.shown.count == 3 && has(session, "notes-page") && !agent.nativeInFlight() }
         XCTAssertTrue(split.nested)
-        XCTAssertEqual(split.controller.traitCollection.horizontalSizeClass, .compact)
-        _ = split.splitViewController(split.controller, displayModeForExpandingToProposedDisplayMode: .oneBesideSecondary)
-        split.list.setViewControllers(Array(split.list.viewControllers.prefix(1)), animated: false)
-        waitForMainQueue("the calls the move made")
+        let window = try XCTUnwrap(self.window)
+        window.traitOverrides.horizontalSizeClass = .regular
+        window.updateTraitsIfNeeded()
+        window.layoutIfNeeded()
+        until("expanded and settled") { !split.controller.isCollapsed && !split.moving && !agent.nativeInFlight() }
+        waitForMainQueue("any Back a fresh turn would press")
         XCTAssertTrue(has(session, "notes-page") && has(session, "notes-a"), "the router keeps the book and its notes")
-        XCTAssertTrue(split.moving && agent.nativeInFlight(), "the move is in flight until UIKit says it expanded")
+        XCTAssertEqual(split.detailRoutes.count, 2, "N1 holds the book and its notes beside the list")
     }
 
     /// As UIKit collapses the split it puts N1 in N0 while the split still
@@ -998,7 +1002,7 @@ final class SplitIOSTests: XCTestCase {
 
     /// The book, collapsed: UIKit's Back from it pops N1 off N0, which the
     /// person may also swipe (`InteractivePop`).
-    private func collapsedBook(_ session: ExactSession) throws -> SplitIOS {
+    func collapsedBook(_ session: ExactSession) throws -> SplitIOS {
         let split = try split(session), agent = Agent(session: session)
         try tap(session, "row-a")
         until("the book is pushed") { split.shown.count == 2 && split.nested && !agent.nativeInFlight() }

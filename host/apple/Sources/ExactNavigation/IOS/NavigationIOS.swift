@@ -53,6 +53,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     private var syncYieldReported = false
     /// A pop UIKit committed with no call Exact heard is followed in the next turn (`followPopsNextTurn`).
     var followOwed = false
+    /// The pops read while UIKit moved a split, until a fresh turn reports them (`recordPops`).
+    var owedPops: [RouteController] = []
+    /// The columns whose transition ended while their split moved, run once it settles (`completeOwedTransitions`).
+    var transitionEndsOwed: [UINavigationController] = []
     private var mounting = false
     private(set) weak var container: NodeView?
     private(set) var routeIDs: [UInt32] = []
@@ -579,7 +583,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         syncing = true
         defer {
             syncing = false
-            if presenter.session?.view?.window != nil {
+            // While UIKit moves a split its writes wait for the move's settling, which runs them (`splitChanged`)
+            if presenter.session?.view?.window != nil, !splitsMoving {
                 settleScrollEdges()
                 presenter.flushPendingFocus(); presenter.elementScrolls.flush()
             }
@@ -633,6 +638,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // Follow by the next turn a pop UIKit committed that no call has reported yet (its `willShow` is still to
         // come); until then its tab is not written (`routesInFlight`)
         if !poppedByUIKit().isEmpty { followPopsNextTurn() }
+        // While UIKit moves a split it is the one writer of the split and its containers (LLP 1127 D15): the
+        // projection waits for the settling, which projects the router's visits as they then stand (`splitChanged`)
+        if splitsMoving {
+            projectionHeld = true
+            owePress()
+            return
+        }
         let root = p.root, wanted = p.chosen
         // A presentation whose route a logical ancestor's `display: none`
         // hides is not presented, nor is any above it: its sheet is out of
@@ -995,7 +1007,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
 
     /// An explicit focus request may reach the arriving screen once UIKit mounts it.
     func isArriving(_ node: NodeView) -> Bool {
-        guard node.headerField == nil, !syncing, !mounting, let navigation, let transition = pushOrPop(on: navigation),
+        guard node.headerField == nil, !syncing, !mounting, let navigation, let transition = Self.pushOrPop(on: navigation),
               let route = transition.viewController(forKey: transition.isCancelled ? .from : .to) as? RouteController else { return false }
         return presenter.authored(node, inside: route.node)
     }
@@ -1014,7 +1026,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// there until the tab shows again (LLP 1075.003 §9.16), and a write to
     /// that stack waits for it (`writable`).
     var changing: Bool {
-        navigation.map { $0.viewIfLoaded?.window != nil && pushOrPop(on: $0) != nil } ?? false || routesInFlight(selectedStack)
+        navigation.map { $0.viewIfLoaded?.window != nil && Self.pushOrPop(on: $0) != nil } ?? false || routesInFlight(selectedStack)
             || split.map { $0.inTransition && $0.controller.viewIfLoaded?.window != nil } ?? false
     }
     /// More's own push or pop on screen, of a plain tab it shows (`PlainTab`), which `changing` does not read: More's
@@ -1022,7 +1034,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var moreChanging: Bool {
         #if os(iOS)
         guard let more, more.viewIfLoaded?.window != nil else { return false }
-        return pushOrPop(on: more) != nil
+        return Self.pushOrPop(on: more) != nil
         #else
         return false
         #endif
@@ -1237,17 +1249,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             || scrolls.contains(node.style["overflow_y"]?.string ?? "")
     }
 
-    /// UIKit's push or pop on `nav`, while it runs: its coordinator presents
-    /// nothing (a sheet's has a presentation style; a rotation's is not the
-    /// stack's) and moves the stack's top controller in or out. The top is
-    /// the destination until a cancelled swipe's rollback ends, then the
-    /// source again in its `didShow`.
-    private func pushOrPop(on nav: UINavigationController) -> UIViewControllerTransitionCoordinator? {
-        guard let transition = nav.transitionCoordinator, transition.presentationStyle == .none else { return nil }
-        let top = nav.topViewController
-        return transition.viewController(forKey: .to) === top || transition.viewController(forKey: .from) === top ? transition : nil
-    }
-
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
         // Follow a pop UIKit committed (its Back button, a tap on the selected tab, More's pop to its list) as it
         // begins, before the call's other work; a swipe commits only at its end
@@ -1268,7 +1269,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         navigationController.transitionCoordinator?.animate(alongsideTransition: { [weak self] _ in self?.presenter.paintVisibleText() })
         // @ref LLP 1038 D6/D11; LLP 1035.001 D2 — a cancelled swipe calls
         // willShow again for its source, in the transition already begun.
-        guard let transition = pushOrPop(on: navigationController), transition.viewController(forKey: .to) === viewController else { return }
+        guard let transition = Self.pushOrPop(on: navigationController), transition.viewController(forKey: .to) === viewController else { return }
         // A swipe, UIKit's own: the router follows at its end, so Observe's
         // render mark is this transition's first frame, unless it is
         // cancelled. A pop UIKit commits at once was followed above.
@@ -1324,7 +1325,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         HostLog.note(presenter.session, "navigation: didShow \((viewController as? RouteController)?.key ?? "?")")
         // An animated push or pop ends in its coordinator's completion
-        guard pushOrPop(on: navigationController) == nil else { return }
+        guard Self.pushOrPop(on: navigationController) == nil else { return }
         transitionEnded(navigationController, swipe: nil, cancelled: false)
     }
 
@@ -1349,9 +1350,17 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         completeTransition(navigationController, swipe: swipe, cancelled: cancelled)
     }
 
-    private func completeTransition(_ navigationController: UINavigationController,
-                                    swipe: Swipe?, cancelled: Bool) {
+    func completeTransition(_ navigationController: UINavigationController,
+                            swipe: Swipe?, cancelled: Bool) {
         guard follows(navigationController), let viewController = navigationController.topViewController else { return }
+        // A column's transition D23 ends inside UIKit's question records its pop; the settling does the rest (D15)
+        if splitsMoving, let columns = ([split].compactMap { $0 } + Array(tabSplits.values)).first(where: { $0.holds(navigationController) }) {
+            recordPops()
+            if !transitionEndsOwed.contains(where: { $0 === navigationController }) { transitionEndsOwed.append(navigationController) }
+            // A column's transition that ends may be the last thing the move waited on
+            columns.settleCheckSoon()
+            return
+        }
         if nativeMove != .ownerRemoved { nativeMove = .transition }
         stopRevealing()
         // The route a pop took away keeps its block until it leaves the stack (LLP 1123 D2)
