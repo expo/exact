@@ -36,6 +36,7 @@ fn freshness_decides_what_a_load_does() {
     let at = |ago: u64, pairs: &[(&str, &str)]| {
         Head::of(
             &headers(pairs),
+            &[],
             now - Duration::from_secs(ago),
             Duration::ZERO,
         )
@@ -91,6 +92,7 @@ fn freshness_decides_what_a_load_does() {
             ("date", "Sun, 06 Nov 1994 08:49:37 GMT"),
             ("last-modified", "Sun, 06 Nov 1994 08:32:57 GMT"),
         ]),
+        &[],
         received,
         Duration::ZERO,
     );
@@ -115,6 +117,7 @@ fn an_entry_outlives_its_process_under_its_own_url_and_a_304_freshens_it() {
             ("Set-Cookie", "secret"),
             ("Date", "Sun, 06 Nov 1994 08:49:37 GMT"),
         ]),
+        &[],
         SystemTime::now(),
         Duration::from_millis(40),
     );
@@ -135,6 +138,7 @@ fn an_entry_outlives_its_process_under_its_own_url_and_a_304_freshens_it() {
     // An answer it may not keep takes the stored one with it.
     let no_store = Head::of(
         &headers(&[("cache-control", "no-store")]),
+        &[],
         SystemTime::now(),
         Duration::ZERO,
     );
@@ -154,15 +158,17 @@ fn an_entry_outlives_its_process_under_its_own_url_and_a_304_freshens_it() {
     let mut entry = disk.get(url).expect("stored");
 
     // A 304's headers replace the stored ones; the old exchange's `Date` goes.
-    let freshened = entry.head.refreshed(
-        &headers(&[("cache-control", "max-age=3600")]),
-        SystemTime::now(),
-        Duration::ZERO,
-    );
+    let refreshed = |pairs: &[(&str, &str)]| {
+        (entry.head).refreshed(&headers(pairs), &[], SystemTime::now(), Duration::ZERO)
+    };
+    let freshened = refreshed(&[("cache-control", "max-age=3600")]).unwrap();
     assert_eq!(
         freshened.headers,
         headers(&[("etag", "\"v1\""), ("cache-control", "max-age=3600")])
     );
+    // A 304 that names another representation freshens nothing.
+    assert!(refreshed(&[("etag", "\"v1\"")]).is_some());
+    assert!(refreshed(&[("etag", "\"v2\"")]).is_none());
 
     // A torn entry reads as none, and is gone.
     let file = std::fs::read_dir(&dir)
@@ -188,6 +194,7 @@ fn the_least_recently_used_go_first_to_the_cap() {
     let dir = dir();
     let head = Head::of(
         &headers(&[("cache-control", "max-age=60")]),
+        &[],
         SystemTime::now(),
         Duration::ZERO,
     );
@@ -214,5 +221,31 @@ fn the_least_recently_used_go_first_to_the_cap() {
     // Over 1/20 of the cap is never kept.
     disk.put(&url(99), &head, &body(&dir, 99, 101), 101);
     assert!(disk.get(&url(99)).is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_entry_answers_only_the_request_its_vary_names() {
+    let head = |vary: &str, accept: &str| {
+        Head::of(
+            &headers(&[("cache-control", "max-age=60"), ("vary", vary)]),
+            &[("accept", accept)],
+            SystemTime::now(),
+            Duration::ZERO,
+        )
+    };
+    let png = [("accept", "image/png")];
+    assert!(head("Accept", "image/png").selects(&png));
+    assert!(!head("Accept", "image/webp").selects(&png));
+    // The transport decodes a body, and adds a `User-Agent` this cache never sees.
+    assert!(head("accept-encoding, accept", "image/png").selects(&png));
+    assert!(!head("User-Agent", "image/png").selects(&png));
+    assert!(!head("*", "image/png").selects(&png));
+    // What it was selected by outlives the process.
+    let dir = dir();
+    let url = "https://cdn.example/v.jpg";
+    let disk = Disk::new(dir.clone(), DISK_BYTES);
+    disk.put(url, &head("Accept", "image/webp"), &body(&dir, 1, 10), 10);
+    assert!(!disk.get(url).unwrap().head.selects(&png));
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -608,9 +608,11 @@ impl Downloads {
                 load.progress(self.policy.request);
             }
         };
-        let mut url = clean(&job.url).ok_or_else(|| refused("not an http or https URL"))?;
-        let key = url.to_string();
-        let mut stored = self.disk().and_then(|disk| disk.get(&key));
+        let asked_for = clean(&job.url).ok_or_else(|| refused("not an http or https URL"))?;
+        let key = asked_for.to_string();
+        let sent = [("accept", ACCEPT)];
+        let mut stored =
+            (self.disk().and_then(|disk| disk.get(&key))).filter(|entry| entry.head.selects(&sent));
         if let Some(entry) = &mut stored {
             let usable = entry.head.usable(SystemTime::now());
             let shown = !job.refresh
@@ -627,56 +629,78 @@ impl Downloads {
                 stored = None;
             }
         }
-        // Kept under the URL asked for only while every hop is permanent.
-        let mut permanent = true;
-        let (asked, started) = (SystemTime::now(), Instant::now());
-        let mut redirects = 0;
-        let mut response = loop {
-            self.fetches.fetch_add(1, Ordering::Relaxed);
-            let mut request = Request::get(url.as_str());
-            request.headers.set("accept", ACCEPT);
-            let validated = stored.iter().filter(|_| permanent);
-            for (name, value) in validated.flat_map(|entry| entry.head.validators()) {
-                request.headers.set(name, value);
-            }
-            // The cap applies to the answer, after its status (below).
-            request.max_body = Some(usize::MAX);
-            // The transport's own phases outlast the clock's whole-load bound.
-            request.timeout =
-                Some(whole.saturating_duration_since(Instant::now()) + Duration::from_secs(1));
-            let response = self
-                .transport
-                .open(&request, signal)
-                .map_err(|e| failed(e.to_string()))?;
-            progress();
-            let location = matches!(response.status, 301 | 302 | 303 | 307 | 308)
-                .then(|| response.headers.get("location"))
-                .flatten();
-            let Some(location) = location else {
-                break response;
+        let (mut response, received, delay, direct) = loop {
+            let mut url = asked_for.clone();
+            let started = Instant::now();
+            let mut redirects = 0;
+            let response = loop {
+                self.fetches.fetch_add(1, Ordering::Relaxed);
+                let mut request = Request::get(url.as_str());
+                for (name, value) in sent {
+                    request.headers.set(name, value);
+                }
+                // The validators are the URL's own: no redirect's target gets them.
+                let validated = stored.iter().filter(|_| redirects == 0);
+                for (name, value) in validated.flat_map(|entry| entry.head.validators()) {
+                    request.headers.set(name, value);
+                }
+                // The cap applies to the answer, after its status (below).
+                request.max_body = Some(usize::MAX);
+                // The transport's own phases outlast the clock's whole-load bound.
+                request.timeout =
+                    Some(whole.saturating_duration_since(Instant::now()) + Duration::from_secs(1));
+                let response = self
+                    .transport
+                    .open(&request, signal)
+                    .map_err(|e| failed(e.to_string()))?;
+                progress();
+                let location = matches!(response.status, 301 | 302 | 303 | 307 | 308)
+                    .then(|| response.headers.get("location"))
+                    .flatten();
+                let Some(location) = location else {
+                    break response;
+                };
+                redirects += 1;
+                if redirects > MAX_REDIRECTS {
+                    return Err(refused("too many redirects"));
+                }
+                url = url
+                    .join(location)
+                    .ok()
+                    .and_then(|next| clean(next.as_str()))
+                    .ok_or_else(|| refused(format!("a redirect to {}", without_query(location))))?;
             };
-            permanent &= matches!(response.status, 301 | 308);
-            redirects += 1;
-            if redirects > MAX_REDIRECTS {
-                return Err(refused("too many redirects"));
+            let (received, delay) = (SystemTime::now(), started.elapsed());
+            let Some(mut entry) = stored
+                .take()
+                .filter(|_| response.status == 304 && redirects == 0)
+            else {
+                // Where a redirect leads may change, and its own headers are not
+                // read: an answer that came through one is not kept.
+                break (response, received, delay, redirects == 0);
+            };
+            let refreshed =
+                (entry.head).refreshed(response.headers.entries(), &sent, received, delay);
+            if let Some(head) = refreshed {
+                if let Ok(body) = spooled(&mut entry) {
+                    if head.selects(&sent) {
+                        *then = Some(Then::Store(key, head));
+                    }
+                    return Ok(body);
+                }
             }
-            url = url
-                .join(location)
-                .ok()
-                .and_then(|next| clean(next.as_str()))
-                .ok_or_else(|| refused(format!("a redirect to {}", without_query(location))))?;
+            // A 304 for another representation, or a stored body that cannot be
+            // read: asked for whole, and the entry goes.
+            drop(entry);
+            if let Some(disk) = self.disk() {
+                disk.remove(&key);
+            }
         };
-        if let (304, Some(entry)) = (response.status, &mut stored) {
-            let head = entry
-                .head
-                .refreshed(response.headers.entries(), asked, started.elapsed());
-            let body = spooled(entry)?;
-            *then = Some(Then::Store(key, head));
-            return Ok(body);
-        }
-        if response.status == 200 && permanent {
-            let head = disk::Head::of(response.headers.entries(), asked, started.elapsed());
-            *then = Some(Then::Store(key, head));
+        if response.status == 200 && direct {
+            let head = disk::Head::of(response.headers.entries(), &sent, received, delay);
+            if head.selects(&sent) {
+                *then = Some(Then::Store(key, head));
+            }
         }
         // A status that is not 2xx is the failure of a body that is not an
         // image; its body is read all the same, as a browser reads it.

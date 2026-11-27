@@ -38,7 +38,8 @@ const VERSION: &str = "exact-image-cache 1";
 const MAX_HEAD: usize = 16 << 10;
 
 /// A stored response's head: its kept headers, when it was received (since
-/// the epoch) and how long after it was asked for.
+/// the epoch) and how long after it was asked for. The request's values of
+/// the headers its `Vary` names are kept among them, as `>name`.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Head {
     pub headers: Vec<(String, String)>,
@@ -46,26 +47,45 @@ pub(super) struct Head {
     pub delay: Duration,
 }
 impl Head {
-    pub fn of(headers: &[(String, String)], received: SystemTime, delay: Duration) -> Self {
-        Self {
+    /// `headers` answering a request that sent `sent`.
+    pub fn of(
+        headers: &[(String, String)],
+        sent: &[(&str, &str)],
+        received: SystemTime,
+        delay: Duration,
+    ) -> Self {
+        let mut head = Self {
             headers: (headers.iter())
                 .filter(|(name, _)| KEPT.iter().any(|k| name.eq_ignore_ascii_case(k)))
                 .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
                 .collect(),
             received: received.duration_since(UNIX_EPOCH).unwrap_or_default(),
             delay,
-        }
+        };
+        let selecting: Vec<_> = (head.varied())
+            .filter_map(|name| Some((format!(">{name}"), sent_value(sent, &name)?.to_owned())))
+            .collect();
+        head.headers.extend(selecting);
+        head
     }
     /// This head freshened by a 304's headers (RFC 9111 §4.3.4): each kept
     /// header it carries replaces the stored ones. The stored `Date` and `Age`
-    /// go either way, as they describe the old exchange's timing.
+    /// go either way, as they describe the old exchange's timing. None when
+    /// the 304 names another representation: an `ETag` other than the stored one.
     pub fn refreshed(
         &self,
         headers: &[(String, String)],
+        sent: &[(&str, &str)],
         received: SystemTime,
         delay: Duration,
-    ) -> Self {
-        let fresh = Head::of(headers, received, delay);
+    ) -> Option<Self> {
+        let fresh = Head::of(headers, sent, received, delay);
+        if fresh
+            .get("etag")
+            .is_some_and(|etag| self.get("etag") != Some(etag))
+        {
+            return None;
+        }
         let mut kept: Vec<_> = (self.headers.iter())
             .filter(|(name, _)| {
                 !matches!(name.as_str(), "date" | "age")
@@ -74,10 +94,28 @@ impl Head {
             .cloned()
             .collect();
         kept.extend(fresh.headers);
-        Self {
+        Some(Self {
             headers: kept,
             ..fresh
-        }
+        })
+    }
+    /// The headers its `Vary` names, but `Accept-Encoding`: the transport
+    /// decodes a body before it is kept, so its coding selects nothing here.
+    fn varied(&self) -> impl Iterator<Item = String> + '_ {
+        (self.get("vary").unwrap_or_default().split(','))
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty() && name != "accept-encoding")
+    }
+    /// Whether it answers a request that sends `sent` (RFC 9111 §4.1): the
+    /// request it answered sent the same value of each header its `Vary`
+    /// names. A header this cache does not send itself, such as the
+    /// `User-Agent` a transport adds, is one it cannot compare, so a response
+    /// that varies on one is never used (`Vary: *` included).
+    pub fn selects(&self, sent: &[(&str, &str)]) -> bool {
+        self.varied().all(|name| {
+            sent_value(sent, &name)
+                .is_some_and(|value| self.get(&format!(">{name}")) == Some(value))
+        })
     }
     fn get(&self, name: &str) -> Option<&str> {
         (self.headers.iter())
@@ -107,6 +145,12 @@ impl Head {
             Use::Validate
         }
     }
+}
+
+fn sent_value<'a>(sent: &[(&str, &'a str)], name: &str) -> Option<&'a str> {
+    (sent.iter())
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, value)| *value)
 }
 
 #[derive(Debug, PartialEq)]
@@ -203,7 +247,7 @@ impl Disk {
         }
         let mut text = format!(
             "{VERSION}\n{url}\n{} {} {len}\n",
-            head.received.as_secs(),
+            head.received.as_millis(),
             head.delay.as_millis()
         );
         for (name, value) in &head.headers {
@@ -280,7 +324,7 @@ fn read(file: &mut File, url: &str) -> Option<(Head, u64, u64)> {
         .collect::<Option<_>>()?;
     let head = Head {
         headers,
-        received: Duration::from_secs(received),
+        received: Duration::from_millis(received),
         delay: Duration::from_millis(delay),
     };
     Some((head, at as u64, len))

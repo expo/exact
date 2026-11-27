@@ -227,12 +227,45 @@ fn a_body_and_a_redirect_load_and_the_cache_answers_again() {
 fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
     let picture = png(4, 3, [10, 20, 30, 255]);
     let body = picture.clone();
-    let windows = AtomicUsize::new(0);
+    let (windows, retags, moves) = (
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    );
     let refreshed = png(4, 3, [40, 50, 60, 255]);
+    let newer = refreshed.clone();
     let origin = serve(move |path, headers| match path {
         "/fresh.png" => Answer::Headed(200, "Cache-Control: max-age=3600\r\n".into(), body.clone()),
-        // Where a temporary redirect leads may change: never kept under its URL.
+        // Where a redirect leads may change: never kept under its URL.
         "/moved.png" => Answer::Redirect("/fresh.png".into()),
+        "/moved-for-good.png" => Answer::Headed(301, "Location: /fresh.png\r\n".into(), Vec::new()),
+        // Two seconds fresh, its headers a second in coming: the wait is
+        // counted once in its age.
+        "/slow.png" => {
+            std::thread::sleep(Duration::from_millis(1100));
+            Answer::Headed(200, "Cache-Control: max-age=2\r\n".into(), body.clone())
+        }
+        // A 304 that names another representation is asked for again, whole.
+        "/retagged.png" if headers.contains("if-none-match") => {
+            Answer::Headed(304, "ETag: \"v2\"\r\n".into(), Vec::new())
+        }
+        "/retagged.png" if retags.fetch_add(1, Ordering::SeqCst) > 0 => Answer::Headed(
+            200,
+            "Cache-Control: no-cache\r\nETag: \"v2\"\r\n".into(),
+            refreshed.clone(),
+        ),
+        // Stored once, then moved: its validators are not the target's.
+        "/later-moved.png" if moves.fetch_add(1, Ordering::SeqCst) > 0 => {
+            Answer::Headed(301, "Location: /target.png\r\n".into(), Vec::new())
+        }
+        "/target.png" if headers.contains("if-none-match") => {
+            Answer::Headed(304, String::new(), Vec::new())
+        }
+        "/target.png" => Answer::Headed(
+            200,
+            "Cache-Control: max-age=3600\r\n".into(),
+            refreshed.clone(),
+        ),
         // Refreshed, it is another picture, fresh for an hour.
         "/window.png" if windows.fetch_add(1, Ordering::SeqCst) > 0 => Answer::Headed(
             200,
@@ -264,10 +297,18 @@ fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
     };
     let (fresh, stale) = (format!("{origin}/fresh.png"), format!("{origin}/stale.png"));
     let window = format!("{origin}/window.png");
+    let (retagged, later) = (
+        format!("{origin}/retagged.png"),
+        format!("{origin}/later-moved.png"),
+    );
+    let slow = format!("{origin}/slow.png");
     let first = launch();
     let moved = format!("{origin}/moved.png");
-    assert_eq!(bytes(&fetched(&first, &moved).unwrap()), picture);
-    for url in [&fresh, &stale, &window] {
+    let moved_for_good = format!("{origin}/moved-for-good.png");
+    for url in [&moved, &moved_for_good] {
+        assert_eq!(bytes(&fetched(&first, url).unwrap()), picture);
+    }
+    for url in [&fresh, &stale, &window, &retagged, &later, &slow] {
         assert_eq!(bytes(&fetched(&first, url).unwrap()), picture);
         // Stored once the load has settled.
         let started = Instant::now();
@@ -279,11 +320,15 @@ fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
-    assert!(disk::Disk::new(dir.clone(), disk::DISK_BYTES)
-        .get(&moved)
-        .is_none());
+    for url in [&moved, &moved_for_good] {
+        assert!(disk::Disk::new(dir.clone(), disk::DISK_BYTES)
+            .get(url)
+            .is_none());
+    }
     let second = launch();
-    assert_eq!(bytes(&fetched(&second, &fresh).unwrap()), picture);
+    for url in [&slow, &fresh] {
+        assert_eq!(bytes(&fetched(&second, url).unwrap()), picture);
+    }
     assert_eq!(second.fetches.load(Ordering::Relaxed), 0);
     // `no-cache`: asked with its validator, whose 304 is the stored body.
     assert_eq!(bytes(&fetched(&second, &stale).unwrap()), picture);
@@ -303,6 +348,10 @@ fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
         }
     }
     assert_eq!(second.fetches.load(Ordering::Relaxed), 2);
+    for url in [&retagged, &later] {
+        assert_eq!(bytes(&fetched(&second, url).unwrap()), newer);
+    }
+    assert_eq!(second.fetches.load(Ordering::Relaxed), 6);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
