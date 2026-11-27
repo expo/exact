@@ -54,7 +54,6 @@ export function overlap(r, band, width, height) {
  * bound. A reader out of the document, or with no box, takes `initial`. */
 export function observe(readers, band = documentBand(), keyboard = keyboardInset()) {
   if (!readers.length) return { rounds: 0, unsettled: [] };
-  reserves = register(RESERVED);
   // Each reader's inputs are only those its style reads: kept, written and compared alone
   const reads = new Map(readers.map((el) => [el, consumed(el)]));
   const root = document.documentElement, before = new Map(readers.map((el) => [el, reads.get(el).inputs.map((i) => el.style.getPropertyValue(NAMES[i]))]));
@@ -265,7 +264,8 @@ function step(input, measured, last, caps, tolerance) {
  * UIKit bar does; the route itself does not, nor a box inside the bar, since the bar is the route's first child in its
  * flow (neutral.css) and either would move it by what it reads. A box observes only what reaches it, not its own
  * reservation, which its descendants observe (the kernel's `Reserved::inside`). */
-function over(readers, box) {
+export function over(readers, box) {
+  reserves = register(RESERVED);
   const own = new Map(), held = new Map();
   const steps = (a) => {
     let found = own.get(a);
@@ -297,8 +297,9 @@ const HOLDS = `${TRANSPARENT}, [style*="--exact-additional-safe-area-"], [style*
  * with every scroll offset at zero), and each edge's depth below the box that drew it (`caps`): from the viewport's
  * unsafe area `band`, through each of `steps` (`over`) in order: a bar draws the top line down to its bottom; a reserving
  * box takes what reaches it on each edge, adds its additional inset, clamps at 0 and adds its safe-area padding, from its
- * own edge. Each box is read once a round (`seen`). */
-function lines(steps, band, width, height, box, seen) {
+ * own edge. `outer` is the area's outer side on each edge (D13): the viewport's edge, or the padding edge of a box that
+ * reserves clear of the band. Each box is read once a round (`seen`). */
+export function lines(steps, band, width, height, box, seen) {
   const at = (el) => {
     if (!seen.has(el)) {
       const b = el.getClientRects().length ? el.getBoundingClientRect() : null, [dx, dy] = b ? unscrolled(chain(el, box).filter((a) => a === document.scrollingElement || box(a).scrolls)) : [0, 0];
@@ -306,7 +307,7 @@ function lines(steps, band, width, height, box, seen) {
     }
     return seen.get(el);
   };
-  const line = [band[0], width - band[1], height - band[2], band[3]], caps = [...band];
+  const line = [band[0], width - band[1], height - band[2], band[3]], caps = [...band], outer = [0, width, height, 0];
   for (const step of steps) {
     if (step.route) {
       const bar = at(step.header), route = at(step.route);
@@ -317,13 +318,20 @@ function lines(steps, band, width, height, box, seen) {
     if (!r) continue;
     const reached = overlap(r, [line[0], width - line[1], height - line[2], line[3]], width, height);
     const depth = reached.map((d, e) => Math.max(0, d + step.added[e]) + step.padding[e]);
+    // What a box reserves clear of the band starts at its padding edge (D13), what it adds to a band that reaches it at
+    // that band's outer side
+    const s = box(step.box).borders;
+    if (!reached[0] && depth[0]) outer[0] = r.top + s[0];
+    if (!reached[1] && depth[1]) outer[1] = r.right - s[1];
+    if (!reached[2] && depth[2]) outer[2] = r.bottom - s[2];
+    if (!reached[3] && depth[3]) outer[3] = r.left + s[3];
     line[0] = r.top + depth[0]; line[1] = r.right - depth[1]; line[2] = r.bottom - depth[2]; line[3] = r.left + depth[3];
     depth.forEach((d, e) => { caps[e] = d; });
   }
-  return { band: [line[0], width - line[1], height - line[2], line[3]], caps };
+  return { band: [line[0], width - line[1], height - line[2], line[3]], caps, outer };
 }
 
-function unscrolled(scrollers) {
+export function unscrolled(scrollers) {
   let dx = 0, dy = 0;
   for (const a of scrollers) {
     dx += a.scrollLeft;
@@ -336,7 +344,7 @@ function unscrolled(scrollers) {
  * containing block or one of that block's, the document's scroller last, unless the chain ends at a fixed box that only
  * the viewport contains. An in-flow box's containing block is its parent's box; an absolute one's its nearest positioned
  * ancestor or one that contains fixed boxes; a fixed one's its nearest that contains fixed boxes. */
-function chain(el, box = styles()) {
+export function chain(el, box = styles()) {
   const scroller = document.scrollingElement, found = [];
   let position = box(el).position;
   for (let a = el.parentElement; a; a = a.parentElement) {
@@ -354,14 +362,16 @@ function chain(el, box = styles()) {
 /** A transaction's reading of each element's computed position, of whether it contains fixed boxes, of whether it is
  * a scroll container (CSS Overflow 3: an axis neither `visible` nor `clip`) and of whether it has a transition that
  * runs, once each: the last three only when asked. */
-function styles() {
+export function styles() {
   const known = new Map();
   return (el) => {
     let b = known.get(el);
     if (!b) {
       const s = getComputedStyle(el);
-      let fixed, scrolls, transitions, reserved;
+      let fixed, scrolls, transitions, reserved, borders, stops;
       b = { position: s.position, get fixed() { return fixed ??= fixedContainer(s); },
+        get borders() { return borders ??= ["Top", "Right", "Bottom", "Left"].map((e) => parseFloat(s[`border${e}Width`]) || 0); },
+        get stops() { return stops ??= stopping(s, this.borders); },
         get reserved() { return reserved === undefined ? (reserved = reservation(s)) : reserved; },
         get scrolls() { return scrolls ??= [s.overflowX, s.overflowY].some((o) => o !== "visible" && o !== "clip"); },
         get transitions() { return transitions ??= s.transitionDuration.split(",").some((d) => parseFloat(d) > 0); } };
@@ -384,6 +394,16 @@ function reservation(s) {
   if (!reserves) return null;
   const v = RESERVED.map((name) => parseFloat(s.getPropertyValue(name)) || 0);
   return v.some((x) => x !== 0) ? { added: v.slice(0, 4), padding: v.slice(4) } : null;
+}
+
+/** On which edges (top right bottom left) a box with the computed style `s` stops a descendant's reach at its padding
+ * edge (D13): it clips on that edge's axis, has a border there, or is drawn through a transform, a filter, a clip path or
+ * a mask, which leaves the band no place. */
+function stopping(s, borders) {
+  const drawn = ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdropFilter", "clipPath", "mask"].some((p) => (s[p] ?? "none") !== "none" && s[p] !== "");
+  const clips = (o) => o !== "visible";
+  const y = drawn || clips(s.overflowY), x = drawn || clips(s.overflowX);
+  return [y || borders[0] > 0, x || borders[1] > 0, y || borders[2] > 0, x || borders[3] > 0];
 }
 
 /** Whether a box with the computed style `s` is the containing block of its fixed descendants, and so of its absolute
