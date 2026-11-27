@@ -1158,8 +1158,7 @@ impl Em<'_> {
             if b.kind == BindingKind::Prop && b.id == PropId::FocusGuide as u16 {
                 continue;
             }
-            // Nor have the system bars (LLP 1105 D7), interactive glass,
-            // a menu's order or a tip (LLP 1035.006.000 D4).
+            // Nor have the system bars (LLP 1105 D7), UIKit's glass and menu props or a tip (LLP 1035.006.000 D4).
             // A zoomable scroller's zoom is zoom.js's; no other scroller has one.
             if b.kind == BindingKind::Prop && b.id == PropId::ScrollZoom as u16 {
                 if zoomable {
@@ -1181,6 +1180,7 @@ impl Em<'_> {
                     || b.id == PropId::SystemBarsHidden as u16
                     || b.id == PropId::GlassInteractive as u16
                     || b.id == PropId::MenuOrder as u16
+                    || b.id == PropId::KeepsMenuPresented as u16
                     || b.id == PropId::Arrangement as u16
                     || b.id == PropId::Tip as u16
                     || b.id == PropId::TipMessage as u16

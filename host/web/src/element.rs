@@ -919,8 +919,11 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::BackgroundMaterial => "backgroundMaterial",
             // LLP 1053.000.000 D1: written, read by no rule, drawn nowhere.
             PropId::GlassGroup => "glassGroup",
-            // Interactive glass and a menu's order are UIKit's; a page has neither.
-            PropId::GlassInteractive | PropId::MenuOrder | PropId::Arrangement => continue,
+            // Interactive glass, a menu's order and a menu kept open at a pick are UIKit's; a page has none.
+            PropId::GlassInteractive
+            | PropId::MenuOrder
+            | PropId::KeepsMenuPresented
+            | PropId::Arrangement => continue,
             // A page has no tip system (LLP 1035.006.000 D4).
             PropId::Tip | PropId::TipMessage | PropId::TipImage | PropId::TipDone => continue,
             PropId::RetainFocus => "retainFocus",
