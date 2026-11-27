@@ -259,10 +259,12 @@
      viewport segments side by side, the list fills the segment at its inline start and the detail starts after the
      fold's gap (`--exact-split-detail`; LLP 1078 D6). */
   #exact-root [data-exact-sidebar] { flex-direction: row !important; }
-  #exact-root [role="tablist"][data-exact-sidebar-tabs] { order: -1; flex: none !important; box-sizing: border-box !important; width: 240px !important; height: auto !important; flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; justify-content: flex-start !important; gap: 2px !important; padding: 12px 10px !important; overflow-y: auto; }
+  /* The sidebar's sizing passes over a leaving list, which keeps the box presence measured for it (presence-glue.js `exit`). */
+  #exact-root [role="tablist"][data-exact-sidebar-tabs]:not([data-exiting]) { flex: none !important; box-sizing: border-box !important; width: 240px !important; height: auto !important; }
+  #exact-root [role="tablist"][data-exact-sidebar-tabs] { order: -1; flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; justify-content: flex-start !important; gap: 2px !important; padding: 12px 10px !important; overflow-y: auto; }
   #exact-root :is([role="tablist"][data-exact-sidebar-tabs], [role="tablist"][data-exact-sidebar-tabs] > :where([data-exact-list-item])) > [role="tab"] { flex: none !important; width: auto !important; height: auto !important; min-height: 36px; justify-content: start !important; padding: 6px 10px !important; border-radius: calc(8px * var(--exact-curve-reach)) !important; corner-shape: var(--exact-curve); }
   #exact-root [data-exact-tab-navigation="sidebar"] { order: -1; display: flex !important; flex: none !important; flex-direction: column !important; width: 240px !important; min-height: 0; }
-  #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > [data-exact-sidebar-tabs] { flex: 1 1 0% !important; min-height: 0; width: 100% !important; }
+  #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > [data-exact-sidebar-tabs]:not([data-exiting]) { flex: 1 1 0% !important; min-height: 0; width: 100% !important; }
   #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > footer { flex-shrink: 0; }
   #exact-root [data-exact-tab-navigation="hidden"], #exact-root :is([data-exact-tab-navigation="bar"], [data-exact-tab-navigation="bar"] > :where([data-exact-list-item])) > footer { display: none !important; }
   /* A tab's symbol is in its ink as the page lays it out now (the runtimes copy the title's at a commit, and a resize is none). */

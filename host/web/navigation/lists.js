@@ -1,7 +1,19 @@
-export const listRow = (el) => [...el.children].find((c) => !c.hasAttribute("data-exiting"));
+// A view presence is taking out (presence-glue.js `exit`) is no input of the projection: it keeps what the last
+// projection wrote until it is removed. Attribute and parent walks also work in the server renderer's DOM.
+export const leaving = (el) => el.hasAttribute("data-exiting");
+export const live = (el) => {
+  for (let n = el; n; n = n.parentElement) {
+    if (leaving(n)) {
+      return false;
+    }
+  }
+  return true;
+};
+export const listRow = (el) => [...el.children].find((c) => !leaving(c));
 export function viewChildren(el) {
   return [...el?.children ?? []].flatMap((c) => c.hasAttribute("data-exact-list-item") ? [listRow(c)].filter(Boolean) : [c]);
 }
+export const liveChildren = (el) => viewChildren(el).filter((child) => !leaving(child));
 // Semantic list items keep the row's own element and contribute no layout box.
 export function viewParent(el) {
   const p = el?.parentElement;

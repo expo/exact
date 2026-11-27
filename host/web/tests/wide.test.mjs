@@ -65,7 +65,8 @@ const page = (body, routePaths = [], waitForActivation = false) => style + `<div
 async function inChrome(html, test, w = 1280) {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(req.url === '/check.js' ? resolve(WEB, '../web-js/check.js') : resolve(WEB, 'navigation.js')));
+    const file = req.url === '/check.js' ? resolve(WEB, '../web-js/check.js') : ['/presence-glue.js', '/motion-glue.js'].includes(req.url) ? resolve(WEB, req.url.slice(1)) : resolve(WEB, 'navigation.js');
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(file));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=1400,900'] }), { cdp } = suite;
@@ -655,5 +656,72 @@ check('only an ordinary outer press associates its row with navigation', () => {
     expect(await evaluate(`[document.getElementById('owner').hasAttribute('data-exact-split-row'), back('r3')]`)).toEqual([true, false]);
     await evaluate(`(async () => { const {navigation} = await import('/navigation.js'); navigation.reset({top:3,url:'/item/b',visits:[[3,'/item/b']]}); select(3); })()`);
     expect(await evaluate(`[document.getElementById('owner').hasAttribute('data-exact-split-row'), back('r3')]`)).toEqual([false, true]);
+  });
+}, 60000);
+
+// A view presence takes out (presence-glue.js `exit`, the production controller's, with a fade the test ends) keeps
+// how the last projection showed it until it is removed, and the projection reads the live root without it
+check('a tab, panel, tablist, header, site nav or heading leaving a live root is none of the projection\'s input', () => {
+  const r2 = `<div navigationKey="2" id="r2" style="${abs}"><header id="head"><span data-exact-text role="heading" aria-level="2" id="title">r2</span><nav id="site"><a href="/a">A</a></nav></header><div>r2</div></div>`;
+  const t2 = `<div navigationKey="11" id="t2" data-navigationbar="transparent" style="${abs}"><header id="t2-head"><h2>t2</h2></header><button id="t2-go">Go</button><div style="flex:1;min-height:0;overflow-y:auto"><div style="height:1600px"></div></div></div>`;
+  const body = tabs(`<nav id="rail">${BAR}<footer id="foot">Account</footer></nav>`).replace(detail('r2', 2), r2).replace(detail('t2', 11), t2);
+  const leaves = `<style>@keyframes fade { to { opacity: 0 } }</style><script type="module">
+    window.exact ??= {};
+    const root = document.getElementById('exact-root'), live = import('./presence-glue.js').then(() => exact.presence(root));
+    window.reset = key => { root.innerHTML = ${JSON.stringify(body)}; select(key); };
+    window.el = id => document.getElementById(id);
+    // As a batch with an exit op: presence takes the view out, the batch's other ops run, then the projection
+    window.leave = async (view, ops = () => {}) => { (await live).exit(view, 'fade 10s linear both'); ops(); select(el('nav').getAttribute('navigationKey')); };
+    // Its fade ends and presence removes it, with no projection after
+    window.end = async view => { await Promise.all(view.getAnimations().map(a => (a.finish(), a.finished))); await new Promise(r => setTimeout(r)); return view.isConnected; };
+    window.hidden = view => [getComputedStyle(view).visibility, view.inert];
+    window.size = view => { const b = view.getBoundingClientRect(); return [b.x, b.y, b.width, b.height].map(Math.round); };
+    window.sidebar = () => [el('nav').hasAttribute('data-exact-sidebar'), el('rail').getAttribute('data-exact-tab-navigation'), box('panels')[0]];
+    window.backOn = header => { const b = header.shadowRoot?.querySelector('button[part=back]'); return !!b && !b.hidden && b.checkVisibility(); };
+    window.ground = header => getComputedStyle(header).backgroundColor;
+  </script>`;
+  return inChrome(page(body) + leaves, async (evaluate) => {
+    expect(await evaluate(`sidebar()`)).toEqual([true, 'sidebar', 240]);
+    // An unselected panel leaving stays hidden and inert, its top route out of reach, until it is gone
+    expect(await evaluate(`(async () => {
+      const p2 = el('p2'), go = el('t2-go'); select('11'); go.focus(); const reached = document.activeElement === go;
+      select('2'); await leave(p2); go.focus();
+      return [reached, hidden(p2), document.activeElement === go, await end(p2)];
+    })()`)).toEqual([true, ['hidden', true], false, false]);
+    // A tab leaving names its panel no more, which is released as one no tab names
+    expect(await evaluate(`(async () => { reset('2'); const tab = el('tab2'); await leave(tab); return [hidden(el('p2')), await end(tab), hidden(el('p2'))]; })()`))
+      .toEqual([['visible', false], false, ['visible', false]]);
+    // A wrapped tablist replaced: the new one is the sidebar beside the footer, during the fade and after it, and the
+    // old one keeps its column at the box it had
+    expect(await evaluate(`(async () => {
+      reset('2'); const old = el('bar'), before = size(old);
+      await leave(old, () => old.insertAdjacentHTML('afterend', ${JSON.stringify(BAR.replace(/id="(\w+)"/g, 'id="$1-new"'))}));
+      const next = el('bar-new'), during = [...sidebar(), next.hasAttribute('data-exact-sidebar-tabs'), old.hasAttribute('data-exact-sidebar-tabs'), size(old).join() === before.join()];
+      return [during, await end(old), [...sidebar(), next.hasAttribute('data-exact-sidebar-tabs')]];
+    })()`)).toEqual([[true, 'sidebar', 240, true, true, true], false, [true, 'sidebar', 240, true]]);
+    // A pushed route's transparent header replaced at the top of its scroller: the new one is the bar, clear, with its
+    // Back, during the fade and after it, and the old one stays clear as it goes
+    expect(await evaluate(`(async () => {
+      reset('11'); const old = el('t2-head'), had = [backOn(old), ground(old)];
+      await leave(old, () => old.insertAdjacentHTML('afterend', '<header id="t2-new"><span data-exact-text role="heading" aria-level="1">t2</span></header>'));
+      const next = el('t2-new'), bar = () => [next.hasAttribute('data-exact-bar'), backOn(next), ground(next)];
+      const during = [...bar(), ground(old)];
+      return [had, during, await end(old), bar()];
+    })()`)).toEqual([[true, 'rgba(0, 0, 0, 0)'], [true, true, 'rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)'], false, [true, true, 'rgba(0, 0, 0, 0)']]);
+    // A header whose nav leaves is no site's, and a heading replaced keeps the bar and names the page
+    expect(await evaluate(`(async () => {
+      reset('2'); const nav = el('site'); await leave(nav); const bar = () => [el('head').hasAttribute('data-exact-site'), el('head').hasAttribute('data-exact-bar')];
+      const site = [bar(), await end(nav), bar()], title = el('title');
+      await leave(title, () => title.insertAdjacentHTML('afterend', '<span data-exact-text role="heading" aria-level="2" id="title-new">Renamed</span>'));
+      return [site, bar(), document.title, await end(title), document.title];
+    })()`)).toEqual([[[false, true], false, [false, true]], [false, true], 'Renamed', false, 'Renamed']);
+    // The sole linked panel leaving: the tab bar is no sidebar from the fade's start, and the content takes its width
+    expect(await evaluate(`(async () => {
+      reset('2'); el('tab2').remove(); el('p2').remove(); select('2'); const p1 = el('p1'); await leave(p1);
+      const during = [el('nav').hasAttribute('data-exact-sidebar'), box('panels')[0], box('panels')[2]];
+      return [during, await end(p1), [el('nav').hasAttribute('data-exact-sidebar'), box('panels')[0], box('panels')[2]]];
+    })()`)).toEqual([[false, 0, 1280], false, [false, 0, 1280]]);
+    // A panel no tab names any more, still mounted, draws no "Select an item" once released
+    expect(await evaluate(`reset('1'); const prompt = placeholder('p1') !== null; el('tab1').remove(); select('10'); [prompt, placeholder('p1')]`)).toEqual([true, null]);
   });
 }, 60000);

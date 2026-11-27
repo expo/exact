@@ -1,4 +1,4 @@
-import { viewChildren, viewParent } from "./lists.js";
+import { leaving, live, liveChildren, viewChildren, viewParent } from "./lists.js";
 import { placeTabBar, inFlow } from "./tab-bar.js";
 import { fold, foldColumns, launched, onFold, launchLocation, launchVisits } from "./environment.js";
 import { agentParameters } from "./agent-parameters.js";
@@ -30,7 +30,7 @@ function inspectTestIds(root, log) {
   const seen = new Map();
   for (const el of root.querySelectorAll('[data-testid]')) {
     const route = el.closest('[navigationKey]');
-    if (!route || route.hasAttribute('navigationBack') || el.closest('[data-exiting]')) continue;
+    if (!route || route.hasAttribute('navigationBack') || !live(el)) continue;
     const id = el.getAttribute('data-testid');
     if (!id) continue;
     if (seen.has(id) && seen.get(id) !== route && !inspection.reported.has(id)) {
@@ -52,14 +52,14 @@ function captureLink(event) {
   const press = pressedLink = { event, from: last?.top, url: url.pathname + url.search + url.hash, at: canonicalOf(url.pathname + url.search) };
   setTimeout(() => { if (pressedLink === press) pressedLink = null; }, 0);
 }
-const routesIn = (node) => viewChildren(node).filter((r) => r.hasAttribute("navigationKey") && !r.hasAttribute("data-exiting"));
+const routesIn = (node) => viewChildren(node).filter((r) => r.hasAttribute("navigationKey") && !leaving(r));
 const setInert = (el, on) => {
   if (el.inert !== on) {
     el.inert = on;
   }
 };
 export const liveById = (id, root = document) => {
-  const el = document.getElementById(id), live = (n) => !n.closest("[data-exiting]");
+  const el = document.getElementById(id);
   return !el ? null : live(el) && root.contains(el) ? el : [...root.querySelectorAll("[id]")].find((n) => n.id === id && live(n)) ?? null;
 };
 // a command by id means the live element: one leaving keeps its ids for its own references
@@ -90,15 +90,18 @@ const tabsOf = (nav) => {
   }
   const all = [...nav?.getElementsByTagName("*") ?? []];
   const owns = (el) => {
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      if (p.hasAttribute("navigationKey")) {
+    for (let p = el; p; p = p.parentElement) {
+      if (p !== el && p.hasAttribute("navigationKey")) {
         return p === nav;
+      }
+      if (leaving(p)) {
+        return false;
       }
     }
     return false;
   };
   for (const list of all.filter((el) => el.getAttribute("role") === "tablist" && owns(el))) {
-    const panels = viewChildren(list).filter((tab) => tab.getAttribute("role") === "tab" && tab.hasAttribute("aria-controls")).map((tab) => all.find((panel) => panel.getAttribute("id") === tab.getAttribute("aria-controls"))).filter((panel) => panel?.getAttribute("role") === "tabpanel" && owns(panel));
+    const panels = viewChildren(list).filter((tab) => tab.getAttribute("role") === "tab" && tab.hasAttribute("aria-controls") && owns(tab)).map((tab) => all.find((panel) => panel.getAttribute("id") === tab.getAttribute("aria-controls"))).filter((panel) => panel?.getAttribute("role") === "tabpanel" && owns(panel));
     if (panels.length) {
       return [list, panels];
     }
@@ -259,7 +262,7 @@ export const overPage = (route) => {
 };
 // A route that shows the page it covers: a sheet, or a full-screen route whose author wrote its background, which composites over that page as CSS has it (Charlie, 2026-11-10). neutral.css gives a full-screen route a clear colour no author writes, so its computed colour tells whether the author wrote one, `transparent` included; a server render computes none (render.mjs). One that paints nothing hides the page, on the root's ground.
 let pressedRow = null, pendingRow = null;
-const excluded = (el) => el.hasAttribute("popover") || el.hasAttribute("data-exiting") || el.getAttribute("navigationSplit") === "placeholder" || getComputedStyle(el).display === "none";
+const excluded = (el) => el.hasAttribute("popover") || leaving(el) || el.getAttribute("navigationSplit") === "placeholder" || getComputedStyle(el).display === "none";
 const rowPress = (el) => el.getAttribute("data-exact-router-press");
 const rowHref = (el) => el.getAttribute("href") || null;
 const linked = (href) => href?.startsWith("/") && !href.startsWith("//") && routeMatches(href);
@@ -334,7 +337,7 @@ export function pushingList(route, retained = splitLists.get(route)) {
   return empty;
 }
 /** The route's own child box written `navigationSplit="placeholder"` (LLP 1127 D1): it asks, and shows while nothing is selected. */
-const ownPlaceholder = (route) => route ? viewChildren(route).find((box) => box.getAttribute("navigationSplit") === "placeholder" && !box.hasAttribute("navigationKey") && !box.hasAttribute("data-exiting")) : undefined;
+const ownPlaceholder = (route) => route ? viewChildren(route).find((box) => box.getAttribute("navigationSplit") === "placeholder" && !box.hasAttribute("navigationKey") && !leaving(box)) : undefined;
 /** The list column's width `navigationSplit` names, a whole number of px from 1 to 999999 (exact_kernel `split_width`), else 0. */
 const splitWidth = (said) => /^[1-9]\d{0,5}$/.test(said ?? "") ? Number(said) : 0;
 /** Recheck authored admission even while narrow. Projection's visibility/inert never opt a list out. */
@@ -456,7 +459,7 @@ const routesOf = (nav) => stacksOf(nav).find((routes) => routes.some((r) => r.ge
 export function focusStack(nav) {
   const key = nav.getAttribute("navigationKey"), projected = shownRoutes.get(nav), top = projected?.at(-1);
   if (top && top.getAttribute("navigationKey") === key &&
-      projected.every((route) => route.isConnected && nav.contains(route) && !route.hasAttribute("data-exiting"))) {
+      projected.every((route) => route.isConnected && nav.contains(route) && !leaving(route))) {
     return projected;
   }
   const routes = routesOf(nav);
@@ -492,18 +495,21 @@ const stamp = (index, op) => ({ exact: index, id: op.top, url: op.url, ...placeO
 const backControl = (nav, route = selectedRoute(nav), name = nav.getAttribute("navigationBack")) => route && name !== null ? route.querySelector(`[id="${CSS.escape(name)}"]`) ?? [...nav.ownerDocument.querySelectorAll(`[id="${CSS.escape(name)}"]`)].find((control) => [null, nav].includes(control.closest("[navigationKey]"))) ?? null : undefined;
 // LLP 1116.000 D4: Back belongs to the header shadow root; bar items proxy the authored controls.
 const BACK = `<style>button{all:unset;display:inline-flex;align-items:center;gap:6px;flex:none;vertical-align:middle;margin-inline:-6px 6px;padding:4px 8px 4px 4px;border-radius:8px;cursor:pointer;white-space:nowrap;-webkit-user-select:none;user-select:none}button[hidden],span[hidden]{display:none}button:focus-visible{outline:2px solid var(--exact-accent,AccentColor);outline-offset:1px}button:active>*{opacity:var(--exact-back-press,.5)}svg{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}button:dir(rtl) svg{scale:-1 1}</style><button part="back" type="button"><svg viewBox="4 4 16 16" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg><span></span></button><slot></slot>`;
-const headerOf = (route) => viewChildren(route).find((child) => child.localName === "header");
+const headerOf = (route) => liveChildren(route).find((child) => child.localName === "header");
 const authored = "[data-exact-said~=\"appearance\"]";
 // a header or a node in one whose author wrote `appearance: none` (element.rs)
 // @ref LLP 1153 D8 — a route's header holding a `nav` anywhere (a popover's too), or more than one link outside a `popover` or `dialog` in it (a menu's links are its button's, as an app bar's are), is a site's, marked `data-exact-site`: drawn as written (index.html, neutral.css), as one whose author wrote `appearance: none` is, it is no app bar and holds no Back. document_bars.rs `site_header` is the Rust renderer's rule.
 const siteHeader = (header, links = 0) => {
   const holds = (el, menu) => [...el.children].some((child) => {
+    if (leaving(child)) {
+      return false;
+    }
     const inMenu = menu || child.matches("[popover], dialog");
     return child.localName === "nav" || !inMenu && child.matches("a[href], [role=link]") && ++links > 1 || holds(child, inMenu);
   });
   return holds(header, false);
 }, markSites = (route) => {
-  for (const child of viewChildren(route)) {
+  for (const child of liveChildren(route)) {
     if (child.localName === "header") {
       child.toggleAttribute("data-exact-site", siteHeader(child));
     }
@@ -513,11 +519,11 @@ const siteHeader = (header, links = 0) => {
 // ported to the elements both runtimes write alike, since the JS target keeps no kernel to ask. `walk` is `Walk::walk`:
 // a bar's header holds one heading, or none and only what the bar places (`unplaced`: a node that is no box), and an item is a pressable it reaches, not the title's, or a disabled button. A header drawn as written is no bar.
 function barItems(route, header) {
-  if (route.getAttribute("data-navigationbar") === "none" || viewChildren(route)[0] !== header || asWritten(header)) {
+  if (route.getAttribute("data-navigationbar") === "none" || liveChildren(route)[0] !== header || asWritten(header)) {
     return null;
   }
   const heading = "[data-exact-text][role=heading]", press = "[data-exact-on~=\"press\"]", layer = (el) => el.matches("[popover], dialog");
-  const holds = (el) => [...el.children].some((child) => !layer(child) && (child.matches(heading) || holds(child)));
+  const holds = (el) => [...el.children].some((child) => !leaving(child) && !layer(child) && (child.matches(heading) || holds(child)));
   const disabled = (el) => el.matches("button[disabled]") && !el.hasAttribute("role") && root?.getAttribute("aria-busy") !== "true";
   // `fact::DISABLED`, dimmed whether or not it presses; a `button` element carries no `role` unless it has another one (element.rs); until input is ready, the glue disables every control itself (glue.js)
   // `fact::BOX`: a plain box, a `div` that is no text or a semantic box (element.rs `element`)
@@ -525,7 +531,7 @@ function barItems(route, header) {
   let headings = 0, tap = null, placed = 0, unplaced = false, searches = 0, tablists = 0;
   const items = [], walk = (node) => {
     for (const child of node.children) {
-      if (layer(child)) {
+      if (leaving(child) || layer(child)) {
         continue;
       }
       if (child.matches(`[role=tablist], input[type="search"], ${authored}`)) {
@@ -583,7 +589,7 @@ function opens(el) {
 // LLP 1115.000 D4.1: title precedence is authored head, visible route heading, then app name.
 const titleOf = (route) => {
   for (const el of headerOf(route)?.getElementsByTagName("*") ?? []) {
-    if (el.matches("h1, h2, h3, h4, h5, h6, [role=heading]")) return el.textContent.trim();
+    if (el.matches("h1, h2, h3, h4, h5, h6, [role=heading]") && live(el)) return el.textContent.trim();
   }
   return "";
 };
@@ -638,10 +644,13 @@ function clearBar(route) {
   if (!CLEAR_BARS) {
     return;
   }
-  const header = headerOf(route), clear = !!header && route.getAttribute("data-navigationbar") === "transparent" && viewChildren(route)[0] === header && !asWritten(header);
+  const header = headerOf(route), clear = !!header && route.getAttribute("data-navigationbar") === "transparent" && liveChildren(route)[0] === header && !asWritten(header);
   for (const el of viewChildren(route)) {
     if (el.hasAttribute("data-exact-clear") && !(clear && el === header)) {
-      el.removeAttribute("data-exact-clear");
+      // A leaving header keeps its clear paint until it is removed
+      if (!leaving(el)) {
+        el.removeAttribute("data-exact-clear");
+      }
       barResized?.unobserve(el);
       clearBars.delete(el);
     }
@@ -1264,11 +1273,13 @@ export const navigation = {
         if (SHEETS && panels.length && !previous.length) {
           setScrim(nav, false);
         }
+        // A panel no tab names any more is released, unless it is leaving: that one stays as the last projection showed it
         for (const panel of previous) {
-          if (!panels.includes(panel)) {
+          if (!panels.includes(panel) && live(panel)) {
             SHEETS && setScrim(panel, false);
             panel.style.visibility = "";
             setInert(panel, !!panel.authoredInert);
+            panel.removeAttribute("data-exact-split-empty");
           }
         }
         managed.set(nav, panels);
