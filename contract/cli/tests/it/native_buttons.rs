@@ -856,6 +856,19 @@ fn platform_rows_belong_only_to_native_buttons_and_roundtrip_through_classes() {
             assert!(message.contains("native button"), "{body}: {message}");
         }
     }
+    // A segmented control takes a size, not a corner style (LLP 1069.011.001 D8)
+    for role in ["tablist", "radiogroup"] {
+        let item = if role == "tablist" { "tab" } else { "radio" };
+        let segments = format!(
+            "  button role=\"{item}\"\n    text \"A\"\n  button role=\"{item}\"\n    text \"B\""
+        );
+        let body = format!("row role=\"{role}\" -exact-control-size=\"large\"\n{segments}");
+        contract::compile(&app(&body)).unwrap_or_else(|e| panic!("{body}: {e}"));
+        let (id, message) = refused(&format!(
+            "row role=\"{role}\" -exact-corner-style=\"capsule\"\n{segments}"
+        ));
+        assert_eq!(id, "lower-button-style-attr", "{role}: {message}");
+    }
     let mut r = boot(&format!("style A\n  -exact-control-size=\"large\"\n  -exact-corner-style=\"capsule\"\nstyle B\n  opacity=1\n{}", app("button appearance=\"auto\" class=(n == 0 ? A : B) press=go testId=\"b\"\n  text \"Go\"")));
     let b = view_of(&r, "b");
     let style = r.kernel().button_face_style(b).unwrap();

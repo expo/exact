@@ -2071,7 +2071,9 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   colour is `-exact-tint-color`; the title's is `color`. Use a custom `button`
   without `appearance="auto"` for aligned image frames or arbitrary children.
   `-exact-control-size` and `-exact-corner-style` are admitted only on an
-  explicit native button, including through classes. (LLP 1069.011.001 D12–D14.)
+  explicit native button, including through classes, and `-exact-control-size`
+  also written on a segmented control, a `tablist` or `radiogroup`.
+  (LLP 1069.011.001 D8, D12–D14.)
 
 - **`Request::continuation` does not compile: "type annotations needed"**, or
   an Apple production build answers a source's request with `Unlinked("io")`.

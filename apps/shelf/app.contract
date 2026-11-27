@@ -1101,8 +1101,9 @@ component StatusControl
     choose: action
     prefix: string
   view
-    // In a list's transparent section the tabs span the card, so the control lines up with the fields' cards
-    row role="tablist" aria-label="Status" testId=prefix padding-left=0 padding-right=0
+    // In a list's transparent section the tabs span the card, so the control lines up with the fields' cards.
+    // It is the platform's large segmented control.
+    row role="tablist" aria-label="Status" testId=prefix padding-left=0 padding-right=0 -exact-control-size="large"
       button role="tab"
         aria-selected=(status == "want")
         press=choose("want")

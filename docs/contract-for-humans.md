@@ -1313,7 +1313,9 @@ column), sets image-to-title spacing. Leave it absent for the platform's
 spacing. Title-to-subtitle spacing stays the platform's. `align-items` and
 `justify-content` accept only `center`. `-exact-control-size` takes `mini`,
 `small`, `medium`, `large`; `-exact-corner-style` takes `dynamic`, `small`,
-`medium`, `large`, `capsule`. These are styleable rows for native buttons only.
+`medium`, `large`, `capsule`. These are styleable rows for native buttons only,
+but a segmented control (a `tablist` or `radiogroup`) also takes
+`-exact-control-size`, which makes it the platform's segmented control of that size.
 With explicit `appearance="auto"`, `border-radius` sets a radius and wins over
 the named corner style. Under the default, a radius makes the button bare. `padding`
 and its longhands set content insets; leave them absent for the style's own.

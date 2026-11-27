@@ -2983,7 +2983,10 @@ spacing. Absent means the platform's spacing, not zero; title-to-subtitle
 spacing stays the platform's. `align-items` and `justify-content` accept only
 `center`. `-exact-control-size` takes `mini`, `small`, `medium`, `large`;
 `-exact-corner-style` takes `dynamic`, `small`, `medium`, `large`, `capsule`.
-Both are style rows admitted only on native buttons, including in a class.
+Both are style rows admitted only on native buttons, including in a class;
+`-exact-control-size` written on a segmented control (a `tablist` or
+`radiogroup`) sizes it as the platform's segmented control of that size
+(`large` is SwiftUI's large segmented picker on iOS).
 With explicit `appearance="auto"`, `border-radius` sets the authored radius
 and wins over the named corner style; under the default it makes the button bare.
 `padding` and its longhands set content insets. Absent leaves the native

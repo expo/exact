@@ -134,19 +134,23 @@ pub(crate) fn control(
     }
     // An author's: the grouped sheet sizes a row's switch by the platform's
     // metric (LLP 1115.002 D6), which is the compiler's row and not theirs.
+    // A segmented control, a tablist or a radiogroup, takes a size too (LLP
+    // 1069.011.001 D8).
+    let segmented = attrs.iter().any(|a| {
+        a.name == "role"
+            && matches!(&a.value, Expr::Str(v, _) if v == "tablist" || v == "radiogroup")
+    });
     if let Some(a) = attrs.iter().find(|a| {
         a.written
-            && matches!(
-                a.name.as_str(),
-                "-exact-control-size" | "-exact-corner-style"
-            )
+            && (a.name == "-exact-corner-style" || (a.name == "-exact-control-size" && !segmented))
     }) {
+        let owners = match a.name.as_str() {
+            "-exact-control-size" => "a native button, `button appearance=\"auto\"`, or a segmented control, `role=\"tablist\"` or `role=\"radiogroup\"`",
+            _ => "a native button: `button appearance=\"auto\"`",
+        };
         return err(
             "lower-button-style-attr",
-            format!(
-                "`{}` belongs to a native button: `button appearance=\"auto\"`",
-                a.name
-            ),
+            format!("`{}` belongs to {owners}", a.name),
             a.span,
         );
     }
