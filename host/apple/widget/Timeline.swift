@@ -209,6 +209,24 @@ func footprint() -> UInt64 {
     return status == KERN_SUCCESS ? max(info.phys_footprint, UInt64(max(0, info.ledger_phys_footprint_peak))) : 0
 }
 #endif
+enum ExactPlacementsFile {
+    private static let queue = DispatchQueue(label: "exact.widget-placements")
+    static func write(kind: String, records: [[String: Any]], root: URL? = WidgetContainer.root, appID: String? = WidgetContainer.appID) {
+        guard let root else { return }
+        queue.async {
+            let file = root.appendingPathComponent("widget-placements.json")
+            var all = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            let encoded = records.compactMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }.sorted { $0.lexicographicallyPrecedes($1) }
+            let sorted = encoded.compactMap { try? JSONSerialization.jsonObject(with: $0) }
+            let before = all[kind].flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
+            all[kind] = sorted
+            guard let after = try? JSONSerialization.data(withJSONObject: sorted, options: [.sortedKeys]), after != before,
+                  let data = try? JSONSerialization.data(withJSONObject: all, options: [.sortedKeys]),
+                  (try? data.write(to: file, options: .atomic)) != nil, let appID else { return }
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName((appID + ".widget-placements") as CFString), nil, nil, true)
+        }
+    }
+}
 // An entity parameter's choices are the entries the app published to the App Group
 // (LLP 1126 D2): Edit Widget runs these in the extension, where no session boots.
 extension ExactConfigurationEntity {

@@ -1,0 +1,10 @@
+{
+  "name": "@exact/widgets",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The configurations of the app's placed widgets (LLP 1126.005 D4).",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json"
+  }
+}

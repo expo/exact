@@ -18,6 +18,14 @@ public func exactWidgetReload(_ bytes: UnsafePointer<UInt8>?, _ length: Int) {
         for kind in kinds { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
     } else { WidgetCenter.shared.reloadAllTimelines() }
 }
+@_cdecl("exact_widget_counts")
+public func exactWidgetCounts(_ context: UnsafeMutableRawPointer?, _ done: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void) {
+    WidgetCenter.shared.getCurrentConfigurations { result in
+        guard case .success(let infos) = result,
+              let data = try? JSONSerialization.data(withJSONObject: Dictionary(infos.map { ($0.kind, 1) }, uniquingKeysWith: +)) else { return done(context, nil, 0) }
+        data.withUnsafeBytes { raw in done(context, raw.bindMemory(to: UInt8.self).baseAddress, raw.count) }
+    }
+}
 #else
 import ExactCore
 

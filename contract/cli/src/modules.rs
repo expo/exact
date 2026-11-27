@@ -801,6 +801,10 @@ fn check_answers(
     span: Span,
     errors: &mut Vec<CompileError>,
 ) {
+    let sub: serde_json::Value = serde_json::from_str(&m.substitute).unwrap_or_default();
+    if sub["answersWidget"].is_string() && shape.is_some() {
+        return;
+    }
     let Some(answers) = typed_answer(m, args).or_else(|| m.answers.clone()) else {
         return;
     };

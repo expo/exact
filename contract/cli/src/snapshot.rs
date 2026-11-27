@@ -5,6 +5,7 @@ mod activities;
 mod entry;
 mod inline;
 mod paragraphs;
+pub(crate) mod placed;
 mod refresh;
 pub(crate) mod values;
 pub use refresh::{bake_app, bake_app_with_warnings, check_refreshes, entries, source_plan};

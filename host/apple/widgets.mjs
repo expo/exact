@@ -439,6 +439,7 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
       : `@Parameter(title: ${literal(p.title)}, default: .${fallback(p)}) var \`parameter_${p.name}\`: ${name}_${identifier(p.name)}?`).join('\n    ')}
     ${platform === 'watchos' ? `static var exactRecommendations: [AppIntentRecommendation<Self>] { [\n        ${recommendations.join(',\n        ')}\n    ] }` : ''}
     var exactConfiguration: [String: String] { ${chosen} }
+    static let exactParameters = [${offered.map(p => literal(p.name)).join(', ')}]
 }
 `;
   };

@@ -47,6 +47,7 @@ use nfcStatus, scan, abortScan, abortWrite, openNFCSettings, reading, readingerr
 
 use setAppShortcuts, ShortcutItem from "@exact/quick-actions"
 use setContentIndex, ContentDescription from "@exact/search-index"
+use placedWidgets from "@exact/widgets"
 use appIcon, setAppIcon, AppIconStatus from "@exact/app-icon"
 
 routes nav
@@ -118,6 +119,8 @@ shape Found
   pages: number
 
 fn statusLabel(s: string): string = s == "want" ? "Want to Read" : (s == "reading" ? "Reading" : "Finished")
+fn chosenShelf(c: BookChoice): string = match c.shelf { case some(s) => statusLabel(s), case none => "No shelf chosen" }
+fn chosenBook(books: Book[], c: BookChoice): string = match c.book { case some(id) => match first(books.filter(b => b.id == id)) { case some(b) => b.title, case none => "A removed book" }, case none => "No book chosen" }
 fn percent(cur: number, total: number): number = total > 0 ? round(cur / total * 100) : 0
 fn matches(b: Book, f: string, q: string): bool = (f == "all" or b.status == f) and (q == "" or b.title.toLowerCase().includes(q) or b.author.toLowerCase().includes(q))
 fn wholePages(text: string): bool = match parseNumber(text) { case some(n) => floor(n) == n and n > 0 and n <= 10000, case none => false }
@@ -171,6 +174,7 @@ component Shelf
   mutation found as shape Owner then openFound
   // The Home Screen icon: Shelf's own or Paper (app.json's alternate_icons).
   resource shownIcon = appIcon() as shape AppIconStatus else empty()
+  resource placedProgress = placedWidgets(kind="progress") as shape PlacedProgress else empty()
   mutation iconSet as shape AppIconStatus refreshes shownIcon
 
   derive current = top(nav)
@@ -672,6 +676,8 @@ component Shelf
                     flex=1
                     min-height=0
                     StatsSections(lib=lib, finished=finished, goalBy=goalBy)
+                    if placedProgress.ready and placedProgress.placements.length > 0
+                      PlacedSection(placed=placedProgress, books=lib.books)
                     if shownIcon.available
                       IconSection(status=shownIcon, primary=choosePrimaryIcon, choose=chooseIcon)
       // The tab bar: each tab a symbol over its label, naming its panel.
@@ -1240,6 +1246,24 @@ component IconSection
           if status.icon == some("Paper")
             image "symbol:checkmark" color="AccentColor"
 
+component PlacedSection
+  props
+    placed: PlacedProgress
+    books: Book[]
+  view
+    section testId="placed-progress"
+      header
+        text "Reading Progress Widgets"
+      for i in range(placed.placements.length) key = i
+        match placed.placements.at(i)
+          case some(c)
+            row testId=`placed-${i}`
+              text chosenBook(books, c) flex=1
+              text chosenShelf(c) color="-exact-secondary-label"
+          case none
+      footer
+        text "The books and shelves your Reading Progress widgets show on the Home Screen."
+
 // What a screen shows with nothing in it (UIKit's ContentUnavailableView).
 component Empty
   props
@@ -1330,3 +1354,7 @@ component CoverWidget
       column gap=8
         text title role="heading" aria-level=2 line-clamp=2
         text author line-clamp=2
+
+shape PlacedProgress
+  ready: bool
+  placements: BookChoice[]

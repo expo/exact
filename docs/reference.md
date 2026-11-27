@@ -1020,6 +1020,48 @@ configuration's placements in every family, and each render still reads its own
 values. On Android the argument is the defaults, as above, so a render there must
 not rely on the refresh having read its choice.
 
+The app can read the configurations of the widgets a person has placed with
+`placedWidgets` from `@exact/widgets`
+(LLP 1126.005 D4). A weather app can fetch only the cities placed widgets show:
+
+```
+use placedWidgets from "@exact/widgets"
+
+shape Placed
+  ready: bool
+  placements: Rows[]
+
+component Trains
+  resource placed = placedWidgets(kind="next-trains") as shape Placed else empty()
+```
+
+`kind` is a literal that names a widget of `app.json` with a `configuration`,
+and `placements` holds the shape that widget's component, or one it uses,
+injects as `snapshot_configuration`; the build refuses anything else, in any
+source file of the app. Each record has the
+values the refresh receives, entity rows included, after the rule for a row
+within another. WidgetKit lists placements with the same choices once, so there
+is one record for each different configuration, not for each widget. `ready` is
+false while the app does not know the placed set: treat it as unknown and keep
+what the app did before.
+
+On iOS and macOS, the widget extension records the placements of a kind after
+each timeline it makes, from WidgetKit's
+[`getCurrentConfigurations`](https://developer.apple.com/documentation/widgetkit/widgetcenter/getcurrentconfigurations(_:))
+and [`widgetConfigurationIntent(of:)`](https://developer.apple.com/documentation/widgetkit/widgetinfo/widgetconfigurationintent(of:)),
+and pings the app. The app reads the record when it becomes active and on that
+ping, which a suspended app does not receive. Before it answers, it asks
+WidgetKit how many configurations of the kind are placed: none answers an empty
+list, and a count that differs from the record answers `ready: false` and
+reloads that kind's timelines, so the extension records it again. A removed
+widget runs no timeline, and WidgetKit keeps listing it, and the configuration
+an Edit Widget sheet replaced, for up to about a minute (seen on iOS 27.2). So
+while the app is active it asks again every 30 seconds until two minutes after
+it became active or the record changed. Until then the answer can still hold a
+removed configuration, and after a mismatch it stays `ready: false` until
+WidgetKit runs the reloaded timeline, which it may delay by a minute. Other
+hosts have no implementation, and the resource keeps its `else`.
+
 The configuration, labels included, is generated Swift and so a binary
 compatibility input; Live Activities have none. Keep kind, parameter and value
 identifiers stable across updates; changing a title does not change a choice.

@@ -11,6 +11,7 @@ protocol ExactConfigurationIntent: WidgetConfigurationIntent {
     static var exactRecommendations: [AppIntentRecommendation<Self>] { get }
     #endif
     var exactConfiguration: [String: String] { get }
+    static var exactParameters: [String] { get }
 }
 
 /// An entity parameter's value (app.json `type: "entity"`): a content-index entry of
@@ -48,12 +49,28 @@ struct ExactIntentTimelineProvider<Intent: ExactConfigurationIntent>: AppIntentT
     }
     func timeline(for configuration: Intent, in context: Context) async -> Timeline<ExactWidgetEntry> {
         let chosen = Self.chosen(configuration)
-        return await withCheckedContinuation { done in
+        let timeline = await withCheckedContinuation { done in
             base.getTimeline(in: context, configuration: chosen) { timeline in
                 done.resume(returning: Timeline(entries: timeline.entries.map { Self.configured($0, chosen) }, policy: timeline.policy))
             }
         }
+        #if !os(watchOS)
+        Self.recordPlacements(kind: kind)
+        #endif
+        return timeline
     }
+    #if !os(watchOS)
+    private static func recordPlacements(kind: String) {
+        WidgetCenter.shared.getCurrentConfigurations { result in
+            guard case .success(let infos) = result else { return }
+            let records = infos.filter { $0.kind == kind }.compactMap { $0.widgetConfigurationIntent(of: Intent.self) }.map { intent in
+                let values = intent.exactConfiguration
+                return Dictionary(uniqueKeysWithValues: Intent.exactParameters.map { ($0, values[$0].map { $0 as Any } ?? NSNull()) })
+            }
+            ExactPlacementsFile.write(kind: kind, records: records)
+        }
+    }
+    #endif
     #if os(watchOS)
     // A watch face offers a configured complication only through its recommendations.
     func recommendations() -> [AppIntentRecommendation<Intent>] {

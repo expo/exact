@@ -104,6 +104,7 @@ extension ExactConfigurationEntity {
     static func exactChild(_ id: String?, parent: String?) -> String? { parent == "elsewhere" ? nil : id }
 }
 func exactEntityID<E: ExactConfigurationEntity>(_ entity: E?) -> String? { entity?.id }
+enum ExactPlacementsFile { static func write(kind: String, records: [[String: Any]]) {} }
 `);
       const runApple = (cmd, args) => {
         // `swiftc` leaves a `TemporaryDirectory.*` in TMPDIR each run: the children's TMPDIR is this test's directory, removed after.

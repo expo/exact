@@ -947,6 +947,7 @@ fn compile_loaded(
     );
     picker::check(&file, Some(&app_root))
         .and(orientationlock::check(&file, Some(&app_root)))
+        .and(snapshot::placed::check(&file, &app_root))
         .map_err(|all| {
             all.into_iter()
                 .map(|e| sources.resolve(e))

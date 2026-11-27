@@ -1,0 +1,23 @@
+{
+  "kind": "interface",
+  "name": "@exact/widgets",
+  "version": "1.0.0",
+  "shapes": {
+    "WidgetPlacements": {
+      "ready": "bool"
+    }
+  },
+  "names": [
+    {
+      "source": "placedWidgets",
+      "live": true,
+      "options": {
+        "kind": "string"
+      },
+      "answers": "WidgetPlacements",
+      "substitute": {
+        "answersWidget": "kind"
+      }
+    }
+  ]
+}

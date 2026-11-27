@@ -356,6 +356,7 @@ public final class ExactPackageContext {
     public let shortcuts = ExactShortcutStore()
     /// The host's content index mirror (LLP 1133.023 D4, D15 item 2).
     public let contentIndex = ExactContentIndexStore()
+    public let placedWidgets = ExactWidgetPlacements()
     /// The process's pad slots (LLP 1133.022 D10 item 1); nil on a host
     /// older than them, where a pad module reads no pads (item 4).
     public let pads: ExactPads?
@@ -730,6 +731,15 @@ public final class ExactContentIndexStore {
     public func delete(id: String) { _ = post("delete", ["id": id]) }
     /// Every entry, in the order the app set them.
     public var entries: [[String: Any]] { post("entries", [:])["entries"] as? [[String: Any]] ?? [] }
+}
+
+public final class ExactWidgetPlacements {
+    public static let changed = Notification.Name("exact.widgets.placementsChanged")
+    public func answer(kind: String, reply: @escaping ([String: Any]) -> Void) {
+        let body = NSMutableDictionary(dictionary: ["kind": kind, "reply": reply])
+        NotificationCenter.default.post(name: Notification.Name("exact.widgets.placed"), object: body)
+        if body["taken"] == nil { reply(["ready": false, "placements": [Any]()]) }
+    }
 }
 
 /// The host's background `URLSession`s and their durable records (LLP
