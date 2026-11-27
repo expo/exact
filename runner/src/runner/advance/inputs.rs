@@ -5,7 +5,7 @@
 //! was due by its arrival; [`Runner::timer_due_ms`] counts it, so a
 //! wall-clock host advances again at once.
 use super::super::{
-    Advanced, CommitReceipt, DataSource, Event, Runner, RunnerError, Timed, ViewId,
+    Advanced, CommitReceipt, DataSource, Event, InputCommit, Runner, RunnerError, Timed, ViewId,
     TIMER_FIRE_LIMIT,
 };
 
@@ -16,7 +16,7 @@ pub(super) struct Held {
 }
 
 enum Input {
-    Event(ViewId, Event, Option<Box<dyn FnOnce(bool) + Send>>),
+    Event(ViewId, Event, Option<Box<dyn FnOnce(InputCommit) + Send>>),
     Forward(ViewId),
     ReorderTarget(exact_kernel::NodeKey, bool),
 }
@@ -28,16 +28,19 @@ impl<D: DataSource> Runner<D> {
         self.hold_input(Input::Event(view, event, None), now_ms)
     }
 
-    /// Dispatch as [`Runner::dispatch_at`], reporting whether this event committed its
-    /// receipt, independently of timer or later host errors. A deferred event owns
-    /// the callback until it runs; dropping the runner drops it without calling it.
+    /// Dispatch as [`Runner::dispatch_at`], telling `committed` that the runner refused
+    /// the event on arrival (at NaN, [`InputCommit::Refused`]) or what its own dispatch
+    /// committed ([`InputCommit`]): work that falls due first, other input the
+    /// call runs, and timer or later host errors are not its. A deferred event owns the
+    /// callback until it is dispatched, in a later advance or dispatch, which reports it
+    /// whether a handler runs or not; dropping the runner drops it without calling it.
     /// Hosts can keep imported resources here until the event publishes them.
     pub fn dispatch_at_with_receipt(
         &mut self,
         view: ViewId,
         event: Event,
         now_ms: f64,
-        committed: impl FnOnce(bool) + Send + 'static,
+        committed: impl FnOnce(InputCommit) + Send + 'static,
     ) -> Advanced {
         self.hold_input(Input::Event(view, event, Some(Box::new(committed))), now_ms)
     }
@@ -57,7 +60,7 @@ impl<D: DataSource> Runner<D> {
         // queue's front until a later cutoff passes it again.
         if at.is_nan() {
             if let Input::Event(_, _, Some(committed)) = input {
-                committed(false);
+                committed(InputCommit::Refused);
             }
             return Advanced {
                 receipts: Vec::new(),
@@ -139,9 +142,15 @@ impl<D: DataSource> Runner<D> {
             let due = std::mem::replace(&mut self.clock.due, false);
             let ran: Result<Option<CommitReceipt>, RunnerError> = match held.input {
                 Input::Event(view, event, committed) => {
+                    // Clear what earlier commits opened so the event is told only of its own
+                    self.take_router_opened();
                     let result = self.dispatch(view, event);
+                    let opened = self.take_router_opened();
                     if let Some(committed) = committed {
-                        committed(result.is_ok());
+                        committed(match result {
+                            Ok(_) => InputCommit::Committed { opened },
+                            Err(_) => InputCommit::Refused,
+                        });
                     }
                     result.map(Some)
                 }
@@ -169,3 +178,7 @@ impl<D: DataSource> Runner<D> {
 #[cfg(test)]
 #[path = "held_input_tests.rs"]
 mod held_input_tests;
+
+#[cfg(test)]
+#[path = "input_commit_tests.rs"]
+mod input_commit_tests;

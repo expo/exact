@@ -134,7 +134,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::drag_began CanvasHost::drag_ended CanvasHost::fling_ended CanvasHost::moved CanvasHost::refresh CanvasHost::scrolled CanvasHost::scrollers CanvasHost::sheet_drag CanvasHost::snap_target CanvasHost::snaps_around CanvasHost::under"],
     ["painted:host/painted/src/height_binding.rs", "Host::dispatch_height_held"],
     ["painted:host/painted/src/holds.rs", "Host::dispatch_held Host::dispatch_retained"],
-    ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
+    ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_at_with Host::dispatch_now"],
     ["painted:host/painted/src/presenter/accesskit.rs", "WindowTree::action"],
     ["painted:host/painted/src/presenter/accesskit/node.rs", "scroll_target"],
     ["painted:host/painted/src/presenter/access.rs", "Presenter::access_act Presenter::access_menu_flag"],
@@ -436,8 +436,8 @@ export const classifications = [
     ["painted:host/painted/src/holds.rs", "Host::retained_input_eligible"],
     ["painted:host/painted/src/host.rs",
       "Host::agent Host::app_files Host::app_roots Host::carry Host::content_region Host::document_value Host::engine Host::executor Host::executor_with Host::grants Host::kernel Host::log " +
-      "Host::now Host::preorder Host::presented Host::project_navigation Host::roots Host::router_op Host::runner Host::size_new_symbols " +
-      "Host::take_commands Host::take_surface_updates Host::viewport Host::wants_frames"],
+      "Host::now Host::preorder Host::presented Host::roots Host::runner Host::size_new_symbols Host::take_commands Host::take_surface_updates Host::viewport Host::wants_frames"],
+    ["painted:host/painted/src/host_navigation.rs", "Host::project_navigation Host::router_op"],
     ["painted:host/painted/src/lower.rs", "Host::layer_tracks Host::lower_eligibility Host::spinner_tracks"],
     ["painted:host/painted/src/media_session.rs", "handled"],
     ["painted:host/painted/src/paint_motion.rs", "Host::inheritors_of Host::presented_path"],
@@ -478,7 +478,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/scroll_end.rs", "Presenter::tracks_scroll_end"],
     ["painted:host/painted/src/presenter/scrollbar.rs", "Presenter::refresh_scrollbar_preferences"],
     ["painted:host/painted/src/presenter/shortcuts.rs", "Presenter::shortcut_buttons"],
-    ["painted:host/painted/src/presenter/split.rs", "Presenter::associate_split_row Presenter::read_split Presenter::split_press Presenter::validate_split_rows State::retained_list"],
+    ["painted:host/painted/src/presenter/split.rs", "Presenter::credit_press Presenter::read_split Presenter::split_press Presenter::validate_split_rows State::retained_list visit"],
     ["painted:host/painted/src/presenter/stage.rs", "Presenter::motion_off"],
     ["painted:host/painted/src/presenter/status_bar.rs", "Presenter::resolve_status_bar Presenter::status_bar"],
     ["painted:host/painted/src/presenter/swipe.rs", "Presenter::swipe_candidate Presenter::swipe_ways"],
@@ -607,7 +607,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/links.rs", "Presenter::launch_at Presenter::launch_location"],
     ["runner:runner/src/runner/router.rs",
       "Runner::host_back Runner::host_back_to Runner::host_forward Runner::host_go Runner::host_launch Runner::location_ahead Runner::location_behind Runner::location_beneath " +
-      "Runner::resource_args Runner::resource_is_placeholder Runner::route_accepts Runner::route_matches Runner::route_one_location Runner::take_router_change Runner::visit_location"],
+      "Runner::resource_args Runner::resource_is_placeholder Runner::route_accepts Runner::route_matches Runner::route_one_location Runner::selected_tab Runner::take_router_change Runner::visit_location Runner::visit_tab"],
     ["runner:runner/src/runner/split.rs", "Runner::press_writes_router Runner::route_inspector Runner::show_split_placeholder Runner::split_row_owner Runner::stack_split"],
     ["runner:runner/src/runner/tabs.rs", "Runner::build_every_tab Runner::build_tabs Runner::panels_need_navigation Runner::possible_split_panels Runner::unopened_tabs"],
     ["web:host/web/src/abi.rs", "exact_build_locations exact_host_back exact_host_go exact_location_of exact_route_match exact_set_launch"],

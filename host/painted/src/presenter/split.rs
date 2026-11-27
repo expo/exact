@@ -3,8 +3,9 @@
 use super::*;
 use exact_kernel::props::Presentation;
 use exact_kernel::{BlockAxis, HostBlock, HostCover, Kernel, NodeKey};
-use exact_runner::{instance::InstanceStep, Runner};
-use std::collections::BTreeSet;
+use exact_runner::{instance::InstanceStep, InputCommit, Runner};
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::mpsc;
 
 // Microsoft list/details: stacked at 320–640 epx, beside at 641; SplitView's
 // OpenPaneLength defaults to 320. The neutral web shell splits at 900 px.
@@ -58,9 +59,12 @@ impl Split {
 
 /// A route a list row's action pushed: the base of the pane while it is
 /// shown, and the row it marks selected until that row is gone or recycled.
+/// It lives with its route's visit and its list, whatever the stack asks, and
+/// counts only while its list is the split's.
 struct Association {
-    root: NodeKey,
     list: NodeKey,
+    /// The visit the press opened or moved, by id: a later visit at the same location is not it
+    visit: u64,
     row: Option<NodeKey>,
     route: NodeKey,
     location: String,
@@ -91,9 +95,65 @@ pub(crate) struct State {
     actions: BTreeMap<ViewId, Association>,
     blocks: BTreeMap<NodeKey, ViewId>,
     pub(crate) covers: BTreeMap<NodeKey, (ViewId, HostCover)>,
-    /// The row a press is being dispatched from, and whether its commits
-    /// recycled it before the press's route could be associated with it.
-    pressing: Option<(NodeKey, bool)>,
+    /// Presses from a row of the split's list, in order, each until its own commit's receipt is taken. A reload
+    /// replaces the host and these with it; a runner dropped with a press still held drops its sender.
+    presses: VecDeque<Pending>,
+}
+
+/// A press from a row of the split's list, waiting for its own commit's receipt
+/// (`Runner::dispatch_at_with_receipt`): at the press's dispatch, or later for one the runner holds.
+struct Pending {
+    /// The root route of the stack the press's list stood in
+    root: NodeKey,
+    made: Made,
+    list: NodeKey,
+    row: NodeKey,
+    /// Whether commits since the press recycled its row
+    recycled: bool,
+    receipt: mpsc::Receiver<InputCommit>,
+}
+
+/// The tab a press was made in, as its list's stack tells it; no route's key is read, since the list route's is the
+/// app's to write (`"home-list"`, `"0"`)
+enum Made {
+    /// A stack in a tab panel holds the routes of the tab that names the panel: that tab and the panel, and the tab must
+    /// still name the panel at the receipt, whichever tab the router selects by then
+    Own { tab: Tab, panel: NodeKey },
+    /// One stack with no panels shows whichever tab the router selects: the tab it selected at the press, which the
+    /// visit must be in
+    Selected(String),
+}
+
+impl Made {
+    /// Whether the stack's owner at the receipt is the one at the press: the same tab naming the same panel, or the
+    /// same selected tab for one stack
+    fn matches(&self, now: &Made) -> bool {
+        match (self, now) {
+            (
+                Made::Own { tab, panel },
+                Made::Own {
+                    tab: now_tab,
+                    panel: now_panel,
+                },
+            ) => panel == now_panel && tab.is(now_tab),
+            (Made::Selected(tab), Made::Selected(now)) => tab == now,
+            _ => false,
+        }
+    }
+}
+
+/// A tab control as a press knows it: its mount, its authored `id`, and whether no other element has that `id`
+struct Tab {
+    key: NodeKey,
+    id: Option<String>,
+    unique: bool,
+}
+impl Tab {
+    /// Whether `now` is the same tab: the same element with the same `id`, or any element with an `id` no other element
+    /// has at both reads, which stays with the tab as the app renders its control anew or hands a control to another tab
+    fn is(&self, now: &Tab) -> bool {
+        self.id == now.id && (self.key == now.key || (self.unique && now.unique))
+    }
 }
 impl State {
     fn retained_list<D: DataSource>(&self, runner: &Runner<D>, root: ViewId) -> Option<ViewId> {
@@ -122,8 +182,8 @@ impl State {
                     })
             })
         };
-        if let Some((row, was)) = &mut self.pressing {
-            *was |= renewed(*row);
+        for press in &mut self.presses {
+            press.recycled |= renewed(press.row);
         }
         for a in self.actions.values_mut() {
             if a.row.is_some_and(renewed) {
@@ -138,11 +198,58 @@ impl State {
     }
 }
 
-pub(crate) struct Press {
+/// The stack whose root route is `root` while that route holds `list`, as the navigation projection finds stacks (one
+/// for each tab, or one alone; `navigation::stacks`), under the nearest navigation root above the route whose stacks
+/// include it: a Back marker inside the route is no stack of its own. With it, in a tab panel, the tab and panel that
+/// own it (`stack_of`)
+fn list_stack(
+    kernel: &Kernel,
     root: NodeKey,
     list: NodeKey,
-    row: NodeKey,
-    before: Option<(NodeKey, String)>,
+) -> Option<(Option<Made>, Vec<ViewId>)> {
+    let (root, list) = (kernel.node_by_key(root)?.id, kernel.node_by_key(list)?.id);
+    if !within(kernel, list, root) {
+        return None;
+    }
+    stack_of(kernel, root)
+}
+
+/// The stack whose root route is `root`, every route of it, and, in a tab panel, the tab and panel that own it
+fn stack_of(kernel: &Kernel, root: ViewId) -> Option<(Option<Made>, Vec<ViewId>)> {
+    std::iter::successors(kernel.node(root)?.parent, |id| kernel.node(*id)?.parent)
+        .filter(|id| {
+            (kernel.node(*id)).is_some_and(|n| n.props.str(PropId::NavigationBack).is_some())
+        })
+        .find_map(|navigation| {
+            let (tabs, mut stacks) = crate::navigation::stacks(kernel, navigation);
+            let index = stacks
+                .iter()
+                .position(|stack| stack.first() == Some(&root))?;
+            let own = tabs.and_then(|tabs| {
+                let tab = kernel.node(tabs.tabs[index])?;
+                let id = tab.props.str(PropId::Id).filter(|id| !id.is_empty());
+                let tab = Tab {
+                    key: tab.key,
+                    unique: id.is_some_and(|id| kernel.find_by_id(id).len() == 1),
+                    id: id.map(str::to_string),
+                };
+                let panel = kernel.node(tabs.panels[index])?.key;
+                Some(Made::Own { tab, panel })
+            });
+            Some((own, stacks.swap_remove(index)))
+        })
+}
+
+/// The visit `route` shows, by its `navigationKey`, in whichever tab holds it: its id and location
+fn visit<D: DataSource>(runner: &Runner<D>, route: ViewId) -> Option<(u64, String)> {
+    let id = runner
+        .kernel()
+        .node(route)?
+        .props
+        .str(PropId::NavigationKey)?
+        .parse()
+        .ok()?;
+    Some((id, runner.visit_location(id)?))
 }
 
 fn within(kernel: &Kernel, mut id: ViewId, ancestor: ViewId) -> bool {
@@ -158,13 +265,26 @@ fn within(kernel: &Kernel, mut id: ViewId, ancestor: ViewId) -> bool {
 }
 
 impl<D: DataSource> Presenter<D> {
-    pub(crate) fn capture_split_row(&mut self, target: ViewId) -> Option<Press> {
-        let press = self.split_press(target);
-        self.host.navigation.split.pressing = press.as_ref().map(|p| (p.row, false));
-        press
+    /// The callback the press of `target` carries where `target` is a row of the split's list whose press writes the
+    /// router: it hands the press's own commit to the split, which credits the row at its next sync.
+    pub(crate) fn capture_split_row(
+        &mut self,
+        target: ViewId,
+    ) -> Option<Box<dyn FnOnce(InputCommit) + Send>> {
+        let (root, made, list, row) = self.split_press(target)?;
+        let (send, receipt) = mpsc::channel();
+        self.host.navigation.split.presses.push_back(Pending {
+            root,
+            made,
+            list,
+            row,
+            recycled: false,
+            receipt,
+        });
+        Some(Box::new(move |commit| drop(send.send(commit))))
     }
 
-    fn split_press(&self, target: ViewId) -> Option<Press> {
+    fn split_press(&self, target: ViewId) -> Option<(NodeKey, Made, NodeKey, NodeKey)> {
         let root = *self.host.shown_stack()?.first()?;
         let retained = self
             .host
@@ -178,56 +298,64 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let kernel = self.host.kernel();
-        let before = self.host.shown_stack()?.last().and_then(|top| {
-            let location = rule.locations.iter().find(|(id, _)| id == top)?.1.clone();
-            Some((kernel.node(*top)?.key, location))
-        });
-        Some(Press {
-            root: kernel.node(root)?.key,
-            list: kernel.node(list)?.key,
-            row: kernel.node(row)?.key,
-            before,
-        })
+        let runner = self.host.runner();
+        let made = match stack_of(kernel, root) {
+            Some((Some(own), _)) => own,
+            _ => Made::Selected(runner.selected_tab()?),
+        };
+        Some((
+            kernel.node(root)?.key,
+            made,
+            kernel.node(list)?.key,
+            kernel.node(row)?.key,
+        ))
     }
 
-    pub(crate) fn associate_split_row(&mut self, pressed: Option<Press>) {
-        let recycled = self
-            .host
-            .navigation
-            .split
-            .pressing
-            .take()
-            .is_some_and(|p| p.1);
-        let Some(pressed) = pressed else {
+    /// Credit each press whose own commit has come, in order. A press still waiting keeps its place; a refused one,
+    /// and one whose callback the host or the runner dropped, goes.
+    fn take_split_receipts(&mut self) {
+        for press in std::mem::take(&mut self.host.navigation.split.presses) {
+            match press.receipt.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.host.navigation.split.presses.push_back(press)
+                }
+                Ok(InputCommit::Committed {
+                    opened: Some((visit, location)),
+                }) => self.credit_press(press, visit, location),
+                _ => {}
+            }
+        }
+    }
+
+    /// The press earns credit for the visit its own commit left as the selected top, opened or moved, at that
+    /// location, where it is in the tab the press was made in and its list's own stack shows it (beneath a later push
+    /// too), whichever tab shows now: a later selection of another tab leaves the credit, and a row whose press selects
+    /// another tab credits nothing there.
+    fn credit_press(&mut self, press: Pending, visit_id: u64, location: String) {
+        let runner = self.host.runner();
+        let kernel = runner.kernel();
+        let Some((own, stack)) = list_stack(kernel, press.root, press.list) else {
             return;
         };
-        let kernel = self.host.kernel();
-        let Some(root) = kernel.node_by_key(pressed.root) else {
-            return;
-        };
-        let Some(rule) = self.host.runner().stack_split(root.id, None) else {
-            return;
-        };
-        let Some(top) = self.host.shown_stack().and_then(|s| s.last()).copied() else {
-            return;
-        };
-        let Some((_, location)) = rule.locations.iter().find(|(id, _)| *id == top) else {
-            return;
-        };
-        let Some(route) = kernel.node(top).map(|n| n.key) else {
-            return;
-        };
-        if pressed.before.as_ref() == Some(&(route, location.clone())) {
+        let now = own.or_else(|| runner.visit_tab(visit_id).map(Made::Selected));
+        if !now.is_some_and(|now| press.made.matches(&now)) {
             return;
         }
+        let shown = Some((visit_id, location.clone()));
+        let Some(&route) = stack[1..].iter().find(|id| visit(runner, **id) == shown) else {
+            return;
+        };
+        let Some(key) = kernel.node(route).map(|n| n.key) else {
+            return;
+        };
         self.host.navigation.split.actions.insert(
-            top,
+            route,
             Association {
-                root: pressed.root,
-                list: pressed.list,
-                row: (!recycled).then_some(pressed.row),
-                route,
-                location: location.clone(),
+                list: press.list,
+                visit: visit_id,
+                row: (!press.recycled).then_some(press.row),
+                route: key,
+                location,
             },
         );
     }
@@ -235,6 +363,7 @@ impl<D: DataSource> Presenter<D> {
     /// The split the stack asks for, and the viewport its trial is judged against beside it, outside the `Split` a
     /// shown split compares to know whether to lay out again.
     fn read_split(&mut self) -> Option<(Split, (f32, f32))> {
+        self.take_split_receipts();
         self.validate_split_rows();
         let stack = self.host.shown_stack()?.to_vec();
         let root = *stack.first()?;
@@ -313,26 +442,25 @@ impl<D: DataSource> Presenter<D> {
             })
             .collect();
         let detail = routes.last().copied();
-        let actions = &self.host.navigation.split.actions;
         let linked = |id: ViewId| rule.rows.iter().find(|(r, _)| *r == id).map(|r| r.1);
+        // A row's press credits its route while that row's list is the split's (`Association`)
+        let list = rule.list.and_then(|id| kernel.node(id)).map(|n| n.key);
+        let actions = &self.host.navigation.split.actions;
+        let credit = |id: ViewId| actions.get(&id).filter(|a| Some(a.list) == list);
         let base = routes
             .iter()
             .rev()
-            .find(|id| linked(**id).is_some() || actions.contains_key(id))
+            .find(|id| linked(**id).is_some() || credit(**id).is_some())
             .copied()
             .or_else(|| routes.first().copied());
         let row = base
             .and_then(|id| {
-                linked(id).or_else(|| {
-                    let row = actions.get(&id)?.row?;
-                    kernel.node_by_key(row).map(|n| n.id)
-                })
+                linked(id).or_else(|| kernel.node_by_key(credit(id)?.row?).map(|n| n.id))
             })
             .or_else(|| {
                 // A detail the app opened itself (at launch, after Back): no
                 // row pushed or links a route in the column.
-                let pushed =
-                    base.is_some_and(|id| linked(id).is_some() || actions.contains_key(&id));
+                let pushed = base.is_some_and(|id| linked(id).is_some() || credit(id).is_some());
                 rule.current.filter(|_| detail.is_some() && !pushed)
             });
         // The runner's choice, the root route's own box, which asked for the split (LLP 1127 D1)
@@ -407,8 +535,8 @@ impl<D: DataSource> Presenter<D> {
             .retain(|key| live.contains(key));
         let runner = self.host.runner();
         let kernel = runner.kernel();
-        // A route stays the pane's base while it is shown at the location its
-        // row's press gave it; the row stays selected while it is that row.
+        // A route keeps its credit while it shows the visit its row's press gave it and that row's list is live,
+        // whatever its stack asks meanwhile; the row stays selected while it is that row.
         let valid: BTreeMap<_, _> = self
             .host
             .navigation
@@ -417,14 +545,11 @@ impl<D: DataSource> Presenter<D> {
             .iter()
             .filter_map(|(&id, a)| {
                 let list = kernel.node_by_key(a.list)?;
-                let root = kernel.node_by_key(a.root)?;
-                let rule = runner.stack_split(root.id, Some(list.id))?;
+                // The same view showing the same visit at the location the press gave it
                 let route = kernel.node(id).is_some_and(|n| n.key == a.route)
-                    && rule.list == Some(list.id)
-                    && rule
-                        .locations
-                        .iter()
-                        .any(|(r, url)| *r == id && *url == a.location);
+                    && visit(runner, id).is_some_and(|(visit, location)| {
+                        visit == a.visit && location == a.location
+                    });
                 let row = a
                     .row
                     .and_then(|key| kernel.node_by_key(key))

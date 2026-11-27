@@ -191,7 +191,7 @@ pub use carry::Carried;
 pub use checkpoint::Checkpoint;
 use exact_kernel::{CommitReceipt, Kernel, ViewId};
 use exact_plan::{ActionsId, Code, EventKind, MutationMode, MutationsId, NodesId, Plan, Value};
-pub use router::{launch_matches, routing, RouterChange, Routing};
+pub use router::{launch_matches, routing, InputCommit, RouterChange, Routing};
 pub use split::{press_writes_router, RouteInspector, StackSplit};
 pub use uploads::{UploadEnd, UploadMark};
 

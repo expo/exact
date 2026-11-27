@@ -809,3 +809,6 @@ fn split_cover_and_content_stay_stable_across_sync_and_resize() {
 
 #[path = "split_regression_tests.rs"]
 mod regression;
+
+#[path = "split_press_tests.rs"]
+mod press;

@@ -493,22 +493,26 @@ fn split_recycled_action_row_forgets_the_previous_selection() {
 }
 
 #[test]
-fn split_row_recycled_by_its_own_press_is_not_selected() {
-    // The runner recycles rows as they scroll, so a press whose commits
-    // recycle its own row is staged: the press is captured, its row renewed,
-    // then the route it pushed is associated.
+fn split_row_renewed_before_its_press_commits_is_not_selected() {
+    // A staged renewal: the press is captured, its row renewed as the host's
+    // commit processing renews a row the runner recycles (`State::renewed`),
+    // then the route its own commit opened is credited without the row.
     let mut p = boot(1200., "");
     let row = id(&p, "a");
-    let press = p.capture_split_row(row);
-    assert!(press.is_some());
+    let receipt = p.capture_split_row(row);
+    assert!(receipt.is_some());
     let key = p.host.kernel().node(row).unwrap().key;
     let mut state = std::mem::take(&mut p.host.navigation.split);
     state.renewed(p.host.kernel(), &[key]);
     p.host.navigation.split = state;
-    act(&mut p, "open", vec![Value::str("a")]);
-    p.associate_split_row(press);
+    let at = p.host.now();
+    assert_eq!(
+        p.host.dispatch_at_with(row, Event::Press, at, receipt),
+        None
+    );
     assert_eq!(p.after_commit(), None);
     let item = id(&p, "route-item");
+    assert!(p.host.navigation.split.actions[&item].row.is_none());
     assert_eq!(split(&p).base, Some(item));
     assert_eq!(split(&p).row, None);
 }
