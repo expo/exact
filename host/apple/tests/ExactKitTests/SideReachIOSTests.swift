@@ -83,7 +83,9 @@ final class SideReachIOSTests: XCTestCase {
             let node = try node("scroll"), scroll = try XCTUnwrap(node.scroll)
             waitFor("\(shape): in its box") { scroll.frame.width == node.bounds.width && scroll.frame.minX == 0 }
             XCTAssertEqual([scroll.contentInset.left, scroll.contentInset.right], [0, 0], shape)
-            XCTAssertEqual(scroll.horizontalScrollIndicatorInsets.right, 0, shape)
+            // A border masks the content at the padding edge and keeps the indicators inside it, as CSS's scrollbars
+            // are (`ScrollView.paddingInset`): the bordered shape's 1-point border, and nothing of the reach
+            XCTAssertEqual(scroll.horizontalScrollIndicatorInsets.right, shape == "bordered" ? 1 : 0, shape)
             XCTAssertEqual(scroll.contentOffset.x, 0, accuracy: 0.5, shape)
             try show("plain")
             waitFor("plain after \(shape): reaching") { scroll.frame.width > node.bounds.width }
