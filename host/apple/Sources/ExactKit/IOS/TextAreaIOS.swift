@@ -459,6 +459,22 @@ package final class TextArea: UITextView {
         typingAttributes.merge(attributes) { _, authored in authored }
     }
     var placeholder = "" { didSet { setNeedsDisplay() } }
+    /// The size layout last saw (`layoutSubviews`).
+    private var lastLayoutSize = CGSize.zero
+    // What `draw` paints (the placeholder, the decorations' lines) is laid
+    // out across the view's size, so a new size draws it again: under the
+    // view's `scaleToFill` its old picture would be stretched to the new
+    // bounds, a placeholder squeezed sideways as a field narrows (a docked
+    // composer, the keys put away as the app leaves). Checked after layout,
+    // which a new size reaches however it is set (`frame`, `bounds`, the
+    // layer), not in the `bounds` setter, which a new `frame` does not call;
+    // not `.redraw`, which also draws again at every scroll offset.
+    package override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.size != lastLayoutSize else { return }
+        lastLayoutSize = bounds.size
+        if decorations?.drawsLines == true || (!placeholder.isEmpty && !hasText) { setNeedsDisplay() }
+    }
     /// The authored `::placeholder` colour (LLP 1104 D3); nil, UIKit's.
     package var placeholderColor: UIColor?
     // A scroll view's own drawing does not move with its content: the
