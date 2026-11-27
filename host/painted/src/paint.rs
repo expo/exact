@@ -87,6 +87,8 @@ pub(crate) mod stage;
 mod svg;
 pub(crate) mod tape;
 pub(crate) use svg::{fitted, view_box};
+mod motion;
+pub(crate) mod symbol_effect;
 mod text_clip;
 mod text_decoration;
 mod text_shadow;
@@ -437,6 +439,8 @@ pub struct Painter {
     pub(crate) focus_presses: bool,
     /// Material's ripples, each from its press's touch (`ripple.rs`).
     pub(crate) ripples: ripple::Ripples,
+    /// Each symbol's `-exact-symbol-effect` (`symbol_effect.rs`).
+    pub(crate) symbol_effects: symbol_effect::SymbolEffects,
     /// The background the last box painted shows, its states' over its own,
     /// which its `background-clip: text` fills with (`text_clip`).
     clipped: Option<(ViewId, [u8; 4])>,
@@ -557,6 +561,7 @@ impl Painter {
             held_press: None,
             focus_presses: false,
             ripples: Default::default(),
+            symbol_effects: Default::default(),
             clipped: None,
             field_content: HashMap::new(),
             field_text: HashMap::new(),
@@ -604,22 +609,6 @@ impl Painter {
     #[cfg(windows)]
     pub(crate) fn take_window_underlay(&mut self) -> Option<WindowLayer> {
         self.backend.take_window_underlay()
-    }
-
-    /// Something the painter animates owes a frame: a number rolling, a
-    /// field's label floating, a ripple spreading or fading.
-    pub(crate) fn moving(&self) -> bool {
-        let (now, still) = (self.numerals.now, self.numerals.still);
-        self.numerals.rolling() || self.labels.moving() || self.ripples.moving(now, still)
-    }
-
-    /// When the last of them comes to rest, ms.
-    pub(crate) fn settles_at(&self) -> Option<f64> {
-        let now = self.numerals.now;
-        (self.numerals.settles_at().into_iter())
-            .chain(self.labels.settles_at())
-            .chain(self.ripples.settles_at(now))
-            .reduce(f64::max)
     }
 
     #[cfg(windows)]
@@ -849,9 +838,7 @@ impl Painter {
         }
         // Publication is the ownership boundary. On Err the previous accepted
         // set remains intact; candidate leases simply unwind with `walk`.
-        self.numerals.painted();
-        self.labels.painted();
-        self.ripples.painted(self.numerals.now, self.numerals.still);
+        self.motion_painted(scene.kernel);
         if finished.is_ok() {
             self.accepted_text = Rc::new(walk.text);
             self.field_text = walk.fields;

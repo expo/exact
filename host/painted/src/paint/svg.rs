@@ -247,7 +247,25 @@ impl Painter {
         let face = node.computed_style(exact_kernel::StyleMask::of(
             exact_kernel::StyleId::FontWeight,
         ));
+        // Its `-exact-symbol-effect`, about its box's centre (`symbol_effect.rs`).
+        let (now, still) = (self.numerals.now, self.numerals.still);
+        let Some((scale, opacity)) = self.symbol_effects.pose(node, now, still) else {
+            self.draw_glyph(path, &face, rect, colour, ts, Some(edge));
+            return;
+        };
+        let (x, y, w, h) = edge.rect;
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let ts = (ts.pre_translate(cx, cy))
+            .pre_scale(scale, scale)
+            .pre_translate(-cx, -cy);
+        let dims = opacity < 1.0;
+        if dims {
+            self.backend.push_opacity(opacity);
+        }
         self.draw_glyph(path, &face, rect, colour, ts, Some(edge));
+        if dims {
+            self.backend.pop_opacity();
+        }
     }
 
     /// A semantic button's symbol shares the portable image painter.

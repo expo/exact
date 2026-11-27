@@ -208,6 +208,12 @@ impl<D: DataSource> Presenter<D> {
         let mut dirty = self.host.take_row_dirty();
         // A ripple paints its node's row again every frame it shows.
         self.brush.ripples.keys().for_each(|key| dirty.node(key));
+        // So does a symbol whose effect moves (`paint/symbol_effect.rs`).
+        let now = self.host.now();
+        self.brush
+            .symbol_effects
+            .keys(now)
+            .for_each(|key| dirty.node(key));
         self.sync_media(&mut dirty);
         self.brush.numerals.now = self.host.now();
         self.brush.numerals.still = self.host.runner().viewport().preferences.reduced_motion;

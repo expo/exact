@@ -220,6 +220,9 @@ fn refuse() -> i32 {
 extern crate self as exact_windows;
 
 #[cfg(test)]
+mod symbol_effect_tests;
+
+#[cfg(test)]
 mod clipboard_package {
     include!("../../../packages/clipboard/windows/lib.rs");
 

@@ -29,6 +29,7 @@ impl Painter {
         self.shared = SharedState::default();
         self.svg_warned.clear();
         self.ripples.clear();
+        self.symbol_effects.clear();
         self.zoom.clear();
         self.reader_highlights.clear();
     }

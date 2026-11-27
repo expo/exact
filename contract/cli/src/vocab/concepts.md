@@ -1499,8 +1499,8 @@ changes). `symbolEffectValue` picks the form, as SwiftUI's `value:` and `isActiv
 it, the effect plays once each time the value changes; without it, the effect runs while it
 is set. `scale` has no once form, so it holds while set either way; `bounce`, `wiggle`,
 `breathe` and `rotate` need iOS 18 or macOS 15 to run while set, and `wiggle`, `breathe` and
-`rotate` to play at all. The web stands in for `bounce`, `pulse` and `scale`; Android, Linux
-and Windows draw none.
+`rotate` to play at all. The web, Android, Linux and Windows stand in for `bounce`, `pulse`
+and `scale`, timed as UIKit's, and leave the others still.
 
 ```contract
 component App
