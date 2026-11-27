@@ -62,6 +62,11 @@ final class SearchLevelsIOSTests: XCTestCase {
             XCTAssertTrue(fixture.split.detail.topViewController === results, "\(mode.rawValue): \(fixture.searchFacts)")
             XCTAssertFalse(results.isInSearchContainer(fixture.search), "\(mode.rawValue): \(fixture.searchFacts)")
             XCTAssertTrue(results.visible, "\(mode.rawValue): \(fixture.searchFacts)")
+            if mode == .secondaryOnly, let block = results.block {
+                // The hidden list's view keeps its frame, and covers none of the results
+                let safe = results.view.bounds.inset(by: results.view.safeAreaInsets)
+                XCTAssertEqual(block.block.width, safe.width, accuracy: 1, "the results take the detail's width: \(fixture.searchFacts)")
+            }
         }
     }
 
@@ -500,18 +505,18 @@ final class SearchLevelsIOSTests: XCTestCase {
             fixture.settle("the column handoff completes")
         }
 
-        // A fold shows the column UIKit proposes, the retained book; the search waits behind its Back with its query,
-        // its results ready over the list (LLP 1127 D4, LLP 1127.000 D3)
-        func coveredByTheBook() throws {
-            XCTAssertTrue(fixture.split.list.topViewController === fixture.split.detail, fixture.searchFacts)
+        // A fold keeps the search in front: the list's column, the results over the list with the query, the retained
+        // book kept behind them (LLP 1127.000 D3)
+        func searchInFront() throws {
+            XCTAssertFalse(fixture.split.nested, fixture.searchFacts)
             XCTAssertTrue(fixture.split.detail.topViewController === retained)
             XCTAssertTrue(results.parent === container)
-            XCTAssertFalse(try fixture.inactive(retained.node))
-            XCTAssertTrue(try fixture.inactive(books))
+            XCTAssertTrue(results.visible, fixture.searchFacts)
+            XCTAssertTrue(try fixture.inactive(retained.node))
             XCTAssertEqual(try fixture.value(), "Fuji")
         }
         move(regular: false)
-        try coveredByTheBook()
+        try searchInFront()
         move(regular: true)
         try browseInDetail()
         let movedEditor = fixture.search.bindEditor()
@@ -524,7 +529,7 @@ final class SearchLevelsIOSTests: XCTestCase {
         fixture.search.resign()
         fixture.settle("browsing without a keyboard")
         move(regular: false)
-        try coveredByTheBook()
+        try searchInFront()
         XCTAssertFalse(fixture.search.bindEditor().isFirstResponder)
         move(regular: true)
         try browseInDetail()

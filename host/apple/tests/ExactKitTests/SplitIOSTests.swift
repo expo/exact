@@ -1413,6 +1413,28 @@ extension SplitIOSTests {
     /// The inspector's column starts to slide away while the detail's pop is
     /// still under way, not after it.
     @available(iOS 26.0, *)
+    /// On a phone, the open iPhone Duo, the sidebar shown lies beside the detail, and a turn keeps it shown or hidden
+    /// as it was, where UIKit's automatic mode hides it in portrait and shows it in landscape (LLP 1127 D3).
+    func testATurnKeepsTheSidebarAsItWas() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the phone's rule") }
+        let session = try boot(size: CGSize(width: 951, height: 669), width: .regular)
+        let controller = try split(session).controller
+        XCTAssertEqual(controller.preferredSplitBehavior, .tile)
+        controller.show(.primary)
+        until("the sidebar shows") { controller.displayMode == .oneBesideSecondary && controller.transitionCoordinator == nil }
+        let window = try XCTUnwrap(self.window)
+        func turn(_ size: CGSize) {
+            window.frame = CGRect(origin: .zero, size: size)
+            window.rootViewController?.view.subviews.first?.frame = window.bounds
+        }
+        turn(CGSize(width: 669, height: 951))
+        until("portrait keeps it beside the detail") { controller.displayMode == .oneBesideSecondary && controller.transitionCoordinator == nil }
+        controller.hide(.primary)
+        until("the person hides it") { controller.displayMode == .secondaryOnly && controller.transitionCoordinator == nil }
+        turn(CGSize(width: 951, height: 669))
+        until("landscape keeps it hidden") { controller.displayMode == .secondaryOnly && controller.transitionCoordinator == nil }
+    }
+
     /// The detail's first route counts as pushed whatever projects its stack again (LLP 1127 D7): an appearance change
     /// (the app switcher's snapshot takes the app in light and dark as it leaves the screen) projected it as a root,
     /// whose bar it hid, animated, as UIKit nested the detail in the list to collapse for the snapshot; UIKit then

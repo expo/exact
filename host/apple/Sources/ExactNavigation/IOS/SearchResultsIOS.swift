@@ -222,16 +222,19 @@ final class HeaderSearchResults: UIViewController {
 
     func refit() {
         // A hidden results viewport keeps the allocation that owns its scroll position.
-        guard let host, let root, let view = viewIfLoaded, exposed,
-              let occupancy = host.searchOccupancy(in: view) else { return }
+        guard let host, let root, let view = viewIfLoaded, exposed else { return }
+        // With the list hidden the search's bar and keys take nothing from the results (`searchOccupancy`), which
+        // still fit the detail as it is now
+        let occupancy = host.searchOccupancy(in: view) ?? SearchClearance.Occupancy()
         let policy = host.presenter.keyboardPolicy
         // The results run under the bottom band (the search bar, the keys, the home indicator), which their scroller
         // takes as its inset (`SearchClearance.fit`), as a UIKit results controller's list runs under the bar
         var insets = view.safeAreaInsets
         insets.bottom = 0
         var safe = view.bounds.inset(by: insets)
-        if let split = host.split, parent === split.detail, let sidebar = split.list.viewIfLoaded {
-            // A beside sidebar may cover part of the detail controller's view.
+        if let split = host.split, parent === split.detail, split.overlaysDetail, let sidebar = split.list.viewIfLoaded {
+            // A sidebar UIKit shows over the detail covers part of its view, which UIKit's safe area leaves out; a hidden
+            // one's view keeps its frame and covers nothing.
             let overlap = safe.intersection(view.convert(sidebar.bounds, from: sidebar))
             if !overlap.isEmpty {
                 if overlap.minX <= safe.minX { safe = CGRect(x: overlap.maxX, y: safe.minY, width: safe.maxX - overlap.maxX, height: safe.height) }

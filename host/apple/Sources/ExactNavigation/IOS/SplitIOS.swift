@@ -16,9 +16,14 @@ import ExactKit
 /// laid out wide from the start sends its delegate no expansion.
 private final class SplitController: UISplitViewController {
     var laidOut: () -> Void = {}
+    var willResize: () -> Void = {}
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         laidOut()
+    }
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        willResize()
+        super.viewWillTransition(to: size, with: coordinator)
     }
 }
 
@@ -248,6 +253,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #endif
         controller.delegate = self
         #if os(iOS)
+        // On a phone, the open iPhone Duo, the sidebar shown lies beside the detail, never over it, and a turn keeps
+        // it shown or hidden as it was, where UIKit's automatic mode hides it in portrait and shows it in landscape
+        // (James Ide, 2026-11-27, LLP 1127 D3). An iPad keeps UIKit's automatic behavior.
+        if UIDevice.current.userInterfaceIdiom == .phone, let split = controller as? SplitController {
+            controller.preferredSplitBehavior = .tile
+            split.willResize = { [weak self] in self?.keepSidebarAcrossTurn() }
+        }
         // The list's column is a sidebar, in UIKit's style for one, as SwiftUI's split sets it (LLP 1127 D7)
         controller.primaryBackgroundStyle = .sidebar
         #endif
@@ -559,6 +571,14 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         }
     }
 
+    /// As a turn begins, asks UIKit for the sidebar as it shows now, beside the detail or hidden, at the new size.
+    private func keepSidebarAcrossTurn() {
+        guard !controller.isCollapsed, move == nil else { return }
+        let shown: Bool
+        if #available(iOS 26.0, *) { shown = controller.isShowing(.primary) } else { shown = controller.displayMode != .secondaryOnly }
+        controller.preferredDisplayMode = shown ? .oneBesideSecondary : .secondaryOnly
+    }
+
     /// N1's routes UIKit keeps out of sight while the collapsed split shows its list, which the router keeps too and
     /// the runner is told are hidden (LLP 1127 D5, D12).
     var kept: [RouteController] { controller.isCollapsed && !moving && !nested ? detailRoutes : [] }
@@ -726,8 +746,11 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         }
         #endif
         #if os(iOS)
-        // UIKit's proposal stands; nothing selected, the list (LLP 1127 D4)
-        let top: UISplitViewController.Column = projectedDetailTop == nil ? .primary : proposedTopColumn
+        // UIKit's proposal stands (LLP 1127 D4), but for two answers of the app's: nothing selected, the list; the
+        // search's results in front, the list they then cover, so that a fold keeps the search in front, the selected
+        // detail behind it (LLP 1127.000 D3)
+        let resultsInFront = pairedSearch.map { $0.open && searchState.primaryForeground && $0.results?.visible == true } ?? false
+        let top: UISplitViewController.Column = projectedDetailTop == nil || resultsInFront ? .primary : proposedTopColumn
         if paired {
             pairedSearch?.preparePostureMove()
             searchState.beginOwnerMove()
