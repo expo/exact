@@ -46,17 +46,33 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
 // popover inside a scroller, which lies in the document's space and observes the band; a box at 100 reserving 20 whose
 // top border reads its left input, 10 under a 10-point left band, so its child at 110 lies on its padding edge and
 // observes 20; a box at the band's inner side whose safe-area padding resolves to -10, taken as 0, so its child at 27
-// observes 20 of the band; and the vertical scroller's reader again under `overlays-content`, where nothing takes the keys
+// observes 20 of the band; the vertical scroller's reader again under `overlays-content`, where nothing takes the keys;
+// a popover the browser's own sheet lets scroll, scrolled by 100, which takes the area for its content, its first child
+// at its top reading none; a popover a class
+// keeps from scrolling, inside a vertical scroller, holding a sideways scroller whose reader ends at 780 and reads 280 of
+// a 300-point keyboard, which no scroller past the popover takes; an absolute popover at 160, which the page's scroll by
+// 150 moves, so its child still reads none; a fixed child at the top of a fixed popover inside a transformed scroller
+// scrolled by 70, which neither moves; and a reader 15 down a box that clips, which an ancestor scales by 2 and a script
+// scrolled by 20, at 30 on the screen with no scroll, under 17 of the band
 const MORE = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box }
   .r { height: 20px; outline-offset: var(--exact-safe-area-inset-top, 0px) } .at { position: absolute; top: 0; left: 0; width: 20px }
   .classed { overflow-y: auto } .classreader { outline-offset: var(--exact-safe-area-inset-top, 0px) }
   .k { position: absolute; bottom: 0; width: 40px; height: 100px } .kr { height: 20px; outline-offset: var(--exact-keyboard-inset-bottom, 0px); margin-top: 80px }
-  [data-scroll="true"] { overflow: auto }</style>
+  [data-scroll="true"] { overflow: auto } .vis { overflow: visible }</style>
   <div data-scroll="true" style="position:absolute;top:0;left:200px;width:40px;height:100px"><div class="r at" id="scrollcut"></div></div>
   <div data-scroll="true" style="position:absolute;top:0;left:250px;width:40px;height:100px;overflow:visible"><div class="r at" id="scrollkept"></div></div>
   <div style="position:absolute;top:400px;left:0;width:100px;height:100px;overflow:auto"><div popover id="pop" style="margin:0;inset:0 auto auto 0;width:40px;height:40px;padding:0;border:0;overflow:visible"><div class="r at" id="popped"></div></div></div>
   <div style="position:absolute;top:100px;left:0;width:40px;height:60px;border-top:var(--exact-safe-area-inset-left, 0px) solid;--exact-safe-area-padding-top:20px" id="bordered"><div class="r" id="onedge"></div></div>
   <div style="position:absolute;top:47px;left:100px;width:40px;height:60px;--exact-safe-area-padding-top:calc(10px - 20px)"><div class="r at" id="negative" style="top:-20px"></div></div>
+  <div popover id="uapop" style="margin:0;inset:0 auto auto 0;width:40px;height:100px;padding:0;border:0"><div class="r" id="uachild"></div><div style="height:1000px"></div></div>
+  <div style="position:absolute;top:0;left:0;width:60px;height:800px;overflow-y:auto"><div popover id="vispop" class="vis" style="margin:0;inset:auto auto 0 0;width:60px;height:100px;padding:0;border:0">
+    <div style="overflow-x:auto;overflow-y:hidden;height:100px;width:60px"><div id="hreader" style="height:20px;margin-top:60px;outline-offset:var(--exact-keyboard-inset-bottom, 0px)"></div></div></div></div>
+  <div popover id="abspop" style="position:absolute;inset:auto;top:160px;left:0;margin:0;width:40px;height:40px;padding:0;border:0;overflow:visible"><div class="r" id="abschild"></div></div>
+  <div style="position:absolute;top:500px;left:300px;width:60px;height:100px;overflow:auto;transform:translateX(0)"><div style="height:1000px">
+    <div popover id="fpop" style="margin:0;inset:0 auto auto 0;width:40px;height:40px;padding:0;border:0;overflow:visible"><div id="fchild" style="position:fixed;top:0;left:0;width:20px;height:20px;outline-offset:var(--exact-safe-area-inset-top, 0px)"></div></div></div></div>
+  <div style="position:absolute;top:0;left:200px;transform:scale(2);transform-origin:0 0"><div id="shid" style="overflow:hidden;height:50px;width:20px"><div style="height:15px"></div>
+    <div id="sreader" style="height:10px;outline-offset:var(--exact-safe-area-inset-top, 0px)"></div><div style="height:1000px"></div></div></div>
+  <div style="height:3000px"></div>
   <div style="position:absolute;top:300px;left:0;width:40px;height:100px;overflow:auto;--exact-safe-area-padding-top:20px"><div class="r at" id="ownreserve"></div></div>
   <div style="position:absolute;top:0;left:50px;width:40px;height:100px"><div style="display:contents;overflow:auto"><div class="r at" id="contents"></div></div></div>
   <div class="classed" data-exact-safe-area="scroller" style="position:absolute;top:0;left:100px;width:40px;height:100px"><div class="r at" id="classcut"></div></div>
@@ -79,12 +95,35 @@ const MORE = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-
     const popped = top($('popped'));
     $('pop').hidePopover();
     observe([$('bordered'), $('onedge')], [47, 0, 0, 10]);
+    $('uapop').showPopover();
+    $('uapop').scrollTop = 100;
+    observe([$('uachild')], [47, 0, 0, 0]);
+    const uachild = top($('uachild'));
+    $('uapop').hidePopover();
+    $('vispop').showPopover();
+    observe([$('hreader')], [47, 0, 0, 0], 300, 'resizes-visual');
+    const hreader = keys($('hreader'));
+    $('vispop').hidePopover();
+    $('fpop').parentElement.parentElement.scrollTop = 70;
+    $('fpop').showPopover();
+    observe([$('fchild')], [47, 0, 0, 0]);
+    const fchild = top($('fchild'));
+    $('fpop').hidePopover();
+    $('shid').scrollTop = 20;
+    observe([$('sreader')], [47, 0, 0, 0]);
+    $('abspop').showPopover();
+    scrollTo(0, 150);
+    observe([$('abschild')], [47, 0, 0, 0]);
+    const abschild = top($('abschild'));
+    $('abspop').hidePopover();
+    scrollTo(0, 0);
     // The reader comes to read its bottom edge, which nothing obstructs
     $('grows').style.paddingBottom = 'var(--exact-safe-area-inset-bottom, 30px)';
     observe([$('grows')], [47, 0, 0, 0]);
     window.result = { found, ownreserve: top($('ownreserve')), contents: top($('contents')), classcut: top($('classcut')), classreader: top($('classreader')),
       vertical: taken, overlaid: keys($('vertical')), sideways: keys($('sideways')), deep: keys($('deep')), mixed: top($('mixed')),
       scrollcut: top($('scrollcut')), scrollkept: top($('scrollkept')), popped, onedge: top($('onedge')), negative: top($('negative')),
+      uachild, hreader, fchild, abschild, sreader: parseFloat(top($('sreader'))),
       bottom: $('grows').style.getPropertyValue('--exact-safe-area-inset-bottom'), padding: getComputedStyle($('grows')).paddingBottom };
   </script>`;
 
@@ -147,7 +186,9 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`scrollers keep the
     const r = await page.evaluate(() => window.result);
     expect(r.found).toContain('classreader');
     expect(r).toMatchObject({ ownreserve: '20px', contents: '47px', classcut: '0px', classreader: '47px', vertical: '0px', sideways: '300px', deep: '0px', bottom: '0px', padding: '0px', mixed: '47px',
-      overlaid: '300px', scrollcut: '0px', scrollkept: '47px', popped: '47px', onedge: '20px', negative: '20px' });
+      overlaid: '300px', scrollcut: '0px', scrollkept: '47px', popped: '47px', onedge: '20px', negative: '20px',
+      uachild: '0px', hreader: '280px', fchild: '47px', abschild: '0px' });
+    expect(r.sreader).toBeCloseTo(17, 0);
   } finally {
     await browser.close();
   }

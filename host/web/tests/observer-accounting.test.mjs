@@ -12,7 +12,8 @@ beforeAll(() => {
     if (/^\/[\w-]+\.js$/.test(path)) {
       return new Response(Bun.file(resolve(import.meta.dir, '../navigation' + path)), { headers: { 'content-type': 'text/javascript' } });
     }
-    return new Response(path === '/clipped' ? CLIPPED : path === '/edge' ? EDGE : PAGE, { headers: { 'content-type': 'text/html' } });
+    const pages = { '/clipped': CLIPPED, '/edge': EDGE, '/nested': NESTED, '/child': CHILD };
+    return new Response(pages[path] ?? PAGE, { headers: { 'content-type': 'text/html' } });
   } });
 });
 afterAll(() => server.stop(true));
@@ -116,6 +117,58 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a clip's change of
     await page.goto(`${server.url.href}clipped`);
     await page.waitForFunction(() => window.result);
     expect(await page.evaluate(() => window.result)).toEqual({ crossed: [0.4], outside: 1, scaled: [0.25], scaledOutside: 1, escaped: 0 });
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// Clips the sample cannot see, whose changes are outside: a box in a document inside an iframe, which a 50-point clip in
+// the parent cuts to half and then, widened, shows whole; a box in a clip that `overflow-clip-margin` widens by 25, then
+// by none; and a fixed box under a clip path that hides its right half, then none. Every entry each delivers is outside
+const NESTED = `<!doctype html><style>body { margin: 0 }</style>
+  <div id="pclip" style="width:50px;height:100px;overflow:hidden"><iframe src="/child" style="width:100px;height:100px;border:0"></iframe></div>
+  <div style="position:absolute;top:300px;left:0;overflow:clip;overflow-clip-margin:25px;width:50px;height:50px" id="margin"><div id="wide" style="width:100px;height:50px"></div></div>
+  <div style="position:absolute;top:400px;left:0;clip-path:inset(0 50px 0 0);width:100px;height:10px" id="path"><div id="fixed" style="position:fixed;top:600px;left:0;width:100px;height:50px"></div></div>
+  <script type="module">
+    import { account } from '/accounting.js';
+    const $ = (id) => document.getElementById(id), books = account(), frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const seen = [], io = new IntersectionObserver((entries) => seen.push(...entries), { threshold: [0, 0.4, 0.6, 0.9, 1] });
+    io.observe($('wide'));
+    io.observe($('fixed'));
+    await frame();
+    books.sample([$('wide'), $('fixed')], 1);
+    seen.length = 0;
+    $('margin').style.overflowClipMargin = '0px';
+    $('path').style.clipPath = 'none';
+    await frame();
+    window.local = { delivered: seen.length, outside: books.outside(seen, io).length };
+  </script>`;
+const CHILD = `<!doctype html><style>body { margin: 0 }</style><div id="box" style="width:100px;height:100px"></div>
+  <script type="module">
+    import { account } from '/accounting.js';
+    const box = document.getElementById('box'), books = account(), frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const seen = [], io = new IntersectionObserver((entries) => seen.push(...entries), { threshold: [0, 0.5, 1] });
+    io.observe(box);
+    await frame();
+    books.sample([box], 1);
+    seen.length = 0;
+    parent.document.getElementById('pclip').style.width = '100px';
+    await frame();
+    parent.result = { ...parent.local, nested: seen.map((e) => e.intersectionRatio), nestedOutside: books.outside(seen, io).length };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a clip the sample cannot see leaves its deliveries outside, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}nested`);
+    await page.waitForFunction(() => window.result && window.local, null, { timeout: 10_000 });
+    const r = await page.evaluate(() => window.result);
+    // The parent's clip widened: the child's box shows whole, which its document's sample cannot tell
+    expect(r.nested).toEqual([1]);
+    expect(r.nestedOutside).toBe(1);
+    // What the clip margin's and the clip path's changes deliver, as each engine draws them, is all outside
+    expect(r.outside).toBe(r.delivered);
   } finally {
     await browser.close();
   }

@@ -13,7 +13,8 @@ pub(crate) fn reads(css: &str) -> bool {
     .any(|family| css.contains(family))
 }
 
-/// Whether a style text lets an axis scroll: an `overflow` longhand or shorthand of `auto` or `scroll`.
+/// Whether a style text makes a scroll container: an `overflow` longhand or shorthand of `auto` or `scroll`, which a
+/// person scrolls, or `hidden`, which a script can; the executor reads the computed overflow for which it is.
 pub(crate) fn scrolls(css: &str) -> bool {
     css.split(';').any(|declaration| {
         declaration
@@ -22,13 +23,13 @@ pub(crate) fn scrolls(css: &str) -> bool {
                 matches!(property.trim(), "overflow" | "overflow-x" | "overflow-y")
                     && value
                         .split_whitespace()
-                        .any(|v| v == "auto" || v == "scroll")
+                        .any(|v| v == "auto" || v == "scroll" || v == "hidden")
             })
     })
 }
 
-/// The `data-exact-safe-area` value of a node that reads (`reader`), scrolls or may scroll (`scroller`), or both; `None`
-/// for neither.
+/// The `data-exact-safe-area` value of a node that reads (`reader`), is or may be a scroll container (`scroller`), or
+/// both; `None` for neither.
 pub(crate) fn marks(reads: bool, scrolls: bool) -> Option<String> {
     match (reads, scrolls) {
         (false, false) => None,

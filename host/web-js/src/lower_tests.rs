@@ -511,7 +511,11 @@ fn class_held_scrollers_and_readers_are_marked_for_the_safe_area_executor() {
 #[test]
 fn safe_area_marks_read_the_style_text() {
     use crate::safe_area::{reads, scrolls};
-    assert!(scrolls("overflow-y:auto;height:10px") && scrolls("overflow:hidden scroll"));
-    assert!(!scrolls("overflow-x:hidden") && !scrolls("color:red"));
+    assert!(
+        scrolls("overflow-y:auto;height:10px")
+            && scrolls("overflow:hidden scroll")
+            && scrolls("overflow-x:hidden")
+    );
+    assert!(!scrolls("overflow:clip") && !scrolls("overflow:visible") && !scrolls("color:red"));
     assert!(reads("padding-top:var(--exact-keyboard-inset-bottom,0px)") && !reads("color:red"));
 }

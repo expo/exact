@@ -60,13 +60,15 @@ export function observe(readers, band, keyboard, policy) {
   const box = styles(), scroller = document.scrollingElement;
   const chains = new Map(readers.map((el) => [el, chain(el, box).filter((a) => a === scroller || box(a).scrolls)]));
   const held = over(readers, box, policy);
-  // The scrollers a round's values can clamp: any whose range a round's lengths change, inside a reader or beside it as
-  // well as around it, so each scrolled one, found as the area's scrollers are, and those that move a reader. Read once,
-  // before the first write, as only a write can clamp one, so a transaction that changes nothing reads none
+  // The scroll containers a round's values can clamp: any whose range a round's lengths change, inside a reader or beside
+  // it as well as around it, so each scrolled one (`SCROLLED`), and those that move a reader. Read once, before the first
+  // write, as only a write can clamp one: a transaction that changes nothing and holds no sticky box reads none
   let scrollers;
   const save = () => {
-    scrollers ??= new Map([...[...document.querySelectorAll(SCROLLER)].filter((a) => a.scrollTop || a.scrollLeft), ...[...chains.values()].flat()]
-      .map((a) => [a, [a.scrollLeft, a.scrollTop]]));
+    if (scrollers) return;
+    const candidates = [...document.querySelectorAll(SCROLLED), ...SCROLLED_TAGS.flatMap((t) => [...document.getElementsByTagName(t)]),
+      ...(document.fullscreenElement ? [document.fullscreenElement] : [])];
+    scrollers = new Map([...candidates.filter((a) => a.scrollTop || a.scrollLeft), ...[...chains.values()].flat()].map((a) => [a, [a.scrollLeft, a.scrollTop]]));
   };
   // Every box a round measures held at rest: the readers and what shapes their areas, a bar's header among them
   const sticky = [...new Set([...readers, ...shaping(held)].flatMap(ancestry))].filter((a) => box(a).position === "sticky");
@@ -162,12 +164,15 @@ export function readers(root = document) {
  * inside a box positioned, against a containing block that holds the animated element, whose size it can change. */
 export function moving(readers, animations = document.getAnimations()) {
   // In a flex or grid container an item moves its earlier siblings too, as a centred row's first item moves as the second
-  // widens, and a change inside an item can resize it, so the animated element stands for the outermost such container
-  // above it
+  // widens, and a box whose width is its content's (inline-level, or narrower than its parent, as a centred
+  // `max-content` block is) moves what it holds as it resizes; a change inside either can resize it, so the
+  // animated element stands for the outermost such box above it
   const context = (el) => {
     let scope = el;
     for (let a = el; a.parentElement; a = a.parentElement) {
-      if (/flex|grid/.test(getComputedStyle(a.parentElement).display)) scope = a.parentElement;
+      const p = a.parentElement;
+      if (/flex|grid/.test(getComputedStyle(p).display)) scope = p;
+      else if (a !== el && sized(a)) scope = a;
     }
     return scope;
   };
@@ -373,7 +378,8 @@ export function over(readers, box, policy = "resizes-visual") {
   const step = (a) => {
     if (!own.has(a)) {
       const header = a.matches(TRANSPARENT) ? liveChildren(a).find((c) => c.hasAttribute("data-exact-clear")) ?? null : null;
-      const scroller = a.matches(SCROLLER) && box(a).display !== "contents" && box(a).scrollView;
+      // A box in the top layer is a candidate too, as the browser's own sheet lets a popover or a dialog scroll
+      const scroller = (a.matches(SCROLLER) || box(a).top) && box(a).display !== "contents" && box(a).scrollView;
       own.set(a, { box: a, header, reserving: reserves && a.matches(RESERVING), scroller, vertical: scroller && box(a).scrollsY });
     }
     return own.get(a);
@@ -383,7 +389,7 @@ export function over(readers, box, policy = "resizes-visual") {
   const takes = (a) => {
     const found = step(a);
     if (found.takes === undefined) {
-      const above = box(a).top ? null : a.parentElement?.closest(SCROLLER);
+      const above = box(a).top ? null : a.parentElement?.closest(BOUNDED);
       found.takes = found.vertical || (!!above && takes(above));
     }
     return found.takes;
@@ -425,9 +431,9 @@ const TOP = [":popover-open", ":modal", ":fullscreen"].filter((p) => globalThis.
 const CLASS_READER = '[data-exact-safe-area~="reader"]';
 /** A box whose inline style declares a reservation, as the emitter writes one. */
 const RESERVING = '[style*="--exact-additional-safe-area-"], [style*="--exact-safe-area-padding-"]';
-/** A box that may scroll: one whose inline style says how it overflows, one the JS target marks for a class that does
- * (`safe_area::marks`), and those the host's own sheets make scroll (`HOST_SCROLLERS`); its computed overflow decides,
- * and a box that generates none (`display: contents`) scrolls nothing. */
+/** A box that may scroll: one whose inline style says how it overflows, one the JS target marks for a class that makes
+ * it a scroll container (`safe_area::marks`), and those the host's own sheets make scroll (`HOST_SCROLLERS`); its
+ * computed overflow decides, and a box that generates none (`display: contents`) scrolls nothing. */
 const SCROLLING = ['[style*="overflow"]', '[data-exact-safe-area~="scroller"]'];
 /** The boxes the host's sheets (`index.html`, `neutral.css`) give an `overflow` of `auto` or `scroll`, by the selectors
  * that find them: a `scroll` or `list` element, the sidebar's and the coarse pointer's tab lists, an open route popover
@@ -435,6 +441,13 @@ const SCROLLING = ['[style*="overflow"]', '[data-exact-safe-area~="scroller"]'];
 export const HOST_SCROLLERS = ['[data-scroll="true"]', '[role="tablist"][data-exact-sidebar-tabs]', '[role="tablist"][data-exact-tab-bar]',
   "[data-exact-route-popover]", 'dialog[role="alertdialog"] > [data-alertpart="message"]'];
 const SCROLLER = [...SCROLLING, ...HOST_SCROLLERS].join(", ");
+/** A scroller, or the top layer, which ends the search for one above. */
+const BOUNDED = [SCROLLER, TOP].filter(Boolean).join(", ");
+/** What may hold a scroll offset a round can clamp, found by selector: a scroller, a box the JS target marks for a class
+ * that clips or scrolls, and a popover, which the top layer can hold; and by tag, from the document's own collections,
+ * which cost no walk, a dialog and a text control, which scrolls its text (`SCROLLED_TAGS`), with the fullscreen element. */
+const SCROLLED = `${SCROLLER}, [popover]`;
+const SCROLLED_TAGS = ["dialog", "textarea", "input"];
 /** The boxes that can shape a reader's area, and the top layer, past which none does. */
 const HOLDS = [TRANSPARENT, RESERVING, SCROLLER, TOP].filter(Boolean).join(", ");
 
@@ -472,11 +485,22 @@ export const depth = ([outer, inner], at) => Math.min(Math.max(0, inner - at), M
 /** A box's edges as distances in from the viewport's edges, top right bottom left. */
 export const edgesOf = (r, width, height) => [r.top, width - r.right, height - r.bottom, r.left];
 
+/** How far `scrollers`' offsets move what they hold on the screen, x then y: each offset at its scroller's scale, as a
+ * transform on it or above it draws it (its drawn size over its laid-out size; the document's scroller at 1). */
 export function unscrolled(scrollers) {
   let dx = 0, dy = 0;
   for (const a of scrollers) {
-    dx += a.scrollLeft;
-    dy += a.scrollTop;
+    const x = a.scrollLeft, y = a.scrollTop;
+    if (!x && !y) continue;
+    let sx = 1, sy = 1;
+    if (a !== document.scrollingElement && a.offsetWidth && a.offsetHeight) {
+      const r = a.getBoundingClientRect();
+      // A laid-out size within a point of the drawn one is the same box, its offset size rounded
+      if (Math.abs(r.width - a.offsetWidth) > 1) sx = r.width / a.offsetWidth;
+      if (Math.abs(r.height - a.offsetHeight) > 1) sy = r.height / a.offsetHeight;
+    }
+    dx += x * sx;
+    dy += y * sy;
   }
   return [dx, dy];
 }
@@ -487,8 +511,9 @@ export function unscrolled(scrollers) {
  * ancestor or one that contains fixed boxes; a fixed one's its nearest that contains fixed boxes. */
 export function chain(el, box = styles()) {
   const scroller = document.scrollingElement, found = [];
-  // A box in the top layer is contained by the viewport, whatever its ancestors
-  if (box(el).top) return found;
+  // A box in the top layer is contained by the viewport, or by the initial containing block, which the document scrolls,
+  // where it is absolute, whatever its ancestors
+  if (box(el).top) return box(el).position === "absolute" && scroller ? [scroller] : found;
   let position = box(el).position;
   for (let a = el.parentElement; a; a = a.parentElement) {
     if (a === scroller) break;
@@ -496,10 +521,12 @@ export function chain(el, box = styles()) {
     // A box that generates no box contains nothing (CSS Display 3 §2.5)
     if (b.display === "contents") continue;
     const contains = position === "fixed" ? b.fixed : position === "absolute" ? b.position !== "static" || b.fixed : true;
-    if (!contains) continue;
-    found.push(a);
-    if (b.top) return found;
-    position = b.position;
+    if (contains) {
+      found.push(a);
+      position = b.position;
+    }
+    // The top layer ends the chain, whether or not its box contains what lies in it
+    if (b.top) return position === "absolute" && scroller ? [...found, scroller] : found;
   }
   if (scroller && (position !== "fixed" || box(scroller).fixed)) found.push(scroller);
   return found;
@@ -581,6 +608,18 @@ function stopping(s, borders) {
 const fixedContainer = (s) => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdropFilter"].some((p) => (s[p] ?? "none") !== "none")
   || s.transformStyle === "preserve-3d" || s.contentVisibility === "auto" || /\b(layout|paint|strict|content)\b/.test(s.contain ?? "")
   || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(s.willChange ?? "");
+
+/** Whether a box's width can follow its content: an inline-level or table box, or any other narrower than its parent's
+ * content box (a float, a positioned box or a block of its content's width, as one that fills its parent, a route at
+ * `inset: 0` among them, takes its width from there). */
+function sized(el) {
+  const s = getComputedStyle(el), p = el.parentElement;
+  if (/^inline|table/.test(s.display)) return true;
+  if (!p) return false;
+  const ps = getComputedStyle(p), room = p.clientWidth - (parseFloat(ps.paddingLeft) || 0) - (parseFloat(ps.paddingRight) || 0);
+  // Its own width, as a used `auto` margin would make a centred block's margin box fill the parent
+  return el.offsetWidth < room - 1;
+}
 
 /** `el` and its ancestors. */
 function ancestry(el) {
