@@ -56,6 +56,20 @@ final class GroupedPressIOSTests: GroupedListFixture {
         XCTAssertNil(lists.cell(carrying: row))
     }
 
+    /// A row that takes a press look of its own while its menu is open
+    /// still returns to the cell that lifted it: the cell that shows it,
+    /// whatever its press.
+    func testALiftedRowsCellStaysItsCarrier() throws {
+        let p = presenter { self.model(custom: true) }
+        let lists = try XCTUnwrap(p.groupedLists), row = try XCTUnwrap(p.views[21])
+        let cell = try self.cell(p, 21)
+        XCTAssertTrue(lists.cell(carrying: row) === cell)
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "press_background_color": [0, 0, 255, 255]]]]))
+        XCTAssertNil(lists.cell(carrying: row), "no longer one to lift")
+        XCTAssertTrue(lists.carrier(of: row) === cell, "but still the one to return to")
+        XCTAssertNil(lists.carrier(of: try XCTUnwrap(p.views[20])), "a standard row's is UIKit's")
+    }
+
     /// A custom row with a press look of its own shows that look: its cell
     /// takes no highlight.
     func testACustomRowWithItsOwnPressLookTakesNoCellHighlight() throws {

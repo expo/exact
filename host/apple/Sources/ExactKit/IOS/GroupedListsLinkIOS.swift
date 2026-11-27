@@ -61,6 +61,9 @@ package protocol GroupedLists: AnyObject {
     /// cell's highlight (`press`): a context menu lifts the whole cell, its
     /// highlight with it, as a collection view lifts its own; nil otherwise.
     func cell(carrying node: NodeView) -> UIView?
+    /// The cell a list shows custom row `node` in, whatever its press: where
+    /// a menu that lifted it returns to.
+    func carrier(of node: NodeView) -> UIView?
     /// Runs the press of a tapped custom row `node` whose press is its
     /// cell's as UIKit's selection runs a tapped standard row's
     /// (`GroupedListView.pressSelected`); false for any other node, whose

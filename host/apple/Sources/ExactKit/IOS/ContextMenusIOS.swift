@@ -55,6 +55,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         /// row), decided once so the highlight, the preview and the
         /// dismissal agree (`liftsAvatar`)
         var avatarOnly: Bool?
+        /// Whether it lifts the cell a grouped list carries its row in,
+        /// decided at the first ask so the highlight and the dismissal agree
+        var liftsCell: Bool?
         let point: CGPoint
         /// Whether the source's own `contextmenu` has fired (once, lazily).
         var fired = false
@@ -597,11 +600,19 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
         if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
         // A row a grouped list carries lifts its cell, as a collection view
-        // lifts its own: the row's full width, and its press's highlight
-        if shown === source, let cell = presenter?.groupedLists?.cell(carrying: source), let target = LiftTarget.target(cell) {
-            let parameters = UIPreviewParameters()
-            parameters.visiblePath = LiftTarget.rounded(cell)
-            return UITargetedPreview(view: cell, parameters: parameters, target: target)
+        // lifts its own: the row's full width, and its press's highlight.
+        // Decided at the first ask, and returned to while a cell in the window
+        // shows the row, whatever its press since; one scrolled away has no
+        // place to return to.
+        if shown === source {
+            if owner.liftsCell == nil { owner.liftsCell = presenter?.groupedLists?.cell(carrying: source) != nil }
+            if owner.liftsCell == true {
+                guard let cell = presenter?.groupedLists?.carrier(of: source), cell.window != nil, source.isDescendant(of: cell),
+                      let target = LiftTarget.target(cell) else { return nil }
+                let parameters = UIPreviewParameters()
+                parameters.visiblePath = LiftTarget.rounded(cell)
+                return UITargetedPreview(view: cell, parameters: parameters, target: target)
+            }
         }
         let parameters = UIPreviewParameters()
         if shown === source, let lift = LiftTarget.clipLift(source) {

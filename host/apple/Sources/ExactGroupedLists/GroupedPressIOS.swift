@@ -61,6 +61,13 @@ extension GroupedListHost {
         return false
     }
 
+    func carrier(of node: NodeView) -> UIView? {
+        #if os(iOS)
+        for list in lists.values where list.rows[node.id]?.custom == true { return list.cell(node.id) }
+        #endif
+        return nil
+    }
+
     func cell(carrying node: NodeView) -> UIView? {
         #if os(iOS)
         for list in lists.values {
