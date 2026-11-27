@@ -799,11 +799,14 @@ extension NavigationHost {
     /// its list (LLP 1075.003 §9.16).
     func selectInUIKit(_ index: Int, in tabs: UITabBarController) {
         guard let stack = tabStack(index) else { return }
-        if #available(iOS 18.0, tvOS 18.0, *), index != moreTab, !tabSplits.isEmpty, builtTabs.indices.contains(index), let tab = builtTabs[index] as? UITab {
-            tabs.selectedTab = tab
-        } else {
-            tabs.selectedViewController = index == moreTab ? more : stack
+        let select = {
+            if #available(iOS 18.0, tvOS 18.0, *), index != self.moreTab, !self.tabSplits.isEmpty, self.builtTabs.indices.contains(index), let tab = self.builtTabs[index] as? UITab {
+                tabs.selectedTab = tab
+            } else {
+                tabs.selectedViewController = index == self.moreTab ? self.more : stack
+            }
         }
+        if ScreenshotMode.uikitAnimationsOff { UIView.performWithoutAnimation(select) } else { select() }
     }
 
     /// Whether a tap may let UIKit pop a stack to its root: only where Back

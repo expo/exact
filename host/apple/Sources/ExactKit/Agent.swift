@@ -15,6 +15,7 @@
 import Foundation
 import CoreFoundation
 import CExact
+import QuartzCore
 #if os(macOS)
 import AppKit
 #endif
@@ -363,6 +364,9 @@ public final class Agent {
         case "tap" where req["part"] != nil: emit(tagged(partTap(req))) // a hatch's part: the aim and the landing (AgentParts.swift)
         case "tap":
             var r: [String: Any]
+            // Screenshot mode: the tap and its settle reach the render server as one commit.
+            if ScreenshotMode.oneCommit { CATransaction.begin() }
+            defer { if ScreenshotMode.oneCommit { CATransaction.commit() } }
             #if os(macOS)
             let wasOpen = presenter.viewport.window?.isVisible == true
             #endif
@@ -421,6 +425,11 @@ public final class Agent {
             // inputs: they answer at once, within its own deadline.
             if req["aim"] == nil, req["log"] == nil { r = completingInput(r) }
             session.canvases.settle(now: session.now())
+            // Screenshot mode: settle in the tap's own main-queue turn, one request per state.
+            if ScreenshotMode.tapSettle, r["error"] == nil, req["aim"] == nil, req["log"] == nil {
+                let c = clock(["op": "clock", "settle": true]); session.tellAgentOffset()
+                r["settle"] = c
+            }
             emit(tagged(r))
         case "type" where req["message"] != nil:
             let r = completingInput(post(req))

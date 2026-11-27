@@ -345,6 +345,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window = w
         DevMenu.install(on: w, session: ExactIOS.session, controller: c, planPath: devPlanPath ?? environment["EXACT_PLAN"], frameHealthContainer: c.view)
         w.makeKeyAndVisible()
+        ScreenshotMode.install()
         // A cold development connection needs the mounted session and window.
         for url in incoming where ExactDevelopmentLink.claims(url) {
             DispatchQueue.main.async { ExactDevelopmentLink.open(url) }
