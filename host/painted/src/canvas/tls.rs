@@ -32,5 +32,7 @@ macro_rules! canvas_jni_tls {
 pub unsafe fn initialize(env: *mut std::ffi::c_void, context: *mut std::ffi::c_void) {
     if unsafe { crate::surfaces::bind_application(env.cast(), context.cast()) } {
         unsafe { ibex2::transport::initialize_android(env, context) };
+        // Pictures go through the platform's HttpEngine where it has one.
+        unsafe { super::http_engine::attach(env.cast(), context.cast()) };
     }
 }

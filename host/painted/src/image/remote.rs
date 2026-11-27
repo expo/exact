@@ -649,8 +649,16 @@ impl Downloads {
                 // The transport's own phases outlast the clock's whole-load bound.
                 request.timeout =
                     Some(whole.saturating_duration_since(Instant::now()) + Duration::from_secs(1));
-                let response = self
-                    .transport
+                // HttpEngine obeys Android's cleartext policy, which refuses `http:`
+                // at the reader's target SDK; the rustls sockets are not under it.
+                #[cfg(target_os = "android")]
+                let transport: &dyn Transport = match crate::canvas::http_engine::transport() {
+                    Some(engine) if url.scheme() == "https" => engine,
+                    _ => &*self.transport,
+                };
+                #[cfg(not(target_os = "android"))]
+                let transport = &self.transport;
+                let response = transport
                     .open(&request, signal)
                     .map_err(|e| failed(e.to_string()))?;
                 progress();
