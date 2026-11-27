@@ -1256,7 +1256,7 @@ package final class Presenter {
         focusGuides.sync()
         #endif
         attachRegionPopovers()
-        ApplyProfile.time("pass.menus") { menus.sync() }
+        ApplyProfile.time("pass.menus") { menus.sync(); menus.updateKeptMenu() }
         #if os(iOS)
         ApplyProfile.time("pass.dragOut") { dragOut?.sync() }
         ApplyProfile.time("pass.dragIn") { dragIn?.sync() }

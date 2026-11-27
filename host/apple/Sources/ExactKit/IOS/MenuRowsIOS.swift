@@ -16,6 +16,13 @@ extension MenuHost {
         if let symbol = img.image, img.imageSource?.hasPrefix("symbol:") == true { return symbol }
         return img.raster.map { Self.rowImage($0.image.image) }
     }
+    /// What `image(of:)` draws, as a key that changes when its image does (`KeptMenu.shape`).
+    func imageKey(of row: NodeView) -> String {
+        guard row.isButton else { return "" }
+        if let symbol = row.face?.symbol { return symbol }
+        guard !row.isNativeButton, let img = Self.firstImage(in: row) else { return "" }
+        return "\(img.imageSource ?? "")|\(img.image != nil || img.raster != nil)"
+    }
     /// A menu row draws an image at its own size: fit it in the row's icon
     /// box, keeping its ratio.
     static func rowImage(_ bitmap: CGImage) -> UIImage {

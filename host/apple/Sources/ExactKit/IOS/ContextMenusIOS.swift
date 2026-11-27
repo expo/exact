@@ -501,8 +501,14 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         fire(owner)
         // A menu that ended gives none: a batch, its `contextmenu`'s included, may end it before UIKit asks
         guard open === owner, let menus, let pop = current(owner) else { return nil }
-        let items = menus.items(of: pop, opener: owner.source) // a row's popover opens from the pressed node (LLP 1021)
-        return items.isEmpty ? nil : UIMenu(title: pop.props["accessibilityLabel"] ?? "", children: items)
+        // A row's popover opens from the pressed node (LLP 1021); the keyboard's edit menu, with no interaction, keeps no row open.
+        let items = menus.items(of: pop, opener: owner.source, keeping: owner.interaction != nil)
+        return items.isEmpty ? nil : UIMenu(title: pop.props["accessibilityLabel"] ?? "", identifier: MenuHost.menuIdentifier, children: items)
+    }
+    /// The interaction showing the long-press menu of `pop` from `source`, while its source still names it (`current`).
+    func keptInteraction(showing pop: NodeView, from source: NodeView) -> UIContextMenuInteraction? {
+        guard let owner = open, owner.source === source, owner.toggled, let interaction = owner.interaction, current(owner) === pop else { return nil }
+        return interaction
     }
 
     /// The preview row, moved into a controller sized by its layout; nil

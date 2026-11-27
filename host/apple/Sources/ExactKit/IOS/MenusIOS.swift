@@ -140,6 +140,7 @@ package final class MenuHost {
     }
 
     init(presenter: Presenter) { self.presenter = presenter }
+    let kept = KeptMenu() // The menu `items(of:)` last built (MenuUpdateIOS.swift).
     #if os(iOS)
     /// The context menus (LLP 1021 §5.1, ContextMenusIOS.swift).
     private(set) lazy var context = ContextMenuHost(presenter: presenter!, menus: self)
@@ -445,8 +446,8 @@ package final class MenuHost {
     /// `UIMenu(title:)`, taller header and all (LLP 1021, amended 2026-10-16).
     package func pullDown(of v: NodeView, titled heading: String, bar: (() -> UIView?)? = nil) -> UIMenu {
         let rows = rows(of: v, bar: bar, heading: heading)
-        if heading.isEmpty { return UIMenu(children: [rows]) }
-        return bar != nil ? UIMenu(title: heading, children: [rows]) : UIMenu(children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
+        if heading.isEmpty { return UIMenu(identifier: Self.menuIdentifier, children: [rows]) }
+        return bar != nil ? UIMenu(title: heading, identifier: Self.menuIdentifier, children: [rows]) : UIMenu(identifier: Self.menuIdentifier, children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
     }
     /// A `heading` outside a bar is an inline section's, whose title UIKit
     /// draws only over rows of its own: the first untitled section's rows
@@ -473,9 +474,7 @@ package final class MenuHost {
             let stale = bar != nil && self.barMenuClosed() // (closed unseen: Escape, VoiceOver's escape)
             let items = self.items(of: invocation.target, opener: invoker)
             if let bar, !items.isEmpty { self.barMenuOpened(invocation.target, from: invoker, in: bar, afterClose: stale) }
-            if self.recordsGiven, !heading.isEmpty { self.givenHeaders[invocation.target.id, default: []].insert(heading) }
-            guard headed, let first = items.first as? UIMenu, first.options.contains(.displayInline), first.title.isEmpty else { return completion(items) }
-            completion(first.children + items.dropFirst())
+            completion(self.shown(items, of: invocation.target, heading: heading, headed: headed))
         }
     }
     func eligible(_ node: NodeView, contextMenu: Bool = false, inertBoundary: UIView? = nil, inBar: Bool = false) -> Bool {
