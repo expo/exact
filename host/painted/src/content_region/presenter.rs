@@ -217,6 +217,11 @@ impl<D: DataSource> Presenter<D> {
         self.sync_stage();
         let stage = self.stage_paint();
         self.brush.set_stage(self.host.kernel(), stage);
+        // `startViewTransition()` (`paint/window_fade.rs`): whether the plan
+        // can start one, read once, and the fade's opacity at this paint.
+        let plan = self.host.runner().plan();
+        (self.brush.window).know(|| exact_runner::uses::transitions_window(plan));
+        self.brush.window.at(self.host.now());
         let shows = self.stage_shows();
         let roots = self.host.roots();
         let collection_limits = if self.host.content_region().is_some() {

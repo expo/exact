@@ -31,6 +31,8 @@ impl Painter {
         self.ripples.clear();
         self.zoom.clear();
         self.reader_highlights.clear();
+        // A new plan is read again, and the old tree's drawing goes.
+        self.window = Default::default();
     }
 
     /// Locate a target for scrolling before publishing its first frame.

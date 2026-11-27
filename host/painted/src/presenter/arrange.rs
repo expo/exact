@@ -449,6 +449,7 @@ impl<D: DataSource> Presenter<D> {
             || self.surfaces.owes_records()
             || self.stage_moving()
             || self.glides_moving()
+            || self.brush.window.fading()
             || self.zooms_moving()
     }
     pub(super) fn arrange_edge(&self) -> Option<(ViewId, f64, f64)> {

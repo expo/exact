@@ -965,6 +965,13 @@ pub fn chooses_scheme(plan: &Plan) -> bool {
     runs_command(plan, &["setScheme"])
 }
 
+/// Whether an action can cross-fade the window into its commit
+/// (`startViewTransition()`, LLP 1013.003): a painted host then keeps the
+/// drawing of each frame it shows, to fade from.
+pub fn transitions_window(plan: &Plan) -> bool {
+    runs_command(plan, &["startViewTransition"])
+}
+
 fn runs_command(plan: &Plan, names: &[&str]) -> bool {
     let mut runs = false;
     plan.each_code(&mut |code| {
@@ -1205,5 +1212,24 @@ mod grant_tests {
         assert!(!Uses::NONE
             .with_grants("auth.callback app:/oauth")
             .has(Capability::AuthSession));
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    /// Only an action that runs `startViewTransition()` makes a painted host
+    /// keep its window's drawings; the name in a string does not.
+    #[test]
+    fn a_plan_transitions_its_window_only_when_an_action_runs_the_command() {
+        let plan = |run: &str| {
+            let source = format!(
+                "component A\n  state on = false\n  action go\n    on = !on\n{run}  view\n    text \"startViewTransition\"\n"
+            );
+            contract::compile(&source).unwrap_or_else(|e| panic!("{source}: {e:?}"))
+        };
+        assert!(super::transitions_window(&plan(
+            "    startViewTransition()\n"
+        )));
+        assert!(!super::transitions_window(&plan("")));
     }
 }

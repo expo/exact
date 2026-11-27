@@ -92,6 +92,7 @@ mod text_decoration;
 mod text_shadow;
 mod text_stroke;
 mod tint;
+mod window_fade;
 pub(crate) mod zoom;
 use inline::{presented_color, presented_text_colors, text_backgrounds, text_palette};
 pub use presented::{PaintValues, Presented};
@@ -437,6 +438,8 @@ pub struct Painter {
     pub(crate) focus_presses: bool,
     /// Material's ripples, each from its press's touch (`ripple.rs`).
     pub(crate) ripples: ripple::Ripples,
+    /// `startViewTransition()`'s kept drawing and fade (`window_fade.rs`).
+    pub(crate) window: window_fade::WindowFade,
     /// The background the last box painted shows, its states' over its own,
     /// which its `background-clip: text` fills with (`text_clip`).
     clipped: Option<(ViewId, [u8; 4])>,
@@ -557,6 +560,7 @@ impl Painter {
             held_press: None,
             focus_presses: false,
             ripples: Default::default(),
+            window: Default::default(),
             clipped: None,
             field_content: HashMap::new(),
             field_text: HashMap::new(),
@@ -619,6 +623,7 @@ impl Painter {
         (self.numerals.settles_at().into_iter())
             .chain(self.labels.settles_at())
             .chain(self.ripples.settles_at(now))
+            .chain(self.window.ends())
             .reduce(f64::max)
     }
 
@@ -823,6 +828,8 @@ impl Painter {
         self.paint_sheets(&mut walk);
         self.paint_ghost(&mut walk);
         self.paint_alert(&mut walk);
+        let presented = target != FrameTarget::Geometry;
+        self.window_fade(&mut walk, page, last, presented);
         self.rows_end();
         if let Some(menu) = &scene.menu {
             self.menu(menu);
