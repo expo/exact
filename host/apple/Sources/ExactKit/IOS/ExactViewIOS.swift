@@ -132,6 +132,7 @@ public final class ExactView: UIView {
         session.presenter.onTitle = { [weak self] title in self?.onTitle?(title) }
         #if os(iOS)
         session.presenter.onStatusBar = { [weak self] choice in self?.onStatusBarStyle?(choice.style) }
+        KeyboardWindow.watch() // before an editor in this view takes the keys (KeysCoverIOS.swift)
         #endif
         #if !os(tvOS)
         editingObservers = [UITextField.textDidBeginEditingNotification, UITextView.textDidBeginEditingNotification,

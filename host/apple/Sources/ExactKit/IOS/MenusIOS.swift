@@ -106,8 +106,8 @@ package final class MenuHost {
         var placement = PositionArea.History()
         /// The region its option sized it in, as the kernel was told it (`PositionArea.place`).
         var block: HostBlock?
-        /// Anchored to its opener at least once.
-        var placed = false
+        /// Where its opener last showed in its layer and its scroll, once anchored to it: an opener out of the window keeps it.
+        var anchor: (rect: CGRect, scroll: CGPoint)?
         var checkHidden = false
         let incarnation: UInt64
         let source: UInt32?
@@ -810,56 +810,57 @@ package final class MenuHost {
     /// Revisit only the hosts captured at opening, including after UIKit detaches one.
     package func rehostPopovers() {
         guard !agentOpen.isEmpty else { return }
-        for entry in agentOpen.values.sorted(by: { $0.order < $1.order }) { lift(entry) }
+        for entry in agentOpen.values.sorted(by: { $0.order < $1.order }) { relift(entry) }
     }
     package func replacePopoverHost(_ old: UIViewController, with controller: UIViewController) {
         for entry in agentOpen.values { entry.layer.replaceHost(old, with: controller) }
     }
 
-    private func lift(_ entry: Lifted) {
+    func lift(_ entry: Lifted) {
         guard let presenter, let pop = entry.popover else { return }
         #if os(iOS)
         if entry.relay == nil { entry.relay = MountRelay(presenter, mount: entry.layer) }
         #endif
         entry.layer.mount(in: presenter)
         if pop.superview !== entry.layer { pop.movingRoute(into: entry.layer) { entry.layer.addSubview(pop) } }
+        // Still lifted once mounted and moved, which can run an embedded controller's containment callbacks
+        guard lifts(entry) else { return }
         #if os(iOS)
         if checking, entry.substitutesMenu { entry.checkHidden = true }
         #endif
         if pop.isHidden != entry.checkHidden { pop.isHidden = entry.checkHidden }
-        var placement = entry.layer.bounds
-        if let top = presenter.keyboardTop {
-            let end = entry.layer.convert(CGPoint(x: 0, y: top), from: nil).y
-            placement.size.height = max(0, min(placement.maxY, end) - placement.minY)
-        }
-        defer {
-            if presenter.keyboardTop != nil {
-                let height = pop.bounds.height
-                let y = max(placement.minY + height / 2, min(pop.center.y, placement.maxY - height / 2))
-                if pop.center.y != y { pop.center.y = y }
-            }
-        }
+        // Over the keys when the opening may lie there, else above them (KeysCoverIOS.swift)
+        placeOverOrAboveKeys(entry, pop) { place(entry, pop, in: $0) }
+    }
+
+    private func place(_ entry: Lifted, _ pop: NodeView, in placement: CGRect) {
+        guard let presenter else { return }
         let opener = entry.source.flatMap { presenter.views[$0] }
-        guard let source = opener, source.window != nil else {
-            // An opener out of the window for now (its sheet leaving) keeps the place it gave; one gone
-            // recentres it, or one placed by its insets goes there.
-            if !entry.placed || opener == nil {
+        // An opener out of the window for now (its sheet leaving) keeps the place it gave while the card fits the
+        // region; one that no longer fits it (the keys back) is measured again from that place
+        let keeps = opener?.window == nil && entry.anchor != nil && placement.insetBy(dx: -0.5, dy: -0.5).contains(pop.frame)
+        guard let source = opener, source.window != nil || entry.anchor != nil, !keeps else {
+            // An opener gone recentres it, or one placed by its insets goes there.
+            if opener == nil || entry.anchor == nil {
                 if let at = presenter.placeAtInset(pop, laid: pop.bounds.size, told: &entry.block, in: entry.layer, bounds: placement) {
                     pop.center = CGPoint(x: at.origin.x + at.size.width / 2, y: at.origin.y + at.size.height / 2)
                 } else { pop.center = CGPoint(x: placement.midX, y: placement.midY) }
             }
             return
         }
-        let anchorView: UIView = source.isNativeButton ? presenter.controls.controls[source.id] ?? source : source
-        var anchor = anchorView.convert(anchorView.bounds, to: entry.layer), scroll = presenter.anchorScroll(anchorView, outside: entry.layer)
-        // A popover opens from what the bar draws for its source (`barAnchor`), not the hidden node (`agentOpen(barItem:)`).
-        if let drawn = presenter.barAnchor(of: source, in: entry.layer) { (anchor, scroll) = (drawn, .zero) }
+        var (anchor, scroll) = entry.anchor ?? (.zero, .zero)
+        if source.window != nil {
+            let anchorView: UIView = source.isNativeButton ? presenter.controls.controls[source.id] ?? source : source
+            (anchor, scroll) = (anchorView.convert(anchorView.bounds, to: entry.layer), presenter.anchorScroll(anchorView, outside: entry.layer))
+            // A popover opens from what the bar draws for its source (`barAnchor`), not the hidden node (`agentOpen(barItem:)`).
+            if let drawn = presenter.barAnchor(of: source, in: entry.layer) { (anchor, scroll) = (drawn, .zero) }
+            entry.anchor = (anchor, scroll)
+        }
         // Sized in its option's region, as the web's (PopoverRegion.swift). The overflow's page: the
         // document less the bands past its area (status bar, home indicator).
         let at = presenter.placePainted(pop, laid: pop.bounds.size, anchor: anchor, scroll: scroll, pageScroll: presenter.viewport.contentOffset, overflow: PositionArea.overflow(of: pop, page: presenter.viewport.convert(CGRect(origin: .zero, size: presenter.viewport.contentSize).inset(by: presenter.pageMargins), to: entry.layer)),
                                         history: &entry.placement, told: &entry.block, in: entry.layer, bounds: placement)
         let center = CGPoint(x: at.origin.x + at.size.width / 2, y: at.origin.y + at.size.height / 2)
-        entry.placed = true
         // The size it was placed at, now: the region's frame comes with the layout its tell starts.
         if pop.bounds.size != at.size { pop.bounds.size = at.size }
         if pop.center != center { pop.center = center }
