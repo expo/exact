@@ -10,6 +10,7 @@ import { cdpBrowser, chromium } from '../../../scripts/agent-launch.mjs';
 import { comparePresence } from '../parity.mjs';
 import { need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
+import { springCurve } from './motion-scenarios.mjs';
 import { fileURLToPath } from 'node:url';
 
 test('the timeline comparator rejects missing ghosts, drift, and invalid recordings', () => {
@@ -80,7 +81,8 @@ const page = `<style>
     applyBatch({ ops:[...views].map(([id, el]) => ({ op:'style', id, css:el.style.cssText })) });
   };
   window.batch = applyBatch;
-  window.seek = ms => { clock.register(0); clock.seek(ms); };
+  // The clock's time, at which the animations a batch started begin (by default the time is 0 at each batch)
+  window.seek = (ms, from = 0) => { clock.register(from); clock.seek(ms); };
   window.resizePresence = batch => { window.resizeBatch = batch; mediaChanged(); };
   window.surface = () => root.querySelector('[data-exiting] > div');
   window.readPresence = () => presence.live.observation();
@@ -212,16 +214,17 @@ check('a move adds its translate onto a zero translate added under it, and a tur
   expect(await centre()).toEqual(from);
   await evaluate('seek(500)');
   expect(await centre()).toEqual([from[0] + 50, from[1]]);
-  expect(await evaluate(`document.getElementById('card').getAnimations().map(a => [a.effect.getKeyframes()[0].translate, a.effect.composite])`))
+  expect(await evaluate(`document.getElementById('card').getAnimations().filter(a => a.effect.getKeyframes().length).map(a => [a.effect.getKeyframes()[0].translate, a.effect.composite])`))
     .toEqual([['0px', 'add'], ['-100px', 'add']]);
 });
 
 check('the zero translate under a move is held at its first frame, and goes with the move however it ends', async () => {
-  const parts = 'document.getElementById("card").getAnimations().length';
+  // Every animation the card has, and those that show something
+  const parts = 'document.getElementById("card").getAnimations().length', showing = 'document.getElementById("card").getAnimations().filter(a => a.effect.getKeyframes().length).length';
   const pin = '(r => [r.left, r.top])(document.getElementById("pin").getBoundingClientRect())';
   await fixture(`<div id="card" style="${card}"><div id="pin" style="position:fixed;left:0;top:0;width:10px;height:10px"></div></div>`);
   await style(card + ';margin-left:100px');
-  expect(await evaluate(`document.getElementById('card').getAnimations().map(a => [a.id, a.effect.getKeyframes()[0].translate, a.effect.composite, a.playState === 'paused'])`))
+  expect(await evaluate(`document.getElementById('card').getAnimations().filter(a => a.effect.getKeyframes().length).map(a => [a.id, a.effect.getKeyframes()[0].translate, a.effect.composite, a.playState === 'paused'])`))
     .toEqual([['exact-layout-base', '0px', 'add', true], ['exact-layout-move', '-100px', 'add', false]]);
   // While the move plays, the moving card contains its fixed child, as a translated box does
   expect(await evaluate(pin)).not.toEqual([0, 0]);
@@ -230,7 +233,7 @@ check('the zero translate under a move is held at its first frame, and goes with
   await evaluate('seek(400)');
   expect(await evaluate(`document.getAnimations().find(a => a.id === 'exact-layout-base').currentTime`)).toBe(0);
   expect(await evaluate(`(card => { for (const a of card.getAnimations()) { a.pause(); a.currentTime = 400; } return card.getAnimations().map(a => a.id); })(document.getElementById('card'))`))
-    .toEqual(['exact-layout-base', 'exact-layout-move']);
+    .toEqual(expect.arrayContaining(['exact-layout-base', 'exact-layout-move']));
   await evaluate(`document.getAnimations().find(a => a.id === 'exact-layout-move').play()`);
   // Paused and sought past its end, the move shows nothing more, and the next frame lets it and the zero go with no batch
   expect(await evaluate(`(async () => {
@@ -240,7 +243,7 @@ check('the zero translate under a move is held at its first frame, and goes with
   })()`)).toEqual([0, [0, 0]]);
   // Cancelled on its own, it takes the zero with it
   await style(card + ';margin-left:0px');
-  expect(await evaluate(parts)).toBe(2);
+  expect(await evaluate(showing)).toBe(2);
   // (Read once the cancellation has settled, before a frame could retire the move)
   expect(await evaluate(`(async () => { const move = document.getAnimations().find(a => a.id === 'exact-layout-move'), settled = move.finished.catch(() => {}); move.cancel(); await settled; return ${parts}; })()`)).toBe(0);
   // Paused and taken off its element, it goes with its zero at the next frame
@@ -270,16 +273,15 @@ check('an older translate animation the box still shows stays when something pla
   })()`)).toEqual(['active', 'running']);
 });
 
-check('a move sought past its end hands the next one no residual, whatever its spring would say there', async () => {
-  const undamped = card.replace('1000 0 linear', '0 0 spring(1, 0, 1)'); // never settles: the module caps it at ten seconds
-  await fixture(`<div id="card" style="${undamped}"></div>`);
-  await style(undamped + ';margin-left:100px');
+check('a move sought past its end adds nothing to the next one', async () => {
+  await fixture(`<div id="card" style="${card}"></div>`);
+  await style(card + ';margin-left:100px');
   // In one task, so that no frame retires the move first
   const [shown, start] = await evaluate(`(() => {
     const card = document.getElementById('card'), move = document.getAnimations().find(a => a.id === 'exact-layout-move');
     move.pause(); move.currentTime = move.effect.getComputedTiming().endTime + 100;
     const shown = card.getBoundingClientRect().x;
-    batch({ops:[{op:'style',id:'card',css:${JSON.stringify(undamped + ';margin-left:200px')}}]});
+    batch({ops:[{op:'style',id:'card',css:${JSON.stringify(card + ';margin-left:200px')}}]});
     seek(0);
     return [shown, card.getBoundingClientRect().x];
   })()`);
@@ -303,19 +305,149 @@ check('a batch after a move shows nothing more reads no box in the box the move 
   })()`)).toBe(0);
 });
 
-check('an interrupted spring uses the seeked time, including its delay and velocity', async () => {
-  const spring = card.replace('1000 0 linear', '0 100 spring(300, 30, 1)'); // the private row (css.rs layout_transition_css; LLP 1081 D5)
+check('a row the browser refuses ends the moves under way, and an easing retargeted to where the box is shown plays nothing', async () => {
+  const x = () => evaluate('document.getElementById("card").getBoundingClientRect().x');
+  const moving = () => evaluate('document.getElementById("card").getAnimations().length');
+  await fixture(`<div id="card" style="${card}"></div>`);
+  const start = await x();
+  await style(card + ';margin-left:100px');
+  await evaluate('seek(500)');
+  // Halfway, retargeted to 50 points, where it is shown
+  await style(card + ';margin-left:50px');
+  await evaluate('seek(500, 500)');
+  expect([await x() - start, await moving()]).toEqual([50, 0]);
+
+  await style(card + ';margin-left:150px');
+  await evaluate('seek(1000, 500)');
+  // (`steps(0)` is no easing, as an overflowed curve is none)
+  await style(card.replace('1000 0 linear', '1000 0 steps(0)') + ';margin-left:200px');
+  await evaluate('seek(1000, 1000)');
+  expect([await x() - start, await moving()]).toEqual([200, 0]);
+  // A refused row alone, the box laid where it was, ends its move too
+  await style(card + ';margin-left:300px');
+  await evaluate('seek(1500, 1000)');
+  await style(card.replace('1000 0 linear', '1000 0 steps(0)') + ';margin-left:300px');
+  await evaluate('seek(1500, 1500)');
+  expect([await x() - start, await moving()]).toEqual([300, 0]);
+  // On a curve that reaches far past its end, even a two-hundredth of a point left over is a move to see: shown at
+  // 50.005 halfway to 100 and retargeted to 50, the box goes back almost to 0 at three quarters
+  const far = card.replace('1000 0 linear', '1000 0 linear(0, 0.50005 50%, 10000 75%, 1)');
+  await style(far + ';margin-left:0px');
+  await evaluate('seek(3000, 2000)');
+  await style(far + ';margin-left:100px');
+  await evaluate('seek(3500, 3000)');
+  await style(far + ';margin-left:50px');
+  await evaluate('seek(4250, 3500)');
+  expect(Math.abs(await x() - start)).toBeLessThan(1);
+  // At 70 percent, where the share left is a float that leaves no exact zero, the same as halfway
+  await fixture(`<div id="card" style="${card}"></div>`);
+  await style(card + ';margin-left:100px');
+  await evaluate('seek(700)');
+  await style(card + ';margin-left:70px');
+  await evaluate('seek(700, 700)');
+  expect([Math.round(await x() - start), await moving()]).toEqual([70, 0]);
+});
+
+check('a stand-in goes with the last move that changes the size, and the moves left go on on their clocks', async () => {
+  const { ms, easing } = springCurve([300, 30, 1]), spring = card.replace('1000 0 linear', `${ms} 0 spring ${easing}`);
+  const x = () => evaluate('document.getElementById("card").getBoundingClientRect().x');
+  await fixture(`<div id="card" style="${spring}"></div>`);
+  await style(spring.replace('40px', '140px'));
+  // A move of the place alone 100 ms before the resize ends, read 5 ms either side of that end
+  const begun = ms - 100;
+  await evaluate(`seek(${begun})`);
+  await style(spring.replace('40px', '140px') + ';margin-left:100px');
+  await evaluate(`seek(${ms - 5}, ${begun})`);
+  const before = await x();
+  await evaluate(`seek(${ms + 5}, ${begun})`);
+  const after = await x();
+  expect(await evaluate(`(card => [document.querySelectorAll('[data-exiting]').length, getComputedStyle(card).backgroundColor])(document.getElementById('card'))`))
+    .toEqual([0, 'rgb(255, 0, 0)']);
+  // Its move kept its clock: 10 ms on it is a few points further, not back at its start
+  expect(after - before).toBeGreaterThan(0);
+  expect(after - before).toBeLessThan(10);
+});
+
+check('a padding that moves a scaled box\'s content-box origin, and not its laid box, starts no move', async () => {
+  // Scaled about a point of its content box, at a length, a percentage or both, a box shows its border box where the
+  // padding puts that point
+  for (const at of ['0 0', '50% 50%', 'calc(10px + 50%) 50%']) {
+    const scaled = `${card};box-sizing:border-box;scale:2;transform-box:content-box;transform-origin:${at}`;
+    await fixture(`<div id="card" style="${scaled}"></div>`);
+    await style(scaled + ';padding-left:20px');
+    expect([at, await evaluate('document.getElementById("card").getAnimations().filter(a => a.effect.getKeyframes().length).length')]).toEqual([at, 0]);
+  }
+});
+
+check('a box inside a moving box moves with it though a box that is none lies between them', async () => {
+  // A parent and its child both declare the row, with a `display: contents` wrapper between: the child, laid where it
+  // was in its parent, makes no move of its own
+  const child = 'position:absolute;left:10px;top:10px;width:20px;height:20px;--exact-layout-transition:1000 0 linear';
+  // (A turn on the wrapper paints nothing, as it makes no box)
+  await fixture(`<div id="card" style="${card};position:relative"><div id="wrap" style="display:contents;rotate:180deg"><div id="child" style="${child}"></div></div></div>`);
+  const offset = () => evaluate(`(c => [Math.round(c.getBoundingClientRect().left - document.getElementById('card').getBoundingClientRect().left), c.getAnimations().filter(a => a.effect.getKeyframes().length).length])(document.getElementById('child'))`);
+  await style(card + ';position:relative;margin-left:100px');
+  await evaluate('seek(0)');
+  expect(await offset()).toEqual([10, 0]);
+  await evaluate('seek(500)');
+  expect(await offset()).toEqual([10, 0]);
+  // Widened where it is laid, it moves no edge it keeps
+  await style(child.replace('width:20px', 'width:60px'), 'child');
+  await evaluate('seek(0)');
+  expect((await offset())[0]).toBe(10);
+});
+
+check('a box moved within the box it is measured in keeps its moves, and one whose measuring box ceases to be ends them', async () => {
+  const box = 'position:absolute;left:0;top:0;width:20px;height:20px;background:red;--exact-layout-transition:1000 0 linear';
+  const width = () => evaluate('surface()?.getBoundingClientRect().width ?? document.getElementById("box").getBoundingClientRect().width');
+  // Moved halfway through its resize from one `display: contents` wrapper to another in the card it is measured in,
+  // it goes on resizing, its stand-in beside it
+  await fixture(`<div id="card" style="position:relative;width:200px;height:100px"><div id="one" style="display:contents"><div id="box" style="${box}"></div></div><div id="two" style="display:contents"></div></div>`);
+  await style(box.replace('width:20px', 'width:100px'), 'box');
+  await evaluate('seek(500)');
+  await evaluate(`batch({ops:[{op:'children',id:'two',ids:['box']}]}); seek(500)`);
+  expect(Math.round(await width())).toBe(60);
+  // Moved into a box scaled twice about its corner within the card, it starts where it was: its move is in the scaled
+  // box's points, half the card's
+  const scaled = 'position:absolute;left:50px;top:0;width:100px;height:50px;scale:2;transform-origin:0 0';
+  await fixture(`<div id="card" style="position:relative;width:200px;height:100px"><div id="box" style="${box}"></div><div id="wrap" style="${scaled}"></div></div>`);
+  const left = () => evaluate(`Math.round(document.getElementById('box').getBoundingClientRect().left - document.getElementById('card').getBoundingClientRect().left)`);
+  await evaluate(`batch({ops:[{op:'children',id:'wrap',ids:['box']}]}); seek(0)`);
+  expect(await left()).toBe(0);
+  await evaluate('seek(1000)');
+  expect(await left()).toBe(50);
+  // Its measuring box made none (`display: contents`) halfway through a move, the move ends
+  await fixture(`<div id="card" style="position:relative;width:200px;height:100px"><div id="wrap" style="position:relative;width:100px;height:50px"><div id="box" style="${box}"></div></div></div>`);
+  await style(box.replace('left:0', 'left:80px'), 'box');
+  await evaluate('seek(500)');
+  await style('display:contents', 'wrap');
+  expect(await evaluate('document.getElementById("box").getAnimations().filter(a => a.effect.getKeyframes().length).length')).toBe(0);
+});
+
+check('a box a batch moves to another parent ends its moves there, and its stand-in with them', async () => {
+  await fixture(`<div id="a" style="position:relative;height:100px"><div id="card" style="${card}"></div></div><div id="b" style="position:relative;margin-left:40px;height:100px"></div>`);
+  await style(card.replace('40px', '140px'));
+  await evaluate('seek(500)');
+  await evaluate(`batch({ops:[{op:'children',id:'b',ids:['card']},{op:'style',id:'card',css:${JSON.stringify(card.replace('40px', '120px'))}}]}); seek(500, 500)`);
+  // At once at its place in B: its top-left on B's, at its new height
+  expect(await evaluate(`(card => { const r = card.getBoundingClientRect(), b = card.parentElement.getBoundingClientRect(); return [card.parentElement.id, card.getAnimations().length, document.querySelectorAll('[data-exiting]').length, r.left - b.left, r.top - b.top, r.height]; })(document.getElementById('card'))`))
+    .toEqual(['b', 0, 0, 0, 0, 120]);
+});
+
+check('an interrupted spring goes on under a delayed next move, from where it is shown', async () => {
+  const { ms, easing } = springCurve([300, 30, 1]), spring = card.replace('1000 0 linear', `${ms} 100 spring ${easing}`);
   await fixture(`<div id="card" style="${spring}"></div>`);
   await style(spring + ';margin-left:100px');
-  await evaluate('seek(250)');
+  // Retargeted 30 ms into its spring, by a move that waits 100 ms
+  await evaluate('seek(130)');
   const before = await evaluate('document.getElementById("card").getBoundingClientRect().x');
   await style(spring + ';margin-left:180px');
-  await evaluate('seek(0)');
+  await evaluate('seek(130, 130)');
   expect(await evaluate('document.getElementById("card").getBoundingClientRect().x')).toBeCloseTo(before, 1);
-  await evaluate('seek(120)');
+  // The first move, going on, carries the card right while the new one waits
+  await evaluate('seek(220, 130)');
   const later = await evaluate('document.getElementById("card").getBoundingClientRect().x');
-  // The inherited velocity carries the card right as the new spring starts.
-  expect(later - before).toBeGreaterThan(2);
+  expect(later - before).toBeGreaterThan(20);
 });
 
 check('a growing surface follows live paint, opacity and pressed transforms', async () => {
@@ -374,6 +506,54 @@ check('a shrinking clip reveals children up to the shown box, then restores over
   await evaluate('document.getAnimations().forEach(a => a.finish()); Promise.resolve()');
   expect(await evaluate('getComputedStyle(document.getElementById("card")).overflow')).toBe('hidden');
   expect(await evaluate('surface()')).toBeNull();
+});
+
+check('a shrinking clip that `hidden` makes a scroll container keeps clipping once a box in it turns sticky', async () => {
+  const body = 'height:120px;width:100px;background:blue', sticky = ';position:sticky;top:0';
+  // Which box turns sticky, how the card clips, and whether it goes on revealing its body: under `hidden` any shown
+  // sticky box keeps the card clipping at its laid-out box, one in a scroller inside it too, since one might stick to
+  // the card; `clip` makes no scroll container, and a box that is not shown sticks to nothing
+  for (const [turns, overflow, reveals] of [['header', 'hidden', false], ['body', 'hidden', false], ['ghost', 'hidden', true], ['body', 'clip', true]]) {
+    const css = { header: 'height:10px', body, ghost: 'display:none' };
+    await fixture(`<div id="card" style="${card.replace('40px', '140px')};overflow:${overflow}"><div id="panel" style="overflow:auto;height:20px;width:100px"><div id="header" style="${css.header}"></div></div><div id="ghost" style="${css.ghost}"></div><div id="body" style="${body}"></div></div>`);
+    await style(card + `;overflow:${overflow}`);
+    await evaluate('seek(500)');
+    // Halfway, 90 points shown, a box inside it turns sticky
+    await style(css[turns] + sticky, turns);
+    await evaluate('seek(500)');
+    expect([turns, overflow, await evaluate('document.elementFromPoint(40, 70).id') === 'body']).toEqual([turns, overflow, reveals]);
+  }
+});
+
+check('an easing restarts with what the moves under way had left, however little, and with nothing when that cancels', async () => {
+  const x = () => evaluate('document.getElementById("card").getBoundingClientRect().x');
+  // Halfway from 0 to 128 on a curve 2^-48 along there: retargeted to 0, 2^-41 points are left, which three quarters
+  // into the restart, 2^48 along, are 128 points
+  const far = card.replace('1000 0 linear', `1000 0 linear(0, ${2 ** -48} 50%, ${2 ** 48} 75%, 1)`);
+  await fixture(`<div id="card" style="${far}"></div>`);
+  const start = await x();
+  await style(far + ';margin-left:128px');
+  await evaluate('seek(500)');
+  await style(far + ';margin-left:0px');
+  await evaluate('seek(1250, 500)');
+  expect(Math.round(await x() - start)).toBe(-128);
+  // Halfway from 0 to 128 on a curve 2^-48 past halfway there, retargeted to 64: 2^-41 points are left, which at 87.5
+  // percent of the restart, 2^48 along, are 128 points back
+  const back = card.replace('1000 0 linear', `1000 0 linear(0 0%, ${2 ** -47} 25%, 1 75%, ${2 ** 48} 87.5%, 1 100%)`);
+  await fixture(`<div id="card" style="${back}"></div>`);
+  await style(back + ';margin-left:128px');
+  await evaluate('seek(500)');
+  await style(back + ';margin-left:64px');
+  await evaluate('seek(1375, 500)');
+  expect(Math.round(await x() - start)).toBe(-64);
+  // At 9,999 ms of 10,000, 9,999 points along, retargeted there: nothing to play, though the share is a float
+  const long = card.replace('1000 0 linear', '10000 0 linear');
+  await fixture(`<div id="card" style="${long}"></div>`);
+  await style(long + ';margin-left:10000px');
+  await evaluate('seek(9999)');
+  await style(long + ';margin-left:9999px');
+  await evaluate('seek(9999, 9999)');
+  expect([Math.round(await x() - start), await evaluate('document.getElementById("card").getAnimations().length')]).toEqual([9999, 0]);
 });
 
 check('a native button keeps its laid-out size and moves by its centre, which a resize around its place does not restart', async () => {

@@ -32,7 +32,7 @@ pub(super) fn motion_words() -> String {
 
 /// The transition grammar, its paint policy and the last curve covering layout.
 #[allow(clippy::field_reassign_with_default)]
-pub(super) fn transitions(words: &str) -> String {
+pub(super) fn transitions(words: &str, sampler: &str) -> String {
     exact_motion::link_transitions();
     let properties: std::collections::BTreeMap<_, _> = exact_motion::Property::ALL
         .iter()
@@ -53,6 +53,8 @@ pub(super) fn transitions(words: &str) -> String {
             &exact_motion::MAX_TRANSITIONS.to_string(),
         )
         .replace("WORDS", words)
+        .replace("SAMPLER", sampler)
+        .replace("LAYOUT_EXTENT", &exact_motion::LAYOUT_EXTENT.to_string())
         .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
 }
 
@@ -124,20 +126,24 @@ pub enum Parser {
 }
 
 impl Parser {
-    pub(super) fn source(self, plan: &Plan, words: &str) -> String {
+    pub(super) fn source(self, plan: &Plan, words: &str, sampler: &str) -> String {
         match self {
-            Self::Transition => transitions(words),
+            Self::Transition => transitions(words, sampler),
             Self::Animation => animations(plan, words),
         }
     }
 
     pub fn emit(self, plan: &Plan, uses: &mut crate::code::Uses) -> String {
         let words = uses.constant("$motionWords", motion_words);
-        let name = match self {
-            Self::Transition => "$parseTransition",
-            Self::Animation => "$animationStacks",
+        // (Only a transition's parser lowers a spring, for a layout row's text)
+        let (name, sampler) = match self {
+            Self::Transition => (
+                "$parseTransition",
+                uses.constant("$transitionSpring", crate::style::transition_spring),
+            ),
+            Self::Animation => ("$animationStacks", String::new()),
         };
-        uses.constant(name, || self.source(plan, &words))
+        uses.constant(name, || self.source(plan, &words, &sampler))
     }
 }
 

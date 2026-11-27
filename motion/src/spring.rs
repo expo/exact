@@ -285,26 +285,61 @@ impl SpringConfig {
     }
 }
 
+/// The release, in points, whose settle time a layout spring's curve runs for:
+/// a move of up to this many points ends within [`REST_THRESHOLD`] of rest, as
+/// the engine settles a layout spring natively, unless the spring takes longer
+/// than [`MAX_DURATION`] to settle (LLP 1063 D6).
+pub const LAYOUT_EXTENT: f64 = 1000.0;
+
 impl SpringConfig {
     /// The spring's curve from a unit displacement at rest, as a CSS
     /// `linear()` easing over its settle time (seconds): sixty stops a
     /// second, each at the f32 its CSS text carries, so a browser playing
     /// the text and an engine playing the value agree to the bit. How a
-    /// property no spring drives as physics plays one (LLP 1062 D3), and
-    /// how the web writes a `-exact-layout-transition` spring (LLP 1063).
+    /// property no spring drives as physics plays one (LLP 1062 D3).
     pub fn easing(&self) -> (f64, crate::easing::Easing) {
+        self.easing_over(1.0)
+    }
+
+    /// The same curve over the settle time of a release of `extent` at rest,
+    /// so that a release of up to `extent` ends within [`REST_THRESHOLD`] of
+    /// rest, or is set at rest at [`MAX_DURATION`], as natively, by a spring
+    /// that has not settled by then. A release already at rest is `linear`
+    /// over no time. How the web writes a `-exact-layout-transition` spring,
+    /// over [`LAYOUT_EXTENT`] (LLP 1063 D6).
+    pub fn easing_over(&self, extent: f64) -> (f64, crate::easing::Easing) {
         use crate::easing::{Easing, LinearStop};
-        let (duration, frames) = keyframes(self, 1.0, 0.0, 0.0);
-        let step = (frames.len() / (duration * 60.0).ceil().max(1.0) as usize).max(1);
-        let f32 = |v: f64| v as f32 as f64;
-        let stops = frames
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| i % step == 0 || i + 1 == frames.len())
-            .map(|(_, f)| LinearStop {
-                input: f32(f.offset),
-                output: f32(1.0 - f.value),
+        let unit = |t: f64| self.sample(1.0, 0.0, t);
+        let mut count = 0u32;
+        while (count as f64) < MAX_DURATION * SAMPLE_RATE {
+            let s = unit(count as f64 / SAMPLE_RATE);
+            if (SpringSample {
+                displacement: s.displacement * extent,
+                velocity: s.velocity * extent,
             })
+            .at_rest()
+            {
+                break;
+            }
+            count += 1;
+        }
+        if count == 0 {
+            return (0.0, Easing::Linear);
+        }
+        let duration = count as f64 / SAMPLE_RATE;
+        // Every `step`th sample of the grid, about sixty a second, and the target at the end
+        let step = ((count as usize + 1) / (duration * 60.0).ceil().max(1.0) as usize).max(1);
+        let f32 = |v: f64| v as f32 as f64;
+        let stops = (0..count as usize)
+            .step_by(step)
+            .map(|n| LinearStop {
+                input: f32(n as f64 / SAMPLE_RATE / duration),
+                output: f32(1.0 - unit(n as f64 / SAMPLE_RATE).displacement),
+            })
+            .chain([LinearStop {
+                input: 1.0,
+                output: 1.0,
+            }])
             .collect();
         (duration, Easing::PiecewiseLinear(stops))
     }

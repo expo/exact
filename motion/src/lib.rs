@@ -75,7 +75,7 @@ pub use filter::{FilterKind, FilterStep, FilterValue};
 pub use parse::{link_transitions, ParseError};
 pub use path::{PathCommand, PathValue};
 pub use property::{Property, Value};
-pub use spring::{Keyframe, SpringConfig, SpringError, SpringSample};
+pub use spring::{Keyframe, SpringConfig, SpringError, SpringSample, LAYOUT_EXTENT};
 pub use transition::{
     TimingFunction, Transition, TransitionError, TransitionProgress, TransitionProperty,
     Transitions, MAX_TRANSITIONS,

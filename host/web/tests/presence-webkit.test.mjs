@@ -1,15 +1,14 @@
 // What WebKit paints while a layout transition moves a box: filmed there and read back in Chromium, since a WebKit
 // screenshot is drawn on the page's thread and shows where the box is placed, not where it is painted.
 import { afterAll, expect } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { browserMissing } from '../../../scripts/agent-playwright.mjs';
 import { need } from '../../../scripts/coverage.mjs';
+import { moduleRoute, serveModules } from './module-server.mjs';
 
-const WEB = resolve(import.meta.dirname, '..'), ROOTS = [WEB, resolve(WEB, '../web-js')].map(root => realpathSync(root) + sep);
 const PRESENCE = resolve(import.meta.dirname, '../presence-glue.js');
 const check = need('webkit and chromium', (await browserMissing('webkit')) || (await browserMissing('chromium')));
 const dir = mkdtempSync(resolve(tmpdir(), 'presence-webkit-'));
@@ -61,23 +60,9 @@ const decode = `<!doctype html><video muted playsinline src="/film.webm"></video
 
 check('WebKit paints a moving box on its path, which it does not for a translate added to `none`', async () => {
   const film = resolve(dir, 'film.webm');
-  const server = createServer((req, res) => {
-    if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    if (req.url === '/decode') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(decode); return; }
-    if (req.url === '/film.webm') { res.writeHead(200, { 'content-type': 'video/webm' }); res.end(readFileSync(film)); return; }
-    if (req.url === '/js/names.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end('export const sourceTypes = {};'); return; }
-    if (req.url === '/presence-glue.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(PRESENCE)); return; }
-    // `/js/` is the JS target's directory, beside this one; its modules import ours as `../web/`. Only their own `.js`
-    // files are served.
-    const path = req.url.startsWith('/js/') ? req.url.slice(4) : req.url.replace(/^\/(web\/)?/, ''), js = resolve(WEB, '../web-js', path);
-    const file = req.url.startsWith('/js/') && existsSync(js) ? js : resolve(WEB, path);
-    const real = existsSync(file) && statSync(file).isFile() ? realpathSync(file) : null;
-    if (!real?.endsWith('.js') || !ROOTS.some(root => real.startsWith(root))) { res.writeHead(404); res.end(); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' });
-    res.end(readFileSync(real));
-  });
-  await new Promise(ok => server.listen(0, '127.0.0.1', ok));
-  const url = `http://127.0.0.1:${server.address().port}`;
+  const server = await serveModules({ '/': [page, 'text/html'], '/decode': [decode, 'text/html'],
+    '/film.webm': [() => readFileSync(film), 'video/webm'], '/presence-glue.js': moduleRoute(PRESENCE) });
+  const { url } = server;
   let webkit, chromium;
   try {
     webkit = await suiteBrowser('webkit');

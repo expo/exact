@@ -66,40 +66,15 @@ function leavers(queue) {
 export function curve(el) {
   const text = el?.style.getPropertyValue('--exact-layout-transition').trim().replace(/[A-Z]+/g, c => c.toLowerCase());
   if (!text || text === 'none') return null;
-  const decl = text.split(/,(?![^(]*\))/).pop().trim(); // the last declaration; a spring's commas are inside it
+  const decl = text.split(/,(?![^(]*\))/).pop().trim(); // the last declaration; an easing's commas are inside it
   const times = [];
   let timing = 'ease';
-  for (const t of decl.match(/(?:cubic-bezier|steps|linear|spring)\([^)]*\)|\S+/g) ?? []) {
+  for (const t of decl.match(/(?:cubic-bezier|steps|linear)\([^)]*\)|\S+/g) ?? []) {
     const ms = /^(-?[\d.]+)(ms|s)?$/.exec(t);
     if (ms) { times.push(+ms[1] * (ms[2] === 's' ? 1000 : 1)); continue; }
     if (t !== 'all') timing = t;
   }
-  const delay = times[1] ?? 0;
-  const spring = /^spring\(\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)$/.exec(timing);
-  if (spring) return { ...springCurve(+spring[1], +spring[2], +(spring[3] ?? 1)), delay };
-  return times[0] > 0 ? { duration: times[0], delay, timing } : null;
-}
-
-/** A spring from rest to its target as `linear()`, over its settle time:
- * a damped harmonic oscillator, settling as the native flight's does (its
- * progress runs 0 to 1000; at rest under a thousandth in displacement and
- * speed, on a 240 Hz grid, at most ten seconds: motion/src/spring.rs). */
-function springCurve(k, c, m) {
-  const w0 = Math.sqrt(k / m), z = c / (2 * Math.sqrt(k * m));
-  const x = t => {
-    if (z < 1) { const wd = w0 * Math.sqrt(1 - z * z); return Math.exp(-z * w0 * t) * (Math.cos(wd * t) + (z * w0 / wd) * Math.sin(wd * t)); }
-    if (z === 1) return Math.exp(-w0 * t) * (1 + w0 * t);
-    const r1 = -w0 * (z - Math.sqrt(z * z - 1)), r2 = -w0 * (z + Math.sqrt(z * z - 1));
-    return (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r2 - r1);
-  };
-  const at = n => { const t = n / 240, h = 1e-6; return Math.abs(1000 * x(t)) < 1e-3 && Math.abs(1000 * (x(t + h) - x(Math.max(0, t - h))) / (t > h ? 2 * h : h)) < 1e-3; };
-  let n = 1;
-  while (n < 2400 && !at(n)) n++;
-  const end = n / 240;
-  const points = [];
-  for (let i = 0; i <= 48; i++) points.push(+(1 - x(end * i / 48)).toFixed(4));
-  points[48] = 1;
-  return { duration: Math.round(end * 1000), timing: `linear(${points.join(', ')})` };
+  return times[0] > 0 ? { duration: times[0], delay: times[1] ?? 0, timing } : null;
 }
 
 function ident() { return `exact-se-${++serial}`; }

@@ -254,6 +254,13 @@ Ordinary app launches keep their saved website data.
 - **A settled UI is a condition.** After a transition or an animation, wait for
   the condition the product itself uses (`Agent.nativeInFlight()` on Apple, the
   agent's `clock settle`), not a hardcoded sleep timeout.
+- **Test motion by what a viewer sees.** Hold a layout move to what LLP 1063 D10
+  promises with `host/web/motion-check.mjs`, on the boxes it is shown and laid
+  out at, sampled under the page's clock, not on its keyframes or its
+  animations' names, which a correct rewrite changes. Add a case to the seeded
+  scenarios of `host/web/tests/motion-contract.test.mjs` rather than a test of
+  its own. What a host paints but does not report, such as WebKit's added
+  `translate`, needs a film (`host/web/tests/presence-webkit.test.mjs`).
 
 For a `contextPopover` source, use `tap <source> drag 0 0 press 1000` under
 `--touch platform`, then `clock settle`. `tap <action>` selects UIKit's

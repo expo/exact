@@ -2,12 +2,17 @@
 // Transition::validate, including whole-list rejection, reading each word
 // through motion-words.js. src/paint.rs supplies accepted property
 // names and their kernel policy. No word of a transition keeps its case, so
-// the text is folded first.
+// the text is folded first. A layout spring is written as css.rs
+// `layout_transition_css` writes it: `spring` and its curve from rest, over the
+// time a move of LAYOUT_EXTENT points settles in.
 (() => {
   const properties = PROPERTIES, maxTransitions = MAX_TRANSITIONS;
   const { trim, split, easing, lower, time, num, springConfig } = WORDS;
+  // (The sampler is read when a spring is lowered, only for the row's text: the bundle may define it after this)
+  const lowered = curve => { const values = SAMPLER.coefficients(springConfig(curve)), at = values && SAMPLER.sample(values, LAYOUT_EXTENT); return at && [at[0], `spring ${at[1]}`]; };
   return (v, css = true, pressItem) => {
-    const out = { held: false, stacks: false, css: null };
+    // (`layout`: whether a declaration covers layout, which needs no lowering to know)
+    const out = { held: false, stacks: false, layout: false, css: null };
     if (v == null) return out;
     if (typeof v !== "string") return null;
     const text = lower(trim(v));
@@ -38,9 +43,14 @@
       out.stacks ||= property === null || properties[property];
       pressItem?.(property, duration, delay, curve, timing === 2 ? springConfig(curve) : null, easing);
       // Layout is outside Property::ALL. Only the last omitted property or `all` covers it.
-      if (property === null || property === "all") layout = [duration, delay, curve];
+      if (property === null || property === "all") layout = [duration, delay, curve, timing === 2];
     }
-    if (css && layout) out.css = `${num(layout[0] * 1000)} ${num(layout[1] * 1000)} ${easing(layout[2], true)}`;
+    out.layout = layout !== null;
+    if (css && layout) {
+      const [duration, delay, curve, spring] = layout, written = spring ? lowered(curve) : [duration, easing(curve, true)];
+      if (!written) return null;
+      out.css = `${num(written[0] * 1000)} ${num(delay * 1000)} ${written[1]}`;
+    }
     return out;
   };
 })()

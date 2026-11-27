@@ -1,4 +1,4 @@
-// SpringConfig::easing's unit release, sample grid and thinning (motion/src/spring.rs).
+// SpringConfig::easing_over's unit release, rest at an extent, sample grid and thinning (motion/src/spring.rs).
 (() => {
   // Shortest decimal that reads back to this f32, in the fixed notation
   // Easing::css and exact_web::css::num use. Percentages round a second time.
@@ -30,7 +30,8 @@
     const values = [alpha, omegaSquared, discriminant];
     return values.every(Number.isFinite) ? values : null;
   };
-  const sample = ([alpha, omegaSquared, discriminant]) => {
+  // At rest where a release of `extent` would be (SpringConfig::easing_over)
+  const sample = ([alpha, omegaSquared, discriminant], extent = 1) => {
     const epsilon = omegaSquared * 1e-12;
     const at = t => {
       const decay = Math.exp(-alpha * t);
@@ -55,7 +56,7 @@
     while (count < 2400) {
       const [x, velocity] = at(count / 240);
       if (!Number.isFinite(x) || !Number.isFinite(velocity)) return null;
-      if (Math.abs(x) < .001 && Math.abs(velocity) < .001) break;
+      if (Math.abs(x * extent) < .001 && Math.abs(velocity * extent) < .001) break;
       count++;
     }
     const duration = count / 240, step = Math.max(1, Math.floor((count + 1) / Math.max(1, Math.ceil(duration * 60))));

@@ -20,6 +20,7 @@ const test = need('chrome', chromium().unavailable, { test: bunTest });
 const SOURCE = `component App
   state calm = false
   state shown = true
+  state bad = false
   action motion
     calm = not calm
   action drop
@@ -27,14 +28,21 @@ const SOURCE = `component App
   action both
     calm = not calm
     shown = not shown
+  action refuse
+    bad = true
+  action mend
+    bad = false
+    shown = not shown
   view
     column
       button "Motion" press=motion testId="motion"
       button "Drop" press=drop testId="drop"
       button "Both" press=both testId="both"
+      button "Refuse" press=refuse testId="refuse"
+      button "Mend" press=mend testId="mend"
       if shown
         text "First" testId="first" height=40
-      text "Second" testId="second" height=40 -exact-layout-transition=(calm ? "none" : "2000ms linear")
+      text "Second" testId="second" height=40 -exact-layout-transition=(calm ? "none" : bad ? "2000ms cubic-bezier(0, 1e40, 1, 0)" : "2000ms linear")
 `;
 
 test.each(['layout', 'exit', 'both'])('empty presence bindings skip probes on an unrelated action (%s)', async mode => {
@@ -219,7 +227,7 @@ test('motion-held and reference-resolving presence bindings keep probing and dis
           rt.px(node); style(node, '--exact-exit-animation', '', binding);
           // Layout registration follows its write, as the compiler emits it.
           style(node, '--exact-layout-transition', '', binding);
-          rt.lt(node, v => v ? { css: v } : null, binding);
+          rt.lt(node, v => v ? { css: v, layout: true } : null, binding);
         }
       });
       calls = globalThis.probeReads = 0;
@@ -306,6 +314,19 @@ test('a bound layout transition slides while it holds a curve, jumps at none, an
     expect(await press('both')).toEqual({ css: '', moving: false });
     expect(await heard()).toEqual([['before', 0], ['after', 1]]);
     expect(await page.evaluate(() => globalThis.exact.presenceLive.tracking())).toBe(false);
+    // A row the browser refuses (a curve whose number overflows a float) ends the move under way, though the box stays
+    // put; turned valid in the commit that moves the box, it is measured, and the box slides
+    expect(await press('motion')).toEqual({ css: '2000 0 linear', moving: false });
+    expect(await page.evaluate(async () => {
+      const second = document.querySelector('[data-testid="second"]'), click = id => document.querySelector(`[data-testid="${id}"]`).click();
+      click('drop');
+      await new Promise((r) => setTimeout(r));
+      const moving = second.getAnimations().length > 0;
+      click('refuse');
+      await new Promise((r) => setTimeout(r));
+      return [moving, second.style.getPropertyValue('--exact-layout-transition'), second.getAnimations().length];
+    })).toEqual([true, '2000 0 cubic-bezier(0,inf,1,0)', 0]);
+    expect(await press('mend')).toEqual({ css: '2000 0 linear', moving: true });
   } finally {
     await browser?.close();
     server?.stop(true);
@@ -824,12 +845,16 @@ ${region === 'match' ? '        case none\n          text "Gone"\n' : ''}      l
 test('a resizing box\'s stand-in paints at its translate, resolved in the box\'s transform-box', async () => {
   const app = await exitApp('chromium', `component App
   state tall = false
+  state wide = false
   action grow
     tall = not tall
+  action widen
+    wide = not wide
   view
     column
       button "grow" press=grow testId="grow"
-      box testId="card" width=200 height=(tall ? 160 : 100) box-sizing="border-box" padding="10px 20px" border="5px solid #333" background-color="#4a90d9" transform-box="content-box" translate="50% 0" -exact-layout-transition="2000ms linear"
+      button "widen" press=widen testId="widen"
+      box testId="card" width=(wide ? 280 : 200) height=(tall ? 160 : 100) box-sizing="border-box" padding="10px 20px" border="5px solid #333" background-color="#4a90d9" transform-box="content-box" translate="50% 0" -exact-layout-transition="2000ms linear"
 `);
   try {
     const { page } = app;
@@ -850,6 +875,22 @@ test('a resizing box\'s stand-in paints at its translate, resolved in the box\'s
     expect(at.card).toBeCloseTo(at.rest, 1);
     expect(at.height).toBeCloseTo(130, 1);
     expect(at.surface).toBeCloseTo(at.card, 1);
+    // Widened, its 50% translate resolves against the new content width (150 to 230 points) at once: on the commit frame
+    // its stand-in is still 200 wide, and the painted edge is 40 points along (D10 item 1)
+    const wide = await page.evaluate(async () => {
+      const card = document.querySelector('[data-testid="card"]');
+      const rest = card.getBoundingClientRect().left;
+      document.querySelector('[data-testid="widen"]').click();
+      await new Promise(resolve => setTimeout(resolve));
+      const stand = card.previousElementSibling?.hasAttribute('data-exiting') ? card.previousElementSibling.firstElementChild : null;
+      const animations = [card, ...(stand ? [stand.parentElement, stand] : [])].flatMap(node => node.getAnimations());
+      await Promise.all(animations.map(async animation => { animation.pause(); await animation.ready; animation.currentTime = 0; }));
+      const box = stand?.getBoundingClientRect();
+      return { shift: card.getBoundingClientRect().left - rest, surface: box && box.left - rest, width: box?.width ?? null };
+    });
+    expect(wide.width).toBeCloseTo(200, 1);
+    expect(wide.shift).toBeCloseTo(40, 1);
+    expect(wide.surface).toBeCloseTo(40, 1);
   } finally { await app.close(); }
 }, 30000);
 
@@ -958,7 +999,7 @@ component App
   } finally { await app.close(); }
 }, 30000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a commit preserves departing boxes and the survivor’s starting position`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) for (const [under, scale] of [['', ''], [' under a scaled column', ' scale=0.5']]) engineTest[engine](`${engine}: a commit preserves departing boxes and the survivor’s starting position${under}`, async () => {
   const app = await exitApp(engine, `keyframes out
   to opacity=0
 
@@ -967,7 +1008,7 @@ component App
   action toggle
     long = not long
   view
-    column padding=20 gap=12
+    column padding=20 gap=12${scale}
       button "Toggle" press=toggle testId="toggle"
       row margin-left=80 position=(long ? "static" : "relative")
         if long

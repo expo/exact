@@ -9,20 +9,21 @@
 // last box, inert and unnamed, until those animations end; they follow the
 // element's own `animation` list, which keeps playing.
 //
-// `--exact-layout-transition` is `<ms> <delay ms> <easing>`, the easing a
-// CSS one or `spring(stiffness, damping, mass)`. A view that declares it is
-// measured before and after each batch; a move within the box it is placed
-// in plays back from where it was as an additive `translate`, so it composes
-// with the authored one and a moving parent carries it. A size change is the
-// surface's alone, as native frame animation shows it: the element keeps its
-// laid-out box, so its content and children never scale, and a stand-in
-// behind it (the element's background, border, radius, shadow and backdrop
-// filter, which it stops painting for the while) grows or shrinks from its
-// top-left corner; an element that clips its children clips them to the
-// shown box. A native button, whose chrome the browser draws, keeps its
-// laid-out size and moves by its centre. A spring is lowered here, per move,
-// from its displacement and velocity in points, on the grid and rest threshold
-// the engine settles on natively (`exact_motion::spring`).
+// `--exact-layout-transition` is `<ms> <delay ms> [spring] <easing>`: a CSS
+// easing, which a host writes for a spring as the engine's curve for it from
+// rest (`SpringConfig::easing_over`) after the word `spring`, so this module
+// computes no curve. A view that declares it is measured before and after each
+// batch; a change of its laid-out place within the box it is placed in plays
+// back as an additive `translate`, from the change to none, so it composes with
+// the authored one and a moving parent carries it. A spring's move adds to the
+// moves under way, and an easing's restarts from where the box is shown
+// (`move`, LLP 1063 D6). A size change is the surface's alone, as native frame
+// animation shows it: the element keeps its laid-out box, so its content and
+// children never scale, and a stand-in behind it (the element's background,
+// border, radius, shadow and backdrop filter, which it stops painting for the
+// while) grows or shrinks from its top-left corner; an element that clips its
+// children clips them to the shown box. A native button, whose chrome the
+// browser draws, keeps its laid-out size and moves by its centre.
 import { unwrapListItem, viewParent } from './navigation.js';
 import { translation } from './motion-glue.js';
 const LAYOUT = '--exact-layout-transition';
@@ -38,7 +39,7 @@ const CLEAR = { backgroundColor: 'transparent', backgroundImage: 'none', borderT
 // length and a percentage compute as one `calc()`, and a percentage is of
 // the element's `transform-box`.
 function own(el, cs) {
-  const [ox, oy] = cs.transformOrigin.split(' ').map(parseFloat);
+  const [ox, oy] = origin(el, cs);
   const m = new DOMMatrix().translateSelf(ox, oy);
   if (cs.translate !== 'none') m.translateSelf(...translation(el, cs.translate, cs));
   if (cs.rotate !== 'none') {
@@ -51,10 +52,38 @@ function own(el, cs) {
   return m.translateSelf(-ox, -oy);
 }
 
-// `el`'s paint onto its stand-in `box`, a border box with no padding: its translate as `el` resolves it, in px, since a
-// percentage of the stand-in's own box (its moving size, and never `el`'s `transform-box`) would put it elsewhere.
+// An element's transform origin in its border box. The origin is in its `transform-box`, whose used value for a CSS
+// box is its content box for `content-box` and `fill-box`, and its border box otherwise (CSS Transforms 1,
+// `transform-box`). Of a content box, WebKit and Firefox report a percentage resolved against it, and Chromium against
+// the border box, so each axis CSS Typed OM keeps (lengths and percentages, an interpolated `calc()` among them) is
+// resolved here against the content box, less the room its scrollbars take (CSS Overflow 3, scrollbar sizing).
+function origin(el, cs) {
+  const reported = cs.transformOrigin.split(' ').map(parseFloat);
+  if (cs.transformBox !== 'content-box' && cs.transformBox !== 'fill-box') return reported.slice(0, 2);
+  const n = v => parseFloat(v) || 0, [w, h] = size(cs) ?? [0, 0], [bl, br, bt, bb, pl, pr, pt, pb] = [cs.borderLeftWidth,
+    cs.borderRightWidth, cs.borderTopWidth, cs.borderBottomWidth, cs.paddingLeft, cs.paddingRight, cs.paddingTop, cs.paddingBottom].map(n);
+  // (A scrollbar's room, in whole pixels, is told from layout's rounding by being two or more)
+  const gutter = (outer, inner, a, b) => { const g = outer - inner - a - b; return g >= 2 ? g : 0; };
+  const gx = gutter(el.offsetWidth, el.clientWidth, bl, br), gy = gutter(el.offsetHeight, el.clientHeight, bt, bb);
+  const inset = [bl + pl + (cs.direction === 'rtl' ? gx : 0), bt + pt], content = [w - bl - br - pl - pr - gx, h - bt - bb - pt - pb - gy];
+  const axes = el.computedStyleMap?.().get('transform-origin')?.toString().match(/calc\([^)]*\)|\S+/g) ?? [];
+  const at = i => {
+    let v = 0, terms = 0;
+    for (const [, sign, number, unit] of (axes[i] ?? '').matchAll(/([+-]?)\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(px|%)/gi)) {
+      v += (sign === '-' ? -1 : 1) * Number(number) * (unit === '%' ? content[i] / 100 : 1);
+      terms++;
+    }
+    return terms ? v : reported[i];
+  };
+  return [inset[0] + at(0), inset[1] + at(1)];
+}
+
+// `el`'s paint onto its stand-in `box`, a border box with no padding: its translate as `el` resolves it, and its
+// transform origin in its border box, in px, since a percentage of the stand-in's own box (its moving size, and never
+// `el`'s `transform-box`) would put them elsewhere.
 function paint(box, el, cs) {
   for (const k of PAINT) box.style[k] = cs[k];
+  box.style.transformOrigin = origin(el, cs).map(x => `${x}px`).join(' ');
   if (cs.translate === 'none') return;
   const [x, y] = translation(el, cs.translate, cs), z = cs.translate.match(/calc\([^)]*\)|\S+/g)?.[2];
   box.style.translate = `${x}px ${y}px${z ? ` ${z}` : ''}`;
@@ -154,14 +183,17 @@ function contentClip(sf) {
 // box keeps clipping too where clipping places more than that: a scroller or
 // a box scrolled, which would lose its offset and its scrollbar's room; an
 // inline-level box, whose baseline is its bottom edge only while it clips
-// (CSS 2 §10.8.1); and one holding a sticky box, which sticks to the nearest
-// scroll container (`sticky`, read when the move starts). What it holds is
+// (CSS 2 §10.8.1); and one that `hidden` makes a scroll container while it
+// holds a shown sticky box, which might stick to it and would then stick to an
+// outer one: any counts, one in a scroller inside it too, which keeps it clipping
+// early rather than late (`clip` makes no scroll container). What it holds is
 // read from its own style with the hold off, again after each batch, so a
 // restyle mid-move is its own.
-function unclip(hold, el, sticky) {
+function unclip(hold, el) {
   hold.effect.setKeyframes([]);
   const cs = getComputedStyle(el), axes = [cs.overflowX, cs.overflowY];
-  if (sticky || cs.display.startsWith('inline') || axes.some(v => v === 'auto' || v === 'scroll') || el.scrollTop || el.scrollLeft) return;
+  if (cs.display.startsWith('inline') || axes.some(v => v === 'auto' || v === 'scroll') || el.scrollTop || el.scrollLeft) return;
+  if (axes.includes('hidden') && [...el.querySelectorAll('*')].some(d => getComputedStyle(d).position === 'sticky' && d.getClientRects().length)) return;
   const held = { overflow: 'visible' };
   if (axes.includes('hidden')) {
     if (cs.minWidth === 'auto') held.minWidth = '0px';
@@ -200,7 +232,8 @@ function measure() {
     if (m) return m;
     const cs = getComputedStyle(el), [w, h] = size(cs) ?? [0, 0], parent = el.parentElement;
     const above = parent && parent !== document.documentElement ? of(parent) : null;
-    m = { cs, w, h, own: own(el, cs), above: above ? above.above.multiply(linear(above.own)) : new DOMMatrix() };
+    // (A box `display: contents` makes none of paints no transform of its own)
+    m = { cs, w, h, own: cs.display === 'contents' ? new DOMMatrix() : own(el, cs), above: above ? above.above.multiply(linear(above.own)) : new DOMMatrix() };
     // Where its untransformed top-left lands on the page: its bounding rect
     // is the box of its corners through its own and its ancestors' maps.
     const r = el.getBoundingClientRect(), map = m.above.multiply(m.own);
@@ -214,7 +247,7 @@ function measure() {
   // points: sub-pixel and free of ancestral transforms. Row wrappers only
   // position virtual rows (`data-listitemkey`) or supply semantics without
   // a box (`data-exact-list-item`), so measure a row in the list content.
-  return (el, parent = el.parentElement?.matches('[data-listitemkey], [data-exact-list-item]') ? el.parentElement.parentElement : el.parentElement) => {
+  const measured = (el, parent = measuredIn(el)) => {
     if (!parent || !el.isConnected || !size(getComputedStyle(el))) return null;
     const e = of(el), p = of(parent);
     // The page point of its top-left is the parent's local point through
@@ -222,6 +255,21 @@ function measure() {
     const d = p.map.inverse().transformPoint({ x: e.at.x - p.at.x, y: e.at.y - p.at.y });
     return [d.x + parent.scrollLeft, d.y + parent.scrollTop, e.w, e.h];
   };
+  // A displacement `[dx, dy]` in `parent`'s points, in the points a translate on `el` moves it by: through the linear
+  // maps of the boxes between them, which a box moved under a scaled one within `parent` has
+  measured.carry = (el, parent, [dx, dy]) => {
+    const e = of(el), p = of(parent), v = e.above.inverse().multiply(p.above.multiply(linear(p.own))).transformPoint({ x: dx, y: dy });
+    return Number.isFinite(v.x) && Number.isFinite(v.y) ? [v.x, v.y] : [dx, dy];
+  };
+  return measured;
+}
+
+// The box an element is measured in: its parent, but for a row (`measure`), past the boxes `display: contents` makes
+// none of, whose children lie in their parent's
+function measuredIn(el) {
+  let p = el.parentElement?.matches('[data-listitemkey], [data-exact-list-item]') ? el.parentElement.parentElement : el.parentElement;
+  while (p && p !== document.documentElement && getComputedStyle(p).display === 'contents') p = p.parentElement;
+  return p;
 }
 
 // What a layout transition moves: an element's box, or a native button's centre with no size, as the kernel's
@@ -232,37 +280,15 @@ const moving = (el, at) => at && el.matches('button[data-button-style]') ? [at[0
 // stamp (`at`).
 const changesNoTree = batch => batch.still ?? !batch.ops?.some(op => op.op !== 'at');
 
-// `exact_motion::spring`: displacement and velocity at `t` seconds after a
-// release at `d` moving at `v`, closed form in all three regimes.
-function spring([k, c, m], d, v, t) {
-  const a = c / (2 * m), w2 = k / m, disc = a * a - w2, eps = w2 * 1e-12, decay = Math.exp(-a * t);
-  if (disc < -eps) {
-    const wd = Math.sqrt(-disc), b = (v + a * d) / wd, co = Math.cos(wd * t), si = Math.sin(wd * t);
-    return [decay * (d * co + b * si), decay * ((-a * d + b * wd) * co + (-a * b - d * wd) * si)];
-  }
-  if (Math.abs(disc) <= eps) { const b = v + a * d; return [decay * (d + b * t), decay * (b - a * (d + b * t))]; }
-  const root = Math.sqrt(disc), r1 = -a + root, r2 = -a - root, c1 = (v - r2 * d) / (r1 - r2), c2 = d - c1;
-  const e1 = Math.exp(r1 * t), e2 = Math.exp(r2 * t);
-  return [c1 * e1 + c2 * e2, c1 * r1 * e1 + c2 * r2 * e2];
-}
-// Seconds until it first samples at rest on the 240 Hz grid, at most ten.
-function settle(config, d, v) {
-  for (let n = 0; ; n++) {
-    const t = n / 240;
-    if (t >= 10) return 10;
-    const [x, s] = spring(config, d, v, t);
-    if (Math.abs(x) < 1e-3 && Math.abs(s) < 1e-3) return t;
-  }
-}
-
 function createPresence(root) {
   // Every view that declared the row before this module arrived.
   const tracked = new Set([...root.querySelectorAll('[style*="--exact-layout-transition"]')]);
-  // element -> { animation, parts, surface, d, v, config }: each move
-  // running now, the animations that show its size, and the surface's
-  // stand-in.
+  // element -> { base, moves, surface }: each moving element's zero `translate`, its moves under way (each its
+  // animation and the parts that show it on the surface), and the surface's stand-in.
   const flips = new Map();
   const surfaces = new Set();
+  // element -> its row's text and what `row` read of it
+  const rows = new WeakMap();
   // A ghost cannot escape its parent's turn (LLP 1083.000 D4). Keep the
   // parent's current row beneath this temporary write, including changes
   // made by a later batch, and restore it when the last ghost ends.
@@ -306,9 +332,15 @@ function createPresence(root) {
   }
 
   // A move that shows nothing more without having finished (paused and sought past its end, or taken off its element)
-  // ends, its parts with it
+  // ends
   function retire() {
-    for (const [el, f] of flips) if (!el.isConnected || f.animation.effect?.target !== el || f.animation.effect.getComputedTiming().progress === null) stop(el);
+    for (const [el, f] of flips) {
+      if (!el.isConnected) { stop(el); continue; }
+      // (A stand-in its element left behind, moved within the box it is measured in, goes beside it again, which `sync`
+      // places; one it left that box for ended with its moves, `after`)
+      if (f.surface && f.surface.stand.nextElementSibling !== el) el.before(f.surface.stand);
+      for (const m of [...f.moves]) if (m.animation.effect?.target !== el || m.animation.effect.getComputedTiming().progress === null) end(el, m);
+    }
   }
 
   function sync(placed = false) {
@@ -316,9 +348,10 @@ function createPresence(root) {
     for (const el of surfaces) {
       const f = flips.get(el), sf = f.surface;
       reveal(f);
-      f.animation.effect.target = null;
+      for (const m of f.moves) m.animation.effect.target = null;
       const cs = getComputedStyle(el);
       paint(sf.box, el, cs);
+      if (placed) cover(sf, el);
       if (sf.shape) {
         const [w, h] = size(getComputedStyle(sf.box));
         const clipPath = shownClip(cs.clipPath, w, h);
@@ -327,126 +360,190 @@ function createPresence(root) {
         sf.shape.effect.setKeyframes([{ clipPath: content }, { clipPath: content }]);
         sf.shape.effect.target = el;
       }
-      if (placed) {
-        const place = measure(), [x, y] = place(el, viewParent(el)), [ax, ay] = place(sf.stand, viewParent(el));
-        sf.box.style.left = `${x - ax}px`; sf.box.style.top = `${y - ay}px`;
-      }
       for (const a of el.getAnimations()) {
-        if (f.parts.includes(a)) continue;
         const frames = a.effect.getKeyframes();
         if (!frames.some(frame => Object.keys(CLEAR).some(k => k in frame))) continue;
         sf.hidden.set(a, frames);
         a.effect.setKeyframes(frames.map(frame => Object.fromEntries(Object.entries(frame).map(([k, v]) => [k, CLEAR[k] ?? v]))));
       }
-      f.animation.effect.target = el;
+      for (const m of f.moves) m.animation.effect.target = el;
       sf.hide.effect.target = el;
     }
     if (flips.size && frame === null) frame = requestAnimationFrame(() => { frame = null; sync(); });
-  }
-
-  // What a running move still has to go, `[dx, dy, dw, dh]` from the laid-out
-  // box, and how fast it goes there (a spring's velocity; an easing has none,
-  // as CSS gives it none).
-  function going(el) {
-    const f = flips.get(el), still = [[0, 0, 0, 0], [0, 0, 0, 0]];
-    if (!f || f.animation.playState === 'finished' || f.animation.playState === 'idle') return still;
-    if (f.config) {
-      const t = ((f.animation.currentTime ?? 0) - f.animation.effect.getTiming().delay) / 1000;
-      if (t < 0) return [f.d, f.v];
-      const at = f.d.map((d, i) => spring(f.config, d, f.v[i], t));
-      return [at.map(s => s[0]), at.map(s => s[1])];
-    }
-    const p = f.animation.effect.getComputedTiming().progress ?? 1;
-    return [f.d.map(d => d * (1 - p)), still[1]];
   }
 
   function stop(el) {
     const f = flips.get(el);
     if (!f) return;
     flips.delete(el);
-    reveal(f);
-    for (const a of [f.animation, ...f.parts]) a.cancel();
-    f.surface?.stand.remove();
-    surfaces.delete(el);
+    unsurface(el, f);
+    for (const a of [f.base, ...f.moves.flatMap(parts)]) a.cancel();
     if (!flips.size && frame !== null) { cancelAnimationFrame(frame); frame = null; }
   }
 
-  // The element's surface, standing in for it behind it while its size
-  // moves: a zero-size anchor before it (so the size never moves the
-  // anchor, whatever its parent's alignment), and in it a box with the
-  // element's background, border, radius, shadow, backdrop filter and own
-  // transforms, placed over the element's laid-out box. Behind its content in the parent's
-  // stacking context, isolated structurally by the kernel.
-  function surface(el, place) {
-    const cs = getComputedStyle(el), stand = document.createElement('div'), box = document.createElement('div');
-    stand.setAttribute('data-exiting', ''); stand.setAttribute('aria-hidden', 'true'); stand.inert = true;
-    stand.style.cssText = 'position:absolute;width:0;height:0;margin:0;padding:0;border:0;z-index:-1;pointer-events:none';
-    el.before(stand);
-    const [x, y] = place(el, viewParent(el)), [ax, ay] = place(stand, viewParent(el));
-    box.style.cssText = `position:absolute;left:${x - ax}px;top:${y - ay}px;box-sizing:border-box;margin:0`;
-    paint(box, el, cs);
-    stand.append(box);
-    return { stand, box, hidden: new Map(), clips: cs.overflowX !== 'visible' || cs.overflowY !== 'visible', clipPath: cs.clipPath };
+  // A move that ends takes its parts with it; the element's last takes its base and surface too
+  function end(el, m) {
+    const f = flips.get(el);
+    if (!f?.moves.includes(m)) return;
+    f.moves.splice(f.moves.indexOf(m), 1);
+    for (const a of parts(m)) a.cancel();
+    if (!f.moves.length) { stop(el); return; }
+    // With the last move that changes the size, the surface goes: the element paints itself again, in its own turn,
+    // and the moves left wait on it, keeping their clocks
+    if (m.box && f.surface && !f.moves.some(o => o.box)) {
+      unsurface(el, f);
+      for (const o of f.moves) { o.stand.effect.target = el; o.stand.effect.setKeyframes([]); }
+    }
   }
 
-  // Play `el` back from `d` (and velocity `v`) to its laid-out box `w` × `h`.
-  function move(el, d, v, w, h, place) {
-    const [ms, delay, ...rest] = el.style.getPropertyValue(LAYOUT).trim().split(' ');
-    const easing = rest.join(' '), config = /^spring\((.*)\)$/.exec(easing)?.[1].split(',').map(Number);
-    stop(el);
-    // Each sample `d` from the laid-out box: its offset, and its size.
-    let samples = [[d, 0], [[0, 0, 0, 0], 1]], duration = Number(ms);
-    if (config) {
-      duration = Math.max(...d.map((x, i) => x || v[i] ? settle(config, x, v[i]) : 0));
-      if (duration <= 0) return;
-      samples = Array.from({ length: Math.ceil(duration * 60) }, (_, i) => [d.map((x, j) => spring(config, x, v[j], i / 60)[0]), i / 60 / duration]);
-      samples.push([[0, 0, 0, 0], 1]);
-      duration *= 1000;
+  // A move's animations: the element's, and its stand-in's place and size
+  const parts = m => [m.animation, m.stand, ...m.box ? [m.box] : []];
+
+  // The element's surface taken away, its moves' parts on it with it unless a new surface takes them
+  function unsurface(el, f) {
+    const sf = f.surface;
+    if (!sf) return;
+    reveal(f);
+    for (const a of sf.parts) a.cancel();
+    sf.stand.remove();
+    surfaces.delete(el);
+    f.surface = null;
+  }
+
+  // The element's surface, standing in for it behind it from a move that
+  // changes its size until the last such move ends: a zero-size anchor before it
+  // (so the size never moves the anchor, whatever its parent's alignment),
+  // moved by each move, and in it a box with the element's background,
+  // border, radius, shadow, backdrop filter and own transforms, over the
+  // element's laid-out box, to whose size each move adds. Behind its
+  // content in the parent's stacking context, isolated structurally by the
+  // kernel. Its parts (the element's paint hidden, the shown clip, the clip
+  // held off) are held, as the element's base is.
+  function surface(el, measured) {
+    const cs = getComputedStyle(el), stand = document.createElement('div'), box = document.createElement('div');
+    stand.setAttribute('data-exiting', ''); stand.setAttribute('aria-hidden', 'true'); stand.inert = true;
+    // (Its moves add to a zero `translate`, which WebKit paints where it places them)
+    // (and horizontal, left to right, so that a box its borders hold wider than its moves would keeps its left edge)
+    stand.style.cssText = 'position:absolute;width:0;height:0;margin:0;padding:0;border:0;z-index:-1;pointer-events:none;translate:0px 0px;direction:ltr;writing-mode:horizontal-tb';
+    el.before(stand);
+    box.style.cssText = 'position:absolute;box-sizing:border-box;margin:0';
+    paint(box, el, cs);
+    stand.append(box);
+    const sf = { stand, box, parts: [], hidden: new Map(), clips: cs.overflowX !== 'visible' || cs.overflowY !== 'visible', clipPath: cs.clipPath };
+    cover(sf, el, measured);
+    const held = frames => { const a = hold(el.animate(frames, { duration: 1 })); sf.parts.push(a); return a; };
+    sf.hide = held([CLEAR, CLEAR]);
+    // (`sync` gives the clip its shape at the box's shown size)
+    if (sf.clipPath !== 'none' || sf.clips) {
+      if (sf.clips) sf.contentClip = contentClip(sf);
+      sf.shape = held([]);
     }
-    const timing = { duration, delay: Number(delay), easing: config ? 'linear' : easing, fill: 'backwards' };
-    const frames = f => samples.map(([s, offset]) => ({ ...f(s), offset }));
-    const moved = frames(([dx, dy]) => ({ translate: `${dx}px ${dy}px` })), parts = [];
-    // Its stand-in copies the element's transforms before the move adds to them.
-    const sf = samples.some(([s]) => s[2] || s[3]) ? surface(el, place) : null;
-    // A zero translate added under the move gives it a base other than `none` and adds no displacement: WebKit paints
-    // a translate added to `none` farther from the box than it places it, and one added to `0px 0px` where it places it.
-    // With the move's timing, held at its first frame as one of the move's parts, it lasts until the module ends the
-    // move, applies wherever something seeks every animation the element has, and, played or finished by something
-    // else, ends no earlier than the move. It never fills past its end, so it never takes an older animation's place.
-    const base = el.animate([{ translate: '0px 0px' }, { translate: '0px 0px' }], { ...timing, composite: 'add' });
-    base.id = 'exact-layout-base';
-    base.pause();
-    parts.push(base);
-    const animation = el.animate(moved, { ...timing, composite: 'add' });
-    animation.id = 'exact-layout-move';
-    if (sf) {
-      const size = ([, , dw, dh]) => [Math.max(0, w + dw), Math.max(0, h + dh)];
-      sf.hide = el.animate([CLEAR, CLEAR], timing);
-      parts.push(
-        sf.stand.animate(moved, timing),
-        sf.box.animate(frames(s => { const [bw, bh] = size(s); return { width: `${bw}px`, height: `${bh}px` }; }), timing),
-        sf.hide);
-      if (sf.clipPath !== 'none' || sf.clips) {
-        const [bw, bh] = size(d), clipPath = shownClip(sf.clipPath, bw, bh);
-        sf.box.style.clipPath = clipPath;
-        if (sf.clips) sf.contentClip = contentClip(sf);
-        const content = sf.contentClip ? sf.contentClip(clipPath, getComputedStyle(el), bw, bh) : clipPath;
-        sf.shape = el.animate([{ clipPath: content }, { clipPath: content }], timing);
-        parts.push(sf.shape);
-      }
-      if (sf.clips) {
-        sf.sticky = [...el.querySelectorAll('*')].some(d => getComputedStyle(d).position === 'sticky');
-        sf.unclip = el.animate([], timing);
-        unclip(sf.unclip, el, sf.sticky);
-        parts.push(sf.unclip);
-      }
-      surfaces.add(el);
+    if (sf.clips) {
+      sf.unclip = held([]);
+      unclip(sf.unclip, el);
     }
-    const f = { animation, parts, surface: sf, d, v, config };
-    flips.set(el, f);
-    // A move that finishes or is cancelled takes its parts with it
-    const end = () => { if (flips.get(el) === f) stop(el); };
-    animation.finished.then(end, end);
+    surfaces.add(el);
+    return sf;
+  }
+
+  // The surface's box over the element's laid-out box, spanning it by its four offsets, so that each move adds its size
+  // to the box's right and bottom margins, which (unlike a width) may be negative in every engine
+  function cover(sf, el, measured = measure()) {
+    const [x, y, w, h] = measured(el, viewParent(el)), [ax, ay] = measured(sf.stand, viewParent(el)), [left, top] = [x - ax, y - ay];
+    Object.assign(sf.box.style, { left: `${left}px`, top: `${top}px`, right: `${-left - w}px`, bottom: `${-top - h}px` });
+  }
+
+  // A row's timing and whether it is a spring's (`spring`), or null for no row or one the browser refuses (such as a
+  // curve whose numbers overflow its floats), which ends the moves under way as no row does
+  function row(el) {
+    const text = el.style.getPropertyValue(LAYOUT).trim();
+    if (!text) return null;
+    const known = rows.get(el);
+    if (known?.text === text) return known.row;
+    const [ms, delay, ...words] = text.split(' '), spring = words[0] === 'spring';
+    const timing = { duration: Number(ms), delay: Number(delay), easing: words.slice(spring ? 1 : 0).join(' '), fill: 'backwards' };
+    let read = null;
+    try { new KeyframeEffect(null, null, timing); read = { timing, spring }; } catch {}
+    rows.set(el, { text, row: read });
+    return read;
+  }
+
+  // Play a change of `el`'s laid-out box back from `d`, `[dx, dy, dw, dh]` from where it is now laid out, to none, on
+  // its row's curve. A spring's move adds to the moves under way: on the same spring, with no delay, each earlier move
+  // past its own, the box's place then follows the engine's spring released where it is shown (its size before the
+  // floor), with its velocity, each release to its own stops (LLP 1063 D6). An easing's restarts from where the box is
+  // shown, as a CSS transition does (CSS Transitions 1 §3.1, at its full duration even when it reverses): the moves
+  // under way end, and it plays what they had left as well, before the size's floor, and nothing when that and the
+  // change cancel.
+  function move(el, d, measured) {
+    const r = row(el);
+    if (!r) { stop(el); return; }
+    const { timing, spring } = r;
+    let f = flips.get(el);
+    if (f && !spring) {
+      // What the moves under way had left, `o.d · (1 − progress)` each, summed as `Σ o.d − Σ o.d · progress` so that no
+      // `1 − progress` rounds it; what cancels to within the rounding of those sums' terms cancels
+      const whole = d.slice(), shown = d.map(() => 0);
+      for (const o of f.moves) {
+        const p = o.animation.effect.getComputedTiming().progress ?? 1;
+        o.d.forEach((x, i) => { whole[i] += x; shown[i] += x * p; });
+      }
+      const rounding = (2 * f.moves.length + 2) * Number.EPSILON;
+      d = whole.map((x, i) => { const r = x - shown[i]; return Math.abs(r) <= rounding * (Math.abs(x) + Math.abs(shown[i])) ? 0 : r; });
+      stop(el);
+      f = null;
+    }
+    if (!(timing.duration + timing.delay > 0) || d.every(x => x === 0)) return;
+    if (!f) {
+      // A zero translate under the element's moves gives them a base other than `none` and adds no displacement:
+      // WebKit paints a translate added to `none` farther from the box than it places it, and one added to `0px 0px`
+      // where it places it
+      const base = hold(el.animate([{ translate: '0px 0px' }, { translate: '0px 0px' }], { duration: 1, composite: 'add' }));
+      base.id = 'exact-layout-base';
+      f = { base, moves: [], surface: null };
+      flips.set(el, f);
+    }
+    const m = { d, timing, frames: [{ translate: `${d[0]}px ${d[1]}px` }, { translate: '0px 0px' }] };
+    if (d[2] || d[3]) resurface(el, f, measured);
+    const sf = f.surface, added = { ...timing, composite: 'add' };
+    m.animation = el.animate(m.frames, added);
+    m.animation.id = 'exact-layout-move';
+    // Its stand-in's place, on the element and doing nothing until a surface takes it
+    m.stand = sf ? sf.stand.animate(m.frames, added) : el.animate([], added);
+    m.stand.id = 'exact-layout-stand';
+    if (d[2] || d[3]) m.box = sf.box.animate([{ marginRight: `${-d[2]}px`, marginBottom: `${-d[3]}px` }, { marginRight: '0px', marginBottom: '0px' }], added);
+    f.moves.push(m);
+    extend([f.base, ...sf?.parts ?? []], timing);
+    const ended = () => end(el, m);
+    m.animation.finished.then(ended, ended);
+  }
+
+  // The element's surface made anew, from its style now, the moves under way moving their stand-in parts onto it and
+  // keeping their clocks: at a move that changes its size, and when what it clips changes
+  function resurface(el, f, measured) {
+    unsurface(el, f);
+    f.surface = surface(el, measured);
+    for (const o of f.moves) {
+      o.stand.effect.target = f.surface.stand;
+      o.stand.effect.setKeyframes(o.frames);
+      if (o.box) o.box.effect.target = f.surface.box;
+      extend(f.surface.parts, o.timing);
+    }
+  }
+
+  // Held animations last as long as every move they hold for, one after another, so that something that plays or seeks
+  // them with the moves still finds them: the moves under way are never apart, so while they play their lengths
+  // together bound the time since the hold began
+  function extend(held, timing) {
+    for (const a of held) a.effect.updateTiming({ duration: a.effect.getTiming().duration + Math.max(0, timing.delay + timing.duration) });
+  }
+
+  // An animation held at its first frame until the module cancels it: the agent's clock leaves a paused one where it
+  // is (navigation/motion.js `animationClock`), and it fills neither way, so even played or finished by something else
+  // it never takes the place of an older animation that fills (Web Animations 1, "Replacing animations")
+  function hold(a) {
+    a.pause();
+    return a;
   }
 
   return {
@@ -486,8 +583,8 @@ function createPresence(root) {
         const gains = (batch.ops ?? []).filter(op => op.op === 'style' && op.css?.includes(LAYOUT)).map(op => views.get(op.id));
         for (const el of new Set([...tracked, ...gains])) {
           // (A hidden element has no box to move from, though its computed size stays what was written)
-          const at = el && el.getClientRects().length ? moving(el, place(el)) : null;
-          if (at) first.set(el, [at, going(el)]);
+          const parent = el && measuredIn(el), at = el && el.getClientRects().length ? moving(el, place(el, parent)) : null;
+          if (at) first.set(el, [at, parent]);
         }
       }
       // The batch's leaving views, each read before any exit takes one out of flow
@@ -496,7 +593,7 @@ function createPresence(root) {
       // Only a confirmed exit releases holds. A JS region may rescue portal content as it leaves.
       for (const [el] of exits) release(el);
       for (const el of new Set([...departures, ...exits.map(([el]) => el)])) {
-        exitBoxes.set(el, { kept: kept(el), block: el.offsetParent, local: place(el) });
+        exitBoxes.set(el, { kept: kept(el), block: el.offsetParent, local: place(el, root) });
       }
       // Let this commit update the underlying row before reapplying the
       // ghost policy in after(). Both run in the same task, before paint.
@@ -628,8 +725,10 @@ function createPresence(root) {
       const locate = measure(), corrections = [];
       for (const [el, { block, local }] of exitBoxes) {
         if (!local || !el.hasAttribute('data-exiting') || block === el.offsetParent) continue;
-        const at = locate(el);
-        if (at) corrections.push([el.style, parseFloat(el.style.left) + local[0] - at[0], parseFloat(el.style.top) + local[1] - at[1]]);
+        const at = locate(el, root);
+        // Carry the difference from the root's points into the points `left` and `top` move the ghost by
+        const [dx, dy] = at ? locate.carry(el, root, [local[0] - at[0], local[1] - at[1]]) : [];
+        if (at) corrections.push([el.style, parseFloat(el.style.left) + dx, parseFloat(el.style.top) + dy]);
       }
       for (const [style, x, y] of corrections) { style.left = `${x}px`; style.top = `${y}px`; }
       exitBoxes.clear();
@@ -646,30 +745,43 @@ function createPresence(root) {
         if (op.op !== 'create' && op.op !== 'style') continue;
         const el = views.get(op.id);
         if (!el) continue;
+        // (One the browser refuses is still measured, so that it moves once its row turns valid)
         if (el.style.getPropertyValue(LAYOUT)) tracked.add(el);
-        else { tracked.delete(el); stop(el); }
+        else tracked.delete(el);
+        if (!row(el)) stop(el);
       }
       // A move whose box is gone (a restyle to `display: none`) ends with it, a native button's too, which moves with no
       // stand-in. A batch that changes no tree, as `before` read it (the JS target's batch here holds only what it
       // synthesizes), hides none, so a move with no surface reads no box (GitHub #747), though a surface's size and hold
       // are read again after each batch; a removed element is let go unmeasured.
-      const still = stillBatch, running = [...flips];
+      const still = stillBatch, running = [...flips], reclip = new Map();
       stillBatch = false;
       // Every hold off first, so one an ancestor's surface holds (`flow-root`) gives no box to what it hides
       for (const [, { surface: sf }] of running) sf?.unclip?.effect.setKeyframes([]);
       for (const [el, { surface: sf }] of running) {
         if (!el.isConnected) { stop(el); continue; }
         // (Its computed size stays what was written, so the box is what tells; a surface needs a size to place)
-        if (!still && !el.getClientRects().length || sf && !size(getComputedStyle(el))) stop(el);
-        else if (sf?.unclip) unclip(sf.unclip, el, sf.sticky);
+        if (!still && !el.getClientRects().length || sf && !size(getComputedStyle(el))) { stop(el); continue; }
+        // A surface whose element now clips otherwise than when it was made is made anew (its hold is off here), once
+        // the batch's moves are known, unless one that changes the size makes it anew first
+        const cs = sf && getComputedStyle(el), clips = cs && (cs.overflowX !== 'visible' || cs.overflowY !== 'visible');
+        if (sf && (clips !== sf.clips || (clips || cs.clipPath !== 'none') !== !!sf.shape)) reclip.set(el, sf);
+        else if (sf?.unclip) unclip(sf.unclip, el);
       }
       const place = measure(), moves = [];
-      for (const [el, [was, [d, v]]] of first) {
+      for (const [el, [was, parent]] of first) {
         if (!tracked.has(el)) continue;
-        const at = el.isConnected && el.getClientRects().length ? moving(el, place(el)) : null;
-        if (at && at.some((x, i) => Math.abs(x - was[i]) >= 0.01)) moves.push([el, at.map((x, i) => was[i] + d[i] - x), v, at]);
+        // Measured again in the box it was measured in; one the batch takes out of that box, or that box out of being one,
+        // is in other coordinates, and its moves end there
+        if (!parent?.contains(el) || getComputedStyle(parent).display === 'contents') { stop(el); continue; }
+        const at = el.isConnected && el.getClientRects().length ? moving(el, place(el, parent)) : null;
+        if (at && at.some((x, i) => Math.abs(x - was[i]) >= 0.01)) {
+          const [dx, dy, dw, dh] = at.map((x, i) => was[i] - x);
+          moves.push([el, [...place.carry(el, parent, [dx, dy]), dw, dh]]);
+        }
       }
-      for (const [el, d, v, at] of moves) move(el, d, v, at[2], at[3], measure());
+      for (const [el, d] of moves) move(el, d, measure());
+      for (const [el, sf] of reclip) { const f = flips.get(el); if (f?.surface === sf) resurface(el, f, measure()); }
       first = new Map();
       sync(true);
     },

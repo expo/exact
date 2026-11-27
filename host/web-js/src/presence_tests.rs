@@ -107,7 +107,10 @@ fn named_and_computed_layout_values_write_what_the_kernel_writes() {
         })
         .to_vec();
     let map = crate::presence::layout_transition_map(
-        &crate::paint::transitions(&crate::paint::motion_words()),
+        &crate::paint::transitions(
+            &crate::paint::motion_words(),
+            &crate::style::transition_spring(),
+        ),
         "7",
         "say",
     );
@@ -161,7 +164,10 @@ fn computed_layout_transitions_match_the_kernel_grammar_and_css() {
         ]
         .map(str::to_owned),
     );
-    let parser = crate::paint::transitions(&crate::paint::motion_words());
+    let parser = crate::paint::transitions(
+        &crate::paint::motion_words(),
+        &crate::style::transition_spring(),
+    );
     let actual = bun(&format!(
         "const parse={parser};console.log(JSON.stringify({}.map(v=>{{const t=parse(v);return [t?.held??false,t?.css??null]}})))",
         serde_json::json!(values)
@@ -193,7 +199,11 @@ fn the_paint_flag_is_set_where_the_kernel_holds_the_row() {
     let plan = plan();
     let (kind, b) = node_row(&plan, StyleId::LayoutTransition);
     let (_, test) = crate::paint::binding(&plan, kind, &b, |p| {
-        p.source(&plan, &crate::paint::motion_words())
+        p.source(
+            &plan,
+            &crate::paint::motion_words(),
+            &crate::style::transition_spring(),
+        )
     })
     .expect("a paint flag");
     let mut expected: Vec<u32> = VALUES
@@ -300,7 +310,11 @@ fn an_exit_paint_flag_follows_the_kernel_mask() {
     let plan = exit_plan();
     let (kind, binding) = node_row(&plan, StyleId::ExitAnimation);
     let (_, flag) = crate::paint::binding(&plan, kind, &binding, |p| {
-        p.source(&plan, &crate::paint::motion_words())
+        p.source(
+            &plan,
+            &crate::paint::motion_words(),
+            &crate::style::transition_spring(),
+        )
     })
     .unwrap();
     let got = bun(&format!(

@@ -1275,25 +1275,24 @@ fn transition_property(tr: &Transition) -> &'static str {
 }
 
 /// A `-exact-layout-transition` row as the presence module reads it: duration and
-/// delay in milliseconds, then a CSS easing (LLP 1063). A spring is
-/// `spring(stiffness, damping, mass)`: the module lowers each move itself,
-/// from its displacement and velocity in points, to the grid and rest
-/// threshold the engine settles on natively. `None` when no declaration
-/// covers layout.
+/// delay in milliseconds, then a CSS easing (LLP 1063 D6). A spring is `spring`
+/// and its curve from rest, over the time a move of
+/// [`exact_motion::LAYOUT_EXTENT`] points settles in (`SpringConfig::easing_over`):
+/// the module adds a spring's moves to the moves under way, which follows the
+/// engine's retarget as LLP 1063 D6 says, and restarts an easing as CSS does.
+/// `None` when no declaration covers layout.
 pub fn layout_transition_css(t: &Transitions) -> Option<String> {
     let tr = t.matching(exact_motion::Property::Layout)?;
-    let easing = match &tr.timing {
-        TimingFunction::Easing(e) => easing_css(e),
-        TimingFunction::Spring(c) => format!(
-            "spring({}, {}, {})",
-            num(c.stiffness as f32),
-            num(c.damping as f32),
-            num(c.mass as f32)
-        ),
+    let (duration, easing) = match &tr.timing {
+        TimingFunction::Easing(e) => (tr.duration, easing_css(e)),
+        TimingFunction::Spring(c) => {
+            let (duration, easing) = c.easing_over(exact_motion::LAYOUT_EXTENT);
+            (duration, format!("spring {}", easing.css()))
+        }
     };
     Some(format!(
         "{} {} {easing}",
-        num((tr.duration * 1000.0) as f32),
+        num((duration * 1000.0) as f32),
         num((tr.delay * 1000.0) as f32)
     ))
 }

@@ -787,7 +787,13 @@ fn bound_transition_stacking_matches_kernel() {
             expr: Default::default(),
             written: true,
         },
-        |parser| parser.source(&plan, &crate::paint::motion_words()),
+        |parser| {
+            parser.source(
+                &plan,
+                &crate::paint::motion_words(),
+                &crate::style::transition_spring(),
+            )
+        },
     )
     .unwrap();
     let script = format!(
@@ -1004,7 +1010,13 @@ fn bound_animation_stacking_matches_kernel() {
             expr: Default::default(),
             written: true,
         },
-        |parser| parser.source(&plan, &crate::paint::motion_words()),
+        |parser| {
+            parser.source(
+                &plan,
+                &crate::paint::motion_words(),
+                &crate::style::transition_spring(),
+            )
+        },
     )
     .unwrap();
     let script = format!(
@@ -1076,7 +1088,10 @@ fn bound_animation_stacking_matches_kernel() {
 #[test]
 fn press_timing_from_a_bound_transition_matches_literal_lowering() {
     exact_kernel::style::link_all();
-    let parser = crate::paint::transitions(&crate::paint::motion_words());
+    let parser = crate::paint::transitions(
+        &crate::paint::motion_words(),
+        &crate::style::transition_spring(),
+    );
     let spring = crate::style::transition_spring();
     let map = crate::paint::press_timing_map(&parser, &spring, true);
     let declarations = [
@@ -1126,7 +1141,10 @@ fn press_timing_from_a_bound_transition_matches_literal_lowering() {
 #[test]
 fn a_refused_bound_transition_keeps_only_its_written_intent() {
     exact_kernel::style::link_all();
-    let parser = crate::paint::transitions(&crate::paint::motion_words());
+    let parser = crate::paint::transitions(
+        &crate::paint::motion_words(),
+        &crate::style::transition_spring(),
+    );
     let sampler = crate::style::transition_spring();
     let values = ["scale 100ms linear, refused 1s", "unset"];
     let run = |written| {

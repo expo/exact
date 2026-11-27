@@ -123,22 +123,22 @@ export function exitBinding(element, property, unit, binding) {
 export function lt(element, parse, binding) {
   const own = owner();
   Bound.set(element, { own, will: () => {
-    try { return read(() => present(own) && parse(binding())?.css != null); } catch { return false; }
+    try { return read(() => present(own) && !!parse(binding(), false)?.layout); } catch { return false; }
   } });
   onEnd(() => Bound.delete(element));
   pr(element);
 }
 
-// As wasm's ops: before the tree update a view gaining the row; after, each whose declaration changed
-// (a create: not a restyle, as paint.js keeps a ghost parent's isolation).
+// As wasm's ops: before the tree update a view gaining the row; after, each whose row's text changed (a create: not a
+// restyle, as paint.js keeps a ghost parent's isolation), so that presence reads it again, as it does a refused one.
 export function gains() {
   return catchUp(() => inspect(() => {
     const ops = [];
     for (const [element, entry] of Bound) {
       try {
-        if (present(entry.own) && quiet(element, LT)) { element.$lt = false; continue; }
+        if (present(entry.own) && quiet(element, LT)) { element.$lt = ''; continue; }
       } catch {} // The binding probe below leaves a trap to the tree update.
-      element.$lt = !!element.style.getPropertyValue(LT);
+      element.$lt = element.style.getPropertyValue(LT);
       if (!element.$lt && element.isConnected && entry.will()) ops.push({ op: 'style', id: viewId(element), css: LT });
     }
     return ops;
@@ -149,7 +149,7 @@ export function restyled() {
   const ops = [];
   for (const element of Bound.keys()) {
     if (!element.$lt && element.$probeFx?.[LT] && !element.$css[LT]) continue;
-    const now = !!element.style.getPropertyValue(LT);
+    const now = element.style.getPropertyValue(LT);
     if (element.isConnected && element.$lt !== now) ops.push({ op: 'create', id: viewId(element) });
     element.$lt = now;
   }

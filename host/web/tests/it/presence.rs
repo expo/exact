@@ -57,17 +57,25 @@ fn the_rows_reach_the_page_as_custom_properties_and_an_exit_precedes_its_destroy
 }
 
 #[test]
-fn a_spring_layout_transition_reaches_the_page_as_its_parameters() {
+fn a_spring_layout_transition_reaches_the_page_as_its_curve() {
     let plan = contract::compile(
         "component App\n  view\n    column\n      text \"a\" -exact-layout-transition=\"-exact-spring(300, 30, 1)\"\n",
     )
     .unwrap();
     exact_web::link(exact_web_capabilities::ALL);
     let (_, first) = Host::boot(&plan.encode(), NoData, Default::default(), "/").unwrap();
-    // The page lowers each move from its own displacement, as the engine
-    // settles it natively: a curve for a unit move would rest too soon.
-    assert!(
-        first.contains("--exact-layout-transition:0 0 spring(300, 30, 1);"),
-        "{first}"
+    // The spring's curve from rest, over the time a move of the layout extent
+    // settles in, named a spring's: the page adds its moves to the moves under way
+    let config = exact_motion::SpringConfig {
+        stiffness: 300.0,
+        damping: 30.0,
+        mass: 1.0,
+    };
+    let (duration, easing) = config.easing_over(exact_motion::LAYOUT_EXTENT);
+    let row = format!(
+        "--exact-layout-transition:{} 0 spring {};",
+        exact_web::css::num((duration * 1000.0) as f32),
+        easing.css()
     );
+    assert!(first.contains(&row), "{first}");
 }

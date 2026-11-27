@@ -1,11 +1,12 @@
 // The JS target's shared-element curve (host/web-js/shared.js `curve`) reads the
 // `--exact-layout-transition` row the web host writes (css.rs
-// `layout_transition_css`): a spring there is the private `spring(k, c, m)`
-// (LLP 1081 D5 keeps it), whose commas must not split it, lowered to `linear()`.
+// `layout_transition_css`): a spring there is `spring` and its curve as a
+// `linear()`, whose commas must not split it.
 import { afterAll, test, expect } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { springCurve } from './motion-scenarios.mjs';
 import { stageRuntime } from './stand-ins.mjs';
 
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-shared-curve-'));
@@ -15,11 +16,9 @@ const { curve } = await import(resolve(dir, 'shared.js'));
 
 const row = text => ({ style: { getPropertyValue: name => (name === '--exact-layout-transition' ? text : '') } });
 
-test('a spring row lowers to a linear() curve over its settle time', () => {
-  const c = curve(row('0 100 spring(300, 30, 1)'));
-  expect(c.delay).toBe(100);
-  expect(c.timing).toMatch(/^linear\(0, .*, 1\)$/);
-  expect(c.duration).toBeGreaterThan(0);
+test('a spring row keeps its linear() curve whole', () => {
+  const { ms, easing } = springCurve([300, 30, 1]);
+  expect(curve(row(`${ms} 100 spring ${easing}`))).toEqual({ duration: ms, delay: 100, timing: easing });
 });
 
 test('an eased row keeps its duration, delay and timing function', () => {

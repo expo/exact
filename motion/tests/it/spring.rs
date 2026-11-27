@@ -462,3 +462,78 @@ fn the_engine_lowers_a_running_spring_to_the_frames_it_would_sample() {
         );
     }
 }
+
+/// LLP 1063 D6: a layout spring's curve runs until a release of the layout
+/// extent rests, so a move of up to that many points ends at rest; it samples
+/// the same unit release in absolute time as the unit curve, for longer.
+#[test]
+fn a_layout_curve_leaves_a_move_up_to_its_extent_at_rest() {
+    for config in [under(), critical(), over(), SpringConfig::default()] {
+        let (duration, easing) = config.easing_over(exact_motion::LAYOUT_EXTENT);
+        for points in [1.0, 18.0, 300.0, exact_motion::LAYOUT_EXTENT] {
+            assert!(
+                config.sample(points, 0.0, duration).at_rest(),
+                "{config:?} {points}"
+            );
+        }
+        let (unit, _) = config.easing();
+        let settle = config.settle_time(exact_motion::LAYOUT_EXTENT, 0.0);
+        assert!(
+            duration > unit && (duration - settle).abs() <= 1.0 / SAMPLE_RATE,
+            "{config:?}: {duration} {settle}"
+        );
+        assert!(
+            easing.progress(1.0) == 1.0 && easing.progress(0.0) == 0.0,
+            "{config:?}"
+        );
+        // An interior stop is the unit release's displacement at its grid time, to the f32 its text carries
+        let exact_motion::Easing::PiecewiseLinear(stops) = &easing else {
+            panic!("{config:?}: {easing:?}")
+        };
+        let stop = stops[stops.len() / 2];
+        let t = (stop.input * duration * SAMPLE_RATE).round() / SAMPLE_RATE;
+        let expected = 1.0 - config.sample(1.0, 0.0, t).displacement;
+        assert!(
+            (stop.output - expected).abs() < 1e-6,
+            "{config:?}: {stop:?} {expected}"
+        );
+    }
+    // A spring that has not settled by the cap is set at rest there, as natively
+    let undamped = SpringConfig {
+        stiffness: 1.0,
+        damping: 0.0,
+        mass: 1.0,
+    };
+    assert_eq!(
+        undamped.easing_over(exact_motion::LAYOUT_EXTENT).0,
+        MAX_DURATION
+    );
+    // A release already at rest is no curve
+    assert_eq!(
+        critical().easing_over(0.0),
+        (0.0, exact_motion::Easing::Linear)
+    );
+}
+
+/// LLP 1063 D10: the spring is linear, so one released where an earlier
+/// release has brought it, with the velocity it has, toward a target moved by
+/// `jump`, is the earlier release going on plus a release of `jump` from rest:
+/// how the web adds a move to the moves under way.
+#[test]
+fn an_interrupted_spring_is_its_releases_added() {
+    for config in [under(), critical(), over()] {
+        let (first, jump, at) = (240.0, -90.0, 0.13);
+        let there = config.sample(first, 0.0, at);
+        for t in [0.0, 0.01, 0.1, 0.4, 1.2] {
+            let retargeted = config
+                .sample(there.displacement + jump, there.velocity, t)
+                .displacement;
+            let added = config.sample(first, 0.0, at + t).displacement
+                + config.sample(jump, 0.0, t).displacement;
+            assert!(
+                (retargeted - added).abs() < 1e-9,
+                "{config:?} at {t}: {retargeted} {added}"
+            );
+        }
+    }
+}

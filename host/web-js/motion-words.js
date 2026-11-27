@@ -138,10 +138,8 @@
       if (!(n.length === 4 && n[0] >= 0 && n[0] <= 1 && n[2] >= 0 && n[2] <= 1)) return 0;
       return css ? `cubic-bezier(${n.map(num).join(",")})` : 1;
     }
-    if (name === "-exact-spring") {
-      if (!(n.length === 0 || (n.length === 3 && springValid(n)))) return 0;
-      return css ? `spring(${(n.length ? n : [100, 10, 1]).map(num).join(", ")})` : 2;
-    }
+    // (A spring's text is the host's to lower: transition-paint.js and transition-spring-entry.js write its curve)
+    if (name === "-exact-spring") return n.length === 0 || (n.length === 3 && springValid(n)) ? 2 : 0;
     return 0;
   };
   const lower = s => s.replace(/[A-Z]+/g, c => c.toLowerCase());
