@@ -73,10 +73,9 @@ package struct SafeIndicatorTerm {
     package init() {}
 
     package mutating func sync(_ scroll: some SafeIndicators) {
-        let safe = scroll.indicatorSafeArea
-        let off = !scroll.writtenWhole && !scroll.automaticallyAdjustsScrollIndicatorInsets
-        let vertical = off ? UIEdgeInsets(top: safe.top, left: 0, bottom: safe.bottom, right: 0) : .zero
-        let horizontal = off ? safe : .zero
+        let ownsInsets = !scroll.writtenWhole && !scroll.automaticallyAdjustsScrollIndicatorInsets
+        let horizontal = ownsInsets ? scroll.indicatorSafeArea : .zero
+        let vertical = UIEdgeInsets(top: horizontal.top, left: 0, bottom: horizontal.bottom, right: 0)
         if vertical != applied.vertical {
             scroll.verticalScrollIndicatorInsets = scroll.verticalScrollIndicatorInsets.adding(vertical.less(applied.vertical))
             applied.vertical = vertical

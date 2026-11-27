@@ -887,7 +887,7 @@ extension Presenter {
     /// worker if that has finished or is running, else painted here — the
     /// reader never sees it blank (LLP 1050.000 D1). When every attached
     /// paragraph that uses a raster has it whole, no geometry is read. True while
-    /// some paragraph lacks pixels: the pump's refresh has work then.
+    /// a paragraph within reach lacks pixels: the pump's refresh has work then.
     @discardableResult
     package func paintVisibleText() -> Bool {
         guard !applying else { return true }
@@ -913,21 +913,30 @@ extension Presenter {
         var owed = false
         // A paragraph that never rasters (it truncates as it paints, say)
         // is out before its geometry, which is most of a scan's cost.
-        func unsettled(_ node: NodeView) -> Bool { !node.textRasterSettled && !node.bounds.isEmpty && node.canRasterText }
+        func unsettled(_ node: NodeView) -> Bool { owedText.contains(node.id) && !node.bounds.isEmpty && node.canRasterText }
         textIndex.visit(textViews, reach: 0, viewport: viewport) { node in
             guard unsettled(node) else { return true }
-            owed = true
-            let c = clips ?? TextClips(viewport, soon: 0, reach: 0)
+            let c = clips ?? TextClips(viewport, soon: 0, reach: port.height)
             clips = c; textClips = c
             if culls && !presented(node) && !c.frame(node).intersects(port) { return true }
             let visible = textScrollportRect(node)
-            guard !visible.isEmpty, node.textRaster == nil || !node.textRasterFrame.contains(visible) else { return true }
+            guard !visible.isEmpty else { return true }
+            owed = true
+            guard node.textRaster == nil || !node.textRasterFrame.contains(visible) else { return true }
             textRasters.ensure(node, urgent: true)
             return true
         }
         // The refresh has work while a paragraph within its least lead
-        // (a viewport) lacks pixels; one farther waits until it is nearer.
-        if !owed { textIndex.visit(textViews, reach: port.height, viewport: viewport) { node in owed = unsettled(node); return !owed } }
+        // (a viewport) lacks pixels. A nested scroller's own port can be
+        // near its paragraphs while an outer scroller clips them all away.
+        if !owed {
+            textIndex.visit(textViews, reach: port.height, viewport: viewport) { node in
+                guard unsettled(node) else { return true }
+                if clips == nil { clips = TextClips(viewport, soon: 0, reach: port.height); textClips = clips }
+                owed = !textBand(node, reach: port.height).isEmpty
+                return !owed
+            }
+        }
         return owed
     }
 
@@ -993,7 +1002,7 @@ extension Presenter {
         if textRasters.inFlight > 0 { textRasters.abandonStale { !presented($0) && passed(clips.frame($0)) } }
         var ranked: [(distance: CGFloat, node: NodeView)] = []
         textIndex.visit(textViews, reach: reach, viewport: viewport) { node in
-            guard !node.textRasterSettled && !node.bounds.isEmpty && node.canRasterText else { return true }
+            guard owedText.contains(node.id), !node.bounds.isEmpty, node.canRasterText else { return true }
             let r = clips.frame(node)
             let distance = presented(node) ? 0 : max(0, port.minY - r.maxY, r.minY - port.maxY)
             guard !(culls && distance > reach), (presented(node) || !passed(r)), !textBand(node, reach: reach).isEmpty else { return true }
