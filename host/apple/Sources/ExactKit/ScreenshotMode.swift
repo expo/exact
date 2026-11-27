@@ -6,8 +6,9 @@
 //                                included: an animation ends in 1/n of its time.
 //   EXACT_UIKIT_ANIMATIONS=0     UIKit's view animations are off (UIView.setAnimationsEnabled), and a tab switch
 //                                selects without the tab bar's transition.
-//   EXACT_AGENT_ONE_COMMIT=1     the agent's tap runs in one CATransaction, so its state change reaches the render
-//                                server as one commit instead of several.
+//   EXACT_AGENT_ONE_COMMIT=1     the UI mutations the agent's tap makes synchronously are batched in one
+//                                CATransaction, committed before the tap waits or replies. It batches mutations; it
+//                                does not promise the pixels are on screen when the reply arrives.
 //   EXACT_AGENT_TAP_SETTLE=1     the agent's tap settles the clock in the same main-queue turn and answers with the
 //                                settle (`settle` in its reply): one request per state instead of a tap and a clock.
 //
@@ -23,7 +24,7 @@ public enum ScreenshotMode {
     public static let uikitAnimationsOff = environment["EXACT_UIKIT_ANIMATIONS"] == "0"
     public static let oneCommit = environment["EXACT_AGENT_ONE_COMMIT"] == "1"
     public static let tapSettle = environment["EXACT_AGENT_TAP_SETTLE"] == "1"
-    static let speed: Float? = environment["EXACT_ANIMATION_SPEED"].flatMap(Float.init).flatMap { $0 > 0 ? $0 : nil }
+    static let speed: Float? = environment["EXACT_ANIMATION_SPEED"].flatMap(Float.init).flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
     #else
     public static let uikitAnimationsOff = false
     public static let oneCommit = false
@@ -31,7 +32,7 @@ public enum ScreenshotMode {
     #endif
 
     #if os(iOS) && EXACT_AGENT
-    private static var observer: NSObjectProtocol?
+    @MainActor private static var observer: NSObjectProtocol?
     #endif
 
     /// Applies the animation flags once the app's window is visible. Does nothing unless one is set.

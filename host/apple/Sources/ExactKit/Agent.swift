@@ -364,9 +364,12 @@ public final class Agent {
         case "tap" where req["part"] != nil: emit(tagged(partTap(req))) // a hatch's part: the aim and the landing (AgentParts.swift)
         case "tap":
             var r: [String: Any]
-            // Screenshot mode: the tap and its settle reach the render server as one commit.
-            if ScreenshotMode.oneCommit { CATransaction.begin() }
-            defer { if ScreenshotMode.oneCommit { CATransaction.commit() } }
+            // Screenshot mode: the tap's synchronous UI mutations are batched in one transaction, committed before
+            // the tap waits on anything or replies (a transition's completion can wait on that commit). It batches
+            // mutations; it does not promise the pixels are on screen when the reply arrives. Every exit commits it.
+            var batching = ScreenshotMode.oneCommit
+            if batching { CATransaction.begin() }
+            defer { if batching { CATransaction.commit() } }
             #if os(macOS)
             let wasOpen = presenter.viewport.window?.isVisible == true
             #endif
@@ -421,12 +424,16 @@ public final class Agent {
             // `close`'s does, since nothing is left to read after it.
             if wasOpen, r["error"] == nil, req["close"] == nil, presenter.viewport.window?.isVisible != true { r["closed"] = true }
             #endif
+            if batching { batching = false; CATransaction.commit() }
             // The touch runner's observation reads (`aim`, `log`) are not
             // inputs: they answer at once, within its own deadline.
             if req["aim"] == nil, req["log"] == nil { r = completingInput(r) }
             session.canvases.settle(now: session.now())
-            // Screenshot mode: settle in the tap's own main-queue turn, one request per state.
-            if ScreenshotMode.tapSettle, r["error"] == nil, req["aim"] == nil, req["log"] == nil {
+            // Screenshot mode: settle in the tap's own main-queue turn, one request per state. Only a tap that
+            // landed, as agent-session.mjs's `landed`: not a refused one (`delivery: "unsupported"`, no input
+            // delivered) nor one that closed the window (no session left to settle).
+            if ScreenshotMode.tapSettle, r["error"] == nil, r["delivery"] as? String != "unsupported", r["closed"] as? Bool != true,
+               req["aim"] == nil, req["log"] == nil {
                 let c = clock(["op": "clock", "settle": true]); session.tellAgentOffset()
                 r["settle"] = c
             }
