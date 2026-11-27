@@ -997,9 +997,8 @@ impl Em<'_> {
         {
             attrs.push(("tabindex".into(), "0".into()));
         }
-        // A `symbol`'s content is drawn as `use`'s clones, which Chrome
-        // styles from their own attributes, not the page's class rules: its
-        // static rows go inline too (the live host writes every row inline).
+        // A `symbol`'s content is drawn as `use`'s clones, which Chrome styles from their own attributes, not the page's
+        // class rules: its static rows go inline too (the live host writes every row inline).
         if !css.is_empty() && self.in_symbol(i) {
             attrs.push(("style".into(), format!("{css}{presence}")));
         } else if !presence.is_empty() {
@@ -1008,6 +1007,7 @@ impl Em<'_> {
         if parts.tag == "canvas" {
             attrs.extend(style::canvas_bitmap(plan, row)?);
         }
+        attrs.extend(crate::safe_area::marks(&css).map(|m| ("data-exact-safe-area".into(), m))); // LLP 1123 D17
         let class = if css.is_empty() {
             "0".to_string()
         } else {

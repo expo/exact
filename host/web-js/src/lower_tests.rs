@@ -468,3 +468,54 @@ fn a_none_and_a_blank_arm_lower() {
     let js = lowered("text \"x\" font-weight=(s == \"a\" ? none : 700) font-family=(s == \"b\" ? \"\" : \"serif\")");
     assert!(js.contains("[[null,4],[700,\"\"],[700,4]]"), "{js}");
 }
+
+/// @ref LLP 1123 D17 — a node whose rows the classes hold, not its inline style, is marked for the safe-area executor
+/// where they let an axis scroll or read an observation: an arm set that writes `overflow-y`, a static scroller and a
+/// static reader each, and a node with neither not at all.
+#[test]
+fn class_held_scrollers_and_readers_are_marked_for_the_safe_area_executor() {
+    let (arm, why) = refusals("column overflow-y=(s == \"a\" ? \"auto\" : \"visible\")");
+    assert!(why.is_empty(), "{why:?}");
+    let arm = arm.js;
+    assert!(
+        arm.contains("setAttribute(\"data-exact-safe-area\",\"scroller\")"),
+        "{arm}"
+    );
+    let (scroller, _) = refusals("column overflow-y=\"auto\"");
+    assert!(
+        scroller.js.contains("data-exact-safe-area") && scroller.js.contains("scroller"),
+        "{}",
+        scroller.js
+    );
+    let (reader, _) = refusals("column padding-top=\"var(--exact-safe-area-inset-top)\"");
+    assert!(
+        reader.js.contains("data-exact-safe-area") && reader.js.contains("reader"),
+        "{}",
+        reader.js
+    );
+    let (plain, _) = refusals("column padding-top=\"8px\"");
+    assert!(!plain.js.contains("data-exact-safe-area"), "{}", plain.js);
+}
+
+#[test]
+fn safe_area_marks_read_the_style_text() {
+    use crate::safe_area::marks as safe_area_marks;
+    assert_eq!(
+        safe_area_marks("overflow-y:auto;height:10px"),
+        Some("scroller".into())
+    );
+    assert_eq!(
+        safe_area_marks("overflow:hidden scroll"),
+        Some("scroller".into())
+    );
+    assert_eq!(safe_area_marks("overflow-x:hidden"), None);
+    assert_eq!(
+        safe_area_marks("padding-top:var(--exact-keyboard-inset-bottom,0px)"),
+        Some("reader".into())
+    );
+    assert_eq!(
+        safe_area_marks("--a:var(--exact-safe-area-inset-top);overflow:auto"),
+        Some("reader scroller".into())
+    );
+    assert_eq!(safe_area_marks("color:red"), None);
+}

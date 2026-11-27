@@ -76,7 +76,7 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
     // values go back while the marks still hold their transitions, and each scroller to where it was
     restore = transitional || sticky.length > 0 || [...scrollers].some(([a, [x, y]]) => a.scrollLeft !== x || a.scrollTop !== y);
     if (restore) {
-      for (const [el, was] of before) reads.get(el).inputs.forEach((i, k) => was[k] ? own(el, NAMES[i], was[k]) : drop(el, NAMES[i]));
+      for (const el of result.changed) reads.get(el).inputs.forEach((i, k) => before.get(el)[k] ? own(el, NAMES[i], before.get(el)[k]) : drop(el, NAMES[i]));
       sticky.forEach((a) => a.removeAttribute(REST));
       root.getBoundingClientRect();
       for (const [a, [x, y]] of scrollers) if (a.scrollLeft !== x || a.scrollTop !== y) a.scrollTo({ left: x, top: y, behavior: "instant" });
@@ -88,7 +88,7 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   // With the marks gone, the settled values in once, so only that change reaches transition processing
   if (restore) {
     getComputedStyle(root).color;
-    for (const [el, inputs] of result.written) write(el, reads.get(el).inputs, inputs);
+    for (const el of result.changed) write(el, reads.get(el).inputs, result.written.get(el));
   }
   return { rounds: result.rounds, unsettled: result.unsettled };
 }
@@ -131,23 +131,28 @@ function declarations(text) {
 }
 
 /** The readers in `root`, in document order: each element whose own style uses an observation's input, a family's
- * `var(--exact-…)` (D9). The web's targets write each element's style inline, so its `style` attribute says what it
- * reads; one that only declares an input, as an ancestor's value, reads none. Activation (stage 5) takes them at each
- * commit; tests until then. */
+ * `var(--exact-…)` (D9). The wasm target writes every row inline and the JS target its dynamic rows, so an element's
+ * `style` attribute says what those read, and the JS compiler marks a node whose classes hold a row that reads one
+ * (`data-exact-safe-area~="reader"`); one that only declares an input, as an ancestor's value, reads none. Activation
+ * (stage 5) takes them at each commit; tests until then. */
 export function readers(root = document) {
-  return [...root.querySelectorAll(FAMILIES.map((f) => `[style*="var(--exact-${f}-"]`).join(", "))];
+  return [...root.querySelectorAll([...FAMILIES.map((f) => `[style*="var(--exact-${f}-"]`), '[data-exact-safe-area~="reader"]'].join(", "))];
 }
 
 /** The readers a running animation or transition can move (D17, "The web: invalidation"): those in the layout
  * dependency closure of an animated element, which is the element itself and its descendants, its ancestors, and
- * everything after it in document order, its following siblings' and its ancestors' following siblings' subtrees; for
- * an item of a flex or grid container, the container's whole subtree. */
+ * everything after it in document order, its following siblings' and its ancestors' following siblings' subtrees; and
+ * where it lies in a flex or grid container, the outermost such container's whole subtree. */
 export function moving(readers, animations = document.getAnimations()) {
   // In a flex or grid container an item moves its earlier siblings too, as a centred row's first item moves as the second
-  // widens, so the animated item stands for its whole formatting context
+  // widens, and a change inside an item can resize it, so the animated element stands for the outermost such container
+  // above it
   const context = (el) => {
-    const parent = el.parentElement;
-    return parent && /flex|grid/.test(getComputedStyle(parent).display) ? parent : el;
+    let scope = el;
+    for (let a = el; a.parentElement; a = a.parentElement) {
+      if (/flex|grid/.test(getComputedStyle(a.parentElement).display)) scope = a.parentElement;
+    }
+    return scope;
   };
   const animated = [...new Set(animations.filter((a) => a.playState === "running").map((a) => a.effect?.target).filter(Boolean).map(context))];
   return readers.filter((r) => animated.some((a) => a === r || a.contains(r) || r.contains(a)
@@ -197,28 +202,32 @@ function rounds(readers, reads, chains, band, keyboard, box) {
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
   const keys = [0, 0, keyboard, 0], caps = readers.map(() => [...band, ...keys, ...keys]);
   const tolerance = 0.5 / (globalThis.devicePixelRatio || 1);
-  // Each reader advances from the input it holds; a new reader with a box starts at 0 (D9)
-  const written = new Map();
-  readers.forEach((el) => {
-    // Only the inputs its style reads, which are all it holds
-    const only = reads.get(el).inputs, now = NAMES.map(() => 0);
-    let had = false;
-    for (const i of only) {
+  // Each reader advances from the inputs it holds, and an input it does not yet hold starts at 0 (D9), each by its name;
+  // every reader is read before any is written, and a reader with no box is left as it is
+  const written = new Map(), changed = new Set();
+  const seeds = readers.map((el) => {
+    const now = NAMES.map(() => 0), missing = [];
+    for (const i of reads.get(el).inputs) {
       const v = el.style.getPropertyValue(NAMES[i]);
-      if (v.endsWith("px")) { now[i] = parseFloat(v) || 0; had = true; }
+      if (v.endsWith("px")) now[i] = parseFloat(v) || 0;
+      else missing.push(i);
     }
-    if (had) written.set(el, now);
-    else if (el.isConnected && el.getClientRects().length) {
-      const zero = NAMES.map(() => 0);
-      written.set(el, zero);
-      write(el, reads.get(el).inputs, zero);
+    return { now, missing, boxed: el.isConnected && el.getClientRects().length > 0 };
+  });
+  readers.forEach((el, i) => {
+    const { now, missing, boxed } = seeds[i];
+    if (!boxed && missing.length === reads.get(el).inputs.length) return;
+    written.set(el, now);
+    if (boxed && missing.length) {
+      for (const k of missing) own(el, NAMES[k], "0px");
+      changed.add(el);
     }
   });
   const held = over(readers, box);
   // Each round reads every box once, laid out with every scroll offset at zero, and the area each reader observes, which
   // a reader's input can move
   const read = () => {
-    const seen = new Map();
+    const seen = new Map(), reserved = reservedIn(new Map());
     const at = (el) => {
       if (!seen.has(el)) seen.set(el, el.isConnected && el.getClientRects().length ? laid(el, chains.get(el) ?? scrolling(el, box)) : null);
       return seen.get(el);
@@ -226,9 +235,9 @@ function rounds(readers, reads, chains, band, keyboard, box) {
     return readers.map((el, i) => {
       const r = at(el);
       if (!r) return null;
-      const sides = area(held.get(el), band, width, height, at, box, tolerance), mine = edgesOf(r, width, height);
+      const sides = area(held.get(el), band, width, height, at, box, tolerance, reserved), mine = edgesOf(r, width, height);
       sides.forEach(([outer, inner], e) => { caps[i][e] = Math.max(0, inner - outer); });
-      const k = overlap(r, keys, width, height);
+      const k = held.get(el)?.keys ? [0, 0, 0, 0] : overlap(r, keys, width, height);
       return [...mine.map((d, e) => depth(sides[e], d)), ...k, ...k];
     });
   };
@@ -243,13 +252,14 @@ function rounds(readers, reads, chains, band, keyboard, box) {
       const next = input == null || !round ? m : step(input, m, samples[i], caps[i], tolerance);
       written.set(el, next);
       write(el, only, next);
+      changed.add(el);
       moved = true;
     });
-    if (!moved) return { written, rounds: round, unsettled: [] };
+    if (!moved) return { written, changed, rounds: round, unsettled: [] };
     measured = read();
   }
   // The bound: whoever the last batch leaves short of its measurement is unsettled
-  return { written, rounds: ROUNDS, unsettled: readers.filter((el, i) => measured[i] != null && !settled(written.get(el), measured[i], tolerance, reads.get(el).inputs)) };
+  return { written, changed, rounds: ROUNDS, unsettled: readers.filter((el, i) => measured[i] != null && !settled(written.get(el), measured[i], tolerance, reads.get(el).inputs)) };
 }
 
 /** `measure()` with each sticky ancestor of `boxes` held where layout puts it (D9), as the rounds read readers, and
@@ -316,34 +326,42 @@ function step(input, measured, last, caps, tolerance) {
  * either would move it by what it reads. A box observes only what reaches it, not its own reservation, which its
  * descendants observe. */
 export function over(readers, box) {
-  reserves = register(RESERVED);
+  // A browser that cannot register them inherits them and gives their text, so no box counts as reserving there
+  const reserves = register(RESERVED);
   const own = new Map(), held = new Map();
   const step = (a) => {
     if (!own.has(a)) {
       const header = a.matches(TRANSPARENT) ? liveChildren(a).find((c) => c.hasAttribute("data-exact-clear")) ?? null : null;
-      own.set(a, { box: a, header, reserving: reserves && a.matches(RESERVING), scroller: a.matches(SCROLLING) && box(a).scrollView });
+      const scroller = a.matches(SCROLLING) && box(a).display !== "contents" && box(a).scrollView;
+      own.set(a, { box: a, header, reserving: reserves && a.matches(RESERVING), scroller, vertical: scroller && box(a).scrollsY });
     }
     return own.get(a);
   };
   for (const el of readers) {
     const steps = [];
-    let cut = false;
+    let cut = false, keys = false;
     for (let a = el.parentElement?.closest(HOLDS); a; a = a.parentElement?.closest(HOLDS)) {
-      const found = step(a);
-      if (found.scroller) { cut = true; break; }
-      const header = found.header?.contains(el) ? null : found.header;
+      const found = step(a), header = found.header?.contains(el) ? null : found.header;
+      // A scroller's own reservations and bars lie inside its cutoff, as the kernel keeps them
       if (header || found.reserving) steps.unshift(header === found.header ? found : { ...found, header });
+      if (found.scroller) {
+        cut = true;
+        // A vertical scroller takes the keyboard as a content inset, so its content observes none of it (D7)
+        keys = found.vertical;
+        break;
+      }
     }
-    if (steps.length || cut) held.set(el, { steps, cut });
+    if (steps.length || cut) held.set(el, { steps, cut, keys });
   }
   return held;
 }
 const TRANSPARENT = '[data-navigationbar="transparent"]';
 /** A box whose inline style declares a reservation, as the emitter writes one. */
 const RESERVING = '[style*="--exact-additional-safe-area-"], [style*="--exact-safe-area-padding-"]';
-/** A box that may scroll: one whose inline style says how it overflows, as the emitter writes it, and the two that
- * neutral.css makes scroll, the coarse pointer's tab bar and an open route popover; its computed overflow decides. */
-const SCROLLING = '[style*="overflow"], [role="tablist"][data-exact-tab-bar], [data-exact-route-popover]';
+/** A box that may scroll: one whose inline style says how it overflows, one the JS target marks for a class that does
+ * (`safe_area::marks`), and the two that neutral.css makes scroll, the coarse pointer's tab bar and an open route
+ * popover; its computed overflow decides, and a box that generates none (`display: contents`) scrolls nothing. */
+const SCROLLING = '[style*="overflow"], [data-exact-safe-area~="scroller"], [role="tablist"][data-exact-tab-bar], [data-exact-route-popover]';
 /** The boxes that can shape a reader's area. */
 const HOLDS = `${TRANSPARENT}, ${RESERVING}, ${SCROLLING}`;
 
@@ -353,14 +371,15 @@ const HOLDS = `${TRANSPARENT}, ${RESERVING}, ${SCROLLING}`;
  * it reserves: what reaches its padding edge, its additional inset added, clamped at 0, its safe-area padding added, from
  * that edge, its area joining the one it lies in where its padding edge meets that one's inner side within D9's
  * `tolerance` and starting apart otherwise; and a route's transparent bar from the route's padding edge to the bar's
- * bottom, on the top edge. `at` reads a box as laid out, once a round, and `box` its style once a transaction. */
-export function area(held, band, width, height, at, box, tolerance) {
+ * bottom, on the top edge. `at` reads a box as laid out and `reserved` its reservation, each once a round, and `box` its
+ * style once a transaction. */
+export function area(held, band, width, height, at, box, tolerance, reserved = reservedIn(new Map())) {
   const sides = [0, 1, 2, 3].map((e) => [0, held?.cut ? 0 : band[e]]);
   for (const step of held?.steps ?? []) {
     const r = at(step.box);
     if (!r) continue;
     const b = box(step.box).borders, edges = [r.top + b[0], width - r.right + b[1], height - r.bottom + b[2], r.left + b[3]];
-    const v = step.reserving ? reservation(getComputedStyle(step.box)) : null;
+    const v = step.reserving ? reserved(step.box) : null;
     const bar = step.header ? at(step.header) : null;
     for (let e = 0; e < 4; e++) {
       const added = v?.added[e] ?? 0, padding = v?.padding[e] ?? 0, barred = e === 0 && !!bar;
@@ -422,6 +441,7 @@ export function styles() {
       let fixed, scrolls, scrollView, transitions, borders, stops, drawn;
       b = { position: s.position, display: s.display, get fixed() { return fixed ??= fixedContainer(s); },
         get scrollView() { return scrollView ??= [s.overflowX, s.overflowY].some((o) => o === "auto" || o === "scroll"); },
+        get scrollsY() { return s.overflowY === "auto" || s.overflowY === "scroll"; },
         get borders() { return borders ??= ["Top", "Right", "Bottom", "Left"].map((e) => parseFloat(s[`border${e}Width`]) || 0); },
         get stops() { return stops ??= stopping(s, this.borders); },
         get drawn() { return drawn ??= ["filter", "clipPath", "mask"].some((p) => (s[p] ?? "none") !== "none" && s[p] !== ""); },
@@ -437,22 +457,26 @@ export function styles() {
  * inherit, `0px` unsaid: its additional insets, which may be negative, then its safe-area padding, by edge. */
 export const RESERVED = ["additional-safe-area", "safe-area-padding"].flatMap((f) => ["top", "right", "bottom", "left"].map((e) => `--exact-${f}-${e}`));
 
-/** Whether the browser registers `RESERVED`; one that cannot inherits them and gives their text, so no box counts as
- * reserving there. */
-let reserves = false;
+
+/** A round's reading of what each reserving box reserves (`reservation`), once each, kept in `seen`. */
+export const reservedIn = (seen) => (el) => {
+  if (!seen.has(el)) seen.set(el, reservation(getComputedStyle(el)));
+  return seen.get(el);
+};
 
 /** What a box with the computed style `s` reserves (`RESERVED`), or null where it reserves nothing. */
 function reservation(s) {
-  if (!reserves) return null;
   const v = RESERVED.map((name) => parseFloat(s.getPropertyValue(name)) || 0);
   return v.some((x) => x !== 0) ? { added: v.slice(0, 4), padding: v.slice(4) } : null;
 }
 
 /** Whether a box with the computed style `s` has a transition that runs: one whose combined duration, its duration
- * (at least 0) and its delay, is above 0, the lists' items paired by index and the shorter repeated (CSS Transitions 1). */
+ * (at least 0) and its delay, is above 0, for each property `transition-property` names, the time lists repeated to its
+ * length (CSS Transitions 1). */
 function starts(s) {
   const times = (list) => list.split(",").map((t) => (parseFloat(t) || 0) * (t.trim().endsWith("ms") ? 1 : 1000));
-  const durations = times(s.transitionDuration), delays = times(s.transitionDelay), n = Math.max(durations.length, delays.length);
+  // As many transitions as `transition-property` names, the time lists repeated to its length
+  const durations = times(s.transitionDuration), delays = times(s.transitionDelay), n = s.transitionProperty.split(",").length;
   for (let i = 0; i < n; i++) if (Math.max(0, durations[i % durations.length]) + delays[i % delays.length] > 0) return true;
   return false;
 }

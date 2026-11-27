@@ -12,7 +12,7 @@ beforeAll(() => {
     if (/^\/[\w-]+\.js$/.test(path)) {
       return new Response(Bun.file(resolve(import.meta.dir, '../navigation' + path)), { headers: { 'content-type': 'text/javascript' } });
     }
-    return new Response(path === '/clipped' ? CLIPPED : PAGE, { headers: { 'content-type': 'text/html' } });
+    return new Response(path === '/clipped' ? CLIPPED : path === '/edge' ? EDGE : PAGE, { headers: { 'content-type': 'text/html' } });
   } });
 });
 afterAll(() => server.stop(true));
@@ -29,13 +29,14 @@ const PAGE = `<!doctype html><style>body { margin: 0; height: 3000px }</style>
     const el = document.getElementById('grows'), books = account(), frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const resized = [], crossed = [];
     new ResizeObserver((entries) => resized.push(...entries)).observe(el);
-    new IntersectionObserver((entries) => crossed.push(...entries), { threshold: [0, 0.25, 0.5, 0.75, 1] }).observe(el);
+    const io = new IntersectionObserver((entries) => crossed.push(...entries), { threshold: [0, 0.25, 0.5, 0.75, 1] });
+    io.observe(el);
     await frame();
     resized.length = crossed.length = 0;
     observe([el], [47, 0, 34, 0]);
     books.sample([el], 1);
     await frame();
-    const commit = { resized: resized.length, crossed: crossed.length, outside: books.outside([...resized, ...crossed]).length, generation: books.generation(el) };
+    const commit = { resized: resized.length, crossed: crossed.length, outside: books.outside([...resized, ...crossed], io).length, unbound: books.outside(crossed).length, generation: books.generation(el) };
     resized.length = 0;
     el.style.width = '150px';
     await frame();
@@ -43,7 +44,7 @@ const PAGE = `<!doctype html><style>body { margin: 0; height: 3000px }</style>
     crossed.length = 0;
     scrollTo(0, 60);
     await frame();
-    const scrolled = { crossed: crossed.length, outside: books.outside(crossed).length };
+    const scrolled = { crossed: crossed.length, outside: books.outside(crossed, io).length };
     window.result = { commit, author, scrolled, height: el.getBoundingClientRect().height };
   </script>`;
 
@@ -57,7 +58,8 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a commit's sample 
     // Grown by the band's 34 to 54, plus 4 of padding and 2 of border
     expect(r.height).toBe(60);
     // The commit's resize and its crossing of the observer's thresholds are the sample's
-    expect(r.commit).toEqual({ resized: 1, crossed: 1, outside: 0, generation: 1 });
+    // Given the observer, the account takes both as the commit's; without it, the crossing could be any observer's
+    expect(r.commit).toEqual({ resized: 1, crossed: 1, outside: 0, unbound: 1, generation: 1 });
     // The author's widening is outside it, as is the scroll that moves it partly out of view
     expect(r.author).toEqual({ resized: 1, outside: 1 });
     expect(r.scrolled.crossed).toBeGreaterThan(0);
@@ -76,13 +78,14 @@ const CLIPPED = `<!doctype html><style>body { margin: 0 }</style>
     import { account } from '/accounting.js';
     const box = document.getElementById('box'), books = account(), frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const crossed = [];
-    new IntersectionObserver((entries) => crossed.push(...entries), { threshold: [0, 0.4, 1] }).observe(box);
+    const io = new IntersectionObserver((entries) => crossed.push(...entries), { threshold: [0, 0.4, 1] });
+    io.observe(box);
     await frame();
     crossed.length = 0;
     books.sample([box], 1);
     document.getElementById('clip').style.height = '40px';
     await frame();
-    window.result = { crossed: crossed.map((e) => Math.round(e.intersectionRatio * 10) / 10), outside: books.outside(crossed).length };
+    window.result = { crossed: crossed.map((e) => Math.round(e.intersectionRatio * 10) / 10), outside: books.outside(crossed, io).length };
   </script>`;
 
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`a clip's change of a box's intersection is outside the commit, in ${engine}`, async () => {
@@ -92,6 +95,42 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a clip's change of
     await page.goto(`${server.url.href}clipped`);
     await page.waitForFunction(() => window.result);
     expect(await page.evaluate(() => window.result)).toEqual({ crossed: [0.4], outside: 1 });
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A box of no area moved from just below the viewport to its edge, which an IntersectionObserver takes as intersecting;
+// and a content-box scroller with scrollbars that take room (the engine's own scrollbars styled to), its content box less
+// their gutters, which a commit resizes
+const EDGE = `<!doctype html><style>body { margin: 0 } #port::-webkit-scrollbar { width: 15px; height: 15px }</style>
+  <div id="dot" style="position:absolute;left:0;top:800.4px;width:0;height:0"></div>
+  <div id="port" style="position:absolute;top:0;left:100px;width:100px;height:100px;padding:5px;box-sizing:content-box;overflow:scroll"><div style="width:400px;height:400px"></div></div>
+  <script type="module">
+    import { account } from '/accounting.js';
+    const dot = document.getElementById('dot'), port = document.getElementById('port'), books = account();
+    const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const crossed = [], resized = [];
+    const io = new IntersectionObserver((entries) => crossed.push(...entries));
+    io.observe(dot);
+    new ResizeObserver((entries) => resized.push(...entries)).observe(port);
+    await frame();
+    crossed.length = resized.length = 0;
+    books.sample([dot], 1);
+    dot.style.top = '800px';
+    port.style.width = '120px';
+    books.sample([port], 1);
+    await frame();
+    window.result = { crossed: crossed.map((e) => e.isIntersecting), outside: books.outside(crossed, io).length, resized: resized.length, resizedOutside: books.outside(resized).length };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`an edge crossing is outside the commit, and a scroller's gutter is counted once, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}edge`);
+    await page.waitForFunction(() => window.result);
+    expect(await page.evaluate(() => window.result)).toEqual({ crossed: [true], outside: 1, resized: 1, resizedOutside: 0 });
   } finally {
     await browser.close();
   }

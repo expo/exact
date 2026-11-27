@@ -56,6 +56,7 @@ mod presence_tests;
 #[cfg(test)]
 mod reader_tests;
 mod reads;
+mod safe_area;
 mod sized;
 mod style;
 mod svg_lengths;

@@ -237,6 +237,22 @@ impl Em<'_> {
             recipe,
             props,
         } = arms;
+        // What the safe-area executor finds the site by (`safe_area::marks`): an arm that reads an observation, or one
+        // that writes an axis's overflow, which the executor confirms by the computed value
+        let marked = format!(
+            "{}{}",
+            values
+                .iter()
+                .flatten()
+                .map(|v| format!("x:{v};"))
+                .collect::<String>(),
+            props
+                .iter()
+                .filter(|p| p.starts_with("overflow"))
+                .map(|p| format!("{p}:auto;"))
+                .collect::<String>()
+        );
+        let marks = crate::safe_area::marks(&marked);
         let key = crate::code::expression(self.plan, &key, scope, &mut self.uses)?;
         let site = e.trim_start_matches('e');
         let pick: String = lits
@@ -282,6 +298,12 @@ impl Em<'_> {
         );
         // The one `Pc` where the rows were (contiguous: `Interleaved`
         // refuses another binding between them), then the rows' chunks out.
+        // @ref LLP 1123 D17 — a site whose arms read an observation or may let an axis scroll is marked for the
+        // safe-area executor, as a node whose static rows do
+        let text = match marks {
+            Some(marks) => format!("{e}.setAttribute(\"data-exact-safe-area\",\"{marks}\");{text}"),
+            None => text,
+        };
         let text = match self.mount_templates.field_mask(scope, &text) {
             Some(m) => format!("{}({m},()=>{{{text}}});", self.uses.rt("fm")),
             None => text,

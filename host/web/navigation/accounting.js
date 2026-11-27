@@ -15,9 +15,13 @@ export function account() {
     sample(targets, generation) {
       for (const el of targets) samples.set(el, { generation, ...measure(el) });
     },
-    outside(entries) {
+    /** The entries of one delivery that no sample accounts for; `observer`, the options an `IntersectionObserver` was made
+     * with, tells which of its entries the samples can account for: only one whose root is the viewport, with no margin.
+     * Without it, every intersection entry is outside. */
+    outside(entries, observer) {
       const tolerance = 0.5 / (globalThis.devicePixelRatio || 1);
-      return entries.filter((entry) => !accounts(samples.get(entry.target), entry, tolerance));
+      const viewport = !!observer && (observer.root ?? null) === null && /^(0(px|%)?\s*)+$/.test((observer.rootMargin ?? "0px").trim() + " ");
+      return entries.filter((entry) => !accounts(samples.get(entry.target), entry, tolerance, viewport));
     },
     generation(target) {
       return samples.get(target)?.generation;
@@ -25,8 +29,9 @@ export function account() {
   };
 }
 
-/** Whether `sample` accounts for `entry`, each length within `tolerance`. */
-function accounts(sample, entry, tolerance) {
+/** Whether `sample` accounts for `entry`, each length within `tolerance`, an intersection entry only from an observer
+ * rooted at the viewport with no margin (`viewport`). */
+function accounts(sample, entry, tolerance, viewport) {
   if (!sample) return false;
   const near = (a, b) => Math.abs(a - b) <= tolerance;
   if ("borderBoxSize" in entry) {
@@ -36,9 +41,10 @@ function accounts(sample, entry, tolerance) {
   }
   // An intersection the sample can tell only for the viewport as the root with no margin, as the target box clipped by
   // the boxes that clip it; any other observer's delivery is kept as outside, so no change of its root or clip is lost
-  const r = entry.boundingClientRect, s = sample.rect, root = entry.rootBounds, v = sample.visible;
+  if (!viewport) return false;
+  const r = entry.boundingClientRect, s = sample.rect, v = sample.visible;
   const box = near(r.x, s.x) && near(r.y, s.y) && near(r.width, s.width) && near(r.height, s.height);
-  if (!box || !root || !near(root.x, 0) || !near(root.y, 0) || !near(root.width, sample.viewport[0]) || !near(root.height, sample.viewport[1])) return false;
+  if (!box || entry.isIntersecting !== sample.intersecting) return false;
   const i = entry.intersectionRect;
   return v ? near(i.x, v.x) && near(i.y, v.y) && near(i.width, v.width) && near(i.height, v.height) : i.width === 0 && i.height === 0;
 }
@@ -53,16 +59,19 @@ function measure(el) {
   const edge = [px(s.borderLeftWidth) + px(s.borderRightWidth), px(s.borderTopWidth) + px(s.borderBottomWidth)];
   // The used width and height, which `getComputedStyle` resolves for a box that has one
   const used = [px(s.width), px(s.height)];
-  const border = s.boxSizing === "border-box" ? used : used.map((v, i) => v + pad[i] + edge[i]);
-  // A scrollbar takes its gutter from the content box, which the observer reports without it
+  // A scrollbar takes its gutter from the content box, which the observer reports without it: under `border-box` the
+  // used size holds it, and under `content-box` the used size is already the content box without it
   const gutter = [Math.max(0, el.offsetWidth - edge[0] - el.clientWidth), Math.max(0, el.offsetHeight - edge[1] - el.clientHeight)];
+  const border = s.boxSizing === "border-box" ? used : used.map((v, i) => v + pad[i] + edge[i] + gutter[i]);
   const content = border.map((v, i) => v - pad[i] - edge[i] - gutter[i]);
   const order = (pair) => (vertical ? [pair[1], pair[0]] : pair);
   const rect = el.getBoundingClientRect(), viewport = [document.documentElement.clientWidth, document.documentElement.clientHeight];
-  return { border: order(border), content: order(content), rect, visible: shown(el, rect, viewport), viewport };
+  return { border: order(border), content: order(content), rect, ...shown(el, rect, viewport) };
 }
 
-/** What of `rect`, `el`'s box, shows in the viewport through its ancestors that clip their overflow, or null. */
+/** What of `rect`, `el`'s box, shows in the viewport through its ancestors that clip their overflow (`visible`, null for
+ * none), and whether it intersects them, edges included, as an `IntersectionObserver` takes a box of no area that touches
+ * its root (`intersecting`). */
 function shown(el, rect, [width, height]) {
   let x0 = Math.max(rect.left, 0), y0 = Math.max(rect.top, 0), x1 = Math.min(rect.right, width), y1 = Math.min(rect.bottom, height);
   for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
@@ -72,5 +81,5 @@ function shown(el, rect, [width, height]) {
     if (s.overflowX !== "visible") { x0 = Math.max(x0, left); x1 = Math.min(x1, left + a.clientWidth); }
     if (s.overflowY !== "visible") { y0 = Math.max(y0, top); y1 = Math.min(y1, top + a.clientHeight); }
   }
-  return x1 > x0 && y1 > y0 ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null;
+  return { visible: x1 > x0 && y1 > y0 ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null, intersecting: x1 >= x0 && y1 >= y0 };
 }

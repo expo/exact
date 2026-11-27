@@ -26,6 +26,7 @@ beforeAll(() => {
     if (path === '/placed') return new Response(PLACED, { headers: { 'content-type': 'text/html' } });
     if (path === '/clamped') return new Response(CLAMPED, { headers: { 'content-type': 'text/html' } });
     if (path === '/delayed') return new Response(DELAYED, { headers: { 'content-type': 'text/html' } });
+    if (path === '/listed') return new Response(LISTED, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
       <div id="top" style="position:absolute;top:0;left:0;width:390px;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
@@ -205,11 +206,11 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`observers see only
     await page.waitForFunction(() => window.result);
     const r = await page.evaluate(() => window.result);
     // From 0 the rounds moved it through 37 points tall and more to its fixed point, 34 under the band and 54 tall: the
-    // observers saw that height at most once, and no round's
+    // resize observer saw that height once, and no round's
     expect(r.rounds).toBeGreaterThan(1);
     expect(r.height).toBeCloseTo(54, 0);
-    expect(r.sizes.every((h) => Math.abs(h - r.height) < 0.01)).toBe(true);
-    expect(r.sizes.length).toBeLessThanOrEqual(1);
+    expect(r.sizes.length).toBe(1);
+    expect(r.sizes[0]).toBeCloseTo(r.height, 2);
     expect(r.crossings.length).toBeLessThanOrEqual(1);
   } finally {
     await browser.close();
@@ -395,6 +396,30 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a delayed transiti
     await page.goto(`${server.url.href}delayed`);
     await page.waitForFunction(() => window.result);
     expect(await page.evaluate(() => window.result)).toEqual({ running: ['padding-top'], shown: '5px' });
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A reader whose four transitioning properties outnumber its two durations and three delays: the lists repeat to the
+// properties' length, so its fourth, `padding-top`, takes 5s with no delay and its settled input transitions
+const LISTED = `<!doctype html><style>body { margin: 0 }</style>
+  <div id="pads" style="position:absolute;top:0;width:50px;height:100px;padding-top:var(--exact-safe-area-inset-top, 5px);transition-property:opacity, color, margin-top, padding-top;transition-duration:0s, 5s;transition-delay:0s, -5s, -5s"></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const el = document.getElementById('pads');
+    getComputedStyle(el).paddingTop;
+    observe([el], [47, 0, 34, 0]);
+    window.result = { running: el.getAnimations().map((a) => a.transitionProperty) };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a transition the time lists repeat to still takes the settled input, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}listed`);
+    await page.waitForFunction(() => window.result);
+    expect(await page.evaluate(() => window.result)).toEqual({ running: ['padding-top'] });
   } finally {
     await browser.close();
   }
