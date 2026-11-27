@@ -63,8 +63,10 @@ extension TextEngine {
 
     private static let wghtTag = 0x77676874 as NSNumber // 'wght'
 
-    /// San Francisco's `wght` at each named weight.
-    #if canImport(UIKit)
+    /// San Francisco's `wght` at each named weight, which Bold Text moves on iOS and tvOS. watchOS has no Bold Text
+    /// reading outside a SwiftUI view's environment (UIKit's `isBoldTextEnabled` is unavailable there), so a watch
+    /// keeps the one table, as the Mac does.
+    #if canImport(UIKit) && !os(watchOS)
     private static let stopsLock = NSLock()
     private static var cachedStops: [Bool: [CGFloat]] = [:]
     private static var systemStops: [CGFloat] {
