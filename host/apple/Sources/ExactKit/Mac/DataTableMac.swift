@@ -87,11 +87,19 @@ final class DataTableCell: NSTableCellView {
     }
 }
 
-final class DataTableScrollView: NSScrollView {}
+final class DataTableScrollView: NSScrollView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        contentView = DropClipView()
+    }
+    required init?(coder: NSCoder) { nil }
+}
 
 final class DataTableHost {
     private weak var presenter: Presenter?
     private var feeds = [UInt32: DataTableFeed]()
+    /// The tables' clip views (`syncDragDestinations`).
+    var clips: [DropClipView] { feeds.values.compactMap(\.clip) }
     /// Only rows with cells that AppKit can take out of the authored view tree.
     private var rowChildren = [UInt32: [UInt32]]()
     init(_ presenter: Presenter) { self.presenter = presenter }
@@ -212,6 +220,7 @@ private final class DataTableFeed: NSObject, NSTableViewDataSource, NSTableViewD
     weak var node: NodeView?
     let table = NSTableView()
     private let scroll = DataTableScrollView()
+    var clip: DropClipView? { scroll.contentView as? DropClipView }
     private var columns = [UInt32: NSTableColumn]()
     private var rows = [DataRow]()
     private var headers = [NodeView]()

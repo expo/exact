@@ -1335,6 +1335,20 @@ impl<D: DataSource> Runner<D> {
             .collect()
     }
 
+    /// Whether a live view handles any of `kinds`, from the views the runner
+    /// created, without collecting them (LLP 1094.000 D15: a window whose
+    /// nodes hear a drag's events scrolls under a drag).
+    pub fn hears_any(&self, kinds: &[EventKind]) -> bool {
+        self.ids.sites().any(|(view, node)| {
+            let handlers = self.plan.node(node).handlers;
+            handlers.len > 0
+                && handlers
+                    .iter()
+                    .any(|h| kinds.contains(&self.plan.handler(h).event))
+                && self.kernel.node(view).is_some()
+        })
+    }
+
     /// All live listener declarations (bulk host creation), from the views
     /// the runner created — no tree walk.
     pub fn handlers(&self) -> exact_kernel::SortedMap<ViewId, Vec<EventKind>> {

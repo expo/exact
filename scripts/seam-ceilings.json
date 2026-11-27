@@ -620,7 +620,7 @@
       ]
     },
     "treeWalks": {
-      "ceiling": 588,
+      "ceiling": 585,
       "sites": [
         "host/apple/Sources/ExactCollections/Collection.swift: guard let parent = (node as? PlatformView)?.superview else { return nil }",
         "host/apple/Sources/ExactCollections/Collection.swift: parent = current.superview",
@@ -1028,8 +1028,6 @@
         "host/apple/Sources/ExactKit/Mac/ControlsMac.swift: package var ownerNode: NodeView? { sequence(first: self as NSView, next: \\.superview).lazy.compactMap { $0 as? NodeView }.first }",
         "host/apple/Sources/ExactKit/Mac/DialogsMac.swift: let siblings = parent.subviews",
         "host/apple/Sources/ExactKit/Mac/FieldSmoothingMac.swift: var fieldNode: NodeView? { (controlView as? NSTextField)?.delegate as? NodeView ?? controlView?.superview as? NodeView }",
-        "host/apple/Sources/ExactKit/Mac/FileDragMac.swift: var view = TableRowCell.whatIsThere { content.hitTest(content.superview?.convert(point, from: nil) ?? point) }",
-        "host/apple/Sources/ExactKit/Mac/FileDragMac.swift: view = at.superview",
         "host/apple/Sources/ExactKit/Mac/FocusMac.swift: next = view.superview",
         "host/apple/Sources/ExactKit/Mac/FocusMac.swift: sequence(first: self as NSView, next: \\.superview).contains { ($0 as? NodeView)?.props[\"retainFocus\"] == \"true\" }",
         "host/apple/Sources/ExactKit/Mac/FormRowsMac.swift: for view in sequence(first: self as NSView, next: \\.superview) {",
@@ -1053,7 +1051,6 @@
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: guard let presenter, let parent = presenter.pointerParent(of: self), parent !== superview else { return false }",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: let rect = (clip.superview?.superview as? NodeView).map {",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: let rect = (clip.superview?.superview as? NodeView).map {",
-        "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: next = view.superview",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: next = view.superview",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: var ancestor = node.superview",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: var view = superview",

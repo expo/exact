@@ -568,10 +568,13 @@ extension NodeView {
     }
 
     /// A node that hears `drop`, `dragenter` or `dragleave` is a destination
-    /// for files, text and links dragged over it (FileDragMac.swift); one
-    /// that no longer does gives them back to whatever is under it.
+    /// for files, text and links dragged over it (FileDragMac.swift), unless
+    /// a scroller's clip view that is a destination holds it, which is then
+    /// the drag's one destination there (LLP 1094.000 D15); one that no
+    /// longer does gives them back to whatever is under it.
     func syncDropTypes() {
-        if !handlers.isDisjoint(with: FileDrag.events) { registerForDraggedTypes(FileDrag.types) } else { unregisterDraggedTypes() }
+        let clipped = (enclosingScrollView?.contentView as? DropClipView)?.isDestination == true
+        if !handlers.isDisjoint(with: FileDrag.events), !clipped { registerForDraggedTypes(FileDrag.types) } else { unregisterDraggedTypes() }
     }
 
     package override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { held ? [] : FileDrag.moved(self, sender) ?? [] }
@@ -585,8 +588,9 @@ extension NodeView {
     static func dropTarget(_ view: NSView) -> NodeView? {
         var next: NSView? = view
         while let view = next {
-            if let node = view as? NodeView, node.handlers.contains("drop"), !node.formDisabled, !node.inert { return node }
-            next = view.superview
+            let node = view as? NodeView
+            if let node, node.handlers.contains("drop"), !node.formDisabled, !node.inert { return node }
+            next = FileDrag.parent(of: view, node: node)
         }
         return nil
     }

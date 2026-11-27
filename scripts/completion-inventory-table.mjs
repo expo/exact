@@ -180,7 +180,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/file_drop.rs",
       "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_dropped Presenter::drag_event Presenter::drag_flush " +
-      "Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_landed_checked Presenter::drop_owner " +
+      "Presenter::drag_committed Presenter::drag_edge_at Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drag_scrolls Presenter::drop_landed Presenter::drop_landed_checked Presenter::drop_owner " +
       "Presenter::drop_released Presenter::drop_released_behind Presenter::dropped Presenter::field_drop Presenter::landed"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
@@ -492,7 +492,7 @@ export const classifications = [
     ["painted:host/painted/src/transform_binding.rs", "Host::discover_transform_handles Host::transform_bindings Host::transform_path_ready"],
     ["painted:host/painted/src/window_title.rs", "WindowTitle::caption WindowTitle::update"],
     ["runner:runner/src/head.rs", "Runner::head Runner::inactive"],
-    ["runner:runner/src/runner.rs", "Runner::data_ref Runner::derive Runner::failed_resources Runner::grants Runner::handlers Runner::handlers_of Runner::is_poisoned Runner::kernel Runner::last_instance_work Runner::log Runner::now_ms Runner::resource Runner::roots Runner::site_of Runner::slot"],
+    ["runner:runner/src/runner.rs", "Runner::data_ref Runner::derive Runner::failed_resources Runner::grants Runner::handlers Runner::handlers_of Runner::hears_any Runner::is_poisoned Runner::kernel Runner::last_instance_work Runner::log Runner::now_ms Runner::resource Runner::roots Runner::site_of Runner::slot"],
     ["runner:runner/src/runner/apply.rs", "Runner::declared_parent Runner::declared_parents Runner::hidden_movers"],
     ["runner:runner/src/runner/resources.rs", "Runner::resource_draws_entropy Runner::resource_reads_clock"],
     ["runner:runner/src/runner/checkpoint.rs", "Runner::document_checkpoint"],
@@ -810,7 +810,7 @@ export const classifications = [
     ["painted:host/painted/src/holds.rs", "Host::advance_retained_input"],
     ["painted:host/painted/src/host.rs", "Host::advance Host::advance_effects Host::advance_until_request Host::commit_effects Host::frame Host::land_then Host::tick Host::timer_due_by Host::timer_due_ms"],
     ["painted:host/painted/src/presence.rs", "Host::advance_in_layout_steps"],
-    ["painted:host/painted/src/presenter.rs", "Presenter::tick"],
+    ["painted:host/painted/src/presenter/clock.rs", "Presenter::tick"],
     ["painted:host/painted/src/presenter/clock.rs",
       "Presenter::admit_idle_timer Presenter::admit_timer_waits Presenter::advance Presenter::animation_frame Presenter::clock Presenter::clock_until_request " +
       "Presenter::fire_native_timer Presenter::land_then Presenter::native_timer_generation Presenter::set_live_clock Presenter::timer_observation " +

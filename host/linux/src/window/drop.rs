@@ -275,6 +275,15 @@ impl Drops {
         }
     }
 
+    /// The listener ended: a drag it followed is over for the window, so
+    /// nothing asks the presenter about it again, and a scroller it was held
+    /// near stops (LLP 1094.000 D15).
+    pub(super) fn gone<D: DataSource>(&mut self, p: &mut Presenter<D>) {
+        if self.hover.take().is_some() {
+            p.drag_left();
+        }
+    }
+
     /// Ask the presenter again whether a node under a drag that has not
     /// moved takes the drop, as a commit may have changed it.
     pub(super) fn turn<D: DataSource>(&mut self, p: &mut Presenter<D>) {

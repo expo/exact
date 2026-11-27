@@ -1132,6 +1132,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         glassFollower?.follow() // its display link runs only in a window (`GlassGeometryMac.swift`)
         presenter?.transformGeometry.changed()
         presenter?.videoVisibility?.changed()
+        // A node moved into or out of a scroller's clip view registers as it now stands (LLP 1094.000 D15)
+        if !handlers.isDisjoint(with: FileDrag.events) { syncDropTypes() }
     }
 
     package override func viewDidChangeBackingProperties() {

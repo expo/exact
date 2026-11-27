@@ -6,6 +6,13 @@ use exact_plan::EventKind;
 use exact_runner::{DropEvent, KeyModifiers};
 use std::path::PathBuf;
 
+/// A drag's edge band (points), its speed (points a second) and the most
+/// time one step catches up (seconds), as the reorder's (LLP 1094 D7,
+/// `group.rs`), for a drag held near a scroller's edge (LLP 1094.000 D15).
+const EDGE_BAND: f32 = 32.;
+const EDGE_SPEED: f32 = 720.;
+const EDGE_CATCH_UP: f64 = 0.032;
+
 /// What a drag drops: files by path, minted as `doc:` handles when they are
 /// delivered, its plain text and its first link that is not a file, each
 /// empty when it carries none.
@@ -42,6 +49,20 @@ pub(super) struct DragIn {
     /// While a drop is released behind earlier ones (`drop_released_behind`),
     /// the newest of them: what is queued meanwhile waits for them to land.
     behind: Option<u32>,
+    /// Whether the drag is the platform's, which the host reports: only it
+    /// scrolls a scroller it is held near (LLP 1094.000 D15), not the
+    /// agent's `dragenter`, which holds still until the next step.
+    native: bool,
+    /// The scroller the drag scrolls where it was last found, its axis and
+    /// its speed, and the time of its last step.
+    edge: Option<(ViewId, bool, f32)>,
+    edge_clock: Option<f64>,
+    /// A step moved a scroller: the drag is found again on the next frame,
+    /// once the picture shows the move.
+    refind: bool,
+    /// A commit landed while the drag was over the window: the drag is
+    /// found again once the painted picture shows the kernel at this epoch.
+    committed: Option<u64>,
 }
 
 /// A node under the drag, and whether it heard the drag's `dragenter`: one
@@ -137,16 +158,193 @@ impl<D: DataSource> Presenter<D> {
     /// leaves, then the innermost node that takes a drop there, if any, is
     /// what a host shows its copy feedback for.
     pub fn drag_over(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<ViewId> {
+        self.drag_in.native = true;
+        self.drag_hover(point, held)
+    }
+
+    /// `drag_over` for a drag the agent makes, which scrolls nothing.
+    fn drag_hover(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<ViewId> {
         self.drag_at(point, held);
         self.drag_flush();
         let hit = self.drag_hit(point);
         self.drop_target(hit)
     }
 
+    /// The scroller the drag scrolls, its axis and its speed, while it is
+    /// over the window (LLP 1094.000 D15).
+    pub(super) fn drag_edge(&self) -> Option<(ViewId, bool, f32)> {
+        self.drag_in.edge.filter(|_| self.drag_in.over)
+    }
+
+    /// Whether the drag is held near the edge of a scroller it scrolls, as
+    /// Windows marks it (`DROPEFFECT_SCROLL`).
+    pub fn drag_scrolls(&self) -> bool {
+        self.drag_edge().is_some()
+    }
+
+    /// Whether a drag needs a frame: it is held near an edge, or the last
+    /// step's move is yet to be found under it.
+    pub(super) fn drag_needs_frame(&self) -> bool {
+        self.drag_in.over
+            && (self.drag_in.edge.is_some()
+                || self.drag_in.refind
+                || self.drag_in.committed.is_some())
+    }
+
+    /// A frame of a drag over the window (LLP 1094.000 D15). After a step,
+    /// the drag is found again at its point on the picture that shows the
+    /// move, so the nodes there hear their enters and leaves and the host
+    /// learns what takes it; then the scroller it is near moves on at
+    /// `EDGE_SPEED`, by at most `EDGE_CATCH_UP` since the last step.
+    pub(super) fn tick_drag_edge(&mut self, now: f64) {
+        if !self.drag_in.over {
+            return;
+        }
+        let (point, held) = (self.drag_in.point, self.drag_in.held);
+        // A commit's picture may not be shown yet: while one is on its way, the request to look again stays; with
+        // none coming (a paint that failed), the drag is found again on the picture there is, rather than waiting
+        let shown = self.drag_in.committed.is_some_and(|epoch| {
+            self.hit_epoch().is_some_and(|shown| shown >= epoch) || !self.picture_coming()
+        });
+        if shown {
+            self.drag_in.committed = None;
+        }
+        if std::mem::take(&mut self.drag_in.refind) || shown {
+            self.drag_at(point, held);
+            self.drag_flush();
+        }
+        // What the drag may scroll is found on this frame's picture, after any enter it heard ran: a commit, or a
+        // handler that made the scroller inert or took the last listener away, may have changed it
+        if self.drag_in.native {
+            self.drag_in.edge = self.drag_edge_at(point);
+        }
+        let Some((id, vertical, speed)) = self.drag_edge() else {
+            self.drag_in.edge_clock = None;
+            return;
+        };
+        let dt = self.drag_in.edge_clock.replace(now).map_or(0., |last| {
+            ((now - last) / 1000.).clamp(0., EDGE_CATCH_UP) as f32
+        });
+        let limits = self.collection_scroll_limits();
+        let Some(s) = self.scroller(id, &limits) else {
+            self.drag_in.edge = None;
+            return;
+        };
+        let by = if vertical {
+            (0., speed * dt)
+        } else {
+            (speed * dt, 0.)
+        };
+        if by == (0., 0.) {
+            return;
+        }
+        let to = (s.offset.0 + by.0, s.offset.1 + by.1);
+        self.restore_scroll_anchors();
+        let moved =
+            self.scroll_to_completion(id, to, super::scroll_end::Completion::DragEdge, Some(by));
+        self.arm_scroll_anchors();
+        if moved.is_some_and(|(_, movement)| movement != (0., 0.)) {
+            self.publish_scroll();
+            self.drag_in.refind = true;
+        }
+    }
+
+    /// A commit landed: a platform's drag over the window is found again on
+    /// the next frame, since what it may scroll, and the nodes under it, may
+    /// have changed though it did not move (a timer that mounts the first
+    /// `drop`, a scroller that grows under it).
+    pub(super) fn drag_committed(&mut self) {
+        if self.drag_in.over && self.drag_in.native {
+            self.drag_in.committed = Some(self.host.kernel().epoch());
+        }
+    }
+
+    /// The drag is over for the window: what it scrolled stops, and a later
+    /// drag starts its clock again.
+    fn drag_edge_ended(&mut self) {
+        self.drag_in.native = false;
+        self.drag_in.edge = None;
+        self.drag_in.edge_clock = None;
+        self.drag_in.refind = false;
+        self.drag_in.committed = None;
+    }
+
+    /// The scroller a drag at `point` scrolls (LLP 1094.000 D15): of the
+    /// scrollers a reader's scroll there would move, innermost first and the
+    /// page last (`scrollers_at`, which leaves out an axis an inner
+    /// scroller's `overscroll-behavior` keeps and the page under an open
+    /// surface), the first whose port, as far as it shows, holds the point
+    /// within `EDGE_BAND` of an edge it can still move toward, vertically
+    /// first, the nearer edge where the two bands meet; one a route covers,
+    /// and a field, are passed over. None unless a node in the window hears
+    /// `drop`, `dragenter` or `dragleave`.
+    fn drag_edge_at(&mut self, point: (f32, f32)) -> Option<(ViewId, bool, f32)> {
+        let kinds = [EventKind::Drop, EventKind::Dragenter, EventKind::Dragleave];
+        if !self.host.runner().hears_any(&kinds) {
+            return None;
+        }
+        let under = self.scrollers_at(point.0, point.1);
+        under.chain.into_iter().find_map(|s| {
+            // A field takes no drag on these hosts (LLP 1094.001 D2), so its text is no scroller here
+            if s.id != super::scrollers::PAGE
+                && (self.host.route_visibility(s.id).1 || self.brush.field_text.contains_key(&s.id))
+            {
+                return None;
+            }
+            let [x, y, w, h] = s.port;
+            if point.0 < x || point.0 > x + w || point.1 < y || point.1 > y + h {
+                return None;
+            }
+            // (a right-to-left scroller's offsets run from a negative minimum up to zero)
+            [
+                (
+                    true,
+                    s.axes.1,
+                    point.1 - y,
+                    y + h - point.1,
+                    s.offset.1,
+                    s.min.1,
+                    s.max.1,
+                ),
+                (
+                    false,
+                    s.axes.0,
+                    point.0 - x,
+                    x + w - point.0,
+                    s.offset.0,
+                    s.min.0,
+                    s.max.0,
+                ),
+            ]
+            .into_iter()
+            .filter(|axis| axis.1)
+            .find_map(|(vertical, _, from_start, to_end, offset, min, max)| {
+                // The nearer edge's band, then whether the scroller can move that way: a short port held near both
+                // edges does not turn back at one
+                let toward_end = match (from_start < EDGE_BAND, to_end < EDGE_BAND) {
+                    (true, true) => to_end < from_start,
+                    (back, on) if back || on => on,
+                    _ => return None,
+                };
+                let travels = if toward_end {
+                    offset < max
+                } else {
+                    offset > min
+                };
+                travels.then_some((
+                    s.id,
+                    vertical,
+                    if toward_end { EDGE_SPEED } else { -EDGE_SPEED },
+                ))
+            })
+        })
+    }
+
     /// Cancel the drag, including when it leaves the window: the nodes under
     /// it hear their leave, and the enters it waited for are not sent.
     pub fn drag_left(&mut self) {
         self.drag_in.over = false;
+        self.drag_edge_ended();
         self.drag_crossings(Vec::new());
         self.drag_flush();
     }
@@ -206,6 +404,7 @@ impl<D: DataSource> Presenter<D> {
             return None;
         };
         self.drag_in.over = false;
+        self.drag_edge_ended();
         let mut chain = std::mem::take(&mut self.drag_in.chain);
         self.drag_in.last += 1;
         let id = self.drag_in.last;
@@ -427,7 +626,8 @@ impl<D: DataSource> Presenter<D> {
                 format!("view {id} took no drop: nothing under it declares `drop`, or none of its files could be opened")
             })?
         } else {
-            self.drag_over(point, held);
+            self.drag_in.native = false;
+            self.drag_hover(point, held);
             id
         };
         Ok(serde_json::json!({"tapped":target, "at":point, (kind):dropped.paths.len(), "delivery":"presenter"}).to_string())
@@ -475,6 +675,14 @@ impl<D: DataSource> Presenter<D> {
         let hit = self.drag_hit(point);
         let chain = self.drag_chain(hit);
         self.drag_crossings(chain);
+        self.drag_in.edge = if self.drag_in.native {
+            self.drag_edge_at(point)
+        } else {
+            None
+        };
+        if self.drag_in.edge.is_none() {
+            self.drag_in.edge_clock = None;
+        }
         hit
     }
 
@@ -523,6 +731,7 @@ impl<D: DataSource> Presenter<D> {
     /// waited for a pending drop hear their enter, then every one its leave.
     fn drag_ended(&mut self) {
         self.drag_in.over = false;
+        self.drag_edge_ended();
         let (point, held) = (self.drag_in.point, self.drag_in.held);
         let chain = std::mem::take(&mut self.drag_in.chain);
         for m in chain.iter().filter(|m| !m.entered) {
@@ -623,644 +832,5 @@ impl<D: DataSource> Presenter<D> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use exact_plan::Value;
-
-    #[test]
-    fn two_files_over_an_editor_drop_once_on_its_nearest_target_in_order() {
-        let source = r#"component App
-  state calls = 0
-  state names = ""
-  state enters = 0
-  state leaves = 0
-  action received(e: DragEvent)
-    names = e.files.join("|")
-    calls = calls + 1
-  action outer(e: DragEvent)
-    calls = calls + 100
-  action entered(e: DragEvent)
-    enters = enters + 1
-  action left(e: DragEvent)
-    leaves = leaves + 1
-  view
-    column width=300 height=200 drop=outer
-      column width=220 height=120 drop=received dragenter=entered dragleave=left
-        textarea testId="editor" value="original text" width=180 height=80
-"#;
-        let mut p = booted(source);
-        let kernel = p.host.kernel();
-        let field = kernel
-            .node_by_key(kernel.find_by_test_id("editor")[0])
-            .unwrap()
-            .id;
-        let rect = p.rect_of(field).unwrap();
-        let point = (rect.0 + rect.2 / 2., rect.1 + rect.3 / 2.);
-        assert_eq!(p.hit(point.0, point.1), Some(field));
-        let held = KeyModifiers::default();
-        assert!(p.drag_over(point, held).is_some());
-        assert!(p.drag_over(point, held).is_some());
-        p.drag_left();
-        assert!(p.drag_over(point, held).is_some());
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let files = [root.join("README.md"), root.join("docs/testing.md")];
-        let reply = p
-            .agent_drag(Some(field), &serde_json::json!({"drop":files}))
-            .unwrap();
-        let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
-        assert_eq!(reply["drop"], 2);
-        assert_eq!(reply["delivery"], "presenter");
-        p.drag_left();
-        let r = p.host.runner();
-        assert_eq!(r.slot("calls"), Some(&Value::Number(1.)));
-        assert_eq!(r.slot("enters"), Some(&Value::Number(2.)));
-        assert_eq!(r.slot("leaves"), Some(&Value::Number(1.)));
-        let docs: Vec<_> = r
-            .slot("names")
-            .and_then(Value::as_str)
-            .unwrap()
-            .split('|')
-            .collect();
-        assert_eq!(docs.len(), 2);
-        for (doc, name) in docs.iter().zip(["/README.md", "/testing.md"]) {
-            assert!(doc.starts_with("doc:/") && doc.ends_with(name), "{doc}");
-        }
-        assert_eq!(p.field_text(field), "original text");
-    }
-
-    #[test]
-    fn text_and_a_link_over_an_editor_drop_on_its_nearest_target() {
-        let source = r#"component App
-  state text = ""
-  state url = ""
-  state files = -1
-  action received(e: DragEvent)
-    text = e.text
-    url = e.url
-    files = e.files.length
-  view
-    column width=300 height=200 drop=received
-      textarea testId="editor" value="original text" width=180 height=80
-"#;
-        let mut p = booted(source);
-        let kernel = p.host.kernel();
-        let field = kernel
-            .node_by_key(kernel.find_by_test_id("editor")[0])
-            .unwrap()
-            .id;
-        let empty = p.agent_drag(Some(field), &serde_json::json!({"drop": []}));
-        assert!(empty
-            .unwrap_err()
-            .contains("requires a file path, --text or --url"));
-        let request = serde_json::json!({"drop": [], "text": "Mount Fuji\nJapan", "url": "https://example.com/fuji"});
-        p.agent_drag(Some(field), &request).unwrap();
-        let r = p.host.runner();
-        assert_eq!(r.slot("text"), Some(&Value::str("Mount Fuji\nJapan")));
-        assert_eq!(r.slot("url"), Some(&Value::str("https://example.com/fuji")));
-        assert_eq!(r.slot("files"), Some(&Value::Number(0.)));
-        // Exact's fields take no drag on this host, so the text goes to the drop above
-        assert_eq!(p.field_text(field), "original text");
-    }
-
-    /// A zone that counts its drops, enters and leaves, keeping the last drop's text.
-    fn zone() -> (Presenter<()>, (f32, f32), ViewId) {
-        let source = r#"component App
-  state drops = 0
-  state enters = 0
-  state leaves = 0
-  state text = ""
-  action received(e: DragEvent)
-    drops = drops + 1
-    text = e.text
-  action entered(e: DragEvent)
-    enters = enters + 1
-  action left(e: DragEvent)
-    leaves = leaves + 1
-  view
-    column width=300 height=200 testId="zone" drop=received dragenter=entered dragleave=left
-      textarea testId="editor" value="original text" width=180 height=80
-      textarea testId="off" value="off" disabled=true width=180 height=40
-"#;
-        let p = booted(source);
-        let kernel = p.host.kernel();
-        let field = kernel
-            .node_by_key(kernel.find_by_test_id("editor")[0])
-            .unwrap()
-            .id;
-        (p, (250., 150.), field)
-    }
-
-    fn counts(p: &Presenter<()>) -> [f64; 3] {
-        let r = p.host.runner();
-        ["drops", "enters", "leaves"].map(|k| match r.slot(k) {
-            Some(Value::Number(n)) => *n,
-            other => panic!("{k}: {other:?}"),
-        })
-    }
-
-    fn text(text: &str) -> Dropped {
-        Dropped {
-            text: text.into(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn a_pending_drop_holds_a_newer_drags_enter_until_it_lands() {
-        let (mut p, point, _) = zone();
-        let held = KeyModifiers::default();
-        p.drag_over(point, held);
-        let id = p.drop_released(point, held).unwrap();
-        assert_eq!(
-            counts(&p),
-            [0., 1., 0.],
-            "released: the zone neither drops nor leaves yet"
-        );
-        // A newer drag over the zone while the drop's items copy: its enter waits
-        p.drag_over(point, held);
-        assert_eq!(counts(&p), [0., 1., 0.]);
-        assert!(p.drop_landed(id, &text("Fuji")).is_some());
-        assert_eq!(
-            counts(&p),
-            [1., 2., 0.],
-            "the drop, then the newer drag's enter"
-        );
-        assert_eq!(p.host.runner().slot("text"), Some(&Value::str("Fuji")));
-        p.drag_left();
-        assert_eq!(counts(&p), [1., 2., 1.]);
-        assert_eq!(p.drop_landed(id, &text("again")), None, "a drop lands once");
-    }
-
-    #[test]
-    fn a_newer_drag_that_leaves_while_it_waits_sends_nothing() {
-        let (mut p, point, _) = zone();
-        let held = KeyModifiers::default();
-        p.drag_over(point, held);
-        let id = p.drop_released(point, held).unwrap();
-        p.drag_over(point, held);
-        p.drag_left();
-        p.drop_landed(id, &text("Fuji"));
-        assert_eq!(
-            counts(&p),
-            [1., 1., 0.],
-            "the waiting enter was cancelled, and its leave with it"
-        );
-    }
-
-    #[test]
-    fn a_newer_drag_that_drops_first_hears_its_waiting_enter_then_drops() {
-        let (mut p, point, _) = zone();
-        let held = KeyModifiers::default();
-        p.drag_over(point, held);
-        let first = p.drop_released(point, held).unwrap();
-        p.drag_over(point, held);
-        let second = p.drop_released(point, held).unwrap();
-        assert_eq!(
-            counts(&p),
-            [0., 2., 0.],
-            "the newer drag's enter, as it drops"
-        );
-        p.drop_landed(second, &text("second"));
-        p.drop_landed(first, &text("first"));
-        assert_eq!(counts(&p), [2., 2., 0.]);
-        assert_eq!(p.host.runner().slot("text"), Some(&Value::str("first")));
-    }
-
-    /// A zone that logs its enters, leaves and drops, and that its first
-    /// drop moves away from where the drag was.
-    fn moving_zone() -> Presenter<()> {
-        booted(
-            r#"component App
-  state log = ""
-  state moved = false
-  action received(e: DragEvent)
-    log = `${log}drop ${e.text}, `
-    moved = true
-  action entered(e: DragEvent)
-    log = `${log}enter, `
-  action left(e: DragEvent)
-    log = `${log}leave, `
-  view
-    column width=300 height=200 margin-top=(moved ? 400 : 0) testId="zone" drop=received dragenter=entered dragleave=left
-"#,
-        )
-    }
-
-    #[test]
-    fn a_drop_released_behind_another_takes_its_target_first_and_hears_its_enter_after() {
-        let (mut p, point) = (moving_zone(), (150., 100.));
-        let held = KeyModifiers::default();
-        p.drag_over(point, held);
-        let first = p.drop_released(point, held).unwrap();
-        p.drag_over(point, held);
-        let second = p.drop_released_behind(point, held).unwrap();
-        assert_eq!(
-            log(&p),
-            "enter, ",
-            "the second drag's enter waits for the first drop"
-        );
-        assert!(p.drop_landed(first, &text("first")).is_some());
-        assert_eq!(log(&p), "enter, drop first, enter, ");
-        assert!(
-            p.drop_landed(second, &text("second")).is_some(),
-            "the zone taken at the release, though the first drop moved it"
-        );
-        assert_eq!(log(&p), "enter, drop first, enter, drop second, ");
-    }
-
-    #[test]
-    fn a_failed_drop_leaves_before_one_released_behind_it_enters() {
-        let (mut p, point) = (moving_zone(), (150., 100.));
-        let held = KeyModifiers::default();
-        p.drag_over(point, held);
-        let first = p.drop_released(point, held).unwrap();
-        p.drag_over(point, held);
-        let second = p.drop_released_behind(point, held).unwrap();
-        assert_eq!(p.drop_landed(first, &Dropped::default()), None);
-        assert_eq!(log(&p), "enter, leave, enter, ");
-        assert!(p.drop_landed(second, &text("second")).is_some());
-        assert_eq!(log(&p), "enter, leave, enter, drop second, ");
-    }
-
-    #[test]
-    fn a_drop_whose_items_never_arrived_leaves_its_chain() {
-        let (mut p, point, _) = zone();
-        let held = KeyModifiers::default();
-        p.drag_over(point, held);
-        let id = p.drop_released(point, held).unwrap();
-        assert_eq!(p.drop_landed(id, &Dropped::default()), None);
-        assert_eq!(counts(&p), [0., 1., 1.]);
-    }
-
-    #[test]
-    fn a_field_keeps_text_and_links_and_gives_files_away() {
-        /// A shell that hosts fields, as Android's reader does, measuring none.
-        struct Shell;
-        impl crate::fields::FieldMetrics for Shell {
-            fn measure(
-                &self,
-                face: &crate::fields::FieldFace,
-                _: &str,
-                width: Option<f32>,
-            ) -> [f32; 3] {
-                [width.unwrap_or(0.), face.size, face.size]
-            }
-        }
-        let _hosting = crate::fields::host_here(&Shell, 1.0);
-        let (mut p, _, field) = zone();
-        let rect = p.rect_of(field).unwrap();
-        let over = (rect.0 + rect.2 / 2., rect.1 + rect.3 / 2.);
-        assert_eq!(
-            p.drop_owner(field),
-            2,
-            "the zone above the field takes drops"
-        );
-        assert!(p.field_keeps(over, &text("Fuji")));
-        assert!(p.field_keeps(
-            over,
-            &Dropped {
-                url: "https://example.com".into(),
-                ..Default::default()
-            }
-        ));
-        assert!(!p.field_keeps(
-            over,
-            &Dropped {
-                paths: vec!["/tmp/a.txt".into()],
-                ..Default::default()
-            }
-        ));
-        assert!(
-            !p.field_keeps((250., 150.), &text("Fuji")),
-            "no field there"
-        );
-        let kernel = p.host.kernel();
-        let off = kernel
-            .node_by_key(kernel.find_by_test_id("off")[0])
-            .unwrap()
-            .id;
-        let rect = p.rect_of(off).unwrap();
-        let disabled = (rect.0 + rect.2 / 2., rect.1 + rect.3 / 2.);
-        assert!(
-            !p.field_keeps(disabled, &text("Fuji")),
-            "a disabled field keeps no drag"
-        );
-        assert_eq!(
-            p.field_drop(field, over),
-            2,
-            "the field, under a zone that takes drops"
-        );
-        assert_eq!(
-            p.field_drop(off, disabled),
-            -1,
-            "a disabled field takes no drop"
-        );
-        assert_eq!(
-            p.field_drop(field, (250., 150.)),
-            -1,
-            "the zone is painted there"
-        );
-    }
-
-    /// The app `source`, its first frame painted.
-    fn booted(source: &str) -> Presenter<()> {
-        let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan(source),
-            (),
-            (300., 200.),
-            1.,
-            PathBuf::new(),
-            PainterChoice::Cpu,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        p.frame();
-        p
-    }
-
-    /// A zone that logs each event it hears: its kind, whether Shift was
-    /// held, and a drop's offsets and text.
-    fn logging_zone() -> (Presenter<()>, (f32, f32)) {
-        let source = r#"component App
-  state log = ""
-  action received(e: DragEvent)
-    log = `${log}drop ${e.shiftKey ? "S" : "-"} ${e.offsetX} ${e.offsetY} ${e.text};`
-  action entered(e: DragEvent)
-    log = `${log}enter ${e.shiftKey ? "S" : "-"};`
-  action left(e: DragEvent)
-    log = `${log}leave ${e.shiftKey ? "S" : "-"};`
-  view
-    column width=300 height=200 testId="zone" drop=received dragenter=entered dragleave=left
-"#;
-        (booted(source), (100., 50.))
-    }
-
-    fn log(p: &Presenter<()>) -> String {
-        p.host
-            .runner()
-            .slot("log")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    }
-
-    const SHIFT: KeyModifiers = KeyModifiers {
-        shift: true,
-        ctrl: false,
-        alt: false,
-        meta: false,
-    };
-
-    #[test]
-    fn a_failed_drop_leaves_with_its_own_record_before_the_newer_drag_enters() {
-        let (mut p, point) = logging_zone();
-        p.drag_over(point, SHIFT);
-        let id = p.drop_released(point, SHIFT).unwrap();
-        p.drag_over((150., 60.), KeyModifiers::default());
-        assert_eq!(log(&p), "enter S;", "the newer drag's enter waits");
-        p.drop_landed(id, &Dropped::default());
-        assert_eq!(
-            log(&p),
-            "enter S;leave S;enter -;",
-            "the failed drop's leave, with its Shift, then the newer enter"
-        );
-    }
-
-    #[test]
-    fn a_drop_hears_the_record_it_had_at_its_release() {
-        let (mut p, point) = logging_zone();
-        p.drag_over(point, SHIFT);
-        let id = p.drop_released(point, SHIFT).unwrap();
-        p.drag_over((150., 60.), KeyModifiers::default());
-        p.drop_landed(id, &text("Fuji"));
-        assert_eq!(log(&p), "enter S;drop S 100 50 Fuji;enter -;");
-    }
-
-    #[test]
-    fn a_newer_drag_a_field_takes_hears_its_waiting_enter_then_its_leave() {
-        let (mut p, point) = logging_zone();
-        p.drag_over(point, KeyModifiers::default());
-        let id = p.drop_released(point, KeyModifiers::default()).unwrap();
-        p.drag_dropped(point, SHIFT);
-        assert_eq!(log(&p), "enter -;enter S;leave S;");
-        p.drop_landed(id, &text("Fuji"));
-        assert_eq!(
-            log(&p),
-            "enter -;enter S;leave S;drop - 100 50 Fuji;",
-            "the drag is over: no enter after the drop"
-        );
-    }
-
-    #[test]
-    fn a_drop_whose_target_was_renewed_leaves_instead() {
-        let (mut p, point) = logging_zone();
-        p.drag_over(point, KeyModifiers::default());
-        let id = p.drop_released(point, KeyModifiers::default()).unwrap();
-        let kernel = p.host.kernel();
-        let zone = kernel
-            .node_by_key(kernel.find_by_test_id("zone")[0])
-            .unwrap()
-            .id;
-        p.drag_renewed(&[zone]);
-        assert_eq!(p.drop_landed(id, &text("Fuji")), None);
-        assert_eq!(
-            log(&p),
-            "enter -;",
-            "a new mount heard no enter, so it hears no leave either"
-        );
-    }
-
-    #[test]
-    fn a_new_plan_numbers_its_drops_after_the_old_ones() {
-        let (mut p, point) = logging_zone();
-        let old = p.drop_released(point, KeyModifiers::default()).unwrap();
-        p.drag_in.reset();
-        let new = p.drop_released(point, KeyModifiers::default()).unwrap();
-        assert_ne!(old, new);
-        assert_eq!(
-            p.drop_landed(old, &text("late")),
-            None,
-            "the old plan's copy lands nowhere"
-        );
-        assert!(p.drop_landed(new, &text("Fuji")).is_some());
-    }
-
-    /// A zone, a button that disables itself in its own `dragenter`, in a
-    /// column that also takes drops; each counts its drops.
-    fn self_disabling_zone() -> (Presenter<()>, ViewId) {
-        let source = r#"component App
-  state off = false
-  state outer = 0
-  state inner = 0
-  action toOuter(e: DragEvent)
-    outer = outer + 1
-  action toInner(e: DragEvent)
-    inner = inner + 1
-  action entered(e: DragEvent)
-    off = true
-  view
-    column width=300 height=200 testId="outer" drop=toOuter
-      button "Zone" testId="inner" width=200 height=100 disabled=off drop=toInner dragenter=entered
-"#;
-        let p = booted(source);
-        let kernel = p.host.kernel();
-        let outer = kernel
-            .node_by_key(kernel.find_by_test_id("outer")[0])
-            .unwrap()
-            .id;
-        (p, outer)
-    }
-
-    #[test]
-    fn an_enter_that_disables_the_target_at_the_release_does_not_move_the_drop() {
-        let (mut p, _) = self_disabling_zone();
-        let id = p
-            .drop_released((100., 50.), KeyModifiers::default())
-            .unwrap();
-        assert_eq!(
-            p.host.runner().slot("off"),
-            Some(&Value::Bool(true)),
-            "the zone's enter ran at the release"
-        );
-        assert_eq!(
-            p.drop_landed(id, &text("Fuji")),
-            None,
-            "the zone it was released on takes no drop now"
-        );
-        let r = p.host.runner();
-        assert_eq!(
-            [r.slot("outer"), r.slot("inner")],
-            [Some(&Value::Number(0.)), Some(&Value::Number(0.))]
-        );
-    }
-
-    #[test]
-    fn a_hover_answers_with_the_target_after_its_enters_ran() {
-        let (mut p, outer) = self_disabling_zone();
-        assert_eq!(
-            p.drag_over((100., 50.), KeyModifiers::default()),
-            Some(outer),
-            "the zone disabled itself as the drag came over it, so the column above takes the drop there"
-        );
-    }
-
-    #[test]
-    fn an_enter_skipped_at_the_release_owes_no_leave_when_the_drop_fails() {
-        let mut p = booted(
-            r#"component App
-  state off = false
-  state log = ""
-  action innerIn(e: DragEvent)
-    off = true
-    log = `${log}enter inner;`
-  action innerOut(e: DragEvent)
-    log = `${log}leave inner;`
-  action outerIn(e: DragEvent)
-    log = `${log}enter outer;`
-  action outerOut(e: DragEvent)
-    log = `${log}leave outer;`
-  action received(e: DragEvent)
-    log = `${log}drop;`
-  view
-    column width=300 height=200 disabled=off dragenter=outerIn dragleave=outerOut
-      button "Zone" width=200 height=100 drop=received dragenter=innerIn dragleave=innerOut
-"#,
-        );
-        let id = p
-            .drop_released((100., 50.), KeyModifiers::default())
-            .unwrap();
-        assert_eq!(
-            p.drop_landed(id, &Dropped::default()),
-            None,
-            "nothing arrived"
-        );
-        assert_eq!(
-            log(&p),
-            "enter inner;leave inner;",
-            "the column was disabled before its enter, so it hears neither"
-        );
-    }
-
-    #[test]
-    fn a_failed_drop_whose_leave_enables_a_zone_enters_the_drag_over_it() {
-        let mut p = booted(
-            r#"component App
-  state off = true
-  state log = ""
-  action received(e: DragEvent)
-    log = `${log}drop;`
-  action left(e: DragEvent)
-    off = false
-    log = `${log}leave A;`
-  action entered(e: DragEvent)
-    log = `${log}enter B;`
-  view
-    column width=300 height=200
-      button "A" width=200 height=100 drop=received dragleave=left
-      button "B" width=200 height=100 disabled=off dragenter=entered
-"#,
-        );
-        let id = p
-            .drop_released((100., 50.), KeyModifiers::default())
-            .unwrap();
-        p.drag_over((100., 150.), KeyModifiers::default());
-        assert_eq!(log(&p), "", "B is disabled, and A waits for its drop");
-        assert_eq!(
-            p.drop_landed(id, &Dropped::default()),
-            None,
-            "nothing arrived"
-        );
-        assert_eq!(
-            log(&p),
-            "leave A;enter B;",
-            "A's leave enabled B, under the drag still over the window"
-        );
-    }
-
-    #[test]
-    fn an_enter_to_a_node_hidden_at_the_release_owes_no_leave_when_the_drop_fails() {
-        let mut p = booted(
-            r#"component App
-  state look = "flex"
-  state log = ""
-  action innerIn(e: DragEvent)
-    look = "none"
-    log = `${log}enter inner;`
-  action innerOut(e: DragEvent)
-    log = `${log}leave inner;`
-  action outerIn(e: DragEvent)
-    log = `${log}enter outer;`
-  action outerOut(e: DragEvent)
-    log = `${log}leave outer;`
-  action shown(e: DragEvent)
-    look = "flex"
-  action received(e: DragEvent)
-    log = `${log}drop;`
-  view
-    row width=300 height=200
-      button "Show" width=100 height=100 dragenter=shown
-      column width=150 height=200 display=look dragenter=outerIn dragleave=outerOut
-        button "Zone" width=150 height=100 drop=received dragenter=innerIn dragleave=innerOut
-"#,
-        );
-        let id = p
-            .drop_released((150., 50.), KeyModifiers::default())
-            .unwrap();
-        assert_eq!(
-            log(&p),
-            "enter inner;",
-            "the column was hidden before its enter"
-        );
-        p.drag_over((50., 50.), KeyModifiers::default());
-        assert_eq!(
-            p.drop_landed(id, &Dropped::default()),
-            None,
-            "nothing arrived"
-        );
-        assert_eq!(
-            log(&p),
-            "enter inner;leave inner;",
-            "the column, shown again, hears no leave of the drop"
-        );
-    }
-}
+#[path = "file_drop_tests.rs"]
+mod tests;

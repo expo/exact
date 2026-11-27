@@ -29,6 +29,8 @@ package final class Presenter {
     package let root = FlippedView(frame: .zero)
     /// The viewport over it: the window's content view, scrolling like a browser's.
     package let viewport = PageScrollView(frame: .zero)
+    /// Whether the scrollers' clip views are a drag's destinations (`syncDragDestinations`).
+    var dragDestinations = false
     package var views: [UInt32: NodeView] = [:]
     /// The page viewport's programmatic element reveal, while AppKit owns its interpolation.
     var pageElementAnimation: UUID?
@@ -1277,6 +1279,7 @@ package final class Presenter {
         if !flightHost.isEmpty { flightHost.batchApplied() }
         tables.sync(batch)
         dataTables.sync(batch)
+        syncDragDestinations()
         // A prepared subtree's gates were read where it stands (`prepareAccessibility`).
         navigation.sync(batch, reparented: stage.map { reparented.subtracting($0.tops.keys) } ?? reparented)
         sidebar.sync(batch)
