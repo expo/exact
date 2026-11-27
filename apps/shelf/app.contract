@@ -138,7 +138,6 @@ component Shelf
   state draftAuthor = ""
   state draftPages = ""
   state draftStatus = "want"
-  state submitted = false
   // The scan's camera track.
   state scanTrack = ""
   // The book a quote is for, the lines its photo read, and the lines turned
@@ -179,7 +178,8 @@ component Shelf
   derive aimedTitle = match first(lib.books.filter(b => b.id == aimed)) { case some(b) => b.title, case none => "This book" }
   derive finished = lib.books.filter(b => b.status == "done").length
   derive owned = lib.books.map(b => b.sourceKey)
-  derive titleError = draftTitle.trim() == "" ? "Enter a title." : ""
+  // Why Save is disabled, in the form's footers (HIG: a sheet disables its confirm until the form is valid)
+  derive titleHint = draftTitle.trim() == "" ? "Enter a title to save." : ""
   derive pagesError = draftPages == "" or wholePages(draftPages) ? "" : "Pages must be a whole number from 1 to 10,000."
   derive inProgress = lib.books.filter(b => b.status == "reading")
   derive indexKey = lib.books.map(b => `${b.id}|${b.title}|${b.author}|${b.status}`).join("\n")
@@ -254,7 +254,6 @@ component Shelf
     draftAuthor = ""
     draftPages = ""
     draftStatus = "want"
-    submitted = false
     nav = push(nav, "/add")
 
   // Library
@@ -319,8 +318,7 @@ component Shelf
     draftPages = found.pages > 0 ? `${found.pages}` : ""
     endScan()
   action save
-    submitted = true
-    if titleError == "" and pagesError == ""
+    if titleHint == "" and pagesError == ""
       let author = draftAuthor.trim() == "" ? "Unknown author" : draftAuthor.trim()
       send added = addBook(draftTitle.trim(), author, pagesValue(draftPages), draftStatus, "", "", time.epochAtZero + performanceNow())
   action addEnded
@@ -552,14 +550,15 @@ component Shelf
                     align-items="center"
                     justify-content="space-between"
                     padding="8px 16px"
-                    button id="back" press=back testId="quote-cancel"
-                      text "Cancel"
+                    button id="back" press=back aria-label="Cancel" testId="quote-cancel"
+                      image "symbol:close"
                     text "Add Quote" role="heading"
                     button press=addQuote
                       buttonStyle="bordered-prominent"
                       disabled=(quoteChosen.length == 0)
+                      aria-label="Add"
                       testId="quote-add"
-                      text "Add"
+                      image "symbol:checkmark"
                   list id="quote-lines" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
                     section testId="quote-list"
                       if quoteLines.length == 0
@@ -589,14 +588,15 @@ component Shelf
                     align-items="center"
                     justify-content="space-between"
                     padding="8px 16px"
-                    button id="back" press=back testId="add-cancel"
-                      text "Cancel"
+                    button id="back" press=back aria-label="Cancel" testId="add-cancel"
+                      image "symbol:close"
                     text "New Book" role="heading"
                     if canScan
                       button press=openScan aria-label="Scan Barcode" testId="scan-barcode"
                         image "symbol:camera"
-                    button press=save buttonStyle="bordered-prominent" disabled=pending(added) testId="add-save"
-                      text "Save"
+                    button press=save buttonStyle="bordered-prominent" aria-label="Save" testId="add-save"
+                      disabled=(titleHint != "" or pagesError != "" or pending(added))
+                      image "symbol:checkmark"
                   list id="add-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
                     section
                       header
@@ -612,8 +612,7 @@ component Shelf
                           testId="add-title"
                           flex=1
                       footer
-                        text (submitted ? titleError : "") color="-exact-system-red"
-                          testId="error-title"
+                        text titleHint testId="title-hint"
                     section
                       header
                         text "Author"
@@ -641,8 +640,7 @@ component Shelf
                           testId="add-pages"
                           flex=1
                       footer
-                        text (submitted ? pagesError : "") color="-exact-system-red"
-                          testId="error-pages"
+                        text pagesError testId="error-pages"
                     section background-color="transparent"
                       StatusControl(
                         status=draftStatus,
@@ -910,8 +908,8 @@ component Scan
         align-items="center"
         justify-content="space-between"
         padding="8px 16px"
-        button press=cancel testId="scan-cancel"
-          text "Cancel"
+        button id="back" press=cancel aria-label="Back" testId="scan-cancel"
+          image "symbol:back"
         text "Scan Barcode" role="heading" aria-level=2
       exact-camera srcObject=track
         aria-label="Viewfinder"
