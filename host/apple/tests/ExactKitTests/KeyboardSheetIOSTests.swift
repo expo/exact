@@ -91,50 +91,64 @@ final class KeyboardSheetIOSTests: XCTestCase {
         }
     }
 
-    /// LLP 1123 D7: a keyboard that rises while UIKit is still presenting the sheet is taken once the presentation
-    /// lands. Until then the route keeps its block and nothing in it animates its place or size: laid out inside the
-    /// keyboard's animation, the shortened content animated inside a container UIKit was still presenting, which
-    /// drew it out of place until the presentation ended. Then the route ends at the keys.
-    func testAKeyboardThatRisesWhileTheSheetPresentsIsTakenWhenThePresentationLands() throws {
+    /// LLP 1123 D2 and D7: while UIKit presents a sheet, everything in it is drawn where it is laid out. The form is
+    /// Shelf's Add Book: its field takes focus as the sheet opens, so the keyboard rises during the presentation and
+    /// shortens the route from its bottom, and its tab list is a segmented control. Laid out inside UIKit's setup of
+    /// the presentation, that control's animation runs UIKit's layout of the sheet early, which holds the list at the
+    /// size it had then until the animation ends, so the content is drawn off its place and then jumps. Then the route
+    /// ends at the keys.
+    func testASheetsContentIsDrawnWhereItIsLaidOutWhileUIKitPresentsIt() throws {
         guard let scene = hostedWindowScene() else {
             throw missing("scene", "a sheet and the system keyboard need the hosted app's window scene")
         }
         let session = try fixture(scene)
         let p = session.presenter
-        p.press(try XCTUnwrap(named("open")).id)
-        until("the sheet's field is up while UIKit presents it") {
-            self.named("name")?.field?.window != nil && p.modalHost.owner?.isBeingPresented == true
-        }
-        let owner = try XCTUnwrap(p.modalHost.owner), field = try XCTUnwrap(named("name")?.field)
-        let route = try XCTUnwrap(p.modalHost.routes.last?.node), container = try XCTUnwrap(route.superview)
-        // What the keyboard takes off the route's block: the route short of its container. UIKit settling the sheet's
-        // own size moves both, the route a frame behind, a few points; the keyboard takes about 300
-        var risen = false, shortened = Set<CGFloat>(), animated = Set<String>()
+        var risen = false
         let rising = NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: nil) { _ in
-            if owner.isBeingPresented { risen = true }
+            if p.modalHost.owner?.isBeingPresented == true { risen = true }
         }
         defer { NotificationCenter.default.removeObserver(rising) }
-        XCTAssertTrue(field.becomeFirstResponder())
-        // Exact's own views, which its layout places; UIKit's text input animates its cursor views itself
-        func motion(in layer: CALayer) {
-            if let node = layer.delegate as? NodeView {
-                for key in layer.animationKeys() ?? [] where ["position", "bounds", "bounds.size"].contains((layer.animation(forKey: key) as? CAPropertyAnimation)?.keyPath ?? "") {
-                    animated.insert("\(node.kind) \(node.id) \(key)")
+        // Each frame the sheet is on screen while UIKit presents it: where each of the route's node views is drawn
+        // against the drawn sheet, to compare with where it is laid out once the presentation lands
+        var drawn: [(frame: Int, id: UInt32, at: CGPoint)] = [], frames = 0
+        let each = EachFrame {
+            guard let owner = p.modalHost.owner, owner.isBeingPresented, let sheet = p.modalHost.coordinateView,
+                  let route = p.modalHost.routes.last?.node, route.window != nil, let window = sheet.window,
+                  let shown = sheet.layer.presentation()?.convert(CGPoint.zero, to: nil), shown.y < window.bounds.height - 1 else { return }
+            frames += 1
+            func walk(_ view: UIView) {
+                guard !view.isHidden, view.alpha > 0 else { return }
+                // A view moved in this turn (a row carried into its cell) is drawn under its old parent until the
+                // turn commits
+                if let node = view as? NodeView, let layer = node.layer.presentation(), layer.superlayer?.model() === node.layer.superlayer {
+                    let at = layer.convert(CGPoint.zero, to: nil)
+                    drawn.append((frames, node.id, CGPoint(x: at.x - shown.x, y: at.y - shown.y)))
                 }
+                view.subviews.forEach(walk)
             }
-            layer.sublayers?.forEach(motion)
+            walk(route)
         }
-        until("the presentation lands") {
-            if owner.isBeingPresented { shortened.insert((container.bounds.height - route.bounds.height).rounded()); motion(in: route.layer) }
-            return !owner.isBeingPresented
-        }
+        let link = CADisplayLink(target: each, selector: #selector(EachFrame.tick))
+        link.add(to: .main, forMode: .common)
+        p.press(try XCTUnwrap(named("open-form")).id)
+        until("the presentation begins") { p.modalHost.owner?.isBeingPresented == true }
+        let owner = try XCTUnwrap(p.modalHost.owner)
+        until("the presentation lands") { !owner.isBeingPresented }
+        link.invalidate()
         XCTAssertTrue(risen, "the keyboard rose while the sheet was being presented")
-        XCTAssertLessThan(shortened.max() ?? 0, 100, "the keyboard takes nothing off the route's block while UIKit presents it")
-        XCTAssertEqual(animated, [], "no view of the route's animates its place or size while UIKit presents it")
+        XCTAssertGreaterThan(frames, 0, "frames were drawn while the sheet slid up")
+        let sheet = try XCTUnwrap(p.modalHost.coordinateView), route = try XCTUnwrap(p.modalHost.routes.last?.node)
         until("then the route ends at the keys") {
             guard let top = p.keyboardTop else { return false }
             return abs(route.convert(route.bounds, to: nil).maxY - top) < 1
         }
+        let laid = Dictionary(p.views.values.filter { $0.window != nil }.map { ($0.id, $0.convert(CGPoint.zero, to: sheet)) }) { a, _ in a }
+        let off = drawn.compactMap { d in laid[d.id].map { (d, max(abs(d.at.x - $0.x), abs(d.at.y - $0.y))) } }.max { $0.1 < $1.1 }
+        if let (d, distance) = off {
+            let node = p.views[d.id]
+            XCTAssertLessThan(distance, 1, "\(node?.kind ?? "?") \(d.id) \(node?.props["testId"] ?? "") was drawn at \(d.at) on frame \(d.frame) of \(frames), laid out at \(laid[d.id] ?? .zero)")
+        }
+        XCTAssertNotNil(off, "the route's node views were sampled")
     }
 
     /// A dialog sheet's editor: the page is not avoided under it (the sheet
@@ -160,5 +174,11 @@ final class KeyboardSheetIOSTests: XCTestCase {
         wait(for: [hidden], timeout: 10)
         until("the overlap is 0 again") { (try? self.viewport()["keyboardHeight"] as? Double) == 0 }
     }
+}
+/// A display link's target, which a run of the run loop calls each frame.
+private final class EachFrame: NSObject {
+    private let body: () -> Void
+    init(_ body: @escaping () -> Void) { self.body = body }
+    @objc func tick() { body() }
 }
 #endif

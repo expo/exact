@@ -182,6 +182,26 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     // Exact's own writes settle (LLP 1123 D11).
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        // While UIKit presents the route it changes the safe area from inside the presentation's setup, as it adds the
+        // sheet to the window, having armed the transition's alongside animations to run at the end of the next
+        // animation block. Laid out there, a control of the route's animates (a segmented control's indicator), which
+        // runs UIKit's layout of the sheet early, inside that animation: it holds the route's scroller at the size it
+        // had then until the animation ends, over Exact's layout from the sheet's own size and safe area. A native view
+        // only invalidates its layout here; the route takes its safe area in UIKit's next layout pass.
+        if inPresentation {
+            safeAreaOwed = true
+            viewIfLoaded?.setNeedsLayout()
+            return
+        }
+        takeSafeArea()
+    }
+    /// A safe-area change that came while UIKit presented the route, taken in its next layout (`viewDidLayoutSubviews`).
+    private var safeAreaOwed = false
+    /// Whether UIKit is presenting the route's controller or a container holding it.
+    private var inPresentation: Bool {
+        sequence(first: self as UIViewController, next: \.parent).contains { $0.isBeingPresented }
+    }
+    private func takeSafeArea() {
         SafeAreaSteps.react(self) { [weak self] in
             self?.rideBars()
             self?.host?.coversChanged()
@@ -223,6 +243,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     // Its route is laid out in this view's bounds (LLP 1123 D2).
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if safeAreaOwed {
+            safeAreaOwed = false
+            takeSafeArea()
+        }
         fitContentViewport()
         host?.presenter.owners.publish()
         if scrollEdgesOwed { host?.settleScrollEdges() }

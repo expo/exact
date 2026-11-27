@@ -293,22 +293,6 @@ package final class OwnerBlocks {
         }
     }
 
-    #if !os(tvOS)
-    /// The presentation a keyboard's refit waits for (`block(in:)`).
-    private weak var keyboardAwaits: (any UIViewControllerTransitionCoordinator)?
-
-    /// Refit the keyboard when `transition` ends, through UIKit's coordinator. Skip a transition already awaited: its
-    /// refit reads the keyboard as it is when the presentation ends, so this call loses nothing.
-    private func refitKeyboard(after transition: any UIViewControllerTransitionCoordinator) {
-        guard keyboardAwaits !== transition else { return }
-        keyboardAwaits = transition
-        transition.animate(alongsideTransition: nil) { [weak self] _ in
-            self?.keyboardAwaits = nil
-            self?.presenter.refitKeyboard()
-        }
-    }
-    #endif
-
     /// A native route keeps its controller's bounds and avoids only its own keyboard.
     /// Authored chrome keeps the document's allocation.
     package func block(in view: UIView) -> CGRect {
@@ -325,13 +309,6 @@ package final class OwnerBlocks {
         #if !os(tvOS)
         if let sheet = presenter.modals.coordinateView, view.isDescendant(of: sheet),
            let top = presenter.keyboardGuideTop(in: sheet) {
-            // Take a keyboard that rises while UIKit is still presenting the sheet once the presentation lands: laid
-            // out now, inside UIKit's keyboard animation, the shortened content animates inside a container UIKit is
-            // still presenting, which draws it out of place until the presentation ends
-            if let owner = presenter.modals.owner, owner.isBeingPresented, let transition = owner.transitionCoordinator {
-                refitKeyboard(after: transition)
-                return block
-            }
             let end = view.convert(CGPoint(x: 0, y: top), from: sheet).y
             block.size.height = max(0, min(block.height, end - block.minY))
         } else if presenter.keyboardPolicy == "resizes-content", let top = presenter.keyboardTop, let window = view.window {
