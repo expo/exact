@@ -997,9 +997,8 @@ impl Em<'_> {
         {
             attrs.push(("tabindex".into(), "0".into()));
         }
-        // A `symbol`'s content is drawn as `use`'s clones, which Chrome
-        // styles from their own attributes, not the page's class rules: its
-        // static rows go inline too (the live host writes every row inline).
+        // A `symbol`'s content is drawn as `use`'s clones, which Chrome styles from their own attributes, not the page's
+        // class rules: its static rows go inline too (the live host writes every row inline).
         if !css.is_empty() && self.in_symbol(i) {
             attrs.push(("style".into(), format!("{css}{presence}")));
         } else if !presence.is_empty() {
@@ -1158,8 +1157,7 @@ impl Em<'_> {
             if b.kind == BindingKind::Prop && b.id == PropId::FocusGuide as u16 {
                 continue;
             }
-            // Nor have the system bars (LLP 1105 D7), interactive glass,
-            // a menu's order or a tip (LLP 1035.006.000 D4).
+            // Nor have the system bars (LLP 1105 D7), interactive glass, a menu's order or a tip (LLP 1035.006.000 D4).
             // A zoomable scroller's zoom is zoom.js's; no other scroller has one.
             if b.kind == BindingKind::Prop && b.id == PropId::ScrollZoom as u16 {
                 if zoomable {
@@ -1493,9 +1491,8 @@ impl Em<'_> {
     }
 }
 
-/// A drag's `url`, `files` or files and names: bound even when constant, for
-/// `drag.js`'s hooks to admit as the runner does on other hosts (LLP 1094.000
-/// D1, D2, D14).
+/// A drag's `url`, `files` or files and names: bound even when constant, for `drag.js`'s hooks to admit as the
+/// runner does on other hosts (LLP 1094.000 D1, D2, D14).
 pub fn admitted_on_the_page(id: u16) -> bool {
     id == PropId::DataTransferUrl as u16
         || id == PropId::DataTransferFiles as u16

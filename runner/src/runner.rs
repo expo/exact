@@ -601,9 +601,8 @@ pub struct Runner<D: DataSource> {
     geometry: geometry_facts::Facts,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     platform: crate::page::Platform,
-    // @ref LLP 1094.000 D2 — each node's standing drag refusals, by its url
-    // or its files, each by what was refused, so a refusal is journaled once
-    // while it stands.
+    // @ref LLP 1094.000 D2 — each node's standing drag refusals, by its url or its files, each by what was refused,
+    // so a refusal is journaled once while it stands.
     drag_refused: std::collections::HashMap<(exact_kernel::ViewId, bool), Vec<String>>,
     page: crate::page::Page,
     presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)
@@ -1439,11 +1438,9 @@ impl<D: DataSource> Runner<D> {
         self.full = full;
     }
 
-    /// Rebind a list row that leaves the window to the item the window
-    /// needs next, instead of destroying it and building one (LLP 1078; off
-    /// by default). The receipts name every view of a rebound row
-    /// `renewed`: a host that turns this on resets what it keeps by view
-    /// for each of them, as for a new one.
+    /// Rebind a list row that leaves the window to the item the window needs next, instead of destroying it and
+    /// building one (LLP 1078; off by default). The receipts name every view of a rebound row `renewed`: a host that
+    /// turns this on resets what it keeps by view for each of them, as for a new one.
     pub fn set_row_reuse(&mut self, on: bool) {
         self.reuse = on;
     }
