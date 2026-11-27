@@ -42,11 +42,13 @@ public enum ExactContentIndex {
         var entries: [[String: JSONValue]] = []
         /// Keys whose change Spotlight has not acknowledged.
         var pending: [String] = []
+        var hidden: [String]?
     }
     private static var mirror: Mirror?
     private static var installed = false
     /// The keys whose change is pending, as the mirror marks them.
     static var pendingKeys: [String] { load().pending }
+    static var appliedHiddenKinds: [String] { load().hidden ?? [] }
 
     /// The mirror's file, in the app's container; a test names its own and forgets what was read.
     static var file: URL = {
@@ -59,6 +61,8 @@ public enum ExactContentIndex {
     static var widgetKinds = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetEntities") as? [String] ?? []
     static var widgetRoot = WidgetContainer.root { didSet { published = nil } }
     private static var published: [String: [ContentIndexEntries.Entry]]?
+    static var hiddenKinds = Set(Bundle.main.object(forInfoDictionaryKey: "ExactSearchHiddenKinds") as? [String] ?? [])
+    static func searchable(_ e: [String: JSONValue]) -> Bool { !hiddenKinds.contains(e["kind"]?.string ?? "") }
 
     static func install() {
         guard !installed else { return }
@@ -85,7 +89,7 @@ public enum ExactContentIndex {
         }
         #if canImport(CoreSpotlight) && !os(tvOS)
         index.indexDelegate = Reindexer.shared
-        DispatchQueue.main.async { finishPending() }
+        DispatchQueue.main.async { finishPending(); applyHiddenKinds() }
         #endif
     }
 
@@ -233,11 +237,14 @@ public enum ExactContentIndex {
     private static var told = 0
 
     /// Spotlight told, and each key unmarked once it answers.
-    private static func tell(changed: [[String: JSONValue]], gone: [String]) {
+    private static func tell(changed all: [[String: JSONValue]], gone: [String]) {
         told += 1
         let stamp = told
-        for k in changed.map(key) + gone { stamps[k] = stamp }
+        for k in all.map(key) + gone { stamps[k] = stamp }
         let done = { (keys: [String]) in DispatchQueue.main.async { acknowledge(keys, stamp: stamp) } }
+        let changed = all.filter(searchable)
+        let kept = all.filter { !searchable($0) }.map(key)
+        if !kept.isEmpty { done(kept) }
         if !changed.isEmpty {
             index.indexSearchableItems(changed.map(item)) { error in
                 if let error { ExactContentIndex.log("contentIndex: Spotlight refused \(changed.count) entries: \(error.localizedDescription)") } else { done(changed.map(key)) }
@@ -261,6 +268,28 @@ public enum ExactContentIndex {
         save(m)
     }
 
+    static func applyHiddenKinds() {
+        var m = load()
+        let applied = Set(m.hidden ?? [])
+        let returned = applied.subtracting(hiddenKinds)
+        if !returned.isEmpty {
+            m.hidden = applied.intersection(hiddenKinds).sorted()
+            ExactContentIndex.log("contentIndex: kinds back in search \(returned.sorted()) told to Spotlight again")
+            publish(&m, changed: m.entries.filter { returned.contains($0["kind"]?.string ?? "") }, gone: [])
+        }
+        let added = hiddenKinds.subtracting(applied).sorted()
+        guard !added.isEmpty else { return }
+        index.deleteSearchableItems(withDomainIdentifiers: added) { error in
+            if let error { return ExactContentIndex.log("contentIndex: Spotlight kept the kinds kept out of search \(added): \(error.localizedDescription)") }
+            DispatchQueue.main.async {
+                var m = load()
+                m.hidden = Set(m.hidden ?? []).union(added).intersection(hiddenKinds).sorted()
+                save(m)
+                ExactContentIndex.log("contentIndex: kinds kept out of search \(added) removed from Spotlight")
+            }
+        }
+    }
+
     /// What a crash left between the mirror and Spotlight, finished.
     private static func finishPending() {
         let m = load()
@@ -276,7 +305,7 @@ public enum ExactContentIndex {
         static let log = Logger(subsystem: "dev.exact", category: "search")
         func searchableIndex(_ searchableIndex: CSSearchableIndex, reindexAllSearchableItemsWithAcknowledgementHandler acknowledgementHandler: @escaping () -> Void) {
             DispatchQueue.main.async {
-                let all = ExactContentIndex.load().entries
+                let all = ExactContentIndex.load().entries.filter(ExactContentIndex.searchable)
                 Self.log.log("reindex all: \(all.count) entries from the mirror")
                 ExactContentIndex.index.indexSearchableItems(all.map(ExactContentIndex.item)) { _ in acknowledgementHandler() }
             }
@@ -284,7 +313,7 @@ public enum ExactContentIndex {
         func searchableIndex(_ searchableIndex: CSSearchableIndex, reindexSearchableItemsWithIdentifiers identifiers: [String], acknowledgementHandler: @escaping () -> Void) {
             DispatchQueue.main.async {
                 let wanted = Set(identifiers)
-                let some = ExactContentIndex.load().entries.filter { wanted.contains(ExactContentIndex.key($0)) }
+                let some = ExactContentIndex.load().entries.filter { wanted.contains(ExactContentIndex.key($0)) && ExactContentIndex.searchable($0) }
                 Self.log.log("reindex \(identifiers.count) items: \(some.count) in the mirror")
                 ExactContentIndex.index.indexSearchableItems(some.map(ExactContentIndex.item)) { _ in acknowledgementHandler() }
             }

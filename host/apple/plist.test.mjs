@@ -17,6 +17,17 @@ const impl = (plistKeys) => [{ extension: 'purchases', plistKeys }];
 const flat = (plist) => plist.replace(/>\s+</g, '><');
 const KEY = /<key>SKIncludeConsumableInAppPurchaseHistory<\/key><true\/>/;
 
+test('the kinds kept out of search are an Info.plist key on iOS and the Mac, widgets or not', () => {
+  const app = { id: 'dev.exact.lists', displayName: 'Lists', name: 'lists', manifest: { intents: { entities: {
+    task: { title: 'Task' }, list: { title: 'List', search: false }, unit: { title: 'Unit', search: false }, tag: { title: 'Tag', search: true } } } } };
+  const key = /<key>ExactSearchHiddenKinds<\/key><array><string>list<\/string><string>unit<\/string><\/array>/;
+  assert.match(flat(infoPlist(app)), key);
+  assert.match(flat(macInfoPlist(app)), key);
+  assert.doesNotMatch(infoPlist(app, false, { tv: true }), /ExactSearchHiddenKinds/);
+  assert.doesNotMatch(infoPlist({ ...app, manifest: { intents: { entities: { task: { title: 'Task' } } } } }), /ExactSearchHiddenKinds/);
+  assert.match(appleMetadataProblem('host.ios.infoPlist.ExactSearchHiddenKinds: not a known key'), /Exact writes this key itself/);
+});
+
 test('Bluetooth usage is localized on Apple and its background mode is iOS only', () => {
   const app = { id: 'dev.exact.strap', displayName: 'Strap', name: 'strap', manifest: {} };
   const reach = { base: 'en', locales: ['en', 'fr'], usage: {

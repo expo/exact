@@ -146,6 +146,41 @@ final class ContentIndexTests: XCTestCase {
         XCTAssertEqual(ExactContentIndex.pendingKeys, [])
     }
 
+    func testAKindKeptOutOfSearchIsAnsweredButNeverWaitsOnSpotlight() {
+        ExactContentIndex.hiddenKinds = ["shelf"]
+        defer { ExactContentIndex.hiddenKinds = [] }
+        XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("reading", "Reading", "")]))
+        XCTAssertEqual(query("shelf"), ["reading"], "widget rows and tool parameters still read it")
+        let drained = expectation(description: "main queue")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.pendingKeys, [], "a kept entry is settled without Spotlight's answer")
+    }
+
+    func testAKindBackInSearchIsToldAgainAndANewlyKeptKindIsDeletedByDomainOnce() throws {
+        XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("reading", "Reading", "")]))
+        ExactContentIndex.hiddenKinds = ["shelf"]
+        defer { ExactContentIndex.hiddenKinds = [] }
+        ExactContentIndex.applyHiddenKinds()
+        let applied = expectation(description: "Spotlight deleted the shelf domain")
+        func poll() {
+            ExactContentIndex.file = ExactContentIndex.file
+            if ExactContentIndex.appliedHiddenKinds == ["shelf"] { return applied.fulfill() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: poll)
+        }
+        poll()
+        wait(for: [applied], timeout: 20)
+        let stamp = ExactContentIndex.stamps["shelf:reading"]
+        ExactContentIndex.applyHiddenKinds()
+        XCTAssertEqual(ExactContentIndex.stamps["shelf:reading"], stamp, "an applied set is not applied again")
+        ExactContentIndex.hiddenKinds = []
+        ExactContentIndex.applyHiddenKinds()
+        XCTAssertNotEqual(ExactContentIndex.stamps["shelf:reading"], stamp, "a kind back in search is told again")
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.appliedHiddenKinds, [])
+    }
+
     /// A change the mirror could not write is not told to Spotlight.
     func testAChangeTheMirrorCouldNotWriteIsNotTold() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

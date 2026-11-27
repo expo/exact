@@ -22,7 +22,7 @@ import { assertLibraryNames, placeLibrary } from '../../scripts/package-librarie
 import { embedWatch, watchProfiles, watchSyncKeys, watchSyncSelected } from './watch.mjs';
 import { fileURLToPath } from 'node:url';
 // The App Intents module the bundle places, built before the executable links it (LLP 1133.023 D8).
-export { buildIntents, shortcutKeys } from './intents.mjs';
+export { buildIntents, shortcutKeys, searchKeys } from './intents.mjs';
 import { offeredControls } from './controls.mjs';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 

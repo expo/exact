@@ -15,7 +15,7 @@ import { canPromptInteractive, resolveHumanSimulator } from './sim-pick.mjs';
 import { launchAndOptionallyStream } from './sim-logs.mjs';
 import { canFastSimulatorRun, tryFastSimulatorRun } from './fast-run.mjs';
 import { platformWidgetEntries, widgetEntityKeys, activityEntries, hasEntries, widgetGroup, prepareWidgetCore, sharedWidgetCore, placeCoreFramework, dropLeftoverCore, entryProfiles, alarmActivity } from './widgets.mjs';
-import { assembleMac, assembleIOS, buildIntents, shortcutKeys, placeMacDylibs } from './bundle.mjs';
+import { assembleMac, assembleIOS, buildIntents, shortcutKeys, searchKeys, placeMacDylibs } from './bundle.mjs';
 import { embedArmReach, writeEmbedBundle } from './embed.mjs';
 import { EXTENSION_KINDS, assertNotificationServiceGrants, extensionKinds, notificationService, notificationServiceDirectory, notificationServicePlatformRefusal, staleModuleCache, withoutExtensions } from './extensions.mjs';
 import { buildWatch, watchCompanion, watchProfiles, watchSyncSelected } from './watch.mjs';
@@ -435,7 +435,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
   // An App Clip is opened through its associated domains, never a URL scheme (Apple, "Choosing the right
   // functionality for your App Clip"), so the clip registers none: the full app owns the schemes and the dev link.
   if (clip) dict.NSAppClip = { NSAppClipRequestEphemeralUserNotification: false, NSAppClipRequestLocationConfirmation: false };
-  else Object.assign(dict, openingLinks({ ...app, widgetTV: tv, widgetHost: id !== app.id }, 'ios', development, distributed), shortcutKeys(app, tv ? 'tvos' : 'ios'));
+  else Object.assign(dict, openingLinks({ ...app, widgetTV: tv, widgetHost: id !== app.id }, 'ios', development, distributed), shortcutKeys(app, tv ? 'tvos' : 'ios'), searchKeys(app, tv ? 'tvos' : 'ios'));
   Object.assign(dict, updateActivation(app));
   Object.assign(dict, usageKeys(reach), localizationKeys(reach));
   Object.assign(dict, icon);
@@ -514,7 +514,7 @@ export const macInfoPlist = (app, { development = null, icon = {}, reach = null,
   ExactLaunchMode: launchMode(app),
   ...startLocation(app), ...declaredOrigin(app),
   ...updateActivation(app), ...interfaceStyle(app, true), ...layoutDirection(app), ...storeKeys(app, 'macos'),
-  ...openingLinks(app, 'macos', development, distributed), ...shortcutKeys(app, 'macos'),
+  ...openingLinks(app, 'macos', development, distributed), ...shortcutKeys(app, 'macos'), ...searchKeys(app, 'macos'),
   ...(app.manifest.host?.macos?.oneTimeCodeAutofill === 'marked' ? { NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true } : {}),
 }, reach), vendor ? app.manifest : null, 'macos', reach?.packages));
 /** The build receipt (LLP 1030 D2): what this binary was actually built from and with — the toolchain, the SDK, the identity and profile, the entitlements as signed — written beside it, never committed, so "what did this binary contain" is answered by a file. */

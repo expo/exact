@@ -23,7 +23,7 @@
   ],
   "intents": {
     "entities": {
-      "shelf": { "title": "Shelf" },
+      "shelf": { "title": "Shelf", "search": false },
       "book": { "title": "Book", "within": "shelf" }
     },
     "tools": {

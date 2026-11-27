@@ -948,7 +948,21 @@ that kind that the app last published with `setContentIndex`
 when the sheet opens, so the list is as fresh as the app's last publication.
 Publish again when the content changes, and publish an empty list when the
 person signs out. The entries are in the system's search too, as every
-content-index entry is.
+content-index entry is, unless the kind says `"search": false`
+(LLP 1126.005 D3):
+
+```json
+"intents": {"entities": {"shelf": {"title": "Shelf", "search": false}}}
+```
+
+Such a kind's entries serve widget rows, tool parameters and
+`contentIndexEntries` as before, and the app never gives them to Core
+Spotlight. Each still needs a `url` that starts with `/`, because a tool or
+the app may open it; name the page that lists or filters by it (Shelf's
+shelves open the library). An update that adds `"search": false` removes the
+kind's entries from Spotlight once, at the next launch, and one that removes it
+gives them to Spotlight again. Android has no system search for app content, so
+nothing changes there.
 
 In the shape the field is `option<string>`: `none` until the person chooses, then
 the entry's `id`. The refresh receives the same field (`string | null` in

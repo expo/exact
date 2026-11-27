@@ -221,6 +221,16 @@ fn an_entity_kinds_relations_require_a_new_binary_cohort() {
         build(&within),
         "a row that follows another is a generated query"
     );
+    let mut hidden = manifest.clone();
+    hidden.json["intents"]["entities"]["shelf"]["search"] = serde_json::json!(false);
+    assert_ne!(
+        original,
+        build(&hidden),
+        "the kinds kept out of search are an Info.plist key"
+    );
+    let mut searchable = manifest.clone();
+    searchable.json["intents"]["entities"]["shelf"]["search"] = serde_json::json!(true);
+    assert_eq!(original, build(&searchable), "search is the default");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

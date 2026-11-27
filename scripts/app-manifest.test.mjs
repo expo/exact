@@ -274,6 +274,8 @@ test('a widget declares fixed enum choices and content-index entity choices', as
     }
     assert.deepEqual(read([entity], { shelf: { title: 'Shelf' }, book: { title: 'Book', within: 'shelf' } }), [entity]);
     for (const within of ['', 7]) assert.throws(() => read([entity], { book: { title: 'Book', within } }), /entities/, JSON.stringify(within));
+    assert.deepEqual(read([entity], { book: { title: 'Book', search: false } }), [entity]);
+    assert.throws(() => read([entity], { book: { title: 'Book', search: 'no' } }), /entities/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

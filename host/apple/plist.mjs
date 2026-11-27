@@ -366,6 +366,7 @@ export function appleMetadataOwners() {
     [['ios'], ['GCSupportsGameMode']],
     [['ios'], ['UIApplicationShortcutItems']],
     [['macos'], ['ExactShortcutItems']],
+    [['ios', 'macos'], ['ExactSearchHiddenKinds']],
     [['ios'], ['NSAppClip']],
     [['ios', 'macos'], ['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetEntities', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup', 'ExactWatchSync']],
     [['ios'], ['NSSupportsLiveActivities', 'NSSupportsLiveActivitiesFrequentUpdates']],
