@@ -97,13 +97,14 @@ extension GroupedListHost {
 
 extension GroupedListView {
     /// Whether row `node`'s press is its cell's highlight: a standard row's
-    /// always, a custom row's where its author left the press to the
-    /// platform, which elsewhere dims it (LLP 1084 §4, LLP 1115.000 D16). A
-    /// custom row with a ground of its own would cover the highlight, so it
-    /// dims, as a plain list's row does.
+    /// always; a custom row's where the list presses it (a `button` or `link`
+    /// row) and its author left the press to the platform, which elsewhere
+    /// dims it (LLP 1084 §4, LLP 1115.000 D16). A custom row with a ground of
+    /// its own would cover the highlight, so it dims, as a plain list's row
+    /// does.
     static func pressIsCells(_ row: GroupedListModel.Row, _ node: NodeView?) -> Bool {
         guard row.custom else { return true }
-        guard let node, node.platformPressDims else { return false }
+        guard row.pressable, let node, node.platformPressDims else { return false }
         return !node.wrote("background_color") && !node.wrote("background_image")
     }
 

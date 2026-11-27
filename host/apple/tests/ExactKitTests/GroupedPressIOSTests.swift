@@ -6,9 +6,8 @@ import XCTest
 
 final class GroupedPressIOSTests: GroupedListFixture {
     /// A custom row whose author left its press to the platform shows it as
-    /// its cell's highlight, not a dim, through a batch that configures its
-    /// cell again, while the finger stays on it (LLP 1084 §4, LLP 1115.000
-    /// D16).
+    /// its cell's highlight, not a dim, through UIKit configuring its cell
+    /// again, while the finger stays on it (LLP 1084 §4, LLP 1115.000 D16).
     func testAHeldCustomRowIsItsCellsHighlight() throws {
         let p = presenter { self.model(custom: true) }
         let row = try XCTUnwrap(p.views[21])
@@ -17,8 +16,12 @@ final class GroupedPressIOSTests: GroupedListFixture {
         row.pressed = true
         XCTAssertTrue(try held(), "the cell highlights")
         XCTAssertNil(row.layer.animation(forKey: "pressDim"), "the row does not dim")
-        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 255, 255]]]]))
-        XCTAssertTrue(try held(), "a batch keeps the highlight")
+        let l = try list(p)
+        try XCTUnwrap(try cell(p, 21) as? GroupedCell).forcedPressed = false
+        var snapshot = l.source.snapshot()
+        snapshot.reconfigureItems([21])
+        l.source.apply(snapshot, animatingDifferences: false)
+        XCTAssertTrue(try held(), "configuring the cell again shows the held press")
         row.pressFollows(inside: false)
         XCTAssertFalse(try held(), "a finger that leaves the row lets it go")
         row.pressFollows(inside: true)
@@ -60,6 +63,37 @@ final class GroupedPressIOSTests: GroupedListFixture {
         row.pressed = true
         XCTAssertFalse(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
         row.pressed = false
+    }
+
+    /// A custom row the list does not press (a box with a press handler)
+    /// keeps its dim: its cell takes no highlight.
+    func testACustomRowTheListDoesNotPressDims() throws {
+        let p = presenter {
+            var m = self.model(custom: true)
+            m.sections[1].rows[1].pressable = false
+            return m
+        }
+        let row = try XCTUnwrap(p.views[21])
+        row.pressed = true
+        XCTAssertFalse(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        XCTAssertNotNil(row.layer.animation(forKey: "pressDim"), "the row dims")
+        row.pressed = false
+    }
+
+    /// In a card-less section, where a cell is clear at rest, a held custom
+    /// row's cell draws UIKit's highlight, as a standard row's does.
+    func testAHeldCustomRowInACardlessSectionDrawsItsCellsHighlight() throws {
+        let p = presenter {
+            var m = self.model(custom: true)
+            m.sections[1].card = false
+            return m
+        }
+        let row = try XCTUnwrap(p.views[21])
+        XCTAssertEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear)
+        row.pressed = true
+        XCTAssertNotEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear, "highlighted on the list's background")
+        row.pressed = false
+        XCTAssertEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear)
     }
 
     /// A custom row with a background of its own would cover its cell's
