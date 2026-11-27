@@ -911,13 +911,19 @@ component Scan
         button id="back" press=cancel aria-label="Back" testId="scan-cancel"
           image "symbol:back"
         text "Scan Barcode" role="heading" aria-level=2
+      // The viewfinder is a card inside the platform's layout margins, its
+      // corners the platform's large radius on Apple's continuous curve.
       exact-camera srcObject=track
         aria-label="Viewfinder"
         testId="scan-viewfinder"
         object-fit="cover"
         flex=1
         min-height=0
-        width="100%"
+        margin-left="max(space.md, env(-exact-layout-margins-inset-left))"
+        margin-right="max(space.md, env(-exact-layout-margins-inset-right))"
+        border-radius="radius.lg"
+        corner-shape="-exact-continuous"
+        overflow="hidden"
       column gap=8 padding=16 align-items="center" testId="scan-result"
         if isbn == ""
           text "Point the camera at the barcode on the back of the book" text-align="center"
