@@ -54,14 +54,14 @@ final class NavigationRefitIOSTests: XCTestCase {
         let (session, owner) = try fixture(scene)
         let fitted = session.presenter.navigationHost.ownerFrame(owner, in: try XCTUnwrap(owner.view.superview))
         let off = fitted.insetBy(dx: 0, dy: 80)
-        owner.view.frame = off
-        if owner.traitCollection.placesVerticalBar, owner.view.frame == fitted {
-            throw XCTSkip("an iPhone Duo's tab bar controller lays its view out as its frame changes (its adaptive style for the vertical bar), and the route publishing its block in that layout fits the container again at once, so no frame is left for a return to the foreground to refit")
-        }
+        // The frame is moved through the view's layer, as UIKit leaves a container sized for the other display while the
+        // scene is in the background: through the view's own frame, an iPhone Duo's tab bar controller (its adaptive
+        // style for the vertical bar) lays its view out at once, and the route's block fits it again before any return
+        owner.view.layer.frame = off
         NotificationCenter.default.post(name: UIScene.willEnterForegroundNotification, object: nil)
         XCTAssertEqual(owner.view.frame, off, "a return to the foreground of no scene of the view's")
         for name in [UIScene.willEnterForegroundNotification, UIScene.didActivateNotification] {
-            owner.view.frame = off
+            owner.view.layer.frame = off
             NotificationCenter.default.post(name: name, object: scene)
             XCTAssertEqual(owner.view.frame, fitted, "\(name.rawValue) for the view's scene")
         }

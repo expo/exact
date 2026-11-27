@@ -9,10 +9,6 @@ import XCTest
 /// toolbar sits on the keys under the root's default `resizes-content`, and
 /// `exactViewport().keyboardHeight` is the overlap the presenter reads
 /// from the keyboard's layout guide, told with the view and back to 0.
-private extension Array {
-    var nilIfEmpty: Self? { isEmpty ? nil : self }
-}
-
 final class KeyboardSheetIOSTests: XCTestCase {
     private var window: UIWindow?
     private var session: ExactSession?
@@ -174,7 +170,11 @@ final class KeyboardSheetIOSTests: XCTestCase {
         let container = try XCTUnwrap(sequence(first: list as UIView, next: \.superview).first { $0.next is UIViewController })
         let side = container.safeAreaInsets.right, box = list.convert(list.bounds, to: container).maxX
         let reached = try XCTUnwrap(collection.superview).convert(collection.frame, to: container).maxX
-        if container.traitCollection.placesVerticalBar { XCTAssertGreaterThan(side, 0, "an iPhone Duo's sheet clears the vertical bar's strip") }
+        if container.traitCollection.placesVerticalBar {
+            // On an iPhone Duo the case is the one this tests: the list's edge meets the sheet's clearance of the strip
+            XCTAssertGreaterThan(side, 0, "an iPhone Duo's sheet clears the vertical bar's strip")
+            XCTAssertEqual(box, container.bounds.maxX - side, accuracy: 0.5, "the list's box ends at the sheet's clearance")
+        }
         if side > 0, abs(container.bounds.maxX - side - box) < 0.5 {
             XCTAssertEqual(reached, container.bounds.maxX, accuracy: 0.5, "the list reaches the sheet's edge, \(side) past its box")
             XCTAssertEqual(collection.verticalScrollIndicatorInsets.right, 0, accuracy: 0.5, "its indicator at that edge")
@@ -212,5 +212,8 @@ private final class EachFrame: NSObject {
     private let body: () -> Void
     init(_ body: @escaping () -> Void) { self.body = body }
     @objc func tick() { body() }
+}
+private extension Array {
+    var nilIfEmpty: Self? { isEmpty ? nil : self }
 }
 #endif
