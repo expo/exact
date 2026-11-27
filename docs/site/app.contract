@@ -243,6 +243,7 @@ component App
   mutation address as shape Address then copyAddress
   mutation toolDestination as shape ToolDestination then openToolPage
   state searchOpen = false
+  state staleCloses = 0
   state query = ""
   state term = ""
   state chosen = 0
@@ -341,7 +342,7 @@ component App
   task revealing mount
     after(300, revealAtLoad)
   action revealAtLoad
-    if inSidebar(site, top(nav).name)
+    if fragment(top(nav)) == "" and inSidebar(site, top(nav).name)
       scrollIntoView(`nav-${top(nav).name}`, block="center", behavior="instant")
   task clearing when copied or linked or copiedId != "" key=copies
     after(2000, clearCopied)
@@ -402,11 +403,16 @@ component App
   action toggleNav(route: string)
     navToggled = navToggled.includes(route) ? navToggled.filter(x => x != route) : navToggled.concat([route])
   action openSearch
+    if searchOpen
+      staleCloses = staleCloses + 1
     searchOpen = true
     showModal("search")
     focus("search-input")
   action searchClosed
-    searchOpen = false
+    if staleCloses > 0
+      staleCloses = staleCloses - 1
+    else
+      searchOpen = false
   action ask(v: string)
     query = v
     chosen = 0
