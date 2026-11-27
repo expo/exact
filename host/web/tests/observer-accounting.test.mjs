@@ -167,13 +167,14 @@ const CHILD = `<!doctype html><style>body { margin: 0 }</style><div id="box" sty
   </script>`;
 
 // A 100-point box in a clip 50.48 wide at a device pixel ratio of 3, sampled, the clip then narrowed to 50: the
-// intersection crosses the observer's 0.502, a change a sample of whole-point edges would take for its own
+// intersection crosses the observer's 0.502 and still intersects, a change a sample of whole-point edges would take for
+// its own
 const FRACTIONAL = `<!doctype html><style>body { margin: 0 }</style>
   <div id="clip" style="position:absolute;top:0;left:0;width:50.48px;height:100px;overflow:hidden"><div id="box" style="width:100px;height:100px"></div></div>
   <script type="module">
     import { account } from '/accounting.js';
     const $ = (id) => document.getElementById(id), books = account(), frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const seen = [], io = new IntersectionObserver((entries) => seen.push(...entries), { threshold: [0.502] });
+    const seen = [], io = new IntersectionObserver((entries) => seen.push(...entries), { threshold: [0, 0.502] });
     io.observe($('box'));
     await frame();
     books.sample([$('box')], 1);

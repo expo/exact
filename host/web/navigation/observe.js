@@ -203,17 +203,19 @@ export function moving(readers, animations = document.getAnimations()) {
     || (a.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 || against(r, a)));
 }
 
-/** Measure the readers an animation moves each frame while one runs (D17), in rounds as a commit's, until none moves
- * them; returns a function that stops it. Activation (stage 5) starts it as a commit's rounds end; tests until then. */
+/** Measure the readers an animation moves each frame while any runs (D17), in rounds as a commit's, and each once more
+ * where it comes to rest; returns a function that stops it. Activation (stage 5) starts it as a commit's rounds end; tests until then. */
 export function follow(readers, band, keyboard) {
   let frame = 0, last = new Set();
   const step = () => {
-    const now = new Set(moving(readers));
+    const running = document.getAnimations().filter((a) => a.playState === "running"), now = new Set(moving(readers, running));
     // The readers an animation moves, and those one moved last frame and no longer does, once more where they came to rest
     const measured = readers.filter((r) => now.has(r) || last.has(r));
     if (measured.length) observe(measured, band ?? documentBand(), keyboard ?? keyboardInset());
     last = now;
-    frame = now.size ? requestAnimationFrame(step) : 0;
+    // Asked again each frame while any animation runs, as one can come to move a reader it did not move before, as a
+    // centred box's narrowing brings an earlier reader into the band
+    frame = now.size || running.length ? requestAnimationFrame(step) : 0;
   };
   frame = requestAnimationFrame(step);
   return () => cancelAnimationFrame(frame);
@@ -516,12 +518,14 @@ export function unscrolled(scrollers, box = styles()) {
   return [dx, dy];
 }
 
-/** The linear part of the transforms that draw what `a` holds, from `a` up (CSS Transforms 2: each box's `rotate`, then
- * `scale`, then `transform`, its translation and origin moving nothing a scroll moves), or null where none transforms;
- * each box's once a transaction. */
+/** The linear part of the transforms that draw what `a` holds, from `a` up to the top layer (CSS Transforms 2: each
+ * box's `rotate`, then `scale`, then `transform`, its translation and origin moving nothing a scroll moves), or null
+ * where none transforms; each box's once a transaction. A perspective projects, which no linear map carries: under one
+ * this is its affine part, and the offset comes off approximately. */
 function carried(a, box) {
   let m = null;
-  for (let x = a; x && x !== document.documentElement; x = x.parentElement) {
+  // The top layer draws a box apart from its ancestors' transforms, so the walk ends with its own
+  for (let x = a; x && x !== document.documentElement; x = box(x).top ? null : x.parentElement) {
     if (!box(x).turned) continue;
     const s = getComputedStyle(x), own = new DOMMatrix();
     if (s.rotate && s.rotate !== "none") {

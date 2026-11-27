@@ -130,7 +130,8 @@ const MORE = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-
   </script>`;
 
 // Three 100-point boxes that clip, under a 47-point band at the top and the left: one turned a quarter, one flipped
-// upside down, one stretched by 0.9% down; each holds a reader 30 into its content, which reads the band's top and left.
+// upside down, one stretched by 0.9% down, and an open popover that clips, inside a box scaled by 2, which the top layer
+// draws at its own scale; each holds a reader 30 into its content, which reads the band's top and left.
 // A script scrolls each, by 20 and the stretched one by 800, and each reader reads what it read at no scroll
 const TURNED = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box }
   .t { position: absolute; top: 0; width: 100px; height: 100px } .port { overflow: hidden; width: 100px; height: 100px }
@@ -138,9 +139,11 @@ const TURNED = `<!doctype html><style>body { margin: 0 } div { box-sizing: borde
   <div class="t" style="left:0;transform:rotate(90deg)"><div class="port"><div style="height:30px"></div><div class="tr"></div><div style="height:2000px"></div></div></div>
   <div class="t" style="left:120px;transform:scaleY(-1)"><div class="port"><div style="height:30px"></div><div class="tr"></div><div style="height:2000px"></div></div></div>
   <div class="t" style="left:240px;transform:scaleY(1.009);transform-origin:0 0"><div class="port"><div style="height:30px"></div><div class="tr"></div><div style="height:2000px"></div></div></div>
+  <div class="t" style="top:300px;left:0;transform:scale(2);transform-origin:0 0"><div popover id="tpop" class="port" style="margin:0;inset:0 auto auto 0;padding:0;border:0"><div style="height:30px"></div><div class="tr"></div><div style="height:2000px"></div></div></div>
   <script type="module">
     import { observe } from '/observe.js';
     const readers = [...document.querySelectorAll('.tr')], ports = [...document.querySelectorAll('.port')];
+    document.getElementById('tpop').showPopover();
     const read = () => readers.map((el) => ['top', 'left'].map((e) => parseFloat(el.style.getPropertyValue('--exact-safe-area-inset-' + e)) || 0));
     observe(readers, [47, 0, 0, 47]);
     const still = read();
@@ -227,7 +230,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a transformed scro
     await page.goto(`${server.url.href}turned`);
     await page.waitForFunction(() => window.result);
     const r = await page.evaluate(() => window.result);
-    expect(r.offsets).toEqual([20, 20, 800]);
+    expect(r.offsets).toEqual([20, 20, 800, 20]);
     // Each reader reads, scrolled, what it read at no scroll, within D9's tolerance
     r.scrolled.forEach((pair, i) => pair.forEach((v, e) => expect(Math.abs(v - r.still[i][e])).toBeLessThan(0.6)));
     // And the readings are of the band, not nothing
