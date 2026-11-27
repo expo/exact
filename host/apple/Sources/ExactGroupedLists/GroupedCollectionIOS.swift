@@ -85,7 +85,12 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
         } else {
             super.layoutSubviews()
         }
-        paintCardShadows()
+        var paintsShadows = hasCardShadowStyle
+        #if os(iOS)
+        // Reordering defers projection sync while card styles can still change.
+        paintsShadows = paintsShadows || (contact != nil && reorderList?.movingRow != nil)
+        #endif
+        if paintsShadows { paintCardShadows() }
     }
     /// The safe area at the sides the collection reaches over: the kernel's
     /// side reach once it has given one (LLP 1123 D13), else the list's own
@@ -151,6 +156,7 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     /// The sections' inset regions as the layout last took them (`insetsReferences`).
     private var referred: [UIContentInsetsReference?] = [nil, nil, nil]
     private var insets: [(clip: CALayer, caster: InsetShadowCaster)] = []
+    private var hasCardShadowStyle = false
 
     /// How far a section's card's outer shadows reach; nil when it casts none.
     private func outerReach(_ section: Int) -> CGFloat? {
@@ -179,6 +185,7 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     /// came, went or changed its reach, or the regions the list's insets
     /// are measured from changed, then casts every card's shadows.
     func castCardShadows() {
+        hasCardShadowStyle = (0..<numberOfSections).contains { card($0)?.mayCastGroupedCardShadow == true }
         let references = insetsReferences
         if referLayoutInsets(references[0]) || references != referred || (0..<numberOfSections).contains(where: { outerReach($0) != decorated[$0] }) {
             collectionViewLayout.invalidateLayout()
