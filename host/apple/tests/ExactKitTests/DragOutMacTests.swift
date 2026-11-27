@@ -437,11 +437,12 @@ final class DragOutMacTests: XCTestCase {
     }
 
     /// `DragFiles.place` on the copy queue, where it runs: the error it threw.
-    private func place(_ fd: Int32, at url: URL) -> Error? {
+    private func place(_ fd: Int32, at url: URL, offset: off_t? = nil, progress: Progress? = nil) -> Error? {
         let done = expectation(description: "the copy ends")
         var failure: Error?
+        if let offset { lseek(fd, offset, SEEK_SET) }
         DragFiles.copies.addOperation {
-            do { try DragFiles.place(fd, at: url) } catch { failure = error }
+            do { try DragFiles.place(fd, at: url, progress: progress) } catch { failure = error }
             done.fulfill()
         }
         wait(for: [done], timeout: 15)
@@ -548,6 +549,72 @@ final class DragOutMacTests: XCTestCase {
         let destination = folder.appendingPathComponent("dropped.txt")
         XCTAssertNotNil(place(source, at: destination))
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    /// LLP 1094.000 D17: a copy's progress takes the file's size and counts
+    /// the bytes written to it; its cancel stops the copy at the next block,
+    /// which leaves what it wrote.
+    func testACopysProgressCountsItAndItsCancelStopsIt() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("drag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("big.bin"), size = 48 << 20
+        try Data(count: size).write(to: file)
+        let source = open(file.path, O_RDONLY)
+        defer { close(source) }
+        let progress = Progress(totalUnitCount: -1)
+        XCTAssertNil(place(source, at: folder.appendingPathComponent("copy.bin"), progress: progress))
+        XCTAssertEqual([progress.totalUnitCount, progress.completedUnitCount], [Int64(size), Int64(size)])
+        let stopping = Progress(totalUnitCount: -1)
+        let watch = stopping.observe(\.completedUnitCount) { progress, _ in if progress.completedUnitCount > 0 { progress.cancel() } }
+        defer { watch.invalidate() }
+        let partial = folder.appendingPathComponent("partial.bin")
+        XCTAssertEqual((place(source, at: partial, offset: 0, progress: stopping) as? POSIXError)?.code, .ECANCELED)
+        let written = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: partial.path)[.size] as? NSNumber).intValue
+        XCTAssertLessThan(written, size, "stopped before the end, what it wrote left")
+    }
+
+    /// LLP 1094.000 D17: a promise's copy is published as a file progress for
+    /// its destination and unpublished at its end; a cancel from its
+    /// subscriber stops the write before its source is opened, answered as
+    /// the user's cancel.
+    func testAPromisesCopyIsPublishedForItsDestination() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("drag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("big.bin"), bytes = Data(count: 8 << 20)
+        try bytes.write(to: file)
+        let writer = DragItemsMac.PromiseWriter(entry: "app:/data/big.bin", name: "big.bin", resolver: nil, journal: DragFiles.Journal())
+        var opens = 0
+        writer.open = { _, _ in opens += 1; return opens > 1 ? .failure(DragFiles.failure("opened after the cancel")) : .success(Darwin.open(file.path, O_RDONLY)) }
+        for cancel in [false, true] {
+            // The write goes on once the subscriber has heard of it and its own progress reads the subscriber's cancel,
+            // within 10 s, so the publication is heard before the write ends and the worker ends before `write` gives up
+            let heard = DispatchSemaphore(value: 0)
+            writer.published = { progress in
+                let deadline = DispatchTime.now() + 10
+                _ = heard.wait(timeout: deadline)
+                while cancel, !progress.isCancelled, DispatchTime.now() < deadline { usleep(10_000) }
+            }
+            let destination = folder.appendingPathComponent("drag-\(UUID().uuidString).bin")
+            let published = expectation(description: "published"), unpublished = expectation(description: "unpublished")
+            let subscriber = Progress.addSubscriber(forFileURL: destination) { progress in
+                if cancel { progress.cancel() }
+                published.fulfill()
+                heard.signal()
+                return { unpublished.fulfill() }
+            }
+            defer { Progress.removeSubscriber(subscriber) }
+            let failure = write(writer, to: destination)
+            wait(for: [published, unpublished], timeout: 10)
+            if cancel {
+                XCTAssertEqual((failure as? CocoaError)?.code, .userCancelled)
+                XCTAssertEqual(opens, 1, "the cancelled write opens nothing")
+            } else {
+                XCTAssertNil(failure)
+                XCTAssertEqual(try Data(contentsOf: destination).count, bytes.count)
+            }
+        }
     }
 
     /// A copy carries the file's data alone, none of its extended

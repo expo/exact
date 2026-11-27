@@ -498,6 +498,68 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "its directory goes with the resolver")
     }
 
+    /// LLP 1094.000 D17: an `app:/` file's load returns its progress at once,
+    /// which counts the copy to the file's size; a cancel before the copy,
+    /// during it and as it ends each answers the user's cancel once and
+    /// removes that load's folder alone, and the lift's other loads go on.
+    func testAnAppFilesLoadCountsItsCopyAndItsCancelStopsIt() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("drag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("big.bin"), size = 48 << 20
+        try Data(count: size).write(to: file)
+        let scratch = DragItems.Scratch()
+        let load = DragItems.appFile("app:/data/big.bin", "big.bin", scratch, DragFiles.Journal(), open: { _, _ in .success(Darwin.open(file.path, O_RDONLY)) })
+        let loads = { (scratch: DragItems.Scratch) in Set((try? FileManager.default.contentsOfDirectory(atPath: scratch.directory.path)) ?? []) }
+        /// One load: the progress it returned, then what it answered, and how often.
+        func run(_ before: (Progress) -> Void = { _ in }, cancelAt: Int64? = nil) -> (Progress, URL?, Error?, Int) {
+            DragFiles.copies.isSuspended = true
+            var answered = 0, url: URL?, error: Error?
+            let done = expectation(description: "the load answers")
+            let returned = load { u, _, e in url = u; error = e; answered += 1; done.fulfill() }
+            XCTAssertNotNil(returned, "the load returns its progress")
+            let progress = returned ?? Progress(totalUnitCount: -1)
+            XCTAssertEqual(progress.completedUnitCount, 0, "returned before the copy")
+            before(progress)
+            let watch = cancelAt.map { at in progress.observe(\.completedUnitCount) { p, _ in if p.completedUnitCount >= at { p.cancel() } } }
+            DragFiles.copies.isSuspended = false
+            wait(for: [done], timeout: 30)
+            watch?.invalidate()
+            return (progress, url, error, answered)
+        }
+        let (progress, url, error, answered) = run()
+        XCTAssertNil(error)
+        XCTAssertEqual([progress.totalUnitCount, progress.completedUnitCount], [Int64(size), Int64(size)])
+        XCTAssertEqual(try XCTUnwrap(FileManager.default.attributesOfItem(atPath: try XCTUnwrap(url).path)[.size] as? NSNumber).intValue, size)
+        XCTAssertEqual(answered, 1)
+        let kept = loads(scratch)
+        for (name, cancel) in [("before", { (p: Progress) in p.cancel() }), ("during", { (_: Progress) in })] as [(String, (Progress) -> Void)] {
+            let (_, url, error, answered) = run(cancel, cancelAt: name == "during" ? 1 : nil)
+            XCTAssertNil(url, name)
+            XCTAssertEqual((error as? CocoaError)?.code, .userCancelled, name)
+            XCTAssertEqual(answered, 1, name)
+            XCTAssertEqual(loads(scratch), kept, "\(name): that load's folder alone goes")
+        }
+        XCTAssertNil(run().2, "the lift's next load goes on")
+        let delivered = loads(scratch)
+        // An empty file's copy calls back for no block: a cancel once its total is set is read after the copy is closed
+        let empty = folder.appendingPathComponent("empty.bin")
+        try Data().write(to: empty)
+        let emptyLoad = DragItems.appFile("app:/data/empty.bin", "empty.bin", scratch, DragFiles.Journal(), open: { _, _ in .success(Darwin.open(empty.path, O_RDONLY)) })
+        let done = expectation(description: "the empty load answers")
+        var emptyError: Error?
+        // The copy waits until the cancel is in place
+        DragFiles.copies.isSuspended = true
+        let emptyProgress = emptyLoad { _, _, e in emptyError = e; done.fulfill() }
+        let sized = emptyProgress?.observe(\.totalUnitCount) { p, _ in if p.totalUnitCount == 0 { p.cancel() } }
+        DragFiles.copies.isSuspended = false
+        XCTAssertNotNil(emptyProgress, "the load returns its progress")
+        wait(for: [done], timeout: 30)
+        sized?.invalidate()
+        XCTAssertEqual((emptyError as? CocoaError)?.code, .userCancelled)
+        XCTAssertEqual(loads(scratch), delivered, "the delivered loads' folders stay, the cancelled one's goes")
+    }
+
     func testAFileTheAppDoesNotShipCompletesWithTheError() throws {
         let resolver = try AssetResolver(root: URL(fileURLWithPath: NSTemporaryDirectory()), verified: [:])
         let done = expectation(description: "the load completes")
