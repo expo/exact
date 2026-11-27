@@ -26,6 +26,9 @@ impl Cascades {
     /// the shadow distance is at or before the camera's near plane, so
     /// nothing the camera sees is within it and the frame has no sun shadow.
     pub fn reach(frame: &FrameInput<'_>, settings: Shadows) -> Option<(f32, f32)> {
+        if settings.fixed_box.is_some_and(|b| !b.valid()) {
+            return None;
+        }
         let inverse = frame.proj.inverse();
         let near = -inverse.project_point3(Vec3::ZERO).z;
         let far = (-inverse.project_point3(Vec3::Z).z).min(settings.distance);
@@ -65,12 +68,12 @@ impl Cascades {
         )
         .transpose();
         if let Some(fixed) = settings.fixed_box {
-            let w = fixed.half_width;
-            let d = fixed.half_depth;
             assert!(
-                fixed.center.is_finite() && w.is_finite() && w > 0. && d.is_finite() && d > 0.,
+                fixed.valid(),
                 "sun box must be finite with positive extents"
             );
+            let w = fixed.half_width;
+            let d = fixed.half_depth;
             let c = light_view.transform_point3(fixed.center);
             result.count = 1;
             result.texels[0] = 2. * w / resolution as f32;
@@ -469,5 +472,53 @@ mod outline_tests {
     fn a_degenerate_slice_bounds_nothing() {
         let planes = outline(&[Vec3::ZERO; 8], Vec3::X, Vec3::Y, 1.0);
         assert_eq!(planes, [PASS_ALL; 6]);
+    }
+
+    #[test]
+    fn invalid_fixed_box_has_no_shadow_reach() {
+        let frame = FrameInput {
+            sun: Some(crate::Sun {
+                direction: Vec3::new(1., -2., 0.5),
+                color: Vec3::ONE,
+                illuminance: 1.,
+                shadows: None,
+            }),
+            view: glam::camera::rh::view::look_at_mat4(Vec3::new(4., 5., 6.), Vec3::ZERO, Vec3::Y),
+            proj: directx::perspective(1., 1.7, 0.2, 300.),
+            ..Default::default()
+        };
+        for fixed_box in [
+            crate::ShadowBox {
+                center: Vec3::ZERO,
+                half_width: 0.0,
+                half_depth: 10.0,
+            },
+            crate::ShadowBox {
+                center: Vec3::ZERO,
+                half_width: -1.0,
+                half_depth: 10.0,
+            },
+            crate::ShadowBox {
+                center: Vec3::ZERO,
+                half_width: f32::NAN,
+                half_depth: 10.0,
+            },
+            crate::ShadowBox {
+                center: Vec3::ZERO,
+                half_width: 10.0,
+                half_depth: f32::INFINITY,
+            },
+            crate::ShadowBox {
+                center: Vec3::NAN,
+                half_width: 10.0,
+                half_depth: 10.0,
+            },
+        ] {
+            let settings = Shadows {
+                fixed_box: Some(fixed_box),
+                ..Shadows::default()
+            };
+            assert!(Cascades::reach(&frame, settings).is_none());
+        }
     }
 }

@@ -20,6 +20,9 @@ exact-plan = { path = "../plan" }
 exact-runner = { path = "../runner" }
 serde_json = "1.0"
 sha2 = "0.10"
+# WebCrypto subtle algorithms (HMAC, AES-GCM, PBKDF2, HKDF, RSA verify, Ed25519; LLP 1195.000 D5 P0b),
+# already in the workspace lockfile via rustls.
+ring = "0.17"
 # The Compression standard's codecs (src/compression.rs), already in the lockfile through `png`/`flate2`.
 miniz_oxide = "0.8"
 crc32fast = "1.5"

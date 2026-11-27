@@ -72,7 +72,7 @@ extension NodeView {
     /// How the `<edges>` row `key` names the physical `edge` (D13, D14: bits
     /// for top, right, bottom, left, start and end): by `start` or `end`,
     /// resolved against the box's direction, physically, or not at all.
-    private func edgeName(_ key: String, _ edge: UIRectEdge) -> EdgeName? {
+    func edgeName(_ key: String, _ edge: UIRectEdge) -> EdgeName? {
         let bits = Int(style[key]?.number ?? 0)
         let rtl = (style["direction"]?.string ?? presenter?.documentDirection) == "rtl"
         let start = rtl ? UIRectEdge.right : .left, end = rtl ? UIRectEdge.left : .right
@@ -174,5 +174,5 @@ extension NodeView {
 #endif
 
 /// How an `<edges>` row names an edge (`edgeName`).
-private enum EdgeName { case logical, physical }
+enum EdgeName { case logical, physical }
 #endif

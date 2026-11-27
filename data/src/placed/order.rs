@@ -123,6 +123,7 @@ impl<D: DataSource + 'static> Placed<D> {
             outcome,
             snapshot: envelope::snapshot(store, &self.grants),
             clock: store.clock_ms(),
+            epoch: store.epoch_at_zero(),
             reply,
         });
         drop(unsent);

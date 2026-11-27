@@ -785,11 +785,136 @@ fn a_plan_counts_its_hunk_names_each_change_by_file_and_skips_a_file_left_alone(
 }
 
 #[test]
+fn replacing_an_axis_or_renaming_a_referrer_keeps_its_diagnostic() {
+    let src = "forma t\naxes\n  tone = pale | deep\ntheme\n  ink = #112233\n    when tone=deep: #123456\n";
+    let remove = Op::RemoveAxis {
+        name: "tone".into(),
+    };
+    let rename = Op::RenameToken {
+        from: "ink".into(),
+        to: "paint".into(),
+    };
+    let replace = Op::AddAxis {
+        name: "tone".into(),
+        values: vec!["pale".into()],
+        under_dark: false,
+        before: None,
+        comment: None,
+    };
+    for (ops, name) in [
+        (vec![rename, remove.clone()], "paint"),
+        (vec![remove, replace], "ink"),
+    ] {
+        let errors = exact_forma::apply_all(src, &ops, &vocab()).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].line, 6);
+        assert!(errors[0].message.contains(name) && errors[0].message.contains("when tone=deep"));
+    }
+}
+
+#[test]
+fn a_rename_explains_why_the_old_conditions_must_be_unset_first() {
+    let src = "forma t\naxes\n  old = off | on | c | d | e | f | g | h\ntheme\n  ink = #111111\n    when old=on: #222222\n";
+    let remove = Op::RemoveAxis { name: "old".into() };
+    let new_axis = "n".repeat(940);
+    let add = Op::AddAxis {
+        name: new_axis.clone(),
+        values: ('a'..='i').map(|c| c.to_string()).collect(),
+        under_dark: false,
+        before: None,
+        comment: None,
+    };
+    let branch = Op::SetToken {
+        name: "ink".into(),
+        when: conds(&[(&new_axis, "a")]),
+        value: "#333333".into(),
+        at: None,
+        comment: None,
+    };
+    let rename = Op::RenameToken {
+        from: "ink".into(),
+        to: "paint".into(),
+    };
+    let unset = |name: &str| Op::UnsetTokenWhen {
+        name: name.into(),
+        when: conds(&[("old", "on")]),
+    };
+    let ops = [
+        remove.clone(),
+        add.clone(),
+        branch.clone(),
+        rename.clone(),
+        unset("paint"),
+    ];
+    for (src, id, reason) in [
+        (src.to_owned(), "forma-tuples", "72 tuples"),
+        (
+            src.replace(" | c | d | e | f | g | h", ""),
+            "forma-when-ambiguous",
+            "both hold",
+        ),
+    ] {
+        let errors = apply_all(&src, &ops, &vocab()).unwrap_err();
+        let error = errors.iter().find(|e| e.id == id).unwrap();
+        assert!(error.message.contains(reason), "{error}");
+        if id == "forma-tuples" {
+            assert!(error.message.contains("limit of 64"), "{error}");
+        }
+        assert!(
+            error
+                .message
+                .contains("Unset the removed axis's conditions before the rename"),
+            "{error}"
+        );
+        apply_all(
+            &src,
+            &[
+                unset("ink"),
+                remove.clone(),
+                add.clone(),
+                branch.clone(),
+                rename.clone(),
+            ],
+            &vocab(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn axis_removal_checks_parameter_conditions_and_the_last_value() {
+    let src = "forma t\naxes\n  tone = pale | deep\n  other = one\nparams\n  Card.fill = #000000\n    when other=one tone=deep: #ffffff\n";
+    let remove = Op::RemoveAxis {
+        name: "tone".into(),
+    };
+    let errors = apply(src, &remove, &vocab()).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].line, 7);
+    assert!(errors[0]
+        .message
+        .contains("param `Card.fill` still uses `when other=one tone=deep`"));
+    let last = Op::RemoveAxisValue {
+        axis: "other".into(),
+        value: "one".into(),
+    };
+    assert!(apply(src, &last, &vocab()).unwrap_err()[0]
+        .message
+        .contains("use `remove-axis`"));
+    // Only the host's scheme can appear in an axis's under clause.
+    let bad = src.replace("other = one", "other = one under tone=deep");
+    let errors = apply(&bad, &remove, &vocab()).unwrap_err();
+    assert_eq!(errors[0].line, 4);
+    assert!(errors[0].message.contains("under tone=deep"));
+}
+
+#[test]
 fn an_axis_goes_after_the_axes_there_are_or_in_a_new_block_after_the_header() {
     let with = "forma t\n\naxes\n  density = default | compact\n\ntheme\n  ink = #000000\n";
     let add = Op::AddAxis {
         name: "theme".into(),
         values: vec!["default".into(), "blue".into()],
+        before: None,
+        comment: None,
         under_dark: false,
     };
     let done = apply(with, &add, &vocab()).unwrap();

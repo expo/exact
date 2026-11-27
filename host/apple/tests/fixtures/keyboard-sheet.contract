@@ -2,10 +2,13 @@
 // the root's default `resizes-content`, its field and a keyboard toolbar at
 // its bottom, a dialog sheet's field, and the software keyboard's overlap as
 // a value. ModalDetentIOSTests opens a scrolling menu with shrinkable rows.
+// The form is Shelf's Add Book sheet: a header in the bar over an inset-grouped
+// list, its first field focused as the sheet opens, and a tab list.
 routes nav
   home "/"
     players "/players"
     menu "/menu"
+    form "/form"
 
 shape Viewport
   keyboardHeight: number
@@ -14,6 +17,7 @@ shape Viewport
 component App
   resource viewport = exactViewport() as shape Viewport
   state name = ""
+  state status = "want"
   state rows = [0, 1]
   action more
     rows = rows.concat([rows.length])
@@ -25,6 +29,8 @@ component App
     nav = back(nav)
   action edit(v: string)
     name = v
+  action choose(s: string)
+    status = s
   action openNote
     showModal("note")
   view
@@ -37,6 +43,8 @@ component App
               text "Players"
             link href="/menu" testId="open-menu"
               text "Menu"
+            link href="/form" testId="open-form"
+              text "Form"
             button press=openNote testId="open-note"
               text "Note"
             dialog id="note" width=300 height=200
@@ -56,3 +64,21 @@ component App
               text "Fewer"
             for i in rows key=i
               row height=44 testId=`row-${i}`
+        if e.name == "form"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="form-list" position="absolute" inset=0 display="flex" flex-direction="column"
+            header display="flex" align-items="center" justify-content="space-between" padding="8px 16px"
+              button press=back testId="form-cancel"
+                text "Cancel"
+              text "New Book" role="heading"
+            list id="form-list" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+              section
+                header
+                  text "Title"
+                row
+                  input value=name input=edit placeholder="Title" aria-label="Title" autofocus=true testId="form-title" flex=1
+              section background-color="transparent"
+                row role="tablist" aria-label="Status"
+                  button role="tab" aria-selected=(status == "want") press=choose("want") flex=1
+                    text "Want to Read"
+                  button role="tab" aria-selected=(status == "done") press=choose("done") flex=1
+                    text "Finished"

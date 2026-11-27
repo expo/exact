@@ -4,7 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, mainNotes, noteOf, publish, report, stoppedEarly, suitesOf } from './known.mjs';
+import { classify, kindOf, mainNotes, noteOf, publish, report, stoppedEarly, suitesOf } from './known.mjs';
+import { checks, covers, glueTests, nothing } from './async.mjs';
 
 const result = (sha, failures, checks = { ios: { command: 'bun host/apple/build.mjs --test --ios', status: 1 } }) => ({ sha, checks, failures });
 
@@ -89,4 +90,84 @@ test('each stop the lane names marks its check stopped early, and a note reads w
   // Put a stop kept from an earlier run in the list the note reads, while the check's own record says it ran to the end
   const result = { sha: 'x', checks: { test: { command: 'bun scripts/affected.mjs --cargo-tests a', status: 0, complete: true } }, failures: ['test: y (lib test) does not compile'] };
   expect(noteOf(result, 1).checks.test.complete).toBe(true);
+});
+
+test('kindOf classifies glue as bun, splits macos and ios xctest, and ignores narrow non-test commands', () => {
+  const fullSteps = Object.fromEntries(checks('tip', 'base', { glue: glueTests(process.cwd()), lane: ['x'] }).map(([name, cmd, args]) => [name, [cmd, ...args].join(' ')]));
+  expect(kindOf(fullSteps.glue)).toBe('bun');
+  expect(kindOf(fullSteps.test)).toBe('cargo');
+  expect(kindOf(fullSteps.ios)).toBe('xctest-ios');
+  expect(kindOf('bun host/apple/build.mjs --test')).toBe('xctest-macos');
+  expect(kindOf('bun host/apple/build.mjs --test --ios --only Nav')).toBe('xctest-ios');
+  expect(kindOf('bun test scripts/cargo-checkout.test.mjs')).toBe('bun');
+  expect(kindOf(fullSteps['game-pins'])).toBeNull();
+  expect(kindOf(fullSteps['notifications-web'])).toBeNull();
+  expect(kindOf('bun scripts/agent.mjs web --app shelf --test apps/shelf/app.test.contract')).toBeNull();
+});
+
+test('narrow checks, lane, full glue, and macos vs ios xctest do not misclassify unrelated failures', () => {
+  const glueCmd = checks('tip', 'base', { ...nothing(), glue: glueTests(process.cwd()) }).find(([n]) => n === 'glue');
+  const fullGlueCmd = [glueCmd[1], ...glueCmd[2]].join(' ');
+  // Full glue + incomplete test + passing lane: cargo failure is unknown, bun failure is new.
+  const mixed = [{
+    sha: 'm1',
+    notes: [{
+      sha: 'm1', tier: 1, at: '2026-11-25T01:00',
+      checks: {
+        test: { command: 'cargo test --workspace', status: 101, complete: false },
+        lane: { command: 'cargo test --workspace -- --ignored slow', status: 0, complete: true, covers: ['cargo:exact-linux'] },
+        glue: { command: fullGlueCmd, status: 0, complete: true },
+      },
+      failures: [],
+    }],
+  }];
+  const cargoFailure = ['local: -p exact-linux --lib foo::bar'];
+  const bunFailure = ['local: fails'];
+  expect(classify(cargoFailure, 'cargo', mixed, suitesOf(cargoFailure, 'cargo', '')).rows[0].verdict).toBe('unknown');
+  expect(classify(bunFailure, 'bun', mixed, { 'local: fails': ['bun:scripts/foo.test.mjs'] }).rows[0].verdict).toBe('new');
+
+  // Partial game/vocab + narrow checks without whole coverage never satisfy unrelated cargo or bun failures.
+  const narrow = [{
+    sha: 'n1',
+    notes: [{
+      sha: 'n1', tier: 1, at: '2026-11-25T02:00',
+      checks: {
+        game: { command: 'cargo test --manifest-path game/Cargo.toml --workspace', status: 0, complete: true },
+        'game-vocab': { command: 'bun test game/vocab.test.mjs', status: 0, complete: true, covers: covers('game-vocab', { full: true }) },
+        'web-ax-test': { command: 'env bun test ./host/web/tests/zero-viewport.test.mjs', status: 0, complete: true, covers: covers('web-ax-test', { full: true }) },
+        'other-glue': { command: 'env bun test --isolate ./packages/p/a.test.mjs', status: 0, complete: true, covers: covers('other-glue', { full: true, extra: [['other-glue', 'env', ['bun', 'test', './packages/p/a.test.mjs']]] }) },
+        'app:shelf:web:0': { command: 'bun scripts/agent.mjs web --app shelf --test apps/shelf/app.test.contract', status: 0, complete: true },
+      },
+      failures: [],
+    }],
+  }];
+  expect(classify(cargoFailure, 'cargo', narrow, suitesOf(cargoFailure, 'cargo', '')).rows[0].verdict).toBe('unknown');
+  expect(classify(bunFailure, 'bun', narrow, { 'local: fails': ['bun:apps/agents/app.test.ts'] }).rows[0].verdict).toBe('unknown');
+  expect(classify(bunFailure, 'bun', narrow, { 'local: fails': ['bun:game/vocab.test.mjs'] }).rows[0].verdict).toBe('new');
+  expect(classify(bunFailure, 'bun', narrow, { 'local: fails': ['bun:packages/p/a.test.mjs'] }).rows[0].verdict).toBe('new');
+
+  // macOS and iOS XCTests never cross-match each other, and partial macOS suites match xctest:macos:<Class>.
+  const macFailure = ['local: ExactKitTests.Nav pop failed'];
+  const macSuites = suitesOf(macFailure, 'xctest-macos', '');
+  expect(macSuites[macFailure[0]]).toEqual(['xctest:macos:Nav']);
+  const macOnly = [{
+    sha: 'x1',
+    notes: [{
+      sha: 'x1', tier: 1, at: '2026-11-25T03:00',
+      checks: { macos: { command: 'bun host/apple/build.mjs --test', status: 0, complete: true } },
+      failures: ['ios: ExactKitTests.Nav pop failed'],
+    }],
+  }];
+  expect(classify(macFailure, 'xctest-ios', macOnly, suitesOf(macFailure, 'xctest-ios', '')).rows[0].verdict).toBe('unknown');
+  expect(classify(macFailure, 'xctest-macos', macOnly, macSuites).rows[0].verdict).toBe('new');
+  const macPart = [{
+    sha: 'x2',
+    notes: [{
+      sha: 'x2', tier: 1, at: '2026-11-25T04:00',
+      checks: { macos: { command: 'bun host/apple/build.mjs --test --only Nav', status: 1, complete: true, covers: ['xctest:macos:Nav'] } },
+      failures: ['macos: ExactKitTests.Nav pop failed'],
+    }],
+  }];
+  expect(classify(macFailure, 'xctest-macos', macPart, macSuites).rows[0].verdict).toBe('known');
+  expect(classify(macFailure, 'xctest-ios', macPart, suitesOf(macFailure, 'xctest-ios', '')).rows[0].verdict).toBe('unknown');
 });

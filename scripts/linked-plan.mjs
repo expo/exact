@@ -17,7 +17,7 @@ import { bakeTarget, cargoEnvironment, developmentBuildEnv } from './app.mjs';
 import { oneScheme, webOnly } from './app-cli.mjs';
 import { copiedAndroidEntries, copiedBuildScripts } from './app-shells.mjs';
 import { appleCargo, cargoBuildEnv } from './cargo-check.mjs';
-import { cargoInputPaths, cargoLibraryTarget, packageDirectories, watchedDigest } from './cargo-dep-info.mjs';
+import { cargoInputPaths, cargoLibraryTarget, watchedDigest } from './cargo-dep-info.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const TOOL_TARGET = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(ROOT, 'target');
@@ -164,8 +164,8 @@ export const linkedBakeDir = (env, platform, target) => resolve(env.EXACT_BAKE_O
  * before its own build has replaced this one. */
 export function linkedInputs(dir) {
   try {
-    const {paths, missing = [], watchedDirectories = []} = JSON.parse(readFileSync(resolve(dir, 'inputs.json'), 'utf8'));
-    return [paths, missing, watchedDirectories].every(Array.isArray) ? {paths, missing, watchedDirectories} : null;
+    const {paths, digest, missing = [], watchedDirectories = []} = JSON.parse(readFileSync(resolve(dir, 'inputs.json'), 'utf8'));
+    return [paths, missing, watchedDirectories].every(Array.isArray) ? {paths, missing, watchedDirectories, ...(digest === null ? {unstable:resolve(dir, 'inputs.json')} : {})} : null;
   } catch { return null; }
 }
 
@@ -180,11 +180,11 @@ const watchOutputs = (dir, env, outputs = []) => [dir, env.CARGO_TARGET_DIR, env
 
 /** Explicit producer files (a signed GPU library) remain inputs under output roots.
  * The bake's own directory is always excluded, including through aliases. */
-function inputDigests(paths, dir, env, {since = Infinity, known = new Set(), outputs: built = []} = {}) {
+function inputDigests(paths, dir, env, {since = Infinity, known = new Set(), outputs: built = [], snapshots} = {}) {
   const outputs = watchOutputs(dir, env, built);
   return new Map(paths.map(path => {
     let file = false; try { file = statSync(path).isFile(); } catch { /* missing watch */ }
-    return [path, watchedDigest([path], file ? [dir] : outputs, {since:known.has(path) ? Infinity : since})];
+    return [path, watchedDigest([path], file ? [dir] : outputs, {since:known.has(path) ? Infinity : since, snapshots})];
   }));
 }
 const digestOf = inputs => [...inputs.values()].includes(null) ? null : createHash('sha256').update(JSON.stringify([...inputs])).digest('hex');
@@ -206,12 +206,28 @@ export function androidBakeBlobs(dir) {
   return blobs;
 }
 
-/** The digest of the bake's linked files, or null for incomplete output. */
+const ENTRY_TREE_PREFIX = /^(?:plans|typescript|activities)\//;
+
+/** Entry-tree files (`plans/`, `typescript/`, `activities/`) recorded in a bake's compat.json. */
+export function bakedEntryAssets(compat) {
+  return (compat?.embedded?.assets ?? []).filter(card => typeof card?.name === 'string' && ENTRY_TREE_PREFIX.test(card.name));
+}
+
+/** The digest of the bake's linked files and entry-tree assets, or null for incomplete output. */
 function pairOf(dir, android) {
   try {
     const files = android ? androidBakeBlobs(dir) : ['app.plan', 'compat.json'];
     const hash = createHash('sha256');
     for (const file of files) hash.update(readFileSync(resolve(dir, file)));
+    if (!android) {
+      const compat = JSON.parse(readFileSync(resolve(dir, 'compat.json'), 'utf8'));
+      for (const card of bakedEntryAssets(compat)) {
+        if (card.name.startsWith('/') || card.name.split('/').includes('..')) return null;
+        const bytes = readFileSync(resolve(dir, card.name));
+        if (bytes.length !== card.bytes || createHash('sha256').update(bytes).digest('hex') !== card.sha256) return null;
+        hash.update(card.name).update('\0').update(bytes);
+      }
+    }
     return hash.digest('hex');
   } catch { return null; }
 }
@@ -226,10 +242,15 @@ function fileClock(dir) {
 }
 
 /** Whether the linked output and its inputs still match the bake's record. */
-function fresh(record, dir, env, tool, outputs, android) {
+function fresh(record, dir, env, tool, outputs, android, snapshots) {
   if (record?.version !== 2 || record.tool !== tool || !record.pair || record.pair !== pairOf(dir, android)) return false;
   if (Object.entries(record.env).some(([name, value]) => (env[name] ?? null) !== value)) return false;
-  return record.digest != null && record.digest === inputDigest(record.paths, dir, env, {outputs});
+  return record.digest != null && record.digest === inputDigest(record.paths, dir, env, {outputs, snapshots});
+}
+
+function writeInputs(at, record) {
+  writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
+  renameSync(`${at}.${process.pid}.tmp`, at);
 }
 
 /** Bakes `app` for `platform` and `target` into its linked bake directory,
@@ -264,7 +285,14 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
   // one line where the first was, as `contract build` says them (18 of them every euxy build).
   const warn = (warnings) => { for (const line of bakeWarnings(app.name, warnings ?? [])) console.error(line); };
   let record = null; try { record = JSON.parse(readFileSync(at, 'utf8')); } catch { /* none yet */ }
-  if (fresh(record, dir, runEnv, tool, outputs, android)) { warn(record.warnings); return dir; }
+  const snapshots = new Map();
+  if (fresh(record, dir, runEnv, tool, outputs, android, snapshots)) {
+    const watchedDirectories = [...snapshots.values()];
+    if (JSON.stringify(watchedDirectories) !== JSON.stringify(record.watchedDirectories)) writeInputs(at, {...record, watchedDirectories});
+    warn(record.warnings);
+    return dir;
+  }
+  snapshots.clear();
   const cargoOutput = resolve(dir, 'rust-output.txt');
   const previousOutput = rust && !record?.paths ? readFileSync(cargoOutput, 'utf8') : '';
   const watched = record?.paths ?? cargoInputPaths(previousOutput, cwd);
@@ -283,12 +311,11 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
   const paths = cargoInputPaths(r.stdout ?? '', cwd);
   // New watches have no pre-bake digest. Their change times must precede the read;
   // known watches compare bytes so touching an unchanged input does not invalidate it.
-  const after = inputDigests(paths, dir, runEnv, {since, known:new Set(watched), outputs});
+  const after = inputDigests(paths, dir, runEnv, {since, known:new Set(watched), outputs, snapshots});
   const stable = [...after].every(([path, digest]) => !before.has(path) || before.get(path) === digest);
-  record = { version: 2, at: started, tool, pair: pairOf(dir, android), warnings: said('warning'), env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])), paths, digest:stable ? digestOf(after) : null, missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
+  record = { version: 2, at: started, tool, pair: pairOf(dir, android), warnings: said('warning'), env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])), paths, digest:stable ? digestOf(after) : null, missing: paths.filter(path => !existsSync(path)), watchedDirectories:[...snapshots.values()] };
   mkdirSync(dir, { recursive: true });
-  writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
-  renameSync(`${at}.${process.pid}.tmp`, at);
+  writeInputs(at, record);
   return dir;
 }
 
@@ -439,13 +466,13 @@ export function recordRustBake(env, outputs = [], workspace) {
   const output = readFileSync(resolve(dir, 'rust-output.txt'), 'utf8'), lines = output.split('\n');
   const said = key => lines.map(line => new RegExp(`^cargo::?${key}=(.*)$`).exec(line)?.[1]).filter(value => value !== undefined);
   const paths = cargoInputPaths(output, baker.cwd);
+  const snapshots = new Map();
   const record = { version: 2, at: baker.started, tool, pair, warnings: said('warning'),
     ...(workspace ? {link:androidLinkDigest(output, baker.cwd)} : {}),
     env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])),
     // Cargo's bootstrap predates this call: never certify inputs changed since its read.
-    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.since ?? baker.started, outputs}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
-  writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
-  renameSync(`${at}.${process.pid}.tmp`, at);
+    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.since ?? baker.started, outputs, snapshots}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:[...snapshots.values()] };
+  writeInputs(at, record);
 }
 
 /** An Apple bake's warning lines for app `name`, in the compiler's order: each, but the SF Symbols only the web draws

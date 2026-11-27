@@ -182,6 +182,8 @@ component App
           for e in t.stack key=e.id
             column navigationKey=\`\${e.id}\` navigationPresentation=(e.name == "edit" ? "modal" : "") testId=\`route-\${e.name}\` position="absolute" inset=0
               if e.name == "items"
+                box navigationSplit="placeholder"
+                  text "Pick a person"
                 list
                   button press=show("alpha") testId="row-alpha"
                     text "Alpha"

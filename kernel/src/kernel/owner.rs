@@ -932,7 +932,7 @@ pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: 
 /// Queue `slot`'s relative rows to be resolved again where one is in a container unit, whose
 /// query containers may have moved (LLP 1123 D16); whether it was queued.
 pub(crate) fn queue_contained(arena: &mut NodeArena, slot: u32) -> bool {
-    let contained = (arena.style(slot).relative.iter()).any(|(_, unit, _)| unit.is_container());
+    let contained = (arena.style(slot).relative.iter_specs()).any(|(_, spec)| spec.is_container());
     if contained {
         arena.relative.invalidate(slot);
     }

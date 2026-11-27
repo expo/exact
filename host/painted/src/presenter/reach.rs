@@ -1,0 +1,141 @@
+//! @ref LLP 1123 D13 — the painted presenter's executor for a box's reach (`crate::safe_area`): tests set it, and
+//! activation (stage 5) sets it from `Kernel::box_reach` after each layout.
+use super::*;
+
+impl<D: DataSource> Presenter<D> {
+    /// Set or clear (`None`) how far the box `view` reaches past its laid-out border box, top right bottom left in
+    /// points: its background, border and children's clip are painted, and its hits taken, over its border box outset
+    /// by it, while its layout, its children and what reads its geometry keep the laid-out box. Whether it changed; a
+    /// change is painted in full.
+    pub fn set_box_reach(&mut self, view: ViewId, reach: Option<[f32; 4]>) -> bool {
+        let Some(key) = self.host.kernel().node(view).map(|n| n.key) else {
+            return false;
+        };
+        // Taken out of the host while the host's kernel says which boxes are live
+        let mut area = std::mem::take(&mut self.host.safe_area);
+        let changed = area.set_reach(self.host.kernel(), key, reach);
+        self.host.safe_area = area;
+        self.dirty |= changed;
+        changed
+    }
+
+    /// Set or clear (`None`) how far the box `view`'s colour-only extension paints its background colour past its
+    /// laid-out border box, top right bottom left in points (D13): a strip around what the box paints, which takes no
+    /// hits and leaves its picture, its children and its geometry as they were. Whether it changed; a change is
+    /// painted in full.
+    pub fn set_box_extension(&mut self, view: ViewId, extension: Option<[f32; 4]>) -> bool {
+        let Some(key) = self.host.kernel().node(view).map(|n| n.key) else {
+            return false;
+        };
+        let mut area = std::mem::take(&mut self.host.safe_area);
+        let changed = area.set_extension(self.host.kernel(), key, extension);
+        self.host.safe_area = area;
+        self.dirty |= changed;
+        changed
+    }
+
+    /// Set or release (`None`) the scroller `view`'s claim, its reach and its content insets (D13, D14), each top right
+    /// bottom left in points: its scrollport and the frame that takes its hits reach, its decoration keeps its box, its
+    /// range is its content and insets past the reached scrollport, and its content is painted at the displacement
+    /// `ScrollClaim::displacement` gives its CSS offset. The CSS offset stays as it was, clamped to the new range.
+    /// Whether it changed; a change is painted in full.
+    pub fn set_scroll_claim(&mut self, view: ViewId, claim: Option<([f32; 4], [f32; 4])>) -> bool {
+        let Some(key) = self.host.kernel().node(view).map(|n| n.key) else {
+            return false;
+        };
+        let claim = claim.map(|(reach, insets)| crate::safe_area::ScrollClaim { reach, insets });
+        // A follower at its end keeps it as the claim moves its range, as UIKit's writer keeps one (`ScrollInsetsIOS`)
+        let at_end = self.rests_at_end(view);
+        let mut area = std::mem::take(&mut self.host.safe_area);
+        let changed = area.set_scroll_claim(self.host.kernel(), key, claim);
+        self.host.safe_area = area;
+        if changed {
+            self.dirty = true;
+            // Moved as a clamp moves it, the list's own move, so a list's pending position moves with it
+            if let Some(end) = at_end.then(|| self.end_of(view)).flatten() {
+                let before = self.scroll.get(&view).copied().unwrap_or_default();
+                let after = (before.0, end);
+                self.scroll.insert(view, after);
+                self.rebase_clamped_anchor(view, before, after);
+            }
+            self.clamp_scroll();
+            // The runner's geometry follows at once, back to the CSS offset when released, which it may hold as none
+            let at = self.scroll.get(&view).copied().unwrap_or_default();
+            let (x, y) = claim.map_or(at, |c| c.displacement(at));
+            self.host
+                .runner_mut()
+                .scrolled(Some(view), f64::from(x), f64::from(y));
+            // A list's port, padding and range reach the runner at once, before any input reports them
+            self.queue_collections();
+        }
+        changed
+    }
+
+    /// Tell the runner what list `view`'s claim covers of its reached port at its start and end on `axis`, its insets
+    /// (LLP 1123 D14), before each of its reports, so `scrollIntoView` aligns a row in its clear region, as iOS tells
+    /// what its bars cover (`listCovered`); none unclaimed.
+    pub(super) fn tell_covered(&mut self, view: ViewId, axis: exact_runner::ListAxis) {
+        let Some(key) = self.host.kernel().node(view).map(|n| n.key) else {
+            return;
+        };
+        let i = self
+            .host
+            .safe_area
+            .scroll_claim(key)
+            .map_or([0.; 4], |c| c.insets);
+        let covered = match axis {
+            exact_runner::ListAxis::Vertical => [i[0], i[2]],
+            exact_runner::ListAxis::Horizontal => [i[3], i[1]],
+        };
+        self.host
+            .runner_mut()
+            .set_list_covered(view, covered.map(f64::from));
+    }
+
+    /// Whether `view` follows its end (`scrollFollowEnd`) and rests there, within a point of its farthest offset down.
+    fn rests_at_end(&self, view: ViewId) -> bool {
+        let follows = self
+            .host
+            .kernel()
+            .node(view)
+            .is_some_and(|n| n.props.bool(exact_kernel::PropId::ScrollFollowEnd) == Some(true));
+        follows
+            && self
+                .end_of(view)
+                .is_some_and(|end| self.scroll.get(&view).map_or(0., |o| o.1) >= end - 1.)
+    }
+
+    /// The farthest `view` scrolls down, as it now stands.
+    fn end_of(&self, view: ViewId) -> Option<f32> {
+        self.scroller(view, &self.collection_scroll_limits())
+            .map(|s| s.max.1)
+    }
+
+    /// The scroll offsets the painter places content at: each claimed scroller's displacement of its CSS offset in
+    /// `kept`, and `kept`'s for every other; `None` while no scroller is claimed, when they are `kept`.
+    pub(crate) fn displaced_scroll(
+        &self,
+        kept: &BTreeMap<ViewId, (f32, f32)>,
+    ) -> Option<BTreeMap<ViewId, (f32, f32)>> {
+        let kernel = self.host.kernel();
+        let mut claims = self.host.safe_area.scroll_claims().peekable();
+        claims.peek()?;
+        let mut shown = kept.clone();
+        for (id, claim) in claims.filter_map(|(key, c)| Some((kernel.node_by_key(key)?.id, c))) {
+            let at = kept.get(&id).copied().unwrap_or_default();
+            shown.insert(id, claim.displacement(at));
+        }
+        Some(shown)
+    }
+
+    /// Drop the reach of the views `renewed`, which a commit made new.
+    pub(super) fn renew_reach(&mut self, renewed: &[ViewId]) {
+        let mut area = std::mem::take(&mut self.host.safe_area);
+        area.renewed(self.host.kernel(), renewed);
+        self.host.safe_area = area;
+    }
+}
+
+#[cfg(test)]
+#[path = "reach_tests.rs"]
+mod tests;

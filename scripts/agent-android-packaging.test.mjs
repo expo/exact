@@ -86,7 +86,7 @@ test('an APK carries each GPU library the bake built, by the name Cargo gave it,
 
 const releaseJavaEnv = androidJavaEnv(process.env);
 const releaseSdk = androidSdk(process.env);
-test.skipIf(!process.env.ANDROID_NDK_HOME && !existsSync(resolve(releaseSdk, 'ndk')))('a development APK data image maps each edited blob at 16-byte alignment', () => {
+test.skipIf(!(process.env.ANDROID_NDK_HOME && existsSync(process.env.ANDROID_NDK_HOME)) && !existsSync(resolve(releaseSdk, 'ndk')))('a development APK data image maps each edited blob at 16-byte alignment', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-data-'));
   try {
     mkdirSync(resolve(dir, 'plans'));
@@ -369,3 +369,122 @@ test('an APK with a separate bake detects a Contract edit after baking', async (
     expect(changes.map(path => basename(path)).sort()).toEqual(['surfaces.json', 'view.contract']);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test.skipIf(process.platform === 'win32' || !releaseJavaEnv || !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))(
+  'package-private Android ComponentActivity compiles with ActivityResultLauncher, resolves ExactTranslucent/ExactLaunch, and fails on merged-manifest or theme tampering (LLP 1133.030 D9)', () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-private-activity-')), source = resolve(dir, 'sheet');
+    try {
+      mkdirSync(source);
+      writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: 'dev.exact.ci', name: 'CI' } }));
+      writeFileSync(resolve(source, 'SheetActivity.kt'), `package fixture.sheet
+import android.app.Activity
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import dev.exact.canvas.ExtensionContext
+
+class SheetActivity : ComponentActivity() {
+    private val launcher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        setResult(result.resultCode, result.data)
+        finish()
+    }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (savedInstanceState == null && intent.getBooleanExtra("launch", false)) {
+            launcher.launch(Intent(this, ScreenActivity::class.java))
+        }
+    }
+}
+
+class ScreenActivity : ComponentActivity()
+
+class SheetLauncher(private val context: ExtensionContext) {
+    fun open(done: (Int, Intent?) -> Unit) {
+        context.startActivityForResult(Intent(context.application, SheetActivity::class.java), done)
+    }
+}
+`);
+      const fragment = manifestFragment([{
+        extension: 'sheet', className: 'fixture.sheet.SheetLauncher',
+        manifest: {
+          activities: [
+            { name: 'fixture.sheet.SheetActivity', private: true },
+            { name: 'fixture.sheet.ScreenActivity', private: true, theme: 'opaque' },
+          ],
+        },
+      }]);
+      writeFileSync(resolve(dir, 'fragment.xml'), fragment);
+      const run = (tasks, extra = []) => spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), [
+        '--no-daemon', '--console=plain', ...tasks,
+        '-PapplicationId=dev.exact.ci', '-PappName=CI', '-Papp=ci', `-PappDir=${dir}`,
+        `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`,
+        `-PextensionDirs=${source}`, `-PmanifestFragment=${dir}/fragment.xml`,
+        '-Pmaven=androidx.activity:activity:1.9.0', `-PmavenLock=${dir}/gradle.lockfile`, ...extra,
+      ], { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000, env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk } });
+      const ok = run([':app:compileReleaseKotlin', ':app:checkReleaseCarManifest', ':app:processReleaseResources'], ['--write-locks']);
+      expect(ok.status, ok.stdout + ok.stderr).toBe(0);
+      // Verify a conflicting manifest entry that widens a private activity is rejected.
+      const widenInit = resolve(dir, 'widen.gradle');
+      writeFileSync(widenInit, `gradle.afterProject { p ->
+        if (p.path == ':app') p.tasks.matching { it.name == 'processReleaseMainManifest' }.configureEach {
+          doLast {
+            outputs.files.asFileTree.matching { include '**/AndroidManifest.xml' }.forEach { f ->
+              def updated = f.text.replaceAll(/(?s)(android:name="fixture\\.sheet\\.SheetActivity"[^>]*android:exported=")false(")/, '\$1true\$2')
+              if (updated == f.text) throw new GradleException("expected SheetActivity exported=false in " + f)
+              f.write(updated)
+            }
+          }
+        }
+      }`);
+      const widened = run([':app:checkReleaseCarManifest', '--rerun-tasks'], ['-I', widenInit]);
+      expect(widened.status).toBe(1);
+      expect(widened.stdout + widened.stderr).toContain('Merged fixture.sheet.SheetActivity differs from the approved manifest entry');
+      // Verify an `<activity-alias>` targeting a package-private activity (directly or via resource reference) is rejected.
+      const aliasInit = resolve(dir, 'alias.gradle');
+      writeFileSync(aliasInit, `gradle.afterProject { p ->
+        if (p.path == ':app') p.tasks.matching { it.name == 'processReleaseMainManifest' }.configureEach {
+          doLast {
+            outputs.files.asFileTree.matching { include '**/AndroidManifest.xml' }.forEach { f ->
+              def alias = '        <activity-alias android:name="fixture.sheet.LeakAlias" android:exported="true" android:targetActivity="fixture.sheet.SheetActivity" />\\n    </application>'
+              def updated = f.text.replace('</application>', alias)
+              if (updated == f.text) throw new GradleException("expected </application> in " + f)
+              f.write(updated)
+            }
+          }
+        }
+      }`);
+      const aliased = run([':app:checkReleaseCarManifest', '--rerun-tasks'], ['-I', aliasInit]);
+      expect(aliased.status).toBe(1);
+      expect(aliased.stdout + aliased.stderr).toContain('cannot target package-private activity fixture.sheet.SheetActivity');
+      const resAliasInit = resolve(dir, 'res-alias.gradle');
+      writeFileSync(resAliasInit, `gradle.afterProject { p ->
+        if (p.path == ':app') p.tasks.matching { it.name == 'processReleaseMainManifest' }.configureEach {
+          doLast {
+            outputs.files.asFileTree.matching { include '**/AndroidManifest.xml' }.forEach { f ->
+              def alias = '        <activity-alias android:name="fixture.sheet.IndirectAlias" android:exported="true" android:targetActivity="@string/alias_target" />\\n    </application>'
+              def updated = f.text.replace('</application>', alias)
+              if (updated == f.text) throw new GradleException("expected </application> in " + f)
+              f.write(updated)
+            }
+          }
+        }
+      }`);
+      const resAliased = run([':app:checkReleaseCarManifest', '--rerun-tasks'], ['-I', resAliasInit]);
+      expect(resAliased.status).toBe(1);
+      expect(resAliased.stdout + resAliased.stderr).toContain('must use a literal android:targetActivity');
+      // Verify an external AAR style overriding @style/ExactTranslucent (including via XML character references) is rejected.
+      const fakeAarValues = resolve(dir, 'fake-aar/values');
+      mkdirSync(fakeAarValues, { recursive: true });
+      writeFileSync(resolve(fakeAarValues, 'themes.xml'), '<resources><style name="&#x45;xactTranslucent" parent="android:Theme.DeviceDefault" /></resources>');
+      const themeInit = resolve(dir, 'theme.gradle');
+      writeFileSync(themeInit, `gradle.afterProject { p ->
+        if (p.path == ':app') p.tasks.matching { it.name == 'checkReleaseCarManifest' }.configureEach {
+          externalThemeResources.from('${resolve(fakeAarValues, 'themes.xml')}')
+        }
+      }`);
+      const themeTampered = run([':app:checkReleaseCarManifest', '--rerun-tasks'], ['-I', themeInit]);
+      expect(themeTampered.status).toBe(1);
+      expect(themeTampered.stdout + themeTampered.stderr).toContain('reserve @style/ExactTranslucent for Exact');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 300000);

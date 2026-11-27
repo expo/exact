@@ -499,6 +499,7 @@ final class Recognition: ExactTrackConsumer {
     // MARK: the track (D8, D10)
 
     func live(_ source: ExactAudioSource?) {
+        guard state != "ended", !stopping else { return }
         audio = true; sound = true
         self.source = source
         if let source { engine?.live(source) }
@@ -518,6 +519,7 @@ final class Recognition: ExactTrackConsumer {
 
 @available(iOS 26, macOS 26, *)
 final class AnalyzerEngine: RecognitionEngine {
+    private enum Lifecycle { case running, stopped, aborted }
     private weak var r: Recognition?
     private var analyzer: SpeechAnalyzer?
     private var input: AsyncStream<AnalyzerInput>.Continuation?
@@ -525,6 +527,7 @@ final class AnalyzerEngine: RecognitionEngine {
     private var ready = false, aborted = false
     /// A stop that came while the analyzer started acts once it has one.
     private var stopped = false
+    private var setup: Task<Void, Never>?
     private let queue = DispatchQueue(label: "exact.speech-recognition.convert")
 
     /// The transcriber `word` names for `locale`, or nil when it supports no equivalent locale.
@@ -548,68 +551,186 @@ final class AnalyzerEngine: RecognitionEngine {
         self.r = r
         let locale = SpeechRecognitionModule.locale(args), interim = r.interimResults, alternatives = r.maxAlternatives > 1
         let phrases = (args["phrases"] as? [[String: Any]] ?? []).compactMap { $0["phrase"] as? String }
-        Task { [weak self] in
+        setup = Task { [weak self] in
+            if await Self.haltIfEnded(self) { return }
             guard let module = await Self.module(word, locale, interim: interim, alternatives: alternatives) else {
-                return await self?.end("language-not-supported", "no \(word) for \(locale.identifier)")
+                if await Self.haltIfEnded(self) { return }
+                await self?.end("language-not-supported", "no \(word) for \(locale.identifier)")
+                return
             }
+            if await Self.haltIfEnded(self) { return }
             guard await AssetInventory.status(forModules: [module]) == .installed else {
-                return await self?.end("language-not-supported", "the \(locale.identifier) model is not installed (installSpeechRecognition)")
+                if await Self.haltIfEnded(self) { return }
+                await self?.end("language-not-supported", "the \(locale.identifier) model is not installed (installSpeechRecognition)")
+                return
             }
+            if await Self.haltIfEnded(self) { return }
             guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
-                return await self?.end("language-not-supported", "no analyzer takes audio for the \(locale.identifier) \(word) model here")
+                if await Self.haltIfEnded(self) { return }
+                await self?.end("language-not-supported", "no analyzer takes audio for the \(locale.identifier) \(word) model here")
+                return
             }
+            if await Self.haltIfEnded(self) { return }
             let context = AnalysisContext()
             if !phrases.isEmpty { context.contextualStrings[.general] = phrases }
             do {
                 let analyzer: SpeechAnalyzer
                 if let file {
                     analyzer = try await SpeechAnalyzer(inputAudioFile: AVAudioFile(forReading: file), modules: [module], analysisContext: context, finishAfterFile: true)
-                    await self?.hold(analyzer)
+                    switch await self?.hold(analyzer) {
+                    case true: break
+                    case false: return
+                    case nil:
+                        await analyzer.cancelAndFinishNow()
+                        return
+                    }
                 } else {
                     let (stream, input) = AsyncStream.makeStream(of: AnalyzerInput.self)
                     analyzer = SpeechAnalyzer(modules: [module])
                     try await analyzer.setContext(context)
+                    if await Self.haltIfEnded(self) {
+                        input.finish()
+                        await analyzer.cancelAndFinishNow()
+                        return
+                    }
                     try await analyzer.start(inputSequence: stream)
-                    await self?.began(analyzer, input, format)
+                    switch await self?.began(analyzer, input, format) {
+                    case true: break
+                    case false: return
+                    case nil:
+                        input.finish()
+                        await analyzer.cancelAndFinishNow()
+                        return
+                    }
                 }
                 try await self?.results(module)
                 await self?.end(nil)
             } catch {
-                await self?.end(self?.aborted == true ? "aborted" : "audio-capture", "\(error)")
+                await self?.failed(error)
             }
         }
     }
 
-    @MainActor private func hold(_ analyzer: SpeechAnalyzer) {
-        self.analyzer = analyzer
-        if stopped { stop() }
+    private static func haltIfEnded(_ engine: AnalyzerEngine?) async -> Bool {
+        guard !Task.isCancelled, let state = await engine?.lifecycle() else { return true }
+        switch state {
+        case .running: return false
+        case .stopped:
+            await engine?.end(nil)
+            return true
+        case .aborted:
+            return true
+        }
     }
 
-    @MainActor private func began(_ analyzer: SpeechAnalyzer, _ input: AsyncStream<AnalyzerInput>.Continuation, _ format: AVAudioFormat) {
+    @MainActor private func lifecycle() -> Lifecycle {
+        aborted ? .aborted : stopped ? .stopped : .running
+    }
+
+    @MainActor private func failed(_ error: Error) {
+        end(aborted ? "aborted" : "audio-capture", "\(error)")
+    }
+
+    @MainActor private func hold(_ analyzer: SpeechAnalyzer) -> Bool {
+        self.analyzer = analyzer
+        if aborted { abort(); return false }
+        if stopped { stop() }
+        return true
+    }
+
+    @MainActor private func began(_ analyzer: SpeechAnalyzer, _ input: AsyncStream<AnalyzerInput>.Continuation, _ format: AVAudioFormat) -> Bool {
         self.analyzer = analyzer; self.input = input
         ready = true
-        if aborted { input.finish(); return }
-        if stopped { return stop() }
+        if aborted { abort(); return false }
+        if stopped { stop(); return true }
         if let source { attach(source, format) } else { self.format = format }
+        return true
     }
     private var format: AVAudioFormat?
 
     /// Each buffer of the capture, copied off the audio thread and converted on `queue` to the analyzer's format.
     private func attach(_ source: ExactAudioSource, _ format: AVAudioFormat) {
-        guard tap == nil, let input, let converter = AVAudioConverter(from: source.format, to: format) else { return }
+        guard tap == nil, let input else { return }
         let queue = queue
+        var converter = AVAudioConverter(from: source.format, to: format)
         tap = source.tap { buffer, _ in
             guard let copy = Self.copy(buffer) else { return }
             queue.async {
-                let ratio = format.sampleRate / copy.format.sampleRate
-                guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(Double(copy.frameLength) * ratio) + 16) else { return }
-                var fed = false
-                _ = converter.convert(to: out, error: nil) { _, status in
-                    if fed { status.pointee = .noDataNow; return nil }
-                    fed = true; status.pointee = .haveData; return copy
+                Self.conform(copy, to: format, using: &converter) { out in
+                    input.yield(AnalyzerInput(buffer: out))
                 }
-                if out.frameLength > 0 { input.yield(AnalyzerInput(buffer: out)) }
             }
+        }
+    }
+
+    /// Convert `buffer` to `format` and emit every produced buffer, draining and replacing
+    /// `converter` on any format boundary (including entering passthrough) and looping until
+    /// `buffer` is fully consumed.
+    static func conform(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat,
+                        using converter: inout AVAudioConverter?, emit: (AVAudioPCMBuffer) -> Void) {
+        guard buffer.frameLength > 0, buffer.format.sampleRate > 0, format.sampleRate > 0 else { return }
+        if let previous = converter,
+           buffer.format == format || previous.inputFormat != buffer.format || previous.outputFormat != format {
+            drain(previous, to: format, emit: emit)
+            converter = nil
+        }
+        if buffer.format == format {
+            emit(buffer)
+            return
+        }
+        if converter == nil {
+            converter = AVAudioConverter(from: buffer.format, to: format)
+        }
+        guard let active = converter else { return }
+        let ratio = format.sampleRate / buffer.format.sampleRate
+        let capacity = max(AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 64, 256)
+        var fed = false
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var error: NSError?
+            let status = active.convert(to: out, error: &error) { _, inputStatus in
+                if fed {
+                    inputStatus.pointee = .noDataNow
+                    return nil
+                }
+                fed = true
+                inputStatus.pointee = .haveData
+                return buffer
+            }
+            if status == .error || error != nil {
+                converter = nil
+                return
+            }
+            if out.frameLength > 0 { emit(out) }
+            switch status {
+            case .haveData:
+                if out.frameLength == 0 && fed { return }
+            case .inputRanDry:
+                return
+            case .endOfStream:
+                converter = nil
+                return
+            case .error:
+                converter = nil
+                return
+            @unknown default:
+                return
+            }
+        }
+    }
+
+    private static func drain(_ converter: AVAudioConverter, to format: AVAudioFormat, emit: (AVAudioPCMBuffer) -> Void) {
+        let capacity: AVAudioFrameCount = 1024
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var error: NSError?
+            let status = converter.convert(to: out, error: &error) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            if status == .error || error != nil { return }
+            if out.frameLength > 0 { emit(out) }
+            if status != .haveData || out.frameLength == 0 { return }
         }
     }
 
@@ -649,6 +770,7 @@ final class AnalyzerEngine: RecognitionEngine {
     }
 
     func live(_ source: ExactAudioSource) {
+        guard !stopped, !aborted else { return }
         self.source = source
         if ready, let format { attach(source, format) }
     }
@@ -657,16 +779,19 @@ final class AnalyzerEngine: RecognitionEngine {
         stopped = true
         tap?.cancel(); tap = nil
         input?.finish()
-        let analyzer = analyzer
-        Task { try? await analyzer?.finalizeAndFinishThroughEndOfInput() }
+        if let analyzer {
+            Task { try? await analyzer.finalizeAndFinishThroughEndOfInput() }
+        }
     }
 
     func abort() {
         aborted = true
+        setup?.cancel(); setup = nil
         tap?.cancel(); tap = nil
         input?.finish()
-        let analyzer = analyzer
-        Task { await analyzer?.cancelAndFinishNow() }
+        if let analyzer {
+            Task { await analyzer.cancelAndFinishNow() }
+        }
     }
 }
 
@@ -795,7 +920,7 @@ final class RecognizerEngine: RecognitionEngine {
     /// The track's buffers, on the audio thread. A continuous recognition's request ends its audio after a segment's
     /// worth, as the file reader's does, and what is heard until the next request begins is held for it.
     func live(_ source: ExactAudioSource) {
-        guard tap == nil else { return }
+        guard tap == nil, !stopping, !aborted else { return }
         let continuous = r?.continuous == true
         var inSegment = 0.0
         tap = source.tap { [weak self] buffer, _ in

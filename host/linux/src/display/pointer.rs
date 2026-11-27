@@ -157,7 +157,7 @@ mod tests {
     count = count + 1
   view
     column
-      box testId="row" width=400 height=100 swiperight=reply touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
+      box testId="row" width=400 height=100 swipe=reply swipe-follow="right" touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
         text "swipe"
       text `${count}` testId="count"
 "#).unwrap();
@@ -369,6 +369,42 @@ component App
         forward(&mut p, true);
         forward(&mut p, false);
         assert!(on_detail(&p), "nothing further ahead");
+    }
+    #[test]
+    fn keypad_digits_type_into_a_focused_field() {
+        let mut p = Presenter::boot_with(
+            &contract::compile("component App\n  state note = \"\"\n  action typed(value: string)\n    note = value\n  view\n    input testId=\"field\" value=note input=typed width=200 height=30\n")
+                .unwrap()
+                .encode(),
+            (),
+            (400., 500.),
+            1.,
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+            PainterChoice::Cpu,
+        )
+        .unwrap()
+        .0;
+        let k = p.host().kernel();
+        let field = k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id;
+        p.tap(field).unwrap();
+        let mut at = Pointer::new((20., 40.));
+        // KP1, KP2, KPDOT, KP5.
+        for code in [79, 80, 83, 76] {
+            for down in [true, false] {
+                let key = InputEvent::Key {
+                    code,
+                    shift: false,
+                    down,
+                    repeat: false,
+                };
+                dispatch(&mut p, &mut at, (400., 500.), 1., key, 0.).unwrap();
+            }
+        }
+        let k = p.host().kernel();
+        assert_eq!(
+            k.node(field).unwrap().props.str(PropId::Value),
+            Some("12.5")
+        );
     }
     #[test]
     fn relative_and_absolute_display_events_release_or_escape_once() {

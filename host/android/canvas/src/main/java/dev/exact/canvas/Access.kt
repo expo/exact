@@ -368,6 +368,7 @@ internal class Access(private val host: View) {
         info.isVisibleToUser = true
         info.isImportantForAccessibility = true
         info.isEnabled = !n.has(DISABLED)
+        if (n.has(FOCUSABLE)) info.isFocusable = true
         info.isAccessibilityFocused = focused == n.id
         info.addAction(if (focused == n.id) AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         // Its words: what it says is its text, and what only names it is its description.
@@ -596,7 +597,7 @@ internal class Access(private val host: View) {
                 if (real(n) != null) return NONE
                 val inner = find(n.children)
                 if (inner != NONE) return inner
-                if (n.name.isNotEmpty() || n.has(CLICK) || n.role == UP || n.has(RANGE)) return n.id
+                if (n.name.isNotEmpty() || n.has(CLICK) || n.role == UP || n.has(RANGE) || n.has(FOCUSABLE)) return n.id
             }
             return NONE
         }
@@ -757,6 +758,7 @@ internal class Access(private val host: View) {
         const val RANGE = 1 shl 13
         const val SETTABLE = 1 shl 14
         const val DRAG = 1 shl 16
+        const val FOCUSABLE = 1 shl 17
 
         /** What changed of a node (`presenter::access::change`). */
         private const val SUBTREE = 1

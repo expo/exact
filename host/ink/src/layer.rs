@@ -103,6 +103,25 @@ impl Pool {
         self.take_sized(device, self.size)
     }
 
+    /// A target that holds `size`, and the size it has: each dimension the next
+    /// power of two from 64, up to the frame's. A pass costs a tile-based GPU the
+    /// load and store of its whole target, so content smaller than the frame is
+    /// drawn into a target near its own size. The size follows from the content
+    /// alone, so the same content draws the same pixels whatever the pool holds;
+    /// the steps let content that grows or moves a few pixels a frame keep its
+    /// target.
+    pub fn take_fitting(
+        &mut self,
+        device: &mut impl Device,
+        size: [u32; 2],
+    ) -> Result<(TextureId, [u32; 2])> {
+        let size = [0, 1].map(|axis| {
+            let step = size[axis].max(64).next_power_of_two();
+            step.min(self.size[axis].max(size[axis]))
+        });
+        Ok((self.take_sized(device, size)?, size))
+    }
+
     pub fn take_sized(&mut self, device: &mut impl Device, size: [u32; 2]) -> Result<TextureId> {
         let observing = counters::enabled();
         // Earlier frames have submitted every read. Reusing a target orders its

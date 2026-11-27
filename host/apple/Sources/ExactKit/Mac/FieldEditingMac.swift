@@ -98,7 +98,7 @@ extension NodeView {
     /// the app wrote while it lasted and is still held lands now
     /// (`pendingValue`). Nothing while text is still marked.
     func applyHeldValue(to editor: NSTextView) {
-        if !editor.hasMarkedText(), let held = pendingValue { writeValue(held, into: editor) }
+        if !editor.hasMarkedText(), let held = pendingValue { writeValue(held, into: editor, heldFilter: pendingFiltered) }
     }
     /// What an input method has marked in `editor` becomes text, now: a ⌘
     /// chord's keydown ends the composition.

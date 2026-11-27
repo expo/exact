@@ -241,8 +241,16 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         host?.geometryChanged()
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        #if os(iOS)
+        dialog?.presenter?.textSelection.scrolled(scrollView)
+        #endif
         host?.geometryChanged()
         host?.contentMoved()
+    }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        #if os(iOS)
+        dialog?.presenter?.textSelection.scrollWillBeginDragging(scrollView)
+        #endif
     }
     override var keyCommands: [UIKeyCommand]? {
         [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(escape))]

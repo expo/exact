@@ -69,8 +69,8 @@ async function digestRefusals(): Promise<string> {
     await rejection(() => subtle.digest("MD5", new Uint8Array(0))),
     await rejection(() => subtle.digest("SHA-256", "abc")),
     await rejection(() => subtle.digest.call({}, "SHA-256", new Uint8Array(0))),
-    await rejection(() => subtle.encrypt({ name: "AES-GCM" }, null, new Uint8Array(0))),
-    await rejection(() => subtle.deriveBits({ name: "HKDF" }, null, 8)),
+    await rejection(() => subtle.encrypt({ name: "AES-CBC" }, null, new Uint8Array(0))),
+    await rejection(() => subtle.deriveBits({ name: "ECDH" }, null, 8)),
   ].join("/");
 }
 

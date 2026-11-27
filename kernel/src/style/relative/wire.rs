@@ -1,6 +1,6 @@
 //! Retained lengths on incoming style patches. Exports still carry computed pixels.
 
-use super::{Relative, Unit};
+use super::{LengthSpec, Relative, Unit};
 use crate::wire::codec::{Reader, Writer};
 use crate::{DecodeError, StyleId, StyleProps, StyleValue};
 
@@ -24,7 +24,20 @@ pub(crate) fn decode(style: &mut StyleProps, r: &mut Reader<'_>) -> Result<(), D
             return Err(DecodeError::InvalidRelativeLength);
         }
         previous = Some(row);
-        let unit = match r.u8()? {
+        let tag = r.u8()?;
+        if tag == 7 {
+            if id != StyleId::LineHeight {
+                return Err(DecodeError::InvalidRelativeLength);
+            }
+            let c = crate::style::calc::Comparison::decode(r, id)
+                .map_err(|_| DecodeError::InvalidRelativeLength)?;
+            if !c.is_line_height_math() {
+                return Err(DecodeError::InvalidRelativeLength);
+            }
+            style.relative.put(id, Some(LengthSpec::Math(c)));
+            continue;
+        }
+        let unit = match tag {
             0 => Unit::Rem,
             1 => Unit::Em,
             2 => Unit::TextStyle(r.u8()?),
@@ -68,7 +81,7 @@ pub(crate) fn decode(style: &mut StyleProps, r: &mut Reader<'_>) -> Result<(), D
         if super::of(id, &StyleValue::Text(text.into())).ok().flatten() != Some((unit, n)) {
             return Err(DecodeError::InvalidRelativeLength);
         }
-        style.relative.put(id, Some((unit, n)));
+        style.relative.put(id, Some(LengthSpec::Scaled(unit, n)));
     }
     Ok(())
 }
@@ -97,6 +110,24 @@ mod tests {
             style
                 .set_dynamic(StyleId::BorderWidthTop, &StyleValue::Text(text.into()))
                 .unwrap();
+            round_trip(style);
+        }
+        for text in [
+            "clamp(20px, 4vw, 32px)",
+            "calc(1rem + 4px)",
+            "min(2rem, 40px)",
+            "max(16px, 3cqw)",
+            "calc(infinity * 1vw)",
+            "calc(-infinity * 1vw)",
+        ] {
+            let mut style = StyleProps::default();
+            style
+                .set_dynamic(StyleId::LineHeight, &StyleValue::Text(text.into()))
+                .unwrap();
+            assert!(matches!(
+                style.relative.get_spec(StyleId::LineHeight),
+                Some(LengthSpec::Math(_))
+            ));
             round_trip(style);
         }
     }
@@ -135,6 +166,65 @@ mod tests {
             assert_eq!(
                 decode(&mut style, &mut Reader::new(w.as_slice())),
                 Err(DecodeError::InvalidRelativeLength)
+            );
+        }
+        // Tag 7 (LengthSpec::Math): refused on non-LineHeight rows, when truncated,
+        // or when carrying disallowed %, env(), var(), or compactable expressions.
+        let mut valid_math = StyleProps::default();
+        valid_math
+            .set_dynamic(
+                StyleId::LineHeight,
+                &StyleValue::Text("calc(1rem + 4px)".into()),
+            )
+            .unwrap();
+        let Some(LengthSpec::Math(good_cmp)) =
+            valid_math.relative.get_spec(StyleId::LineHeight).cloned()
+        else {
+            panic!("expected Math");
+        };
+        {
+            let mut style = StyleProps::default();
+            style.mask.set(StyleId::FontSize);
+            let mut w = Writer::new();
+            w.u16(1);
+            w.u32(StyleId::FontSize.bit());
+            w.u8(7);
+            good_cmp.encode(&mut w);
+            assert_eq!(
+                decode(&mut style, &mut Reader::new(w.as_slice())),
+                Err(DecodeError::InvalidRelativeLength)
+            );
+        }
+        {
+            let mut style = StyleProps::default();
+            style.mask.set(StyleId::LineHeight);
+            let mut w = Writer::new();
+            w.u16(1);
+            w.u32(StyleId::LineHeight.bit());
+            w.u8(7);
+            assert!(decode(&mut style, &mut Reader::new(w.as_slice())).is_err());
+        }
+        for bad_expr in [
+            "min(10px, 50%)",
+            "max(10px, env(safe-area-inset-top))",
+            "calc(10px + var(--x))",
+        ] {
+            let crate::Dimension::Compare(bad_cmp) =
+                crate::Dimension::parse_calc(bad_expr).expect(bad_expr)
+            else {
+                panic!("expected Compare for {bad_expr}");
+            };
+            let mut style = StyleProps::default();
+            style.mask.set(StyleId::LineHeight);
+            let mut w = Writer::new();
+            w.u16(1);
+            w.u32(StyleId::LineHeight.bit());
+            w.u8(7);
+            bad_cmp.encode(&mut w);
+            assert_eq!(
+                decode(&mut style, &mut Reader::new(w.as_slice())),
+                Err(DecodeError::InvalidRelativeLength),
+                "{bad_expr}"
             );
         }
     }

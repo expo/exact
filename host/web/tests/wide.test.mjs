@@ -2,11 +2,11 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // LLP 1116.004 D1 in a real browser at a phone's width (390) and a desktop's (1280): the shell's stylesheet and the
 // navigation glue's projection (navigation.js, which both web targets run) over nodes as the hosts write them. A root
 // tab bar whose placement is unsaid is a sidebar on a wide window and a bar on a phone; an arrangement the app wrote
-// stays its own. A stack whose root route is a list whose rows push shows that route beside its top on a wide window
-// (the list live, its disclosure gone, the row whose press pushed the detail marked, no Back in the detail, and while
-// nothing is selected the platform's placeholder in the pane or the author's own) and pushes on a phone;
-// `navigationSplit` opts out or names the width; a sheet stays a sheet; a resize changes nothing else. At a
-// desktop width `check` advises (D1.3) on a tab bar left along the bottom and on a list that pushes unsplit.
+// stays its own. A stack whose root route asks for the split (LLP 1127 D1: "split", a width or a placeholder box of its
+// own) shows that route beside its top on a wide window (the list live, its disclosure gone, the row whose press pushed
+// the detail marked, no Back in the detail, and while nothing is selected the platform's placeholder in the pane or the
+// author's own) and pushes on a phone; "none" or no ask pushes; a sheet stays a sheet; a resize changes nothing else. At a
+// desktop width `check` advises (D1.3) on a tab bar left along the bottom, and holds its advice for a list (LLP 1127 D1).
 import { test, expect } from 'bun:test';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
@@ -24,7 +24,9 @@ const style = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/
 const chevron = '<img data-symbol-source="symbol:forward-chevron" alt="" style="width:17px;height:17px">';
 const abs = 'position:absolute;inset:0;display:flex;flex-direction:column';
 // A route of rows (`rows` true: each row writes the router and draws the disclosure), as the hosts write a `list` of `button`s; `inner` after it.
-const list = (id, key, rows = true, extra = '', inner = '') => `<div navigationKey="${key}" id="${id}" style="${abs}" ${extra}><header><h1>People</h1></header>
+// It asks for the split (LLP 1127 D1) where its rows push, unless `extra` says its own `navigationSplit`.
+const asks = (rows, extra) => rows && !/navigationSplit=/.test(extra) ? `navigationSplit="split" ${extra}` : extra;
+const list = (id, key, rows = true, extra = '', inner = '') => `<div navigationKey="${key}" id="${id}" style="${abs}" ${asks(rows, extra)}><header><h1>People</h1></header>
   <div data-exact-list role="list" id="${id}-list">${['ada', 'bo'].map(n => `<button id="${id}-${n}" data-exact-on="press" data-exact-router-press="${rows}" style="display:flex"><span data-exact-text>${n}</span>${rows ? chevron : ''}</button>`).join('')}</div>${inner}</div>`;
 const detail = (id, key, extra = '') => `<div navigationKey="${key}" id="${id}" style="${abs}" ${extra}><header><h2>${id}</h2></header><div>${id}</div></div>`;
 const tabs = (bar) => `<main id="nav" navigationKey="2" navigationBack="back" style="width:100%;height:100%;display:flex;flex-direction:column;position:relative">
@@ -63,7 +65,8 @@ const page = (body, routePaths = [], waitForActivation = false) => style + `<div
 async function inChrome(html, test, w = 1280) {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(req.url === '/check.js' ? resolve(WEB, '../web-js/check.js') : resolve(WEB, 'navigation.js')));
+    const file = req.url === '/check.js' ? resolve(WEB, '../web-js/check.js') : ['/presence-glue.js', '/motion-glue.js'].includes(req.url) ? resolve(WEB, req.url.slice(1)) : resolve(WEB, 'navigation.js');
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(file));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=1400,900'] }), { cdp } = suite;
@@ -223,6 +226,9 @@ check('a projection with nothing to change writes nothing', () => inChrome(page(
   // A split showing the detail a row's press pushed, then a bound style that does not place the bar; then a sheet
   // over it, the tab bar inert beneath.
   await evaluate(`select('1'); { const row = document.getElementById('r1-bo'); row.addEventListener('click', () => push('2', '/people/bo'), {once:true}); row.click(); }`);
+  // The tab bar's resize observer hears once when it starts watching, in the next rendering update, and rechecks its
+  // placement then; that recheck is no projection's, so the test watches only once two frames have passed
+  await evaluate(`new Promise((settled) => requestAnimationFrame(() => requestAnimationFrame(settled)))`);
   expect(await evaluate(`writes(() => { select(2); document.getElementById('bar').style.backgroundColor = 'red'; select(2); }).then(seen => [document.getElementById('nav').hasAttribute('data-exact-sidebar'), document.getElementById('r1-bo').hasAttribute('data-exact-split-row'), seen])`)).toEqual([true, true, []]);
   await evaluate(`select(3)`);
   expect(await evaluate(`writes(() => { select(3); select(3); }).then(seen => [document.getElementById('bar').inert, seen])`)).toEqual([true, []]);
@@ -281,7 +287,7 @@ check('a list whose rows push is beside its detail on a wide window, and pushes 
   await evaluate(`select('2')`);
   await size(1280);
   expect(await evaluate(`[shown('r1'), shown('r2'), box('r1')[2], document.getElementById('r1-bo').hasAttribute('data-exact-split-row')]`)).toEqual([true, true, 320, true]);
-  // The other tab's rows do not write the router: the stack stays unsplit, with no placeholder.
+  // The other tab's route does not ask: the stack stays unsplit, with no placeholder.
   expect(await evaluate(`[document.getElementById('t1').hasAttribute('data-exact-split'), placeholder('p2')]`)).toEqual([false, null]);
   // A row that is a link (LLP 1115.000 D4.4) is followed from the document's capture phase (input-glue.js, router.js),
   // so its commit lands within the click, before a listener nearer the row would hear it: its row is marked all the same.
@@ -311,6 +317,29 @@ check('the author\'s placeholder in the root route takes the detail pane while n
     // A phone: the list alone, the author's box nowhere.
     await size(390);
     expect(await evaluate(`[box('r1'), getComputedStyle(document.getElementById('own')).display, placeholder('nav')]`)).toEqual([[0, 0, 390, 800], 'none', null]);
+    // Wide again, the box moved out of the route by a page module is the author's placeholder no more, wherever it went
+    await size(1280);
+    await evaluate(`{ const wrap = document.createElement('div'); document.getElementById('nav').after(wrap); wrap.append(document.getElementById('own')); push('1', '/'); }`);
+    expect(await evaluate(`[document.getElementById('own').hasAttribute('data-exact-split-placeholder'), getComputedStyle(document.getElementById('own')).display]`)).toEqual([false, 'none']);
+  });
+}, 60000);
+
+check('a placeholder a page module moves to another tab\'s root is shown by that root, whichever projects first', () => {
+  const own = '<div navigationSplit="placeholder" id="own" style="display:none"><span>Pick</span></div>';
+  const html = tabs(BAR).replace(list('t1', 10, false), list('t1', 10, false, 'navigationSplit="split"', own));
+  const shown = `[document.getElementById('own').hasAttribute('data-exact-split-placeholder'), getComputedStyle(document.getElementById('own')).display]`;
+  return inChrome(page(html), async (evaluate) => {
+    await evaluate(`select('10')`);
+    expect(await evaluate(shown)).toEqual([true, 'flex']);
+    // Into the first tab's root, which shows it while nothing is selected there: that stack projects before the one it left
+    await evaluate(`document.getElementById('r1').append(document.getElementById('own')); select('1')`);
+    expect(await evaluate(shown)).toEqual([true, 'flex']);
+    // And back, the root it leaves projecting first
+    await evaluate(`document.getElementById('t1').append(document.getElementById('own')); select('10')`);
+    expect(await evaluate(shown)).toEqual([true, 'flex']);
+    // Out of every root: the root it left clears its mark
+    await evaluate(`document.getElementById('t1').after(document.getElementById('own')); select('10')`);
+    expect(await evaluate(shown)).toEqual([false, 'none']);
   });
 }, 60000);
 
@@ -410,11 +439,11 @@ check('a list and its detail split at the fold, whatever the window\'s width or 
 // Stage 6d's projection inputs. These DOM fixtures test navigation.js, not
 // whether either compiler emits the facts; compiled-plan coverage is separate.
 const ruleStack = body => `<main id="nav" navigationKey="2" navigationBack="back" style="width:100%;height:100%;position:relative">
-  <div id="r1" navigationKey="1" style="${abs}"><header><h1>People</h1></header>${body}</div>${detail('r2', 2)}</main>`;
+  <div id="r1" navigationKey="1" navigationSplit="split" style="${abs}"><header><h1>People</h1></header>${body}</div>${detail('r2', 2)}</main>`;
 
 check('a served document stays unsplit across resize until its target adopts it', () => {
   const body = '<div data-exact-list><button data-exact-router-press="true">Open</button></div>';
-  const stack = ruleStack(body).replace('id="r1"', 'id="r1" navigationSplit="280"');
+  const stack = ruleStack(body).replace('navigationSplit="split"', 'navigationSplit="280"');
   return inChrome(page(stack, [], true), async (evaluate, size) => {
     const state = `[document.getElementById('r1').getAttribute('data-exact-split'), document.getElementById('r2').getAttribute('data-exact-split'), document.getElementById('r1').style.getPropertyValue('--exact-split'), document.getElementById('r1').inert, document.getElementById('r2').inert]`;
     expect(await evaluate(state)).toEqual([null, null, '', false, false]);
@@ -425,7 +454,10 @@ check('a served document stays unsplit across resize until its target adopts it'
   });
 }, 60000);
 
-check('split admission reads list and outer press facts, not roles or decorative chevrons', () => {
+// The list the rule finds in route r1, by its id ("" for none), or null where it finds none
+const splitList = `import('/navigation.js').then(({ pushingList }) => pushingList(document.getElementById('r1'))?.list.id ?? null)`;
+
+check('the split\'s list is found from list and outer press facts, not roles or decorative chevrons', () => {
   const link = '<a href="/item/a">A</a>';
   const cases = [
     ['link without a chevron', `<div data-exact-list role="presentation">${link}</div>`, true],
@@ -437,43 +469,70 @@ check('split admission reads list and outer press facts, not roles or decorative
     ['another route before a list', `<div navigationKey="nested"><div data-exact-list>${link}</div></div>`, false],
     ['route key inside list rows', `<div data-exact-list><div navigationKey="nested">${link}</div></div>`, true],
     ['sideways outer list', `<div data-exact-list style="display:flex;flex-direction:row"><div data-exact-list>${link}</div></div>`, true],
+    ['a list in the placeholder', `<div navigationSplit="placeholder"><div data-exact-list>${link}</div></div>`, false],
   ];
   return inChrome(page(ruleStack(''), ['/item/a']), async evaluate => {
     const observed = [];
     for (const [name, body] of cases) {
-      // A new root identity isolates each admission case from retained-list state.
-      const route = `<div id="r1" navigationKey="1" style="${abs}">${body}</div>`;
-      observed.push([name, await evaluate(`document.getElementById('r1').outerHTML = ${JSON.stringify(route)}; select(2); document.getElementById('r1').hasAttribute('data-exact-split')`)]);
+      // A new root identity isolates each case from the list retained for the one before.
+      const route = `<div id="r1" navigationKey="1" navigationSplit="split" style="${abs}">${body}</div>`;
+      observed.push([name, await evaluate(`document.getElementById('r1').outerHTML = ${JSON.stringify(route)}; select(2); ${splitList}`) !== null]);
     }
-    expect(observed).toEqual(cases.map(([name, , splits]) => [name, splits]));
+    expect(observed).toEqual(cases.map(([name, , found]) => [name, found]));
   });
 }, 60000);
 
-check('a later pushing list wins over a retained empty list, whose identity alone can retain the split', () => {
+check('the web splits only a stack whose root route asks: "split", a width or a placeholder box of its own', () => {
+  const rows = `<div data-exact-list><button data-exact-on="press" data-exact-router-press="true">Open${chevron}</button></div>`;
+  const own = '<div navigationSplit="placeholder" style="display:none">Pick one</div>';
+  const cases = [
+    ['a list whose rows push, unasked', '', rows, false],
+    ['"split" with no list', 'navigationSplit="split"', '', true],
+    ['a width with no list', 'navigationSplit="280"', '', true],
+    ['its own placeholder box', '', own, true],
+    ['a placeholder in a box of the route', '', `<div>${own}</div>`, false],
+    ['"none"', 'navigationSplit="none"', rows, false],
+    ['a fraction of a px', 'navigationSplit="280.5"', rows, false],
+    ['a word no host reads', 'navigationSplit="auto"', rows, false],
+    ['"none" over its own placeholder', 'navigationSplit="none"', own, false],
+    ['its own placeholder animating out, gone at once as on the native hosts', '', own.replace('<div ', '<div data-exiting '), false],
+  ];
+  return inChrome(page(ruleStack('')), async evaluate => {
+    const observed = [];
+    for (const [name, said, body] of cases) {
+      const route = `<div id="r1" navigationKey="1" ${said} style="${abs}"><header><h1>People</h1></header>${body}</div>`;
+      observed.push([name, await evaluate(`document.getElementById('r1').outerHTML = ${JSON.stringify(route)}; select(2); document.getElementById('r1').hasAttribute('data-exact-split')`)]);
+    }
+    expect(observed).toEqual(cases.map(([name, , , splits]) => [name, splits]));
+  });
+}, 60000);
+
+check('a later pushing list wins over a retained empty list, whose identity alone keeps it the split\'s list', () => {
   const body = `<div data-exact-list id="first"><button data-exact-on="press" data-exact-router-press="true">Open${chevron}</button></div>
     <div data-exact-list id="later" style="display:none"><a id="later-row" href="/item/b">B</a></div>`;
   return inChrome(page(ruleStack(body), ['/item/b']), async evaluate => {
     expect(await evaluate(`document.getElementById('r1').hasAttribute('data-exact-split')`)).toBe(true);
     await evaluate(`document.getElementById('first').textContent = 'No Results'; document.getElementById('later').style.display = 'block'; push(2, '/item/b', [[1, '/'], [2, '/item/b']])`);
     expect(await evaluate(`document.getElementById('later-row').hasAttribute('data-exact-split-row')`)).toBe(true);
+    // The route asks, so the split stays, and the emptied list is still the one its identity retains
     await evaluate(`document.getElementById('later').textContent = 'No Results'; select(2)`);
-    expect(await evaluate(`document.getElementById('r1').hasAttribute('data-exact-split')`)).toBe(true);
-    // The first empty list was not the retained candidate after the later one pushed.
+    expect(await evaluate(`Promise.all([document.getElementById('r1').hasAttribute('data-exact-split'), ${splitList}])`)).toEqual([true, 'later']);
+    // The first empty list was not the retained candidate after the later one pushed
     await evaluate(`document.getElementById('later').remove(); select(2)`);
-    expect(await evaluate(`[document.getElementById('r1').hasAttribute('data-exact-split'), back('r2')]`)).toEqual([false, true]);
+    expect(await evaluate(`Promise.all([document.getElementById('r1').hasAttribute('data-exact-split'), ${splitList}])`)).toEqual([true, null]);
   });
 }, 60000);
 
-check('a bare plan rechecks sideways admission on a resize that stays above the wide threshold', () => {
+check('a bare plan rechecks the split\'s list on a resize that stays above the wide threshold, and the ask holds the split', () => {
   const body = `<div data-exact-list id="resize-list"><button data-exact-on="press" data-exact-router-press="true">Open${chevron}</button></div>`;
   const html = page(ruleStack(body)) + '<style>@media (min-width:1100px) { #resize-list { display:flex;flex-direction:row } }</style>';
   // No exactViewport runtime and no authored or visible default placeholder.
   return inChrome(html, async (evaluate, size) => {
     expect(await evaluate(`[document.querySelector('[navigationSplit="placeholder"]') === null, document.querySelector('[data-exact-split-empty]') === null, document.getElementById('r1').hasAttribute('data-exact-split')]`)).toEqual([true, true, true]);
     await size(1200);
-    expect(await evaluate(`[getComputedStyle(document.getElementById('resize-list')).flexDirection, document.getElementById('r1').hasAttribute('data-exact-split'), back('r2')]`)).toEqual(['row', false, true]);
+    expect(await evaluate(`Promise.all([getComputedStyle(document.getElementById('resize-list')).flexDirection, document.getElementById('r1').hasAttribute('data-exact-split'), back('r2'), ${splitList}])`)).toEqual(['row', true, false, null]);
     await size(1000);
-    expect(await evaluate(`[document.getElementById('r1').hasAttribute('data-exact-split'), back('r2')]`)).toEqual([true, false]);
+    expect(await evaluate(`Promise.all([document.getElementById('r1').hasAttribute('data-exact-split'), back('r2'), ${splitList}])`)).toEqual([true, false, 'resize-list']);
   }, 1000);
 }, 60000);
 
@@ -504,7 +563,7 @@ check('a detail no row pushed marks the row the app says is current', () => {
   });
 }, 60000);
 
-check('check advises on a bottom tab bar and an unsplit pushing list at a desktop width, and on neither at a phone\'s', () => {
+check('check advises on a bottom tab bar at a desktop width, holds its advice for a list, and advises on neither at a phone\'s', () => {
   const positioned = BAR.replace('style="display:flex;flex-direction:row"', 'style="display:flex;flex-direction:row;position:absolute;left:0;right:0;bottom:0"');
   const html = page(tabs(positioned).replaceAll(chevron, '').replace('id="r1" style="position:absolute', 'id="r1" style="position:relative')) + `<script type="module">
     import { observe } from './check.js';
@@ -514,7 +573,7 @@ check('check advises on a bottom tab bar and an unsplit pushing list at a deskto
     await evaluate(`select('1')`);
     expect(await evaluate('advice()')).toEqual(['tabbar bar']);
     await evaluate(`select('2')`);
-    expect(await evaluate('advice()')).toEqual(['tabbar bar', 'push r2']);
+    expect(await evaluate('advice()')).toEqual(['tabbar bar']);
     await size(390);
     expect(await evaluate('advice()')).toEqual([]);
   });
@@ -528,8 +587,8 @@ check('the split and sidebar leave check nothing to advise', () => inChrome(page
 }), 60000);
 
 // LLP 1116.005 D3: each route keeps its own scroll (LLP 1038 §7: mounted rows keep theirs), on a phone and through a
-// split. A route of `n` tall rows over its own scroller; `rows` writes the router, so its stack splits.
-const tall = (id, key, n, rows = false) => `<div navigationKey="${key}" id="${id}" style="${abs}"><header><h2>${id}</h2></header><div id="${id}-scroll" ${rows ? 'data-exact-list' : ''} style="flex:1 1 0%;min-height:0;overflow:auto">${
+// split. A route of `n` tall rows over its own scroller; `rows` writes the router, and its stack asks to split.
+const tall = (id, key, n, rows = false) => `<div navigationKey="${key}" id="${id}" style="${abs}" ${asks(rows, '')}><header><h2>${id}</h2></header><div id="${id}-scroll" ${rows ? 'data-exact-list' : ''} style="flex:1 1 0%;min-height:0;overflow:auto">${
   Array.from({ length: n }, (_, i) => rows ? `<button data-exact-on="press" data-exact-router-press="true" style="display:flex;height:50px"><span data-exact-text>${i}</span>${chevron}</button>` : `<div style="height:50px">${i}</div>`).join('')}</div></div>`;
 
 check('a pushed route opens at its top, and Back finds the list where it was', () => inChrome(page(`<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${tall('r1', 1, 60, true)}</main>`), async (evaluate, size) => {
@@ -569,8 +628,9 @@ check('retained visit URLs restore href selection after adoption, replace and sa
     expect(await evaluate(marks)).toEqual([]);
     await evaluate(`document.getElementById('row-a').removeAttribute('data-exact-router-press'); select(3)`);
     expect(await evaluate(marks)).toEqual(['row-a']);
+    // A hidden list marks no row, and the route's ask holds the split
     await evaluate(`document.getElementById('rows').style.display = 'none'; select(3)`);
-    expect(await evaluate(`[${marks}, document.getElementById('r1').hasAttribute('data-exact-split')]`)).toEqual([[], false]);
+    expect(await evaluate(`[${marks}, document.getElementById('r1').hasAttribute('data-exact-split')]`)).toEqual([[], true]);
     await evaluate(`document.getElementById('rows').style.display = ''; select(3)`);
     expect(await evaluate(marks)).toEqual(['row-a']);
   });
@@ -596,5 +656,271 @@ check('only an ordinary outer press associates its row with navigation', () => {
     expect(await evaluate(`[document.getElementById('owner').hasAttribute('data-exact-split-row'), back('r3')]`)).toEqual([true, false]);
     await evaluate(`(async () => { const {navigation} = await import('/navigation.js'); navigation.reset({top:3,url:'/item/b',visits:[[3,'/item/b']]}); select(3); })()`);
     expect(await evaluate(`[document.getElementById('owner').hasAttribute('data-exact-split-row'), back('r3')]`)).toEqual([false, true]);
+  });
+}, 60000);
+
+// A view presence takes out (presence-glue.js `exit`, the production controller's, with a fade the test ends) keeps
+// how the last projection showed it until it is removed, and the projection reads the live root without it
+check('a tab, panel, tablist, header, site nav or heading leaving a live root is none of the projection\'s input', () => {
+  const r2 = `<div navigationKey="2" id="r2" style="${abs}"><header id="head"><span data-exact-text role="heading" aria-level="2" id="title">r2</span><nav id="site"><a href="/a">A</a></nav></header><div>r2</div></div>`;
+  const t2 = `<div navigationKey="11" id="t2" data-navigationbar="transparent" style="${abs}"><header id="t2-head"><h2>t2</h2></header><button id="t2-go">Go</button><div style="flex:1;min-height:0;overflow-y:auto"><div style="height:1600px"></div></div></div>`;
+  const body = tabs(`<nav id="rail">${BAR}<footer id="foot">Account</footer></nav>`).replace(detail('r2', 2), r2).replace(detail('t2', 11), t2);
+  const leaves = `<style>@keyframes fade { to { opacity: 0 } }</style><script type="module">
+    window.exact ??= {};
+    const root = document.getElementById('exact-root'), live = import('./presence-glue.js').then(() => exact.presence(root));
+    window.reset = key => { root.innerHTML = ${JSON.stringify(body)}; select(key); };
+    window.el = id => document.getElementById(id);
+    // As a batch with an exit op: presence takes the view out, the batch's other ops run, then the projection
+    window.leave = async (view, ops = () => {}) => { (await live).exit(view, 'fade 10s linear both'); ops(); select(el('nav').getAttribute('navigationKey')); };
+    // Its fade ends and presence removes it, with no projection after
+    window.end = async view => { await Promise.all(view.getAnimations().map(a => (a.finish(), a.finished))); await new Promise(r => setTimeout(r)); return view.isConnected; };
+    window.hidden = view => [getComputedStyle(view).visibility, view.inert];
+    window.size = view => { const b = view.getBoundingClientRect(); return [b.x, b.y, b.width, b.height].map(Math.round); };
+    window.sidebar = () => [el('nav').hasAttribute('data-exact-sidebar'), el('rail').getAttribute('data-exact-tab-navigation'), box('panels')[0]];
+    window.backOn = header => { const b = header.shadowRoot?.querySelector('button[part=back]'); return !!b && !b.hidden && b.checkVisibility(); };
+    window.ground = header => getComputedStyle(header).backgroundColor;
+  </script>`;
+  return inChrome(page(body) + leaves, async (evaluate) => {
+    expect(await evaluate(`sidebar()`)).toEqual([true, 'sidebar', 240]);
+    // An unselected panel leaving stays hidden and inert, its top route out of reach, until it is gone
+    expect(await evaluate(`(async () => {
+      const p2 = el('p2'), go = el('t2-go'); select('11'); go.focus(); const reached = document.activeElement === go;
+      select('2'); await leave(p2); go.focus();
+      return [reached, hidden(p2), document.activeElement === go, await end(p2)];
+    })()`)).toEqual([true, ['hidden', true], false, false]);
+    // A tab leaving names its panel no more, which is released as one no tab names
+    expect(await evaluate(`(async () => { reset('2'); const tab = el('tab2'); await leave(tab); return [hidden(el('p2')), await end(tab), hidden(el('p2'))]; })()`))
+      .toEqual([['visible', false], false, ['visible', false]]);
+    // A wrapped tablist replaced: the new one is the sidebar beside the footer, during the fade and after it, and the
+    // old one keeps its column at the box it had
+    expect(await evaluate(`(async () => {
+      reset('2'); const old = el('bar'), before = size(old);
+      await leave(old, () => old.insertAdjacentHTML('afterend', ${JSON.stringify(BAR.replace(/id="(\w+)"/g, 'id="$1-new"'))}));
+      const next = el('bar-new'), during = [...sidebar(), next.hasAttribute('data-exact-sidebar-tabs'), old.hasAttribute('data-exact-sidebar-tabs'), size(old).join() === before.join()];
+      return [during, await end(old), [...sidebar(), next.hasAttribute('data-exact-sidebar-tabs')]];
+    })()`)).toEqual([[true, 'sidebar', 240, true, true, true], false, [true, 'sidebar', 240, true]]);
+    // A pushed route's transparent header replaced at the top of its scroller: the new one is the bar, clear, with its
+    // Back, during the fade and after it, and the old one stays clear as it goes
+    expect(await evaluate(`(async () => {
+      reset('11'); const old = el('t2-head'), had = [backOn(old), ground(old)];
+      await leave(old, () => old.insertAdjacentHTML('afterend', '<header id="t2-new"><span data-exact-text role="heading" aria-level="1">t2</span></header>'));
+      const next = el('t2-new'), bar = () => [next.hasAttribute('data-exact-bar'), backOn(next), ground(next)];
+      const during = [...bar(), ground(old)];
+      return [had, during, await end(old), bar()];
+    })()`)).toEqual([[true, 'rgba(0, 0, 0, 0)'], [true, true, 'rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)'], false, [true, true, 'rgba(0, 0, 0, 0)']]);
+    // A header whose nav leaves is no site's, and a heading replaced keeps the bar and names the page
+    expect(await evaluate(`(async () => {
+      reset('2'); const nav = el('site'); await leave(nav); const bar = () => [el('head').hasAttribute('data-exact-site'), el('head').hasAttribute('data-exact-bar')];
+      const site = [bar(), await end(nav), bar()], title = el('title');
+      await leave(title, () => title.insertAdjacentHTML('afterend', '<span data-exact-text role="heading" aria-level="2" id="title-new">Renamed</span>'));
+      return [site, bar(), document.title, await end(title), document.title];
+    })()`)).toEqual([[[false, true], false, [false, true]], [false, true], 'Renamed', false, 'Renamed']);
+    // The sole linked panel leaving: the tab bar is no sidebar from the fade's start, and the content takes its width
+    expect(await evaluate(`(async () => {
+      reset('2'); el('tab2').remove(); el('p2').remove(); select('2'); const p1 = el('p1'); await leave(p1);
+      const during = [el('nav').hasAttribute('data-exact-sidebar'), box('panels')[0], box('panels')[2]];
+      return [during, await end(p1), [el('nav').hasAttribute('data-exact-sidebar'), box('panels')[0], box('panels')[2]]];
+    })()`)).toEqual([[false, 0, 1280], false, [false, 0, 1280]]);
+    // A panel no tab names any more, still mounted, draws no "Select an item" once released
+    expect(await evaluate(`reset('1'); const prompt = placeholder('p1') !== null; el('tab1').remove(); select('10'); [prompt, placeholder('p1')]`)).toEqual([true, null]);
+  });
+}, 60000);
+
+check('a split\'s first detail hides the control its bar holds, and a deeper or pushed detail keeps a Back', () => {
+  // Each detail's header is a bar holding the author's Back control (`navigationBack="back"`), as the hosts write a
+  // heading and a press
+  const backed = (id, key) => `<div navigationKey="${key}" id="${id}" style="${abs}"><header><span id="${id}-slot"></span><button id="back" data-exact-on="press">Back</button><span data-exact-text role="heading" aria-level="2">${id}</span></header><div id="${id}-body">${id}</div></div>`;
+  const html = `<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${list('r1', 1)}${backed('r2', 2)}${backed('r3', 3)}</main><footer id="footer"></footer>`;
+  return inChrome(page(html), async (evaluate, size) => {
+    // The control's mark, whether a press at its middle reaches it, and whether the bar draws a Back
+    const control = id => `(e => { const b = e.getBoundingClientRect(); return [e.getAttribute('data-exact-bar-back'), b.width > 0 && e.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)), back('${id}')]; })(document.querySelector('[id="back"][data-of="${id}"]'))`;
+    await evaluate(`for (const id of ['r2', 'r3']) document.querySelector('#' + id + ' [id="back"]').dataset.of = id; push(2, '/people/ada')`);
+    expect(await evaluate(control('r2'))).toEqual(['suppressed', false, false]);
+    // A projection that changes nothing writes no mark again, wide or narrow
+    const quiet = `new Promise(done => { const seen = []; const o = new MutationObserver(r => seen.push(...r)); o.observe(document.getElementById('nav'), { attributes: true, subtree: true, attributeFilter: ['data-exact-bar-back'] }); select(2); select(2); queueMicrotask(() => { o.disconnect(); done(seen.length); }); })`;
+    expect(await evaluate(quiet)).toBe(0);
+    // A header drawn as written keeps the author's control, and suppression returns with the bar
+    await evaluate(`document.querySelector('#r2 > header').setAttribute('data-exact-said', 'appearance'); select(2)`);
+    expect(await evaluate(control('r2'))).toEqual([null, true, false]);
+    await evaluate(`document.querySelector('#r2 > header').removeAttribute('data-exact-said'); select(2)`);
+    expect(await evaluate(control('r2'))).toEqual(['suppressed', false, false]);
+    // A detail pushed from the first has the bar's Back for its control
+    await evaluate(`push(3, '/people/ada/more')`);
+    expect(await evaluate(control('r3'))).toEqual(['', false, true]);
+    // A row's press above the first detail leaves its control, whose Back leads to the detail beneath
+    await evaluate(`push(2, '/people/ada', [[1, '/'], [2, '/people/ada']]); { const row = document.getElementById('r1-bo'); row.addEventListener('click', () => push(3, '/people/bo'), {once:true}); row.click(); }`);
+    expect(await evaluate(control('r3'))).toEqual([null, true, false]);
+    // A phone pushes the first detail, whose bar's Back stands for its control, until the window widens again
+    await evaluate(`push(2, '/people/ada', [[1, '/'], [2, '/people/ada']])`);
+    await size(390);
+    expect(await evaluate(control('r2'))).toEqual(['', false, true]);
+    expect(await evaluate(quiet)).toBe(0);
+    await size(1280);
+    expect(await evaluate(control('r2'))).toEqual(['suppressed', false, false]);
+    // A portal moving a control from one route's header to another's in one update leaves it to the route that holds it
+    const held = of => `(e => [e.getAttribute('data-exact-bar-back'), e.getBoundingClientRect().width > 0])(document.querySelector('[data-of="${of}"]'))`;
+    await evaluate(`push(3, '/people/ada/more'); document.getElementById('footer').append(document.querySelector('[data-of="r2"]')); document.getElementById('r2-slot').append(document.querySelector('[data-of="r3"]')); select(3)`);
+    expect(await evaluate(`[${held('r3')}, ${held('r2')}]`)).toEqual([['suppressed', false], [null, true]]);
+    // A control that leaves the route as its header goes, in one update, shows as written
+    await evaluate(`{ const r2 = document.getElementById('r2'); document.getElementById('footer').append(r2.querySelector('[data-of="r3"]')); r2.querySelector('header').remove(); select(3); }`);
+    expect(await evaluate(held('r3'))).toEqual([null, true]);
+  });
+}, 60000);
+
+// A detail whose header (`header`'s nodes first) is a bar holding the stack's Back control, which `data-of` names
+const barred = (id, key, header = '', control = '') => `<div navigationKey="${key}" id="${id}" style="${abs}"><header>${header}<button id="back" data-exact-on="press" data-of="${id}" ${control}>Back</button><span data-exact-text role="heading" aria-level="2">${id}</span></header><div id="${id}-body">${id}</div></div>`;
+const heading = id => `<span data-exact-text role="heading" aria-level="2">${id}</span>`;
+// The control `data-of` names: its mark, whether it shows, and whether a press at its middle reaches it
+const backOf = of => `(e => { const b = e.getBoundingClientRect(); return [e.getAttribute('data-exact-bar-back'), e.checkVisibility({ visibilityProperty: true }), b.width > 0 && e.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2))]; })(document.querySelector('[data-of="${of}"]'))`;
+const markOf = of => `document.querySelector('[data-of="${of}"]').getAttribute('data-exact-bar-back')`;
+// Whether repeated projections write any Back mark under the root
+const quietMarks = `new Promise(done => { const seen = []; const o = new MutationObserver(r => seen.push(...r)); o.observe(document.getElementById('exact-root'), { attributes: true, subtree: true, attributeFilter: ['data-exact-bar-back'] }); select(document.getElementById('nav').getAttribute('navigationKey')); select(document.getElementById('nav').getAttribute('navigationKey')); queueMicrotask(() => { o.disconnect(); done(seen.length); }); })`;
+
+check('a Back control\'s mark goes with the header that held it, before the projection reads the page', () => {
+  const html = `<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${list('r1', 1)}${barred('r2', 2)}${barred('r3', 3)}${barred('r4', 4)}${barred('r5', 5, '', 'aria-keyshortcuts="Alt+B"')}</main><footer id="footer" style="position:fixed;left:0;bottom:0;z-index:9"></footer>`;
+  return inChrome(page(html, ['/people/bo']), async (evaluate, size) => {
+    // A route popped as a portal returns its control to a footer, wide where the first detail's control is suppressed
+    // and narrow where the bar's Back stands for it: the control shows and takes presses
+    await evaluate(`push(2, '/people/ada')`);
+    expect(await evaluate(markOf('r2'))).toBe('suppressed');
+    await evaluate(`document.getElementById('footer').append(document.querySelector('[data-of="r2"]')); document.getElementById('r2').remove(); push(1, '/', [[1, '/']])`);
+    expect(await evaluate(backOf('r2'))).toEqual([null, true, true]);
+    await size(390);
+    await evaluate(`push(3, '/people/ada', [[1, '/'], [3, '/people/ada']])`);
+    expect(await evaluate(markOf('r3'))).toBe('');
+    await evaluate(`document.getElementById('footer').append(document.querySelector('[data-of="r3"]')); document.getElementById('r3').remove(); push(1, '/', [[1, '/']])`);
+    expect(await evaluate(backOf('r3'))).toEqual([null, true, true]);
+    // A marked control moved into the root list as a row is one in the projection that moves it
+    await size(1280);
+    await evaluate(`push(4, '/people/ada', [[1, '/'], [4, '/people/ada']])`);
+    expect(await evaluate(markOf('r4'))).toBe('suppressed');
+    await evaluate(`{ const c = document.querySelector('[data-of="r4"]'); c.setAttribute('href', '/people/bo'); document.getElementById('r1-list').append(c); } push(4, '/people/bo', [[1, '/'], [4, '/people/bo']])`);
+    expect(await evaluate(`(e => [e.getAttribute('data-exact-bar-back'), e.hasAttribute('data-exact-split-row')])(document.querySelector('[data-of="r4"]'))`)).toEqual([null, true]);
+    // A control moved into its route's body keeps its chord, which the bar's Back no longer copies
+    await size(390);
+    await evaluate(`push(5, '/people/ada', [[1, '/'], [5, '/people/ada']])`);
+    const chord = `[${markOf('r5')}, document.querySelector('#r5 > header').shadowRoot.querySelector('button[part="back"]').getAttribute('aria-keyshortcuts')]`;
+    expect(await evaluate(chord)).toEqual(['', 'Alt+B']);
+    await evaluate(`document.getElementById('r5-body').append(document.querySelector('[data-of="r5"]')); select(5)`);
+    expect(await evaluate(chord)).toEqual([null, null]);
+  });
+}, 60000);
+
+check('a mark goes when its header stops being the bar or its route becomes the stack\'s root', () => {
+  const nav = body => `<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${body}</main>`;
+  // r2's Back control is a wrapper holding a list whose link names r3's address
+  const wrapped = `<div navigationKey="2" id="r2" style="${abs}"><header><div id="back" data-exact-on="press" data-of="r2"><div data-exact-list role="list"><a id="to-bo" href="/people/bo">Bo</a></div></div>${heading('r2')}</header><div>r2</div></div>`;
+  return inChrome(page(nav(`${list('r1', 1)}${barred('r2', 2)}`)), async evaluate => {
+    // A header put before the bar's takes its place, and the old one's control shows as written
+    await evaluate(`push(2, '/people/ada')`);
+    expect(await evaluate(markOf('r2'))).toBe('suppressed');
+    await evaluate(`document.getElementById('r2').insertAdjacentHTML('afterbegin', '<header>${heading('new')}</header>'); select(2)`);
+    expect(await evaluate(backOf('r2'))).toEqual([null, true, true]);
+  }).then(() => inChrome(page(nav(`${list('r1', 1)}${wrapped}${barred('r3', 3)}`), ['/people/bo']), async evaluate => {
+    // A first detail that becomes its stack's root in the update that shows r3 lists r3's link, its row, at once
+    await evaluate(`push(2, '/people/ada')`);
+    expect(await evaluate(markOf('r2'))).toBe('suppressed');
+    await evaluate(`document.getElementById('r1').remove(); document.getElementById('r2').setAttribute('navigationSplit', 'split'); push(3, '/people/bo', [[2, '/people/ada'], [3, '/people/bo']])`);
+    expect(await evaluate(`[${markOf('r2')}, document.getElementById('to-bo').hasAttribute('data-exact-split-row')]`)).toEqual([null, true]);
+  }));
+}, 90000);
+
+check('a leaving Back control or route keeps its mark, and a root with no route to show keeps its bars but no mark that left them', () => {
+  const html = `<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${list('r1', 1)}${barred('r2', 2)}${barred('r3', 3)}${barred('r4', 4)}${barred('r5', 5)}<footer id="navfoot"></footer></main>`;
+  return inChrome(page(html), async (evaluate, size) => {
+    await evaluate(`push(2, '/people/ada')`);
+    // A control leaving its header as presence fades it, beside its replacement: the one leaving keeps its mark
+    await evaluate(`{ const old = document.querySelector('[data-of="r2"]'); old.setAttribute('data-exiting', ''); old.dataset.exactExitId = old.id; old.removeAttribute('id'); old.insertAdjacentHTML('afterend', '<button id="back" data-exact-on="press" data-of="r2-new">Back</button>'); select(2); }`);
+    expect(await evaluate(`[${markOf('r2')}, ${markOf('r2-new')}]`)).toEqual(['suppressed', 'suppressed']);
+    await size(390);
+    expect(await evaluate(`[${markOf('r2')}, ${markOf('r2-new')}]`)).toEqual(['suppressed', '']);
+    // A route leaving keeps its marks through a resize
+    await evaluate(`push(3, '/people/ada/more', [[1, '/'], [2, '/people/ada'], [3, '/people/ada/more']])`);
+    expect(await evaluate(markOf('r3'))).toBe('');
+    await evaluate(`document.getElementById('r3').setAttribute('data-exiting', ''); push(2, '/people/ada', [[1, '/'], [2, '/people/ada']])`);
+    await size(1280);
+    expect(await evaluate(`[${markOf('r3')}, ${markOf('r2-new')}]`)).toEqual(['', 'suppressed']);
+    // A root left with no route to show, every route it showed gone, is left as it is: the bar of a route it kept beyond
+    // them keeps its mark, and a control a portal returns to its footer shows
+    await evaluate(`push(4, '/people/ada/x', [[1, '/'], [2, '/people/ada'], [4, '/people/ada/x']])`);
+    expect(await evaluate(`[${markOf('r4')}, ${markOf('r5')}]`)).toEqual(['', '']);
+    await evaluate(`document.getElementById('navfoot').append(document.querySelector('[data-of="r4"]')); for (const id of ['r1', 'r2', 'r4']) document.getElementById(id).remove(); select(99)`);
+    expect(await evaluate(`[${markOf('r5')}, ${markOf('r4')}, document.querySelector('[data-of="r4"]').getBoundingClientRect().width > 0]`)).toEqual(['', null, true]);
+  });
+}, 60000);
+
+check('a Back control moved between two tabs\' bars shows in a header that cannot hold it, in either order, and an unlinked panel keeps its bar', () => {
+  const html = `<main id="nav" navigationKey="2" navigationBack="back" style="width:100%;height:100%;display:flex;flex-direction:column;position:relative">
+    <div id="panels" style="flex:1 1 0%;min-height:0;position:relative">
+      <div role="tabpanel" id="p1" style="${abs}">${list('a1', 1)}<div navigationKey="2" id="a2" style="${abs}"><header>${heading('a2')}</header><div>a2</div></div></div>
+      <div role="tabpanel" id="p2" style="${abs}">${list('b1', 10, false)}${barred('b2', 11)}</div>
+    </div>${BAR}</main>`;
+  return inChrome(page(html), async (evaluate, size) => {
+    await size(390);
+    // The later tab's marked control moves into the earlier tab's two-heading header as that tab is selected
+    await evaluate(`select(11)`);
+    expect(await evaluate(markOf('b2'))).toBe('');
+    await evaluate(`{ const h = document.querySelector('#a2 > header'); h.insertAdjacentHTML('beforeend', '${heading('again')}'); h.append(document.querySelector('[data-of="b2"]')); } select(2)`);
+    expect(await evaluate(`[${backOf('b2')}, back('a2')]`)).toEqual([[null, true, true], false]);
+    // The earlier tab's marked control moves into the later tab's two-heading header as that tab is selected
+    await evaluate(`document.querySelector('#a2 > header > span:last-of-type').remove(); select(2)`);
+    expect(await evaluate(markOf('b2'))).toBe('');
+    await evaluate(`{ const h = document.querySelector('#b2 > header'); h.insertAdjacentHTML('beforeend', '${heading('again')}'); h.append(document.querySelector('[data-of="b2"]')); } select(11)`);
+    expect(await evaluate(`[${backOf('b2')}, back('b2')]`)).toEqual([[null, true, true], false]);
+    // A panel no tab names any more stays mounted, unvisited: its bar keeps its Back or its control, not both, and a
+    // suppressed control a portal moves into its header shows
+    await evaluate(`document.querySelector('#b2 > header > span:last-of-type').remove(); select(11); select(2); document.getElementById('tab2').remove(); select(2)`);
+    expect(await evaluate(`[document.querySelector('[data-of="b2"]').checkVisibility({ visibilityProperty: true }), back('b2')]`)).toEqual([false, true]);
+    await size(1280);
+    await evaluate(`document.querySelector('#a2 > header').insertAdjacentHTML('afterbegin', '<button id="back" data-exact-on="press" data-of="a2">Back</button>'); push(2, '/people/ada')`);
+    expect(await evaluate(markOf('a2'))).toBe('suppressed');
+    await evaluate(`document.querySelector('#b2 > header').append(document.querySelector('[data-of="a2"]')); select(2)`);
+    expect(await evaluate(`(e => [e.getAttribute('data-exact-bar-back'), e.checkVisibility({ visibilityProperty: true })])(document.querySelector('[data-of="a2"]'))`)).toEqual([null, true]);
+  });
+}, 60000);
+
+check('a popover anchored on a Back control opens by the marks of the projection that opens it', () => {
+  // r3 is a popover route anchored on the first Back control in the page, r2's
+  const pick = `<div navigationKey="3" id="r3" navigationPresentation="popover" data-navigationpopoveranchor="back" style="width:240px"><header><h2>Pick</h2></header><div>pick</div></div>`;
+  const opened = `document.getElementById('r3').matches(':popover-open')`;
+  const twoHeadings = `<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${list('r1', 1)}${barred('r2', 2, heading('first'))}${pick}</main>`;
+  const foreign = `<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${list('r1', 1)}${barred('r2', 2)}${pick}</main>`;
+  const popoverAt = [[1, '/'], [2, '/people/ada'], [3, '/people/ada/pick']];
+  return inChrome(page(twoHeadings), async (evaluate, size) => {
+    expect(await evaluate(`CSS.supports('position-area: bottom') && typeof HTMLElement.prototype.showPopover === 'function'`)).toBe(true);
+    // A header that becomes a bar as a popover anchored on its Back opens hides that Back first, wide and narrow, so
+    // the route is the sheet
+    for (const width of [1280, 390]) {
+      await size(width);
+      await evaluate(`push(2, '/people/ada', [[1, '/'], [2, '/people/ada']])`);
+      expect(await evaluate(markOf('r2'))).toBe(null);
+      await evaluate(`document.querySelector('#r2 > header > span').remove(); push(3, '/people/ada/pick', ${JSON.stringify(popoverAt)})`);
+      expect(await evaluate(`[${markOf('r2')}, ${opened}, shown('r3'), document.getElementById('nav').getAttribute('data-exact-scrim')]`)).toEqual([width > 900 ? 'suppressed' : '', false, true, 'on']);
+      await evaluate(`document.querySelector('#r2 > header').insertAdjacentHTML('afterbegin', '${heading('first')}')`);
+    }
+  }).then(() => inChrome(page(foreign), async (evaluate, size) => {
+    // A header whose shadow root is someone else's suppresses its control in the first detail, and shows it when
+    // pushed, where no Back of the bar's can stand for it
+    await evaluate(`document.querySelector('#r2 > header').attachShadow({ mode: 'open' }).innerHTML = '<slot></slot>'; push(2, '/people/ada')`);
+    expect(await evaluate(markOf('r2'))).toBe('suppressed');
+    await size(390);
+    expect(await evaluate(backOf('r2'))).toEqual([null, true, true]);
+    await size(1280);
+    expect(await evaluate(markOf('r2'))).toBe('suppressed');
+    // A first detail that stops being one as a popover anchored on its control opens shows the control first, so the
+    // route is the popover
+    await evaluate(`document.getElementById('r1').setAttribute('navigationSplit', 'none'); push(3, '/people/ada/pick', ${JSON.stringify(popoverAt)})`);
+    expect(await evaluate(`[${markOf('r2')}, ${opened}, shown('r3')]`)).toEqual([null, true, true]);
+  }));
+}, 90000);
+
+check('nested navigation roots naming one Back control id leave each other\'s marks alone', () => {
+  const html = `<main id="nav" navigationKey="2" navigationBack="back" style="width:100%;height:100%;position:relative">
+    <div navigationKey="1" id="o1" style="${abs}"><header><h1>Outer</h1></header></div>
+    <div navigationKey="2" id="o2" style="${abs}"><header>${heading('o2')}</header>
+      <div navigationKey="20" navigationBack="back" style="position:relative;flex:1 1 0%"><div navigationKey="10" id="i1" style="${abs}"><header><h1>Inner</h1></header></div>${barred('i2', 20)}</div></div></main>`;
+  return inChrome(page(html), async evaluate => {
+    expect(await evaluate(markOf('i2'))).toBe('');
+    expect(await evaluate(quietMarks)).toBe(0);
   });
 }, 60000);

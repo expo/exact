@@ -42,7 +42,10 @@ impl<D: DataSource> Runner<D> {
             self.record_into_view(&request, Some(IntoViewStatus::Refused(why)));
             return Ok(CommitReceipt::default());
         };
-        self.update_into_views(&[request], false)
+        let checkpoint = self.checkpoint();
+        let result = self.update_into_views(&[request], false);
+        self.conclude(checkpoint, &result, false);
+        result
     }
 
     /// A refusal is journaled and kept for `state` (a request that started
@@ -132,18 +135,21 @@ impl<D: DataSource> Runner<D> {
         requests: &[IntoView],
         settled: bool,
     ) -> Result<CommitReceipt, RunnerError> {
-        let result = self.update_into_views_inner(requests, settled);
+        let (ops, surfaces, settled) = self.prepare_into_views(settled)?;
+        let result = self.update_into_views_inner(ops, surfaces, requests, settled);
         if result.is_err() {
             self.poison();
         }
         result
     }
 
-    fn update_into_views_inner(
+    /// Run the initial render and any transactional owned reconciliation before
+    /// starting the kernel document commit, so a refusal rolls back cleanly
+    /// without poisoning the runner.
+    fn prepare_into_views(
         &mut self,
-        requests: &[IntoView],
         settled: bool,
-    ) -> Result<CommitReceipt, RunnerError> {
+    ) -> Result<(Vec<exact_kernel::Op>, Vec<crate::SurfaceUpdate>, bool), RunnerError> {
         let (mut ops, mut surfaces, _) =
             self.update_ops(
                 settled,
@@ -155,6 +161,37 @@ impl<D: DataSource> Runner<D> {
                     }
                 },
             )?;
+        let mut settled = settled;
+        if settled && self.transactional_render() {
+            for _ in 0..super::owned::RENDERS {
+                let owners = self.tree.as_ref().expect("booted").owners();
+                let changed = self.reconcile_owned(&owners)?;
+                if !changed {
+                    self.reconcile_tasks(&owners)?;
+                }
+                drop(owners);
+                if !changed {
+                    return Ok((ops, surfaces, settled));
+                }
+                let (next, next_surfaces, _) = self.update_ops(true, |tree, u| tree.update(u))?;
+                ops.extend(next);
+                surfaces.extend(next_surfaces);
+                settled = true;
+            }
+            self.poison();
+            return Err(RunnerError::Cycle);
+        }
+        Ok((ops, surfaces, settled))
+    }
+
+    fn update_into_views_inner(
+        &mut self,
+        mut ops: Vec<exact_kernel::Op>,
+        mut surfaces: Vec<crate::SurfaceUpdate>,
+        requests: &[IntoView],
+        settled: bool,
+    ) -> Result<CommitReceipt, RunnerError> {
+        let _roles = self.bind_roles();
         // The queued patches' colours stay kept until this commit marks them.
         let (mut prefix, _queued) = self.take_reorder_ops();
         if !prefix.is_empty() {
@@ -162,6 +199,7 @@ impl<D: DataSource> Runner<D> {
             ops = prefix;
         }
         self.place_portals(&mut ops);
+        self.admit_drag_files(&mut ops);
         let change = self.router_change()?;
         // Each phase is prepared as `apply` prepares a commit: its `time` and
         // `progress` nodes take their text and value in it, and the font rows
@@ -196,6 +234,7 @@ impl<D: DataSource> Runner<D> {
                     Ok(())
                 })?;
                 self.place_portals(&mut phase);
+                self.admit_drag_files(&mut phase);
                 self.prepare_live_times(&mut phase);
                 axes = self.join_text_axes(axes, self.prepare_text_axes(&phase), &created);
                 created.extend(created_views(&phase));
@@ -217,9 +256,41 @@ impl<D: DataSource> Runner<D> {
             }
             statuses.push(status);
         }
+        // Reconcile owned resources, sends, and tasks for any rows materialized
+        // or unmounted during the seek phases above.
+        if self.transactional_render() {
+            let mut converged = false;
+            for _ in 0..super::owned::RENDERS {
+                let owners = self.tree.as_ref().expect("booted").owners();
+                let changed = self.reconcile_owned(&owners)?;
+                if !changed {
+                    self.reconcile_tasks(&owners)?;
+                }
+                drop(owners);
+                if !changed {
+                    converged = true;
+                    break;
+                }
+                let (mut phase, writes, _) = self.update_ops(true, |tree, u| tree.update(u))?;
+                self.place_portals(&mut phase);
+                self.admit_drag_files(&mut phase);
+                self.prepare_live_times(&mut phase);
+                axes = self.join_text_axes(axes, self.prepare_text_axes(&phase), &created);
+                created.extend(created_views(&phase));
+                self.kernel.continue_document_commit(&phase)?;
+                self.settle_into_view_phase(&mut effects);
+                notes.extend(std::mem::take(&mut self.notes));
+                surfaces.extend(writes);
+                ops.extend(phase);
+            }
+            if !converged {
+                return Err(RunnerError::Cycle);
+            }
+        }
         let mut cleanup = self.reconcile_reorder()?;
         self.place_portals(&mut cleanup);
         if !cleanup.is_empty() {
+            self.admit_drag_files(&mut cleanup);
             self.prepare_live_times(&mut cleanup);
             axes = self.join_text_axes(axes, self.prepare_text_axes(&cleanup), &created);
             self.kernel.continue_document_commit(&cleanup)?;

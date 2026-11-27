@@ -105,6 +105,8 @@ export function implementation({ changed, log = () => {} }) {
   const present = typeof PublicKeyCredential === 'function' && typeof navigator === 'object' && !!navigator.credentials;
   // The pending conditional `get`, which a newer ceremony ends (D9).
   let conditional = null;
+  // Active ceremonies by request id, for `cancel(request)`.
+  const active = new Map();
   // Each registration's RP ID by credential id, for `dispose`.
   const made = new Map();
   const endConditional = () => { conditional?.abort(new DOMException('a newer ceremony replaced this conditional one', 'AbortError')); conditional = null; };
@@ -132,21 +134,25 @@ export function implementation({ changed, log = () => {} }) {
         android: null,
       };
     },
-    async create({ publicKey, mediation }) {
+    async create({ publicKey, mediation }, told = {}) {
       if (!present) return { error: 'NotSupportedError' };
       if (marked(publicKey?.user?.id)) return { error: 'NotAllowedError', message: 'a lock\'s user handle is the lock\'s alone' };
       endConditional();
+      const abort = new AbortController();
+      if (told?.request != null) active.set(told.request, abort);
       try {
-        const credential = await navigator.credentials.create({ publicKey: creation(publicKey), ...(mediation ? { mediation } : {}) });
+        const credential = await navigator.credentials.create({ publicKey: creation(publicKey), ...(mediation ? { mediation } : {}), signal: abort.signal });
         made.set(credential.id, publicKey.rp?.id ?? location.hostname);
         return response(credential);
       } catch (e) { return failure(e); }
+      finally { if (told?.request != null && active.get(told.request) === abort) active.delete(told.request); }
     },
-    async get({ publicKey, mediation, preferImmediatelyAvailableCredentials }) {
+    async get({ publicKey, mediation, preferImmediatelyAvailableCredentials }, told = {}) {
       if (!present) return { error: 'NotSupportedError' };
       if (preferImmediatelyAvailableCredentials) return { error: 'NotSupportedError', message: 'the web has no such request' };
       endConditional();
       const abort = new AbortController();
+      if (told?.request != null) active.set(told.request, abort);
       if (mediation === 'conditional') conditional = abort;
       try {
         const credential = await navigator.credentials.get({ publicKey: request(publicKey), ...(mediation ? { mediation } : {}), signal: abort.signal });
@@ -156,7 +162,17 @@ export function implementation({ changed, log = () => {} }) {
         if (marked(answer.response.userHandle) || (discoverable && !answer.response.userHandle)) return { error: 'NotAllowedError' };
         return answer;
       } catch (e) { return failure(e); }
-      finally { if (conditional === abort) conditional = null; }
+      finally {
+        if (conditional === abort) conditional = null;
+        if (told?.request != null && active.get(told.request) === abort) active.delete(told.request);
+      }
+    },
+    cancel(request) {
+      const abort = active.get(request);
+      if (!abort) return;
+      active.delete(request);
+      if (conditional === abort) conditional = null;
+      abort.abort(new DOMException('the call was let go', 'AbortError'));
     },
     signalUnknownCredential: options => signal('signalUnknownCredential', options),
     signalAllAcceptedCredentials: options => marked(options.userId) ? { error: 'NotAllowedError' } : signal('signalAllAcceptedCredentials', options),

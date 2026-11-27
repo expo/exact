@@ -275,3 +275,143 @@ fn dynamic_offsets_select_each_steps_uniform_slot() {
         .collect();
     assert_eq!(values, [3.0, 7.0]);
 }
+
+#[test]
+fn back_to_back_submissions_past_ring_size_read_their_own_uniform_bytes() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let device = &gpu.device;
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    // Loop briefly in the fragment shader so earlier submissions remain active
+    // on the GPU while subsequent frames wrap around the ring.
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(
+            "struct U { c: vec4<f32> }
+            @group(0) @binding(0) var<uniform> u: U;
+            @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+                let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+                return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+            }
+            @fragment fn fs() -> @location(0) vec4<f32> {
+                var acc = 0.0;
+                for (var k: u32 = 0u; k < 256u; k = k + 1u) {
+                    acc = acc + f32(k) * 1e-9;
+                }
+                return u.c + vec4<f32>(acc, 0.0, 0.0, 0.0);
+            }"
+            .into(),
+        ),
+    });
+    let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&pl),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs"),
+            targets: &[Some(wgpu::TextureFormat::Rgba8Unorm.into())],
+            compilation_options: Default::default(),
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    let mut uniform = FrameUniform::new(device, 16, "burst");
+    let groups: Vec<_> = (0..uniform.slots())
+        .map(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.buffer(i).as_entire_binding(),
+                }],
+            })
+        })
+        .collect();
+    let count = (uniform.slots() * 4).max(16);
+    let targets: Vec<_> = (0..count)
+        .map(|_| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        })
+        .collect();
+    // Submit all frames back-to-back without waiting on GPU completion between them.
+    for (frame, texture) in targets.iter().enumerate() {
+        let r = frame as f32 / (count - 1) as f32;
+        let g = (count - 1 - frame) as f32 / (count - 1) as f32;
+        let bytes: Vec<u8> = [r, g, 0.5, 1.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let slot = uniform.write(&gpu.queue, &bytes);
+        let view = texture.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &groups[slot], &[]);
+            pass.draw(0..3, 0..1);
+        }
+        gpu.queue.submit([encoder.finish()]);
+    }
+    for (frame, texture) in targets.iter().enumerate() {
+        let r = (frame as f32 / (count - 1) as f32 * 255.0).round() as u8;
+        let g = ((count - 1 - frame) as f32 / (count - 1) as f32 * 255.0).round() as u8;
+        let px = fixture::read(&gpu, texture).unwrap();
+        assert_eq!(px.at(32, 32), [r, g, 128, 255], "frame {frame}");
+    }
+}

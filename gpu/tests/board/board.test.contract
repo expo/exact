@@ -1,0 +1,13 @@
+test "the board and its sibling follow the same colour token"
+  prefer prefers-color-scheme light
+  clock settle
+  expect sample "board" at 40 40 == "#ececef" within 0
+  expect sample "face" at 40 40 == "#ececef" within 0
+  prefer prefers-color-scheme dark
+  clock settle
+  expect sample "board" at 40 40 == "#141416" within 0
+  expect sample "face" at 40 40 == "#141416" within 0
+  tap "change"
+  clock settle
+  expect sample "board" at 40 40 == "#ff7638" within 0
+  expect sample "face" at 40 40 == "#ff7638" within 0

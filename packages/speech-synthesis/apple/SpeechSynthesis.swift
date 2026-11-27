@@ -390,8 +390,9 @@ public final class SpeechSynthesisModule: NSObject, ExactPackage, AVSpeechSynthe
         queue = []
         if let id = current, let u = utterances[id] { u.state = "ended"; u.outcome = "error"; u.error = "interrupted"; u.spoken = nil }
         current = nil
-        reasons.removeAll { $0 == "requested" }
+        reasons.removeAll { ["requested", "interrupted", "focus", "route"].contains($0) }
         boundary = Self.noBoundary
+        heldBoundary = nil
         synthesizer?.stopSpeaking(at: .immediate)
         reclaim()
         announce()

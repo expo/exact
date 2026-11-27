@@ -1,10 +1,14 @@
 package dev.exact.canvas
 
+import android.app.Activity
+import android.view.Surface
 import java.util.concurrent.Executors
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
@@ -121,5 +125,28 @@ class ExtensionInvokeTest {
             assertEquals("main-thread host", Host.received)
         } finally { Host.stop(); Exact.turned = {} }
         assertEquals(-1, Exact.invoke("no host"))
+    }
+
+    @Test @Config(sdk = [29]) fun angleAndBindReadDisplayRotationOnApi29() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val display = shadowOf(Legacy.display(activity))
+        display.setRotation(Surface.ROTATION_90)
+        assertEquals(90, Extensions.angle(activity))
+        display.setRotation(Surface.ROTATION_180)
+        assertEquals(180, Extensions.angle(activity))
+        display.setRotation(Surface.ROTATION_270)
+        assertEquals(270, Extensions.angle(activity))
+        display.setRotation(Surface.ROTATION_0)
+        assertEquals(0, Extensions.angle(activity))
+        assertEquals(0, Extensions.angle(null))
+        Extensions.bind(activity)
+        val previous = Extensions.front
+        try {
+            Extensions.front = { activity }
+            display.setRotation(Surface.ROTATION_90)
+            assertEquals(90, ExtensionContext(activity.applicationContext, "test").orientation)
+        } finally {
+            Extensions.front = previous
+        }
     }
 }

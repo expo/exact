@@ -38,6 +38,8 @@ component BarInsets
           column navigationKey=`${e.id}` testId="detail" position="absolute" inset=0
             header
               text "Detail" role="heading" aria-level=1
+            box width="100%" height=40 testId="detail-fill"
+            box width="var(--exact-safe-area-inset-right)" height=4 testId="detail-right-probe"
         if e.name == "sheet"
           column navigationKey=`${e.id}` navigationPresentation="modal" testId="sheet" display="flex" flex-direction="column"
             column height="var(--exact-safe-area-inset-bottom)" testId="sheet-probe"

@@ -229,20 +229,23 @@ extension GroupedListView {
     #if os(iOS)
     /// How far past each side the list's edge meets the collection reaches,
     /// a safe area there, where nothing between the list and the window
-    /// transforms or clips it away. The window's side safe area: Exact's
-    /// layout keeps a route's content inside it (LLP 1123), where UIKit puts
-    /// an inset-grouped list's cards 20 in, and 16 past it when the list
-    /// spans the screen, as a hand-built one does. Half a fold's band (LLP
-    /// 1078): a hand-built split view's column reaches the band's middle,
-    /// that half its safe area, and its card ends 20 short of the band, where
-    /// a list ending at the band has its card run into it (iPhone Duo, iOS
-    /// 27.1, `~/audits/exact2-no-tells-2026-10-11/duo-fold-probe/`).
+    /// transforms or clips it away. The side safe area of the list's own
+    /// controller view, a route's or a sheet's, as UIKit gives it: Exact's
+    /// layout keeps a route's content inside it (LLP 1123), where UIKit lays
+    /// an inset-grouped list over the whole view and puts its cards 20 in,
+    /// and 16 past it when the list spans the screen, as a hand-built one
+    /// does; in a sheet, the list reaches the sheet's edge, not the window's.
+    /// Half a fold's band (LLP 1078): a hand-built split view's column
+    /// reaches the band's middle, that half its safe area, and its card ends
+    /// 20 short of the band, where a list ending at the band has its card run
+    /// into it (iPhone Duo, iOS 27.1, `~/audits/exact2-no-tells-2026-10-11/duo-fold-probe/`).
     func sideReach() -> (left: CGFloat, right: CGFloat) {
         foldReach = (0, 0)
         guard let window = owner.window else { return (0, 0) }
-        let safe = window.safeAreaInsets, r = owner.convert(owner.bounds, to: window)
+        let container = sequence(first: owner as UIView, next: \.superview).first { $0.next is UIViewController } ?? window
+        let safe = container.safeAreaInsets, edges = owner.convert(owner.bounds, to: container), r = owner.convert(owner.bounds, to: window)
         let meets = { (inset: CGFloat, edge: CGFloat) in inset > 0 && abs(edge - inset) < 0.5 ? inset : 0 }
-        var reach = (left: meets(safe.left, r.minX), right: meets(safe.right, window.bounds.width - r.maxX))
+        var reach = (left: meets(safe.left, edges.minX - container.bounds.minX), right: meets(safe.right, container.bounds.maxX - edges.maxX))
         for band in (ReservedRegions.divisions(of: window) ?? []).filter(\.active).map(\.frame) where band.height > band.width {
             if abs(r.maxX - band.minX) < 0.5 { reach.right = band.width / 2; foldReach.right = reach.right }
             if abs(r.minX - band.maxX) < 0.5 { reach.left = band.width / 2; foldReach.left = reach.left }

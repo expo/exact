@@ -2,6 +2,8 @@ import { host, root, views, authoredDisabled, motion, focusAutofocus, messageFra
 import { guestMessageAuthorized, scrollDrag, sourceField, controlEvent, onSelection, inertAncestor } from "../navigation.js";
 import { send } from "./commit.js";
 import { writeValue, syncMarkup, imageEvents } from "./views.js";
+import { loadOnce } from '../load-once.js';
+
 export function setInputReady(ready) {
   host.inputReady = ready;
   root.setAttribute("aria-busy", String(!ready));
@@ -129,7 +131,7 @@ export function attach(el, id, handlers) {
           return;
         }
         if (heldValues.has(el)) {
-          writeValue(el, heldValues.get(el));
+          writeValue(el, ...heldValues.get(el));
         }
         markupPending.delete(el);
         syncMarkup(el);
@@ -273,7 +275,7 @@ export function attach(el, id, handlers) {
         host.sizes.delete(first);
       });
       el.exactResize = landed;
-      (host.resizes ??= Promise.all([loadAfterPaint("./resize-glue.js", "observeResize"), host.geometryLoading?.catch(() => {})]).then(([o]) => o)).then((observe) => {
+      (loadOnce(host, "resizes", () => Promise.all([loadAfterPaint("./resize-glue.js", "observeResize"), host.geometryLoading?.catch(() => {})]).then(([o]) => o))).then((observe) => {
         observe(el, (r) => {
           try {
             if (views.get(id) === el && !retiredViews.has(el)) {
@@ -306,7 +308,7 @@ export function attach(el, id, handlers) {
       });
       el.exactIntersect = landed;
       // (a view retired before it is observed lets go at once)
-      (host.intersects ??= loadAfterPaint("./intersect-glue.js", "observeIntersect")).then((observe) => {
+      (loadOnce(host, "intersects", () => loadAfterPaint("./intersect-glue.js", "observeIntersect"))).then((observe) => {
         if (views.get(id) !== el || retiredViews.has(el)) {
           landed();
           return;
@@ -447,7 +449,12 @@ export function attach(el, id, handlers) {
       });
     } else if (kind === "input" || kind === "change" || kind === "select" && !el.exactMarkup) {
       // navigation.js `controlEvent`: a control's value, a text field's selection
-      controlEvent(el, kind, on, (k, text) => send(host.wasm.exact_dispatch(id, k, writeIn(text), now())));
+      controlEvent(el, kind, on, (k, text) => {
+        const outer = host.inputField;
+        if (kind === "input") host.inputField = el;
+        try { return send(host.wasm.exact_dispatch(id, k, writeIn(text), now())); }
+        finally { host.inputField = outer; }
+      });
     } else if (kind === "hover") {
       // pointerenter/pointerleave: the element's own, not a bubbling mouseover.
       on("pointerenter", () => send(host.wasm.exact_dispatch(id, 2, 0, now())));

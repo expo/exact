@@ -30,9 +30,9 @@ use ibex2::stdlib::{
 use std::sync::Arc;
 use std::time::Duration;
 pub(super) use upload::Uploads;
+pub(super) use upload::{check_waiting_room as check_upload_room, start_waiting as start_uploads};
 pub(super) use upload::{forget as forget_uploads, freed as place_freed, queue as queue_upload};
 use upload::{progress, timed_out, COPIES};
-pub(super) use upload::{start_waiting as start_uploads, waiting_full as uploads_full};
 
 /// What a stream opened as.
 enum Opened {
@@ -400,7 +400,7 @@ fn deliver(
             // Charged to the running stream: its ceiling covers one message.
             bytes: 0,
             message: true,
-            stream: true,
+            stream: Some(crate::StreamKind::Network),
             light: false,
             again: false,
             reply,

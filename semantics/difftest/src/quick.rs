@@ -147,7 +147,7 @@ pub fn run(args: &[String]) -> Result<bool, String> {
     let cases: Vec<Case> = (0..8u64)
         .map(|i| gen::case(seed.wrapping_add(i), &size))
         .collect();
-    ok &= lowering::run(cases, 2, &format!("quick-lowering-{seed}"))?;
+    ok &= lowering::run(cases, 2, &format!("quick-lowering-{seed}"), false)?;
     println!(
         "quick: lowering --seed {seed} --count 8 ({:.1}s)",
         t.elapsed().as_secs_f64()

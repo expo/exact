@@ -1,4 +1,4 @@
-import { address, hasPageOrigin, isLocalNetwork, matchesPage } from "./navigation/network.js";
+import { hasPageOrigin, isLocalNetwork, isLoopback, matchesPage } from "./navigation/network.js";
 // Admission matches the sealed, typed output of the Rust grant parser (LLP 1047.002 D3).
 // App code is the page, so this is parity admission rather than a sandbox.
 const INVALID_GRANTS = "the grant set was not validated";
@@ -22,6 +22,8 @@ const schemeGrants = {
 };
 // `local-network` (LLP 1133.036 D5): a host on the local network as the URL writes it; with `development`, loopback too.
 const localGrants = new Set(["fetch-local-network", "websocket-local-network"]);
+// `loopback` (LLP 1016 D6): a loopback host as the URL writes it, at any port, with no trailing modifier.
+const loopbackGrants = new Set(["fetch-loopback", "websocket-loopback"]);
 const pathGrants = new Set([
   "fs-read",
   "fs-write",
@@ -59,6 +61,9 @@ const grantTupleValid = (grant) => {
   }
   if (localGrants.has(grant[0])) {
     return grant.length === 1 || grant.length === 2 && grant[1] === "development";
+  }
+  if (loopbackGrants.has(grant[0])) {
+    return grant.length === 1;
   }
   if (pathGrants.has(grant[0])) {
     return grant.length >= 2 && ([
@@ -161,6 +166,9 @@ const sourceTuple = (source) => {
   }
   if ((capability === "net.fetch" || capability === "net.websocket") && words[1] === "local-network") {
     return words.length === 2 || words.length === 3 && words[2] === "development" ? [capability === "net.fetch" ? "fetch-local-network" : "websocket-local-network", ...words.slice(2)] : null;
+  }
+  if ((capability === "net.fetch" || capability === "net.websocket") && words[1] === "loopback") {
+    return words.length === 2 ? [capability === "net.fetch" ? "fetch-loopback" : "websocket-loopback"] : null;
   }
   if (words.length !== 2 && !(capability === "secret.keep" && /^(user-presence|biometry-any|biometry-current-set|device-credential)( optional)?( (apple\.accessible=when(PasscodeSet|Unlocked)ThisDeviceOnly|apple\.or(Watch|Companion)|android\.strongBox))*$/.test(words.slice(2).join(" ")))) {
     return null;
@@ -353,6 +361,7 @@ export function admittingGrant(set, value, operation = "fetch", render = globalT
     if (!grant) return false;
     if (render && grant[0] !== 'fetch' && grant[0] !== 'fetch-subdomains') return false;
     if (grant[0] === kind + "-local-network") return schemeGrants[kind + "-scheme"].includes(scheme) && isLocalNetwork(host, grant[1] === "development");
+    if (grant[0] === kind + "-loopback") return schemeGrants[kind + "-scheme"].includes(scheme) && isLoopback(host);
     return grant[1] === scheme && (grant[0] === kind + "-scheme" || grant[3] === port &&
       (grant[0] === kind && grant[2] === host || grant[0] === kind + "-subdomains" && host.endsWith("." + grant[2]) && host.length > grant[2].length + 1));
   });
@@ -408,7 +417,7 @@ export function coversPath(set, capability, path) {
   }[capability];
   return !!target && set.entries.some(([, , grant]) => grant?.[0] === kind && grant.slice(1).every((part, index) => target[index] === part));
 }
-export { isLocalNetwork, isCloudMetadata } from "./navigation/network.js";
+export { isLoopback, isLocalNetwork, isCloudMetadata } from "./navigation/network.js";
 
 // Protocol names, never credentials (LLP 1016.000; RFC 7230 token).
 export function socketProtocols(value, socket = true) {

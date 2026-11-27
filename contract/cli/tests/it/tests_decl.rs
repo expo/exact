@@ -1411,7 +1411,7 @@ fn state_relations_accept_inequality_and_paths() {
         "state",
         "state rows.",
         "state rows.-1",
-        "state rows.1.5",
+        "state rows.1e1",
         "state b + 1",
         "state choices 1",
     ] {

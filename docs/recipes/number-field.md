@@ -57,8 +57,8 @@ test "a bad amount says so, and people commit on Enter"
   expect text "share" == "28.00"
 ```
 
-- `input` writes the raw text at each keystroke; normalize only in `change` (Enter or blur),
-  never as the person types: a rewrite mid-edit misplaces the next keystroke. `parseNumber` answers `none` for `""`, `"12px"`: say so in words (the footer, not red:
+- `input` writes the raw text at each keystroke; normalize this number in `change` (Enter or blur)
+  so a leading minus or trailing decimal point survives while typing. `parseNumber` answers `none` for `""`, `"12px"`: say so in words (the footer, not red:
   red is a refusal the data sent back) and leave the text as typed.
 - The number pad has no Return key: iOS gives it a Done bar that puts it away and fires
   `change`, as does a drag that reaches the keyboard.

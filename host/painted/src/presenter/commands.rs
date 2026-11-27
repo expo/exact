@@ -4,8 +4,9 @@
 //! of the host's shell where it has one (`requests.rs`, LLP 1115.001 D5).
 
 use super::replacement::Waiting;
-use super::Presenter;
+use super::{Presenter, Request};
 use crate::host::HostError;
+use exact_kernel::{NodeType, PropId};
 use exact_plan::EventKind;
 use exact_runner::{DataSource, Event};
 
@@ -160,8 +161,7 @@ impl<D: DataSource> Presenter<D> {
                     let arg = |i: usize| c.args.get(i).and_then(exact_plan::Value::as_str);
                     let (text, name) = (arg(0).unwrap_or_default(), arg(1).unwrap_or_default());
                     if arg(2) == Some("iframe") {
-                        let host = if cfg!(target_os = "android") { "Android" } else { "this host" };
-                        self.host.log(format!("postMessage: iframe replies are unavailable on {host}"));
+                        self.post_frame_message(name, text);
                         continue;
                     }
                     if let Err(refused) = self.post_message(name, text) {
@@ -207,6 +207,9 @@ impl<D: DataSource> Presenter<D> {
                 name @ ("fastSeek" | "load" | "requestFullscreen") if cfg!(target_os = "android") => {
                     self.media_command(name, &c.args)
                 }
+                "exitPictureInPicture" if cfg!(target_os = "android") && self.serves_requests() => {
+                    self.request(Request::VideoPictureInPicture(None));
+                }
                 "format" => {
                     let field = c.args.first().and_then(exact_plan::Value::as_str).unwrap_or("");
                     self.host.log(format!("format \"{field}\" refused: this host edits Markdown as plain source"));
@@ -223,8 +226,26 @@ impl<D: DataSource> Presenter<D> {
                 }
                 // The image hears the refusal too, once the commands have run (LLP 1042 §9).
                 "requestPictureInPicture" => {
-                    eprintln!("exact: requestPictureInPicture unsupported on the headless/DRM host");
-                    floats.extend(c.args.first().and_then(exact_plan::Value::as_str).map(str::to_owned));
+                    if let Some(id) = c.args.first().and_then(exact_plan::Value::as_str) {
+                        let kernel = self.host.kernel();
+                        let target = kernel.find_by_id(id).into_iter().find_map(|k| kernel.node_by_key(k));
+                        let Some(node) = target else {
+                            self.host.log(format!("requestPictureInPicture \"{id}\" refused: no live node with that id"));
+                            continue;
+                        };
+                        let video = node.node_type == NodeType::Video && node.props.str(PropId::SemanticTag) != Some("audio");
+                        let reason = if video && c.args.len() > 1 {
+                            "presentation, title, width and height are image-only options"
+                        } else if cfg!(target_os = "android") && self.serves_requests() && video && node.props.str(PropId::Src).is_some() {
+                            self.request(Request::VideoPictureInPicture(Some((node.id, node.key, self.brush.native_session))));
+                            continue;
+                        } else if cfg!(target_os = "android") && video && self.serves_requests() {
+                            "Android picture in picture requires a URL-backed video"
+                        } else {
+                            "picture in picture is unsupported on the headless/DRM host"
+                        };
+                        floats.push((id.to_owned(), reason));
+                    }
                 }
                 // A window that fades or leaves full screen is the Mac's so far (LLP 1069.010).
                 "panel" => self.host.log("panel unsupported: route panels are available on macOS only"),
@@ -252,8 +273,8 @@ impl<D: DataSource> Presenter<D> {
                 other => eprintln!("exact: unknown command {other}"),
             }
         }
-        for id in floats {
-            self.refuse_picture_in_picture(&id);
+        for (id, reason) in floats {
+            self.refuse_picture_in_picture(&id, reason);
         }
         for (name, args, target) in frames {
             self.frame_command(&name, &args, target);
@@ -266,8 +287,10 @@ impl<D: DataSource> Presenter<D> {
 
 impl<D: DataSource> Presenter<D> {
     /// `requestPictureInPicture(id)` refused: the image's `pictureinpictureerror`, with the reason.
-    fn refuse_picture_in_picture(&mut self, id: &str) {
-        const WHY: &str = "picture in picture is unsupported on the headless/DRM host";
+    fn refuse_picture_in_picture(&mut self, id: &str, reason: &str) {
+        self.host.log(format!(
+            "requestPictureInPicture \"{id}\" refused: {reason}"
+        ));
         let kernel = self.host.kernel();
         let Some(view) = kernel
             .find_by_id(id)
@@ -284,7 +307,7 @@ impl<D: DataSource> Presenter<D> {
         {
             return;
         }
-        let event = Event::Media(EventKind::Pictureinpictureerror, WHY.into());
+        let event = Event::Media(EventKind::Pictureinpictureerror, reason.into());
         let sent = self.host.dispatch_now(view, event);
         if let Some(error) = sent.or(self.after_commit()) {
             self.host.log(error);

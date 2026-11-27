@@ -163,6 +163,12 @@ impl Picker {
             Kind::Directory => "showDirectoryPicker takes (id)",
             Kind::Save => "showSaveFilePicker takes (id, suggestedName)",
         };
+        // Only the Mac panel reads the message following startIn.
+        let message_index = if kind == Kind::Directory { 2 } else { 3 };
+        let args = match args.split_last() {
+            Some((message, shared)) if shared.len() == message_index && message.is_str() => shared,
+            _ => args,
+        };
         let Some(id) = args.first().and_then(Value::as_str) else {
             return Err(usage.into());
         };
@@ -216,6 +222,10 @@ impl Picker {
     /// `{"id":…,"multiple":…}` / `{"id":…,"suggestedName":…}`: the hold's
     /// inspection summary and what a presenting host reads.
     pub fn summary(&self) -> String {
+        self.panel_summary(None)
+    }
+
+    fn panel_summary(&self, message: Option<&str>) -> String {
         let mut s = String::from("{\"id\":");
         quote(&self.id, &mut s);
         match self.kind {
@@ -227,6 +237,10 @@ impl Picker {
             }
         }
         push_start_in(&self.start_in, &mut s);
+        if let Some(message) = message {
+            s.push_str(",\"apple.message\":");
+            quote(message, &mut s);
+        }
         s.push('}');
         s
     }
@@ -241,6 +255,17 @@ pub fn arm<D: DataSource>(
     request: Result<Picker, String>,
     agent: bool,
     available: bool,
+) -> Arm {
+    arm_with_message(runner, kind, request, agent, available, None)
+}
+
+fn arm_with_message<D: DataSource>(
+    runner: &mut Runner<D>,
+    kind: Kind,
+    request: Result<Picker, String>,
+    agent: bool,
+    available: bool,
+    message: Option<&str>,
 ) -> Arm {
     let refuse = |runner: &mut Runner<D>, reason: String, view: Option<ViewId>| {
         runner.log(format!("{}: refused: {reason}", kind.command()));
@@ -261,7 +286,7 @@ pub fn arm<D: DataSource>(
     };
     request.start_in = ruled_start_in(runner, kind.command(), request.start_in.take());
     if agent {
-        let summary = request.summary();
+        let summary = request.panel_summary(message);
         return Arm::Held(runner.hold(kind.capability(), Some(view), &summary, &[], true));
     }
     if !available {
@@ -299,12 +324,14 @@ pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
     };
     let available = !json.contains("\"available\":false");
     let shown = field_bool(json, "agent") && field_bool(json, "present");
-    match arm(
+    let message = field_str(json, "apple.message");
+    match arm_with_message(
         runner,
         kind,
         parsed,
         field_bool(json, "agent") && !shown,
         available,
+        message.as_deref(),
     ) {
         Arm::Refused(reason, view) => {
             let mut s = String::from("{\"refused\":");
@@ -317,7 +344,7 @@ pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
         }
         Arm::Held(ticket) => format!("{{\"ticket\":{ticket}}}"),
         Arm::Present(request, view) => {
-            let summary = request.summary();
+            let summary = request.panel_summary(message.as_deref());
             let held = if shown {
                 let ticket = runner.hold(kind.capability(), Some(view), &summary, &[], true);
                 format!("\"ticket\":{ticket},")
@@ -559,7 +586,12 @@ mod tests {
         assert_eq!(save.unwrap().start_in.as_deref(), Some("screenshots"));
         assert!(Picker::from_args(Kind::Open, &[s("f"), s("pictures")]).is_err());
         assert!(Picker::from_args(Kind::Save, &[s("s"), s("a"), Value::Number(1.0)]).is_err());
-        assert!(Picker::from_args(Kind::Directory, &[s("d"), s("a"), s("b")]).is_err());
+        let messaged = Picker::from_args(
+            Kind::Directory,
+            &[s("d"), s("downloads"), s("Choose a project")],
+        )
+        .unwrap();
+        assert_eq!(messaged.start_in.as_deref(), Some("downloads"));
         // The host resolves a handle; a name outside the set never reaches it.
         assert_eq!(start_in_refusal("videos"), None);
         assert_eq!(start_in_refusal("doc:/12/notes/2026"), None);
@@ -588,6 +620,14 @@ mod tests {
                 &format!(r#"{{"command":"showDirectoryPicker","id":"f","startIn":"{start}"}}"#),
             )
         };
+        request(
+            &mut runner,
+            r#"{"command":"showDirectoryPicker","id":"f","apple.message":"Choose a project","agent":true}"#,
+        );
+        assert_eq!(
+            runner.device_holds().last().unwrap().args,
+            r#"{"id":"f","apple.message":"Choose a project"}"#
+        );
         let named = ask(&mut runner, "downloads");
         assert!(
             named.ends_with(r#","id":"f","startIn":"downloads"}"#),

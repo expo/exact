@@ -20,15 +20,22 @@ impl Em<'_> {
         scope: &Scope,
     ) -> Result<String, String> {
         let f = self.binding_value(i, e, b, scope, true)?;
-        Ok(self.status_read(i, e, b, f))
+        Ok(self.status_read(i, e, b, scope, f))
     }
 
-    pub(super) fn status_read(&mut self, i: u32, e: &str, b: &BindingsRow, f: String) -> String {
+    pub(super) fn status_read(
+        &mut self,
+        i: u32,
+        e: &str,
+        b: &BindingsRow,
+        scope: &Scope,
+        f: String,
+    ) -> String {
         if let Some(owners) = (b.kind == BindingKind::Prop)
             .then(|| self.answers.status_binding(i, b.id))
             .flatten()
         {
-            let owners = super::answers::status_owners(owners);
+            let owners = super::answers::status_owners(owners, scope);
             let guard = self.uses.rt("statusSubject");
             return format!("(globalThis.__exactRender?{guard}({e},{f},{owners}):{f})");
         }

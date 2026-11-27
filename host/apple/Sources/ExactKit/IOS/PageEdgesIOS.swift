@@ -55,7 +55,7 @@ extension Presenter {
         var routes: [ObjectIdentifier: (top: UIScrollView?, bottom: UIScrollView?)] = [:]
         for id in scrollers {
             guard let v = views[id] else { continue }
-            var found = Bands(), own = UIEdgeInsets.zero
+            var found = Bands(), own = UIEdgeInsets.zero, sides = UIEdgeInsets.zero
             if let sv = v.scrollView, (sv as? ScrollView)?.scrollsY ?? true, v.window != nil {
                 if let route = ViewPresentation.controllers(for: v, layout: true).lazy.compactMap({ $0 as? any RouteSurface }).first(where: { $0.hosting === navigation && v.isDescendant(of: $0.node) }) {
                     if let judge { found = routeBands(of: v, sv, in: route, judge) }
@@ -75,9 +75,11 @@ extension Presenter {
                     if !found.top.isEmpty || found.band.top > 0.5, navigation.automaticContentScroller(of: route) === v { r.top = sv }
                     if !found.bottom.isEmpty || found.band.bottom > 0.5 { r.bottom = sv }
                     routes[ObjectIdentifier(route)] = r
+                    sides = sideReach(of: v, in: route.node)
                 } else { found = pageBands(of: v, sv, margins: m, area: area, judge); own = found.band }
             }
             if v.pageBand != found.band || v.bandInset != own { v.setPageBand(found.band, inset: own) }
+            v.setSideReach(sides)
             bars += found.topLifts.map { ($0.bar, v, $0.over, .top) } + found.bottomLifts.map { ($0.bar, v, $0.over, .bottom) }
         }
         #if os(iOS)
@@ -109,15 +111,13 @@ extension Presenter {
     /// reaches the area's edge and the margin, provided the other edge is
     /// banded or open too.
     private func pageBands(of v: NodeView, _ sv: UIScrollView, margins m: UIEdgeInsets, area: CGSize, _ judge: ControlBars?) -> Bands {
-        var at: UIView? = v, page: NodeView?
-        while let c = at, c !== root {
+        var page: NodeView?
+        guard Self.climb(from: v, to: root, { c, node in
             // The scroller's own clip gives way to its band where its scroll view holds what it draws (`clipsItself`)
             let clips = c === v ? c.clipsToBounds && !v.scrollHoldsContent : c.clipsToBounds || c is UIScrollView
-            if c.isHidden || !c.transform.isIdentity || clips { return Bands() }
-            if let n = c as? NodeView, c.superview === root { page = n }
-            at = c.superview
-        }
-        guard at === root, !root.clipsToBounds, let page else { return Bands() }
+            page = node
+            return !c.isHidden && c.transform.isIdentity && !clips
+        }), !root.clipsToBounds, let page else { return Bands() }
         let r = v.convert(v.bounds, to: root), fits = root.bounds.height <= area.height + 0.5
         let atTop = r.minY <= 0.5, atFoot = r.maxY >= area.height - 0.5 && fits
         let margins = Bands(band: UIEdgeInsets(top: atTop ? m.top : 0, left: 0, bottom: atFoot ? m.bottom : 0, right: 0))
@@ -130,6 +130,16 @@ extension Presenter {
         let band = UIEdgeInsets(top: max(0, r.minY) + m.top, left: 0, bottom: max(0, area.height - r.maxY) + m.bottom, right: 0)
         guard Self.drawn(band, v, sv) else { return margins }
         return Bands(band: band, top: top, bottom: bottom)
+    }
+
+    /// Visits `v` and the views above it, below `top`, innermost first, while `visit` answers true; whether it came to `top`.
+    static func climb(from v: UIView, to top: UIView, _ visit: (UIView, NodeView?) -> Bool) -> Bool {
+        var at: UIView? = v
+        while let c = at, c !== top {
+            guard visit(c, c as? NodeView) else { return false }
+            at = c.superview
+        }
+        return at === top
     }
 
     /// A route's scroller (LLP 1131 D2): with its top banded or open, an edge
@@ -203,7 +213,7 @@ extension Presenter {
     /// (`ListHosting.drawnThrough`).
     private static func drawn(_ band: UIEdgeInsets, _ v: NodeView, _ sv: UIScrollView) -> Bool {
         guard let lists = v.presenter?.collections, lists.owns(v.id) else { return true }
-        let i = sv.adjustedContentInset, o = v.reach == .zero ? .zero : v.scrollOutset
+        let i = sv.adjustedContentInset, o = v.reachesDown ? v.scrollOutset : .zero
         let through = lists.drawnThrough(v.id) ?? v.scrollDrawnThrough(sv)
         let port = v.bounds.height + o.top + o.bottom - (i.top - through.top) - (i.bottom - through.bottom)
         return band.top <= port + 0.5 && band.bottom <= port + 0.5
@@ -227,18 +237,26 @@ extension NodeView {
     package func setReach(_ reach: UIEdgeInsets) {
         guard scrollView != nil else { reachBox(reach); return }
         let changed = !reachGiven || reach != self.reach
+        setSideReach(.zero) // the kernel's takes its place
         if !reachGiven { more.reachGiven = true }
         // The scroller's frame and offset move as one: inside an animation UIKit has open, only if the last frame showed it
         moveOrPlace { reachScroll(reach) }
         // A grouped list's geometry, its cards' margins and side safe area among it, follows a new answer now, not at its next batch
         if changed, groupedOwner { presenter?.groupedLists?.geometryChanged(id) }
     }
-    private func reachScroll(_ reach: UIEdgeInsets) {
+    /// The scroll view's move, its `contentInset` with it where that holds the reach (`sideInset`).
+    func reachScroll(_ reach: UIEdgeInsets) {
         guard let sv = scrollView, reach != self.reach else { return }
-        let top = sv.contentOffset.y + scrollTopInset(sv), left = sv.contentOffset.x + scrollLeftInset(sv), height = sv.bounds.height
+        let top = sv.contentOffset.y + scrollTopInset(sv), left = sv.contentOffset.x + scrollLeftInset(sv), height = sv.bounds.height, held = sideInset
         let mark = presenter?.collections.portMark(id)
         defer { if let mark { presenter?.collections.portMoved(id, since: mark) } }
         more.reach = reach
+        if sideInset != held {
+            let moved = sideInset.less(held)
+            sv.contentInset = sv.contentInset.adding(moved)
+            // The horizontal indicator's track keeps inside them, and the vertical indicator takes no side (D14)
+            sv.horizontalScrollIndicatorInsets = sv.horizontalScrollIndicatorInsets.adding(moved)
+        }
         // A layout transition's surface that took the clip over keeps it until it ends (`endSurface`)
         if surface?.clippedSelf != true, clipsToBounds != clipsItself { clipsToBounds = clipsItself }
         sv.frame = scrollFrame

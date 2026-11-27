@@ -477,7 +477,7 @@ impl<D: DataSource> Presenter<D> {
         let mut wants = false;
         let mut service = false;
         let mut flush = BTreeSet::new();
-        let mut submitted = BTreeMap::<String, Vec<u32>>::new();
+        let mut submitted = BTreeMap::<String, Vec<(u32, u32)>>::new();
         let mut recorded = BTreeSet::new();
         let views: Vec<(u32, bool)> = self
             .surfaces
@@ -567,13 +567,11 @@ impl<D: DataSource> Presenter<D> {
             if result != 2 && !starved {
                 recorded.insert(view);
             }
-            // Dirty stays set when a complete image has not been recorded.
-            if result != 2
-                && !buffered
-                && !starved
-                && unsafe { abi.symbol::<Read>(b"gpu_dirty")(c.id) } == 0
-            {
-                submitted.entry(c.artifact.clone()).or_default().push(view);
+            if result != 2 && !buffered && !starved {
+                submitted
+                    .entry(c.artifact.clone())
+                    .or_default()
+                    .push((view, c.id));
             }
             flush.insert(c.artifact.clone());
         }
@@ -583,9 +581,11 @@ impl<D: DataSource> Presenter<D> {
                 self.surfaces.error = abi.error();
             } else if let Some(views) = submitted.get(&artifact) {
                 let mut presented = PRESENTED.lock().unwrap_or_else(|e| e.into_inner());
-                for view in views {
-                    if presented.get(view) == Some(&0) {
-                        presented.insert(*view, 2);
+                for &(view, id) in views {
+                    if presented.get(&view) == Some(&0)
+                        && unsafe { abi.symbol::<Read>(b"gpu_seen")(id) } != 0
+                    {
+                        presented.insert(view, 2);
                     }
                 }
             }

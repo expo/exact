@@ -8,7 +8,7 @@ use crate::grid::Rgb;
 use exact_kernel::{Kernel, NodeKey, NodeType, PropId, ViewId};
 use exact_plan::EventKind;
 use exact_runner::Event;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -29,7 +29,9 @@ pub struct Decoded {
 impl Decoded {
     /// The colour at a pixel, composited over black.
     pub fn at(&self, x: u32, y: u32) -> Rgb {
-        let i = ((y.min(self.height - 1) * self.width + x.min(self.width - 1)) * 4) as usize;
+        let x = x.min(self.width - 1) as usize;
+        let y = y.min(self.height - 1) as usize;
+        let i = (y * self.width as usize + x) * 4;
         let a = self.rgba[i + 3] as u32;
         let c = |v: u8| ((v as u32 * a) / 255) as u8;
         Rgb(c(self.rgba[i]), c(self.rgba[i + 1]), c(self.rgba[i + 2]))
@@ -76,6 +78,16 @@ const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 /// The longest `data:` source, as every host bounds it (LLP 1011 §2;
 /// `exact_raster::MAX_DATA_URL_BYTES`).
 const MAX_DATA_URL_BYTES: usize = 1024 * 1024;
+/// Most pixels decoded for one image (`exact_raster::MAX_SOURCE_PIXELS`).
+const MAX_SOURCE_PIXELS: u64 = 64 * 1024 * 1024;
+/// Most bytes allocated for one decoded RGBA frame.
+const MAX_DECODED_BYTES: usize = (MAX_SOURCE_PIXELS as usize) * 4;
+/// Byte budget for cached images; unreferenced entries evict LRU above this.
+const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
+/// Entry cap for the source cache, bounding retained errors as well as images.
+const MAX_CACHE_ENTRIES: usize = 256;
+/// Most background image decode threads running at once.
+const MAX_DECODE_WORKERS: usize = 4;
 
 /// Read and decode one source: its `error` message when it does not load.
 fn fetch(src: &str, assets: Option<&Path>) -> Result<Decoded, String> {
@@ -188,27 +200,58 @@ fn data_url(src: &str) -> Option<Vec<u8>> {
 }
 
 fn decode(png: Vec<u8>) -> Option<Decoded> {
+    // Reject invalid signatures or oversized IHDR dimensions before the
+    // decoder allocates scanline or output buffers.
+    if png.len() < 24 || &png[..8] != b"\x89PNG\r\n\x1a\n" || &png[12..16] != b"IHDR" {
+        return None;
+    }
+    let ihdr_w = u32::from_be_bytes(png[16..20].try_into().ok()?);
+    let ihdr_h = u32::from_be_bytes(png[20..24].try_into().ok()?);
+    if ihdr_w == 0 || ihdr_h == 0 || u64::from(ihdr_w) * u64::from(ihdr_h) > MAX_SOURCE_PIXELS {
+        return None;
+    }
     let mut decoder = png::Decoder::new(std::io::Cursor::new(&png));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
+    decoder.set_ignore_text_chunk(true);
     let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()?];
+    let header = reader.info();
+    if header.width == 0
+        || header.height == 0
+        || u64::from(header.width) * u64::from(header.height) > MAX_SOURCE_PIXELS
+    {
+        return None;
+    }
+    let out_len = reader.output_buffer_size()?;
+    if out_len > MAX_DECODED_BYTES {
+        return None;
+    }
+    let mut buf = vec![0; out_len];
     let info = reader.next_frame(&mut buf).ok()?;
     let (width, height) = (info.width, info.height);
-    let pixels = &buf[..info.buffer_size()];
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
+        return None;
+    }
+    let len = info.buffer_size();
     let rgba = match info.color_type {
-        png::ColorType::Rgba => pixels.to_vec(),
-        png::ColorType::Rgb => pixels
-            .chunks(3)
+        png::ColorType::Rgba => {
+            buf.truncate(len);
+            buf
+        }
+        png::ColorType::Rgb => buf[..len]
+            .chunks_exact(3)
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
-        png::ColorType::Grayscale => pixels.iter().flat_map(|v| [*v, *v, *v, 255]).collect(),
-        png::ColorType::GrayscaleAlpha => pixels
-            .chunks(2)
+        png::ColorType::Grayscale => buf[..len].iter().flat_map(|v| [*v, *v, *v, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf[..len]
+            .chunks_exact(2)
             .flat_map(|p| [p[0], p[0], p[0], p[1]])
             .collect(),
         png::ColorType::Indexed => return None,
     };
-    (width > 0 && height > 0).then_some(Decoded {
+    let expected = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    (rgba.len() == expected).then_some(Decoded {
         width,
         height,
         rgba,
@@ -258,12 +301,43 @@ impl Protocol {
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
-/// Every image the tree names, read and decoded once per source on a
-/// thread of its own, off the commit; the loop's wake brings it back.
+struct CacheEntry {
+    value: Result<Decoded, String>,
+    bytes: usize,
+    last_used: u64,
+}
+
+impl CacheEntry {
+    fn new(value: Result<Decoded, String>, last_used: u64) -> Self {
+        let bytes = match &value {
+            Ok(decoded) => decoded.rgba.len() + decoded.png.len(),
+            Err(why) => why.len(),
+        };
+        CacheEntry {
+            value,
+            bytes,
+            last_used,
+        }
+    }
+}
+
+#[derive(Default)]
+struct DecodeQueue {
+    pending: VecDeque<String>,
+    workers: usize,
+}
+
+/// Every image the tree names, read and decoded once per source on a bounded
+/// worker pool off the commit; the loop's wake brings it back.
 pub struct Images {
-    /// Each source read so far: its picture, or why it did not load.
-    by_source: HashMap<String, Result<Decoded, String>>,
+    /// Cached sources: each picture or why it did not load, bounded by LRU eviction.
+    by_source: HashMap<String, CacheEntry>,
+    cached_bytes: usize,
+    tick: u64,
+    cache_byte_limit: usize,
+    cache_entry_limit: usize,
     loading: HashSet<String>,
+    queue: Arc<Mutex<DecodeQueue>>,
     done: Sender<(String, Result<Decoded, String>)>,
     landed: Receiver<(String, Result<Decoded, String>)>,
     waker: Arc<Mutex<Option<Waker>>>,
@@ -286,7 +360,12 @@ impl Images {
         let (done, landed) = channel();
         Images {
             by_source: HashMap::new(),
+            cached_bytes: 0,
+            tick: 0,
+            cache_byte_limit: MAX_CACHE_BYTES,
+            cache_entry_limit: MAX_CACHE_ENTRIES,
             loading: HashSet::new(),
+            queue: Arc::new(Mutex::new(DecodeQueue::default())),
             done,
             landed,
             waker: Arc::new(Mutex::new(None)),
@@ -305,8 +384,97 @@ impl Images {
         *self.waker.lock().expect("waker") = Some(waker);
     }
 
+    fn record(&mut self, src: String, decoded: Result<Decoded, String>) {
+        self.tick = self.tick.saturating_add(1);
+        let entry = CacheEntry::new(decoded, self.tick);
+        self.cached_bytes = self.cached_bytes.saturating_add(entry.bytes);
+        if let Some(old) = self.by_source.insert(src, entry) {
+            self.cached_bytes = self.cached_bytes.saturating_sub(old.bytes);
+        }
+        self.evict();
+    }
+
+    fn evict(&mut self) {
+        while self.cached_bytes > self.cache_byte_limit
+            || self.by_source.len() > self.cache_entry_limit
+        {
+            let victim = self
+                .by_source
+                .iter()
+                .filter(|(src, _)| !self.nodes.iter().any(|(_, live)| live == *src))
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(src, _)| src.clone());
+            let Some(victim) = victim else {
+                break;
+            };
+            if let Some(old) = self.by_source.remove(&victim) {
+                self.cached_bytes = self.cached_bytes.saturating_sub(old.bytes);
+            }
+        }
+    }
+
+    fn enqueue(&mut self, src: String) {
+        let spawn = {
+            let mut q = self.queue.lock().unwrap();
+            q.pending.push_back(src);
+            if q.workers < MAX_DECODE_WORKERS {
+                q.workers += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if !spawn {
+            return;
+        }
+        let queue = self.queue.clone();
+        let assets = self.assets.clone();
+        let done = self.done.clone();
+        let waker = self.waker.clone();
+        if std::thread::Builder::new()
+            .name("exact-terminal-image".into())
+            .spawn(move || loop {
+                let src = {
+                    let mut q = queue.lock().unwrap();
+                    match q.pending.pop_front() {
+                        Some(src) => src,
+                        None => {
+                            q.workers -= 1;
+                            break;
+                        }
+                    }
+                };
+                let decoded = fetch(&src, assets.as_deref());
+                if done.send((src, decoded)).is_err() {
+                    let mut q = queue.lock().unwrap();
+                    q.workers -= 1;
+                    break;
+                }
+                if let Some(wake) = waker.lock().ok().and_then(|w| w.clone()) {
+                    wake();
+                }
+            })
+            .is_err()
+        {
+            let mut failed = Vec::new();
+            {
+                let mut q = self.queue.lock().unwrap();
+                q.workers -= 1;
+                if q.workers == 0 {
+                    failed.extend(q.pending.drain(..));
+                }
+            }
+            for src in failed {
+                let _ = self
+                    .done
+                    .send((src, Err("could not start image decoder".into())));
+            }
+        }
+    }
+
     /// Find the tree's images and start reading any new source.
     pub fn load(&mut self, kernel: &Kernel) {
+        self.tick = self.tick.saturating_add(1);
         self.nodes.clear();
         self.keys.clear();
         if kernel.has_type(NodeType::Image) {
@@ -322,24 +490,22 @@ impl Images {
                 stack.extend(n.children());
             }
         }
+        let mut to_enqueue = Vec::new();
         for (_, src) in &self.nodes {
-            // A symbol is drawn by its label and reads nothing.
-            if src.starts_with("symbol:")
-                || self.by_source.contains_key(src)
-                || !self.loading.insert(src.clone())
-            {
+            if let Some(entry) = self.by_source.get_mut(src) {
+                entry.last_used = self.tick;
                 continue;
             }
-            let (src, assets) = (src.clone(), self.assets.clone());
-            let (done, waker) = (self.done.clone(), self.waker.clone());
-            std::thread::spawn(move || {
-                let decoded = fetch(&src, assets.as_deref());
-                let _ = done.send((src, decoded));
-                if let Some(wake) = waker.lock().ok().and_then(|w| w.clone()) {
-                    wake();
-                }
-            });
+            // A symbol is drawn by its label and reads nothing.
+            if src.starts_with("symbol:") || !self.loading.insert(src.clone()) {
+                continue;
+            }
+            to_enqueue.push(src.clone());
         }
+        for src in to_enqueue {
+            self.enqueue(src);
+        }
+        self.evict();
         self.decide();
     }
 
@@ -353,7 +519,7 @@ impl Images {
         let mut any = false;
         while let Ok((src, decoded)) = self.landed.try_recv() {
             self.loading.remove(&src);
-            self.by_source.insert(src, decoded);
+            self.record(src, decoded);
             any = true;
         }
         if any {
@@ -372,7 +538,7 @@ impl Images {
                 break;
             };
             self.loading.remove(&src);
-            self.by_source.insert(src, decoded);
+            self.record(src, decoded);
             any = true;
         }
         if any {
@@ -397,7 +563,7 @@ impl Images {
                 continue;
             }
             self.heard.insert(*id, (*key, src.clone()));
-            let error = read.as_ref().err().cloned();
+            let error = read.value.as_ref().err().cloned();
             self.events.push((*id, *key, src.clone(), error));
         }
     }
@@ -405,7 +571,7 @@ impl Images {
     /// A node's decoded image.
     pub fn of(&self, id: ViewId) -> Option<&Decoded> {
         let src = self.nodes.iter().find(|(n, _)| *n == id).map(|(_, s)| s)?;
-        self.by_source.get(src)?.as_ref().ok()
+        self.by_source.get(src)?.value.as_ref().ok()
     }
 }
 
@@ -485,5 +651,104 @@ impl<D: exact_runner::DataSource> crate::host::Host<D> {
             self.changed();
         }
         self.deliver_image_events();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & (0u32.wrapping_sub(crc & 1)));
+            }
+        }
+        !crc
+    }
+
+    fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(12 + data.len());
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&crc32(&out[4..]).to_be_bytes());
+        out
+    }
+
+    fn forged_png(width: u32, height: u32) -> Vec<u8> {
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&chunk(b"IHDR", &ihdr));
+        png.extend_from_slice(&chunk(b"IDAT", &[]));
+        png.extend_from_slice(&chunk(b"IEND", &[]));
+        png
+    }
+
+    fn tiny_rgba_png(pixel: [u8; 4]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut out, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&pixel)
+                .unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn oversized_ihdr_png_is_refused_before_allocating() {
+        use base64::Engine as _;
+        for (w, h) in [(1_000_000, 1_000_000), (8_193, 8_193), (0, 10), (10, 0)] {
+            let png = forged_png(w, h);
+            assert!(decode(png.clone()).is_none(), "{w}x{h} should be refused");
+            let url = format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&png)
+            );
+            assert!(fetch(&url, None).is_err(), "{w}x{h} data URL should fail");
+        }
+        let ok = decode(tiny_rgba_png([10, 20, 30, 255])).expect("1x1 RGBA decodes");
+        assert_eq!((ok.width, ok.height), (1, 1));
+        assert_eq!(ok.rgba, [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn image_cache_evicts_unreferenced_entries_and_bounds_workers() {
+        use base64::Engine as _;
+        let mut images = Images::new(None);
+        images.cache_entry_limit = 3;
+        images.cache_byte_limit = 1024;
+        let sample = tiny_rgba_png([1, 2, 3, 255]);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&sample);
+        // Pin node 1 on source 0 while inserting more sources than the cache allows.
+        let pinned = format!("data:image/png;base64,{b64}");
+        images.nodes.push((1, pinned.clone()));
+        for i in 0..8 {
+            let src = if i == 0 {
+                pinned.clone()
+            } else {
+                format!("data:image/png;x={i};base64,{b64}")
+            };
+            images.loading.insert(src.clone());
+            images.enqueue(src);
+        }
+        assert!(images.queue.lock().unwrap().workers <= MAX_DECODE_WORKERS);
+        assert!(images.wait(std::time::Duration::from_secs(5)));
+        assert!(!images.loading());
+        assert!(images.by_source.len() <= 3);
+        assert!(
+            images.by_source.contains_key(&pinned),
+            "referenced source must stay cached"
+        );
     }
 }

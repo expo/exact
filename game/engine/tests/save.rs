@@ -273,3 +273,69 @@ fn shadows_at_the_default_local_settings_keep_their_encoding() {
     fresh.load(&w.save()).unwrap();
     assert_eq!(*fresh.resource::<Shadows>(), local);
 }
+
+#[test]
+fn invalid_shadows_fixed_box_refuses_on_load_and_restore() {
+    use exact_game::{Game, Input, ShadowBox, Shadows, Sim, Vec3};
+
+    struct Empty;
+    impl Game for Empty {
+        type Args = ();
+        const ID: &'static str = "test.invalid-shadow-box";
+        fn setup(_: &mut World, _: &()) {}
+        fn tick(_: &mut World, _: &Input, _: &()) {}
+    }
+
+    for fixed_box in [
+        ShadowBox {
+            center: Vec3::ZERO,
+            half_width: 0.0,
+            half_depth: 10.0,
+        },
+        ShadowBox {
+            center: Vec3::ZERO,
+            half_width: -1.0,
+            half_depth: 10.0,
+        },
+        ShadowBox {
+            center: Vec3::ZERO,
+            half_width: f32::NAN,
+            half_depth: 10.0,
+        },
+        ShadowBox {
+            center: Vec3::ZERO,
+            half_width: 10.0,
+            half_depth: f32::INFINITY,
+        },
+        ShadowBox {
+            center: Vec3::NAN,
+            half_width: 10.0,
+            half_depth: 10.0,
+        },
+    ] {
+        let mut w = World::new(60, 0);
+        w.insert_resource(Shadows {
+            fixed_box: Some(fixed_box),
+            ..Default::default()
+        });
+        let world_save = w.save();
+        let mut restored = World::new(60, 0);
+        let err = restored.load(&world_save).unwrap_err();
+        assert!(err.to_string().contains("sun box"), "{err}");
+
+        let mut sim = Sim::<Empty>::new(()).unwrap();
+        sim.world_mut().insert_resource(Shadows {
+            fixed_box: Some(fixed_box),
+            ..Default::default()
+        });
+        let sim_save = sim.save().unwrap();
+        let mut restored_sim = Sim::<Empty>::new(()).unwrap();
+        let err = restored_sim.restore(&sim_save).unwrap_err();
+        assert!(err.to_string().contains("sun box"), "{err}");
+    }
+
+    let mut box_edit = ShadowBox::default();
+    assert!(box_edit.set_field("half_width", "0").is_err());
+    assert!(box_edit.set_field("half_depth", "-2").is_err());
+    assert_eq!(box_edit, ShadowBox::default());
+}

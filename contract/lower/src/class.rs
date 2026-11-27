@@ -6,33 +6,40 @@ use crate::tags::{self, AttrTarget};
 use crate::{err, LowerError, Lowerer};
 use contract_syntax::state::state_of;
 use contract_syntax::{Attr, Expr, Node, Span};
-use exact_kernel::StyleId;
+use std::collections::BTreeSet;
 
 impl Lowerer<'_> {
-    /// A node's class rows as attributes ([`rows`]), from this file's
-    /// styles, as a node that takes no row unwritten has them.
+    /// A node's class rows as attributes ([`rows`]), from this file's styles.
     pub(crate) fn class_rows(
         &self,
         attrs: &[Attr],
     ) -> Result<Option<(String, Vec<Attr>)>, LowerError> {
-        rows(attrs, &|name| self.styles.get(name).map(Vec::as_slice), &[])
+        rows(attrs, &|name| self.styles.get(name).map(Vec::as_slice))
     }
 }
 
 /// A node's class rows as attributes, with a label for the source map: a
 /// named style's rows as declared; a choice's as one `cond ? A's : B's` per
-/// attribute either style sets. A side that does not set a row is what the
-/// node takes unwritten (`unwritten`: its tag's fixed rows, a link's
-/// colour), else `none`, an explicit unset the runner clears to the
-/// kernel's default. Attributes that write one row under different names (a
-/// shorthand and its longhand) are paired row by row, so neither side's
-/// unset clears what it set under the other name. Rows the node itself sets
-/// are left out. `style` finds a style's rows by name.
+/// attribute either style sets. A side that does not set a row is `none`,
+/// letting any earlier implied row (a tag's fixed style, a link's colour, a
+/// grouped sheet) stand unwritten or clearing to the kernel's default.
+/// Attributes that write one row under different names (a shorthand and its
+/// longhand) are paired row by row, so neither side's unset clears what it
+/// set under the other name. Rows the node itself sets are left out.
+/// `style` finds a style's rows by name.
 pub(crate) fn rows<'s>(
     attrs: &[Attr],
     style: &dyn Fn(&str) -> Option<&'s [Attr]>,
-    unwritten: &[(StyleId, Expr)],
 ) -> Result<Option<(String, Vec<Attr>)>, LowerError> {
+    Ok(rows_with_fallbacks(attrs, style)?.map(|(label, rows, _)| (label, rows)))
+}
+
+/// [`rows`], plus the `(name, span)` of every choice row where one style
+/// omitted the attribute so an earlier compiler-implied row stays underneath.
+pub(crate) fn rows_with_fallbacks<'s>(
+    attrs: &[Attr],
+    style: &dyn Fn(&str) -> Option<&'s [Attr]>,
+) -> Result<Option<(String, Vec<Attr>, BTreeSet<(String, Span)>)>, LowerError> {
     let Some(c) = attrs.iter().find(|a| a.name == "class") else {
         return Ok(None);
     };
@@ -51,7 +58,7 @@ pub(crate) fn rows<'s>(
                 .filter(|s| !own(&s.name))
                 .cloned()
                 .collect();
-            Ok(Some((name.clone(), rows)))
+            Ok(Some((name.clone(), rows, BTreeSet::new())))
         }
         Expr::Ternary(cond, yes, no, span) => {
             let (Expr::Ident(a, _), Expr::Ident(b, _)) = (&**yes, &**no) else {
@@ -63,19 +70,23 @@ pub(crate) fn rows<'s>(
             };
             let (sa, sb) = (style(a, yes.span())?, style(b, no.span())?);
             let both: Vec<&Attr> = sa.iter().chain(sb).collect();
-            let (sa, sb) = (by_row(sa, &both, unwritten), by_row(sb, &both, unwritten));
+            let (sa, sb) = (by_row(sa, &both), by_row(sb, &both));
             let mut rows: Vec<Attr> = Vec::new();
+            let mut fallbacks: BTreeSet<(String, Span)> = BTreeSet::new();
             for s in sa.iter().chain(&sb) {
                 if own(&s.name) || rows.iter().any(|r| r.name == s.name) {
                     continue;
                 }
                 let side = |style: &[Attr]| {
-                    style.iter().rfind(|r| r.name == s.name).map_or_else(
-                        || absent(s, unwritten, *span).unwrap_or(Expr::None(*span)),
-                        |r| r.value.clone(),
-                    )
+                    style
+                        .iter()
+                        .rfind(|r| r.name == s.name)
+                        .map(|r| r.value.clone())
                 };
-                let (va, vb) = (side(&sa), side(&sb));
+                let (oa, ob) = (side(&sa), side(&sb));
+                let omitted = oa.is_none() || ob.is_none();
+                let va = oa.unwrap_or(Expr::None(*span));
+                let vb = ob.unwrap_or(Expr::None(*span));
                 // @ref LLP 1069.011 D12 — a prop has no `none` to fall to.
                 let styleable = matches!(crate::tags::attr(&s.name), Some(crate::tags::AttrTarget::Prop(p)) if p.styleable());
                 if styleable && (matches!(va, Expr::None(_)) || matches!(vb, Expr::None(_))) {
@@ -92,17 +103,15 @@ pub(crate) fn rows<'s>(
                     (Expr::Number(x, _), Expr::Number(y, _)) if x == y => va.clone(),
                     _ => Expr::Ternary(cond.clone(), Box::new(va), Box::new(vb), *span),
                 };
-                // No author's row may hold a metric the compiler writes (an
-                // `hr`'s hairline): a choice with a side that takes one
-                // unwritten is unwritten, as a state's fold over one is.
-                let written = s.written && !crate::states::metric_in(&value);
+                if omitted && s.written {
+                    fallbacks.insert((s.name.clone(), s.span));
+                }
                 rows.push(Attr {
                     value,
-                    written,
                     ..s.clone()
                 });
             }
-            Ok(Some((format!("{a}/{b}"), rows)))
+            Ok(Some((format!("{a}/{b}"), rows, fallbacks)))
         }
         _ => err(
             "lower-class-name",
@@ -112,29 +121,10 @@ pub(crate) fn rows<'s>(
     }
 }
 
-/// What `a`'s rows are on a node whose class choice leaves them unset: the
-/// value they take unwritten when each takes the same one, `none` when none
-/// takes one, and `None` when they differ, so that `a` is paired row by row
-/// ([`by_row`]). A state part's row takes none here: its base is the fold's
-/// (`Lowerer::fold_states`).
-fn absent(a: &Attr, unwritten: &[(StyleId, Expr)], span: Span) -> Option<Expr> {
-    if state_of(&a.name).is_some() {
-        return Some(Expr::None(span));
-    }
-    let mut values = crate::anatomy::rows_of(a)
-        .into_iter()
-        .map(|row| unwritten.iter().rfind(|(id, _)| *id == row).map(|(_, e)| e));
-    let first = values.next().flatten();
-    values
-        .all(|v| v == first)
-        .then(|| first.cloned().unwrap_or(Expr::None(span)))
-}
-
 /// `style`'s attributes in a class choice, `both` the two styles'
 /// attributes together: each that writes a row another name among `both`
-/// writes in the same state layer, or whose rows differ unwritten
-/// ([`absent`]), as one attribute a row ([`longhands`]).
-fn by_row(style: &[Attr], both: &[&Attr], unwritten: &[(StyleId, Expr)]) -> Vec<Attr> {
+/// writes in the same state layer, as one attribute a row ([`longhands`]).
+fn by_row(style: &[Attr], both: &[&Attr]) -> Vec<Attr> {
     let layer = |a: &Attr| state_of(&a.name).map(|(s, _)| s.to_string());
     style
         .iter()
@@ -145,8 +135,7 @@ fn by_row(style: &[Attr], both: &[&Attr], unwritten: &[(StyleId, Expr)]) -> Vec<
                     && layer(o) == layer(a)
                     && crate::anatomy::rows_of(o).iter().any(|id| ids.contains(id))
             });
-            let mixed = absent(a, unwritten, a.span).is_none();
-            (shared || mixed)
+            shared
                 .then(|| longhands(a))
                 .flatten()
                 .unwrap_or_else(|| vec![a.clone()])

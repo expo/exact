@@ -923,7 +923,10 @@
     format = String(format);
     if (FORMATS.indexOf(format) < 0) throw new TypeError(name + ": the format \"" + format + "\" is not supported; use \"deflate\", \"deflate-raw\" or \"gzip\"");
     // The context lives in Rust as long as the closures below can reach it.
-    var state = { handle: door(12, kind + " " + format, EMPTY) };
+    var handle;
+    try { handle = door(12, kind + " " + format, EMPTY); }
+    catch (e) { throw new TypeError(name + ": " + (e && e.message !== undefined ? e.message : e)); }
+    var state = { handle: handle };
     keep(Number(state.handle), state);
     function run(op, a, buffer) {
       var n;

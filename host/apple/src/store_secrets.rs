@@ -123,3 +123,98 @@ pub(crate) fn launch_backend_in(
 ) -> impl Backend {
     LaunchBackend(SecretBackend(secrets, directory))
 }
+
+/// Whether the process runs in agent mode, and whether locked secrets belong in
+/// the platform Keychain (production, or an agent drive with `EXACT_STORE=real`).
+pub(super) fn presence_mode() -> (bool, bool) {
+    let agent = std::env::var_os("EXACT_AGENT").is_some();
+    let platform = !agent || std::env::var("EXACT_STORE").as_deref() == Ok("real");
+    (agent, platform)
+}
+
+/// Reconcile or tear down the presence vault when a boot or reload commits.
+/// `PRESENCE` links the vault only when the composition names it.
+pub fn reconcile_presence<const PRESENCE: bool>(
+    bindings: Option<&ibex2::host::Bindings>,
+    grants: &str,
+    app_id: &str,
+) -> Option<(exact_runner::presence::Backend, Option<String>)> {
+    let (agent, platform) = presence_mode();
+    if !PRESENCE {
+        if let Some(b) = bindings {
+            clear_retired_locked_store(b, app_id, platform);
+        }
+        return None;
+    }
+    if !platform {
+        crate::presence_secrets::agent_backend(bindings, grants, agent).map(|b| (b, None))
+    } else {
+        crate::presence_secrets::keychain_backend(bindings, grants, app_id)
+            .map(|(b, service)| (b, Some(service)))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static DELETE_LOCKED_ITEM: std::cell::RefCell<Option<fn(&str, &str) -> bool>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn delete_locked_item(service: &str, account: &str) -> bool {
+    #[cfg(test)]
+    if let Some(f) = DELETE_LOCKED_ITEM.with(|hook| *hook.borrow()) {
+        return f(service, account);
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        crate::defaults::delete_data_protection_item(service, account)
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let _ = (service, account);
+        false
+    }
+}
+
+/// Tear down stale locked items and KV records after an app removes its last
+/// presence policy and stops linking `Capability::Presence` (LLP 1133.010 D4).
+fn clear_retired_locked_store(bindings: &ibex2::host::Bindings, app_id: &str, platform: bool) {
+    const RECORDS: &str = "exact.presence";
+    const LOCKED: &str = "exact.presence.agent";
+    const INDEX: &str = "exact.presence.items";
+
+    if !platform {
+        for scope in [LOCKED, INDEX, RECORDS] {
+            if let Ok(keys) = bindings.kv.keys(scope) {
+                for key in keys {
+                    let _ = bindings.kv.delete(scope, &key);
+                }
+            }
+        }
+        return;
+    }
+
+    let mut blocked = std::collections::BTreeSet::new();
+    if !app_id.is_empty() {
+        if let Ok(accounts) = bindings.kv.keys(INDEX) {
+            let service = format!("{app_id}.presence");
+            for account in accounts {
+                if delete_locked_item(&service, &account)
+                    && bindings.kv.delete(INDEX, &account).is_ok()
+                {
+                    continue;
+                }
+                if let Some((name, _)) = account.split_once('#') {
+                    blocked.insert(name.to_owned());
+                }
+            }
+        }
+    }
+    if let Ok(names) = bindings.kv.keys(RECORDS) {
+        for name in names {
+            if !blocked.contains(&name) {
+                let _ = bindings.kv.delete(RECORDS, &name);
+            }
+        }
+    }
+}

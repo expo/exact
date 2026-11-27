@@ -148,7 +148,7 @@ impl Engine {
                 // frame (LLP 1003.001 D3); a clock's join below decides for
                 // its own.
                 let now = self.sample_time();
-                let pending = self.start_on_frame.then_some(now);
+                let pending = self.holds().then_some(now);
                 for play in self.animations.get_mut(&node).into_iter().flatten() {
                     if !play.animation.paused {
                         if let Some(held) = play.hold.take() {

@@ -8,6 +8,211 @@
 
 use std::ffi::c_void;
 
+#[cfg(any(exact_android_draw_trace, test))]
+#[derive(Default)]
+pub(crate) struct DrawTrace {
+    extent: Option<(f32, f32, f32)>,
+    pub(crate) new_target: bool,
+    wants: bool,
+    pub(crate) polled: bool,
+    pub(crate) invalidated: bool,
+    attempts: u32,
+}
+
+#[cfg(any(exact_android_draw_trace, test))]
+impl DrawTrace {
+    pub(crate) fn empty(&mut self) {
+        *self = Self {
+            extent: self.extent,
+            new_target: self.new_target,
+            ..Self::default()
+        };
+    }
+
+    pub(crate) fn attempt(&mut self) {
+        self.attempts = self.attempts.saturating_add(1);
+    }
+
+    fn admissions(&self, extent: (f32, f32, f32), record: &mut dyn FnMut(&str)) {
+        if self.new_target || self.extent.is_none() {
+            record("surface");
+        }
+        if self.extent.is_some_and(|previous| previous != extent) {
+            record("resize");
+        }
+        if self.attempts > 1 {
+            record("retry");
+        }
+        if self.wants {
+            record("continuation");
+        }
+        if self.polled {
+            record("input-poll");
+        }
+        if self.invalidated {
+            record("invalidation");
+        }
+    }
+
+    fn rendered(&mut self, extent: (f32, f32, f32), wants: bool, drawn: bool) {
+        self.polled = false;
+        self.invalidated = false;
+        self.wants = wants;
+        if drawn {
+            self.attempts = 0;
+            self.new_target = false;
+            self.extent = Some(extent);
+        }
+    }
+}
+
+#[cfg(exact_android_draw_trace)]
+#[link(name = "android")]
+extern "C" {
+    fn ATrace_isEnabled() -> bool;
+    fn ATrace_beginSection(name: *const std::ffi::c_char);
+    fn ATrace_endSection();
+}
+
+#[cfg(exact_android_draw_trace)]
+impl crate::Instance {
+    pub(crate) fn trace_draw_begin(&self, id: u32, frame: &crate::Frame) -> Option<String> {
+        // SAFETY: the NDK reads this process's tracing flag.
+        if !unsafe { ATrace_isEnabled() } {
+            return None;
+        }
+        let mut line = format!("exact canvas {id} {} draw", self.name);
+        let mut record = |why: &str| {
+            line.push(' ');
+            line.push_str(why);
+        };
+        self.draw_trace
+            .admissions((frame.width, frame.height, frame.scale), &mut record);
+        if self.input_dirty {
+            record("device-input");
+        }
+        if self.wake.is_woken() {
+            record("wake");
+        }
+        if self.surface.preparing() {
+            record("preparation");
+        } else if !self.draw_trace.wants
+            && !self.dirty
+            && !self.input_dirty
+            && !self.wake.is_woken()
+            && self.draw_trace.attempts == 1
+            && !self.draw_trace.polled
+        {
+            record("host-request");
+        }
+        if frame.seekable {
+            record("driver-clock");
+        }
+        self.surface
+            .draw_reasons(self.draw_trace.polled, &mut record);
+        Some(line)
+    }
+
+    pub(crate) fn trace_draw_end(
+        &mut self,
+        frame: &crate::Frame,
+        id: u32,
+        line: Option<String>,
+        wants: bool,
+        drawn: bool,
+    ) {
+        self.draw_trace
+            .rendered((frame.width, frame.height, frame.scale), wants, drawn);
+        if !drawn {
+            return;
+        }
+        let samples = self.surface.finish_draw_trace(line.is_some());
+        if let Some(mut line) = line {
+            let count_at = line.find(" draw ").map_or(line.len(), |i| i + 5);
+            if let Some(samples) = samples {
+                line.insert_str(count_at, &format!(" samples={samples}"));
+            }
+            trace_sections(id, &line, |part| {
+                if let Ok(name) = std::ffi::CString::new(part) {
+                    // SAFETY: the NDK copies the live name during begin. The same thread closes the section.
+                    unsafe {
+                        ATrace_beginSection(name.as_ptr());
+                        ATrace_endSection();
+                    }
+                }
+            });
+        }
+    }
+}
+
+// Leave room for atrace's pid and record header in its 1024-byte trace marker.
+#[cfg(any(exact_android_draw_trace, test))]
+fn trace_sections(id: u32, mut line: &str, mut emit: impl FnMut(&str)) {
+    let mut first = true;
+    while !line.is_empty() {
+        let end = line.floor_char_boundary(900);
+        let (part, rest) = line.split_at(end);
+        if first {
+            emit(part);
+            first = false;
+        } else {
+            emit(&format!("exact canvas {id} detail {part}"));
+        }
+        line = rest;
+    }
+}
+
+#[cfg(test)]
+mod draw_trace_tests {
+    use super::*;
+
+    #[test]
+    fn a_retry_keeps_target_changes_and_consumes_each_admission_once() {
+        let old = (10., 10., 1.);
+        let new = (12., 10., 1.);
+        let mut trace = DrawTrace::default();
+        trace.rendered(old, false, true);
+        trace.polled = true;
+        trace.attempt();
+        trace.rendered(old, true, false);
+        trace.invalidated = true;
+        trace.new_target = true;
+        trace.attempt();
+        let reasons = |trace: &DrawTrace| {
+            let mut seen = Vec::new();
+            trace.admissions(new, &mut |r| seen.push(r.to_owned()));
+            seen
+        };
+        assert_eq!(
+            reasons(&trace),
+            ["surface", "resize", "retry", "continuation", "invalidation"]
+        );
+        trace.polled = true;
+        assert!(reasons(&trace).contains(&"input-poll".to_owned()));
+        assert!(reasons(&trace).contains(&"invalidation".to_owned()));
+        trace.rendered(new, false, true);
+        trace.attempt();
+        assert!(reasons(&trace).is_empty());
+        trace.polled = true;
+        trace.empty();
+        assert!(reasons(&trace).is_empty());
+    }
+
+    #[test]
+    fn long_hook_names_leave_all_frame_reasons_in_the_trace() {
+        let line = format!(
+            "exact canvas 7 world draw hook:{} world:Transform",
+            "長".repeat(1000)
+        );
+        let mut joined = String::new();
+        trace_sections(7, &line, |part| {
+            assert!(part.len() < 1000);
+            joined.push_str(part.strip_prefix("exact canvas 7 detail ").unwrap_or(part));
+        });
+        assert_eq!(joined, line);
+    }
+}
+
 /// What the host gives the entry. The pointers are JNI's own types, untyped
 /// here so that an artifact chooses its JNI binding, or none.
 #[derive(Clone, Copy, Debug)]

@@ -156,6 +156,7 @@ fn selected_config_as(compat: &str, dir: &Path, baked: &[u8], client: Client) ->
     config
 }
 
+mod drag;
 mod typescript;
 
 #[test]

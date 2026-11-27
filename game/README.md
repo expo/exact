@@ -664,6 +664,23 @@ String `emit` is the presentation path to Contract `message=`, outside the hash;
 typed events do not deliver a second Contract message. Same-tick effects are function calls.
 See the [tick admission contract](engine/README.md#tick-admission).
 
+### Android canvas draws
+
+Open the installed game normally. Run the command below and move the game during the five-second capture. Check for a draw from the foreground game, then repeat at rest. A default `bun exact.mjs android --release` build allows shell profiling and has development trust. A production-trust bake omits these markers.
+
+```sh
+adb shell 'set -- $(dumpsys activity activities | grep topResumedActivity=); atrace -a "${3%/*}" -b 32768 -t 5 view' | grep -E 'exact canvas|exact replay'
+```
+
+Each `exact canvas` line identifies the canvas instance and surface. It means the GPU module recorded a complete draw for submission. A still canvas prints no draw markers. `exact replay` marks the Android view replaying its display list, including when it reuses the canvas image. SurfaceFlinger can present a retained buffer without either marker. If the moving control works and a still capture is empty, compare `dumpsys gfxinfo` with SurfaceFlinger’s app-layer frame count for the same interval. Set `ANDROID_SERIAL` when several devices are connected.
+
+- `samples=N` counts sensor samples the game consumed since its previous draw or the creation of its world, including ticks that drew nothing. Long labels continue on `exact canvas … detail` lines.
+- `input-poll` means the painted host ticked queued device input and the result requested a draw. `device-input` means device input was still marked dirty, and `input-queued` means events were still waiting for a simulation tick.
+- `world:Transform`, for example, means the renderer saw a revision change in that storage. A mutable lease can advance a revision even when the final value is equal. `hook:<type>` and `hook:tick` identify reads that changed at the input poll admitting this draw.
+- `setup`, `game-active`, `input-timer`, `table-timer`, `hook-animation`, `hook-pending` and `settling` describe simulation, hook and interpolation work. `continuation` means the preceding render requested another callback. `retry` means an earlier attempt produced no complete draw.
+- `surface` marks a new drawable, `resize` a changed extent, and `invalidation` a dirty canvas. `preparation` means the surface has work pending. `host-request` means the host called render without a pending module flag. `driver-clock` identifies a seekable frame.
+
+
 ## Proof pins
 
 The async lane runs `bun game/app/shells.mjs --test`. It gates each game's

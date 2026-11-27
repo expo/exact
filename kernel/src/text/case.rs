@@ -9,7 +9,10 @@
 
 use crate::generated::TextTransform;
 use crate::NodeRef;
-use icu_properties::{props::WordBreak, CodePointMapData};
+use icu_properties::{
+    props::{LineBreak, WordBreak},
+    CodePointMapData,
+};
 use std::borrow::Cow;
 
 impl<'a> NodeRef<'a> {
@@ -161,9 +164,10 @@ impl WordBoundary {
 }
 
 /// The first letter of each word in titlecase, everything else untouched.
-/// Chrome joins letters across apostrophes and `·`, but breaks at `.` and
-/// `:`. Digits and `_` keep a word together; UAX #29 WB4 characters preserve
-/// the preceding context within a run, including around a joiner.
+/// Words are Chrome's ICU word iterator's (UAX #29): letters join across
+/// apostrophes, `·` and the other mid-word marks, but Chrome breaks at `.`
+/// and `:`. Digits and `_` keep a word together; UAX #29 WB4 characters
+/// preserve the preceding context within a run, including around a joiner.
 fn capitalize(text: &str, boundary: WordBoundary) -> String {
     let mut out = String::with_capacity(text.len());
     let (mut last, mut prior) = (boundary.0.filter(|c| !word_ignored(*c)), None::<char>);
@@ -174,7 +178,7 @@ fn capitalize(text: &str, boundary: WordBoundary) -> String {
         }
         let joined = match (prior, last) {
             (_, Some(l)) if word(l) => true,
-            (Some(p), Some(l)) => joiner(l) && p.is_alphabetic() && c.is_alphabetic(),
+            (Some(p), Some(l)) => joiner(l) && letter(p) && letter(c),
             _ => false,
         };
         if c.is_alphabetic() && !joined {
@@ -187,12 +191,38 @@ fn capitalize(text: &str, boundary: WordBoundary) -> String {
     out
 }
 
-fn word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+/// A letter a word runs on from (UAX #29 AHLetter), as Chrome's ICU word
+/// rules have it: a Hangul syllable is a dictionary word of its own, and a
+/// letter of a script written without spaces (Thai, Lao, Khmer, Myanmar)
+/// runs on into a following letter.
+fn letter(c: char) -> bool {
+    let line = CodePointMapData::<LineBreak>::new().get(c);
+    match CodePointMapData::<WordBreak>::new().get(c) {
+        WordBreak::ALetter => !matches!(line, LineBreak::H2 | LineBreak::H3),
+        WordBreak::HebrewLetter => true,
+        _ => line == LineBreak::ComplexContext,
+    }
 }
 
+/// What a word runs on from into a following letter (UAX #29 WB5–WB13): a
+/// letter, a digit, or a connector such as `_`. A Han character, kana or a
+/// symbol (`①`, `²`) ends a word.
+fn word(c: char) -> bool {
+    letter(c)
+        || matches!(
+            CodePointMapData::<WordBreak>::new().get(c),
+            WordBreak::Numeric | WordBreak::ExtendNumLet
+        )
+}
+
+/// A mark that joins the letters beside it into one word (UAX #29
+/// MidLetter, MidNumLet and Single_Quote), less the full stops and colons
+/// Chromium's ICU word rules take out.
 fn joiner(c: char) -> bool {
-    matches!(c, '\'' | '\u{2019}' | '\u{b7}')
+    matches!(
+        CodePointMapData::<WordBreak>::new().get(c),
+        WordBreak::MidLetter | WordBreak::MidNumLet | WordBreak::SingleQuote
+    ) && !matches!(c, '.' | ':' | '\u{fe55}' | '\u{ff0e}' | '\u{ff1a}')
 }
 
 fn word_ignored(c: char) -> bool {
@@ -394,5 +424,26 @@ mod tests {
         assert_eq!(Capitalize.apply("there", "hello "), "There");
         assert_eq!(Capitalize.apply("t stop", "don'"), "T Stop");
         assert_eq!(Capitalize.apply("'t stop", "don"), "'t Stop");
+    }
+
+    #[test]
+    fn capitalize_starts_a_word_where_chromes_word_iterator_does() {
+        use TextTransform::Capitalize;
+        // Chrome 157's innerText of each under `text-transform: capitalize`.
+        for (text, want) in [
+            ("使用iphone 手机", "使用Iphone 手机"),
+            ("日本語のtext", "日本語のText"),
+            ("カタカナweb ｶﾀｶﾅweb ーb", "カタカナWeb ｶﾀｶﾅWeb ーB"),
+            ("한국web", "한국Web"),
+            ("a日b 〆b 日\u{301}b", "A日B 〆B 日\u{301}B"),
+            ("①b ²b", "①B ²B"),
+            ("ไทยweb ᄀb ㄅb ⓐb ٣b", "ไทยweb ᄀb ㄅb Ⓐb ٣b"),
+            ("b\u{203f}c", "B\u{203f}c"),
+            ("a‘b a․b a＇b a\u{387}b a‧b", "A‘b A․b A＇b A\u{387}b A‧b"),
+            ("1'b a,b a．b a：b", "1'B A,B A．B A：B"),
+        ] {
+            assert_eq!(t(Capitalize, text), want, "{text}");
+        }
+        assert_eq!(Capitalize.apply("web", "日本"), "Web");
     }
 }

@@ -203,6 +203,75 @@ fn windows_half_scale_averages_opaque_red_and_hidden_green() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_reduces_a_jpeg_in_its_decoder_and_a_worker_opens_one_factory() {
+    // Red on the left half and blue on the right: a wrong channel order, row
+    // stride or axis shows as the wrong colour.
+    let (red, blue) = ([200, 40, 20, 255], [20, 60, 220, 255]);
+    let jpeg = |width: u32, height: u32| {
+        let mut picture = tiny_skia::Pixmap::new(width, height).unwrap();
+        for (i, p) in picture.pixels_mut().iter_mut().enumerate() {
+            let [r, g, b, a] = if i as u32 % width < width / 2 {
+                red
+            } else {
+                blue
+            };
+            *p = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a).unwrap();
+        }
+        let encoding = exact_runner::canvas_capture::Encoding::new("image/jpeg", Some(0.9));
+        crate::canvas2d::capture::encode(&picture, &encoding)
+            .unwrap()
+            .0
+    };
+    let upright = jpeg(1600, 1200);
+    // The same file with EXIF orientation 6: shown turned, red on top.
+    let mut turned =
+        b"\xff\xd8\xff\xe1\0\x22Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0"
+            .to_vec();
+    turned.extend_from_slice(&upright[2..]);
+    let _worker = super::jpeg_decode::Worker::enter();
+    // The box drawn in, the plan's size for it, and the size asked of the
+    // decoder in the file's own grid: the smallest of its reductions that is
+    // at least twice the plan, or none when a half is not.
+    for (bytes, drawn, planned, asked) in [
+        (&upright, (40., 40.), (128, 96), Some((400, 300))),
+        (&upright, (200., 150.), (256, 192), Some((800, 600))),
+        (&upright, (400., 300.), (512, 384), None),
+        (&turned, (40., 40.), (96, 128), Some((400, 300))),
+    ] {
+        let header = inspect(&mut Cursor::new(bytes), bytes.len() as u64).unwrap();
+        let plan = super::plan(header, drawn, super::SESSION_BYTES).unwrap();
+        assert_eq!((plan.pixels.width, plan.pixels.height), planned);
+        let pixels = decode_rows(Cursor::new(bytes), &plan, || false).unwrap();
+        assert_eq!(super::jpeg_decode::observed().1, asked, "{planned:?}");
+        let (w, h) = (pixels.width(), pixels.height());
+        assert_eq!((w, h), planned);
+        let (in_red, in_blue) = if w > h {
+            ((w / 8, h / 2), (w - w / 8, h / 2))
+        } else {
+            ((w / 2, h / 8), (w / 2, h - h / 8))
+        };
+        for ((x, y), colour) in [(in_red, red), (in_blue, blue)] {
+            let p = pixels.pixel(x, y).unwrap();
+            let near = [p.red(), p.green(), p.blue(), p.alpha()]
+                .iter()
+                .zip(colour)
+                .all(|(got, want)| got.abs_diff(want) <= 6);
+            assert!(near, "{planned:?} at {x},{y}: {p:?}");
+        }
+    }
+    // A reduction that does not divide the frame is passed over: 780 rows
+    // are 97.5 at an eighth, which would cover this plan twice.
+    let uneven = jpeg(1040, 780);
+    let header = inspect(&mut Cursor::new(&uneven), uneven.len() as u64).unwrap();
+    let plan = DecodePlan::new(header, (60, 45)).unwrap();
+    decode_rows(Cursor::new(&uneven), &plan, || false).unwrap();
+    let (opened, asked) = super::jpeg_decode::observed();
+    assert_eq!(asked, Some((260, 195)));
+    assert_eq!(opened, 1);
+}
+
 fn pixel(x: u32, y: u32) -> [u8; 4] {
     [(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, 128]
 }

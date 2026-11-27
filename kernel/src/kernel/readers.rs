@@ -111,8 +111,8 @@ impl Readers {
         // A relative row's container unit reads the box's query containers too (LLP 1123 D16)
         container |= style
             .relative
-            .iter()
-            .any(|(_, unit, _)| unit.is_container());
+            .iter_specs()
+            .any(|(_, spec)| spec.is_container());
         let own = owner::declarations(style);
         // A capture of a native target's insets reads them where it is declared
         targets.extend(own.iter().flat_map(|(_, value)| capture_targets(value)));

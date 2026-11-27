@@ -40,7 +40,7 @@ pub fn eval_constant(
         store_dependent_resources: (&[]).into(),
     };
     let (result, (read, accounting)) =
-        eval_machine_main::<true, _>(code, &env, &[], &mut Scratch::default(), |run| {
+        eval_machine_main::<true, _>(code, &env, &[], &mut Scratch::default(), None, |run| {
             (
                 run.refused_read.clone(),
                 Accounting {

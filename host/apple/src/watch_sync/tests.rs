@@ -407,3 +407,69 @@ fn a_sealed_snapshot_over_the_transport_limit_is_refused_as_oversized() {
     let response: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(response["oversized"], true, "{response}");
 }
+
+#[test]
+fn downgrading_last_presence_policy_to_plain_unblocks_watch_sync() {
+    let plan = plan();
+    let bindings = crate::store::endow_in(
+        Host::new()
+            .with_kv_store(Box::new(MemoryStore::new()))
+            .with_secret_store(Box::new(secrets::MemoryStore::new())),
+        "secret.keep seed",
+    )
+    .unwrap();
+    let phone = Platform::of(&bindings);
+    bindings
+        .kv
+        .set(
+            crate::presence_secrets::RECORDS,
+            "seed",
+            b"locked biometry-any",
+        )
+        .unwrap();
+    bindings
+        .kv
+        .set(crate::presence_secrets::INDEX, "seed#1", &[])
+        .unwrap();
+    // Stale presence record blocks watch sync for the downgraded plain secret.
+    assert!(matches!(
+        transact(&phone, &plan, "secret.keep seed", &request("snapshot")),
+        Err(Refusal::Invalid)
+    ));
+    // Reconciling a stripped release build clears the stale Keychain item, index, and record.
+    fn always_delete(_: &str, _: &str) -> bool {
+        true
+    }
+    crate::store::DELETE_LOCKED_ITEM.with(|h| *h.borrow_mut() = Some(always_delete));
+    let installed = crate::store::reconcile_presence::<false>(
+        Some(&bindings),
+        "secret.keep seed",
+        "com.example.watch.downgrade",
+    );
+    crate::store::DELETE_LOCKED_ITEM.with(|h| *h.borrow_mut() = None);
+    assert!(installed.is_none());
+    assert_eq!(
+        bindings
+            .kv
+            .get(crate::presence_secrets::RECORDS, "seed")
+            .unwrap(),
+        None
+    );
+    assert!(bindings
+        .kv
+        .keys(crate::presence_secrets::INDEX)
+        .unwrap()
+        .is_empty());
+    let snap = transact(&phone, &plan, "secret.keep seed", &request("snapshot")).unwrap();
+    assert_eq!(snap["revision"], 1);
+    assert_eq!(
+        transact(
+            &phone,
+            &plan,
+            "secret.keep seed",
+            &apply(1, json!("plain-now"), json!("true"))
+        )
+        .unwrap()["applied"],
+        true
+    );
+}

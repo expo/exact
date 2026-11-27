@@ -205,10 +205,10 @@ impl<D: DataSource> Runner<D> {
         if let Some((i, nominal)) = candidate {
             self.now_ms = self.now_ms.max(cutoff);
             match self.fire_timer(i, nominal, self.now_ms, cutoff, true) {
-                Ok(receipt) => advanced.receipts.push(Timed {
+                Ok(receipt) => advanced.receipts.extend(receipt.map(|receipt| Timed {
                     at_ms: self.now_ms,
                     receipt,
-                }),
+                })),
                 Err(e) => advanced.error = Some(e),
             }
         }
@@ -292,6 +292,8 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
+    /// Fire timer `i` and arm its next beat: its commit, or `None` when the
+    /// firing was idle ([`Runner::run_task`]).
     pub(super) fn fire_timer(
         &mut self,
         i: usize,
@@ -299,7 +301,7 @@ impl<D: DataSource> Runner<D> {
         execution: f64,
         cutoff: f64,
         admitted: bool,
-    ) -> Result<CommitReceipt, RunnerError> {
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
         let row = self.timer_row(i).clone();
         let (once, frame, interval, waiting) =
             (row.once, row.frame, row.interval_ms as f64, row.wait != 0);

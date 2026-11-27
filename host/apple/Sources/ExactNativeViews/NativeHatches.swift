@@ -362,10 +362,46 @@ private let hatchService: @convention(c) (UnsafeMutableRawPointer?, UnsafePointe
     }
 }
 
+/// Thread-safe per-session resolver registry for `ExactModuleContext.asset(_:)` (LLP 1067.001 D4).
+private let hatchAssetLock = NSLock()
+private var hatchAssetResolvers: [UInt: (String) -> URL?] = [:]
+
+package func registerHatchAssetResolver(host: UnsafeMutableRawPointer?, resolve: @escaping (String) -> URL?) {
+    let key = UInt(bitPattern: host)
+    guard key != 0 else { return }
+    hatchAssetLock.withLock { hatchAssetResolvers[key] = resolve }
+}
+
+package func unregisterHatchAssetResolver(host: UnsafeMutableRawPointer?) {
+    let key = UInt(bitPattern: host)
+    guard key != 0 else { return }
+    _ = hatchAssetLock.withLock { hatchAssetResolvers.removeValue(forKey: key) }
+}
+
+/// Canonicalize an app module asset path strictly into `assets/<rel>` (LLP 1067.001 D1).
+package func canonicalModuleAssetPath(_ raw: String) -> String? {
+    let rel = raw.hasPrefix("assets/") ? String(raw.dropFirst(7)) : raw
+    guard AssetResolver.validAssetName(rel) else { return nil }
+    return "assets/" + rel
+}
+
+/// `asset(host, path, len, out, cap) -> len` (LLP 1067.001 D3): resolves a declared asset under
+/// `assets/` from the active generation on any thread; writes UTF-8 path into `out` when it fits.
+package typealias HatchAssetFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> UInt32
+package let hatchAsset: HatchAssetFn = { host, bytes, length, out, cap in
+    guard let bytes, length > 0, let name = canonicalModuleAssetPath(hatchText(bytes, length)) else { return 0 }
+    let key = UInt(bitPattern: host)
+    let resolve = hatchAssetLock.withLock { hatchAssetResolvers[key] }
+    guard let url = resolve?(name) else { return 0 }
+    let data = Data(url.path.utf8)
+    if let out, data.count <= Int(cap) { data.copyBytes(to: out, count: data.count) }
+    return UInt32(data.count)
+}
+
 /// The host's callbacks, one table for the process: each finds its session
 /// by the handle it is called with.
-private let hatchHostTable: UnsafeRawPointer = {
-    let size = 208
+package let hatchHostTable: UnsafeRawPointer = {
+    let size = 216
     let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
     t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     t.storeBytes(of: UInt32(size), as: UInt32.self)
@@ -393,6 +429,17 @@ private let hatchHostTable: UnsafeRawPointer = {
     t.storeBytes(of: unsafeBitCast(hatchAfterCoalescing, to: UnsafeRawPointer.self), toByteOffset: 184, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchTabIntent, to: UnsafeRawPointer.self), toByteOffset: 192, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchContentScroll, to: UnsafeRawPointer.self), toByteOffset: 200, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(hatchAsset, to: UnsafeRawPointer.self), toByteOffset: 208, as: UnsafeRawPointer.self)
+    return UnsafeRawPointer(t)
+}()
+
+/// Asset-only table used when `EXACT_HATCHES=off`: all UI/clock slots remain zeroed (LLP 1067.001 D4).
+package let hatchHostTableOff: UnsafeRawPointer = {
+    let size = 216
+    let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
+    t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
+    t.storeBytes(of: UInt32(size), as: UInt32.self)
+    t.storeBytes(of: unsafeBitCast(hatchAsset, to: UnsafeRawPointer.self), toByteOffset: 208, as: UnsafeRawPointer.self)
     return UnsafeRawPointer(t)
 }()
 
@@ -520,6 +567,11 @@ extension NativeViews {
         session?.natives.diagnostics?.reset()
         takeBreadcrumb()
         connect(module, hatchHostTable)
+    }
+
+    /// Connect only the asset lookup callback when UI hatches are disabled or absent (LLP 1067.001 D4).
+    func openAssetOnly(_ connect: HatchConnectFn, _ module: UnsafeMutableRawPointer) {
+        connect(module, hatchHostTableOff)
     }
 
     func connectHatches(_ navigation: HatchNavigationFn, _ route: HatchRouteFn, _ tabs: (HatchTabsFn, HatchTabContainerFn)?,

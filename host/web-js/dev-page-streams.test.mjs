@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { connect, createServer as createSocketServer } from 'node:net';
 import { tmpdir } from 'node:os';
+import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
@@ -15,11 +16,20 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 afterEach(() => stopAll());
 
-test('a page that closes is no build of the loop any more, by 127.0.0.1 or by localhost', async () => {
+test('pages join when a design appears and its writer releases the lock, and leave on close by IPv4 or IPv6', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-page-streams-')), dist = join(mkdtempSync(join(tmpdir(), 'exact-page-streams-dist-')), 'dist');
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Streams', app: { id: 'com.exact.streams', name: 'Streams' } }));
   writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "streams"\n');
-  writeFileSync(join(dir, 'app.forma'), 'forma streams\n\ntheme\n  ink = #000000\n');
+  const design = join(dir, 'app.forma'), source = 'forma streams\n\ntheme\n  ink = #000000\n';
+  writeFileSync(design, source);
+  const writer = spawnOwned('cargo', ['run', '-q', '-p', 'contract', '--', 'forma', 'serve', '--stdio', dir], { cwd: ROOT, stdio: ['pipe', 'pipe', 'inherit'] });
+  const locked = new Promise((ok, fail) => {
+    createInterface({ input: writer.stdout }).once('line', line => JSON.parse(line).ok ? ok() : fail(new Error(line)));
+    writer.once('exit', code => fail(new Error(`standalone writer exited ${code}`)));
+  });
+  writer.stdin.write('{"method":"hello"}\n');
+  await locked;
+  rmSync(design);
   const listener = createServer();
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
@@ -40,6 +50,28 @@ test('a page that closes is no build of the loop any more, by 127.0.0.1 or by lo
     await until(() => out.includes(`127.0.0.1:${port}/`) && out.includes('plan ready'), 900_000, 'the first build');
     // localhost resolved to [::1] (as the design tool's canvas is reached first), not left to Chrome to choose.
     browser = await suiteBrowser('chromium', { args: ['--host-resolver-rules=MAP localhost [::1]'] });
+    const page = await browser.newPage();
+    await page.goto(base);
+    await until(() => out.includes('page connected'), 30_000, 'the page stream');
+    const status = async () => (await fetch(base + '/__forma/token')).status;
+    expect(await status()).toBe(404);
+    writeFileSync(design, source);
+    await until(() => out.includes('build registered:'), 20_000, 'the watcher enrolled the open page');
+    expect(await status()).toBe(200);
+    const token = (await (await fetch(base + '/__forma/token')).json()).token;
+    const hello = () => fetch(base + '/__forma', { method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"method":"hello"}' });
+    expect((await hello()).status).toBe(503);
+    expect((await fetch(base + '/__forma/subscribe', { method: 'POST', headers: { 'x-exact-forma-token': token } })).status).toBe(503);
+    expect((await fetch(base + '/__forma/events', { method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"after":0,"wait":false}' })).status).toBe(503);
+    writer.stdin.end();
+    await until(async () => (await hello()).status === 200, 30_000, 'writer handover');
+    await until(async () => await builds() === 1, 30_000, 'the existing page after the writer released its lock');
+    rmSync(design);
+    await until(async () => await status() === 404, 10_000, 'Forma gone with its design');
+    writeFileSync(design, source);
+    await until(async () => await status() === 200 && await builds() === 1, 30_000, 'the page after the design returned');
+    await page.close();
+    await until(async () => await builds() === 0, 10_000, 'the closed page');
     // IPv6 here at all (asked of a socket of its own, not of the loop): then the loop must answer on [::1].
     const six = await new Promise(ok => { const t = createSocketServer(); t.once('error', () => ok(false)); t.listen(0, '::1', () => t.close(() => ok(true))); });
     if (six) await new Promise((ok, fail) => { const c = connect(port, '::1'); c.once('connect', () => { c.destroy(); ok(); }); c.once('error', e => fail(new Error(`the loop does not answer on [::1]: ${e.code}`))); });
@@ -62,6 +94,7 @@ test('a page that closes is no build of the loop any more, by 127.0.0.1 or by lo
     expect(await builds()).toBe(0);
   } finally {
     await browser?.close();
+    await writer.stop();
     await dev.stop(30_000);
     rmSync(dir, { recursive: true, force: true });
     rmSync(dirname(dist), { recursive: true, force: true });

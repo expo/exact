@@ -5,6 +5,8 @@
 //! and a picked image's pixel size read from its header (D3).
 
 use exact_runner::DataError;
+#[cfg(target_os = "linux")]
+use ibex2::stdlib::app_fs::AppDirectories;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -70,10 +72,18 @@ fn base_from(value: Option<OsString>, home: Option<OsString>, fallback: &str) ->
 static ROOTS: Mutex<Option<[PathBuf; 3]>> = Mutex::new(None);
 
 /// Record the app's directories, and empty `app:/tmp/picked/` and
-/// `app:/tmp/shared/` ([`empty_landings`]).
+/// `app:/tmp/shared/` ([`empty_landings`]). On Linux their handles are
+/// pinned here for a drag's reads ([`AppFiles`]). Each root that exists
+/// gets this launch's staging directory, and loses those of launches that
+/// ended with a download or an atomic write unfinished (ibex2's
+/// `claim_staging`).
 pub fn set_roots(data: PathBuf, cache: PathBuf, temporary: PathBuf) {
     empty_landings(&temporary);
-    *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some([data, cache, temporary]);
+    ibex2::stdlib::app_fs::claim_staging(&[&data, &cache, &temporary]);
+    let roots = [data, cache, temporary];
+    #[cfg(target_os = "linux")]
+    pin(&roots);
+    *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(roots);
 }
 
 /// The `app:/tmp` roots whose `picked` and `shared` this process has emptied.
@@ -212,7 +222,7 @@ static EMPTIED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 /// post-pixel activation and any later boot here leave it as it is; emptying
 /// it again there removed what a commit in between had written while memory
 /// still held it, so a relaunch read nothing back.
-pub(crate) fn empty_fresh_tree(app_id: &str) -> Result<(), DataError> {
+pub(crate) fn empty_fresh_tree(app_id: &str, grants: &str) -> Result<(), DataError> {
     let Some((_, Some(tree))) = app_dirs(app_id)? else {
         return Ok(());
     };
@@ -235,6 +245,7 @@ pub(crate) fn empty_fresh_tree(app_id: &str) -> Result<(), DataError> {
     let kv = ibex2::kv::FileStore::new(tree.join("kv"));
     exact_data::storage::seed_persisted(
         &tree,
+        grants,
         |name, value| {
             ibex2::kv::KvStore::set(&kv, exact_data::storage::PERSISTED_SCOPE, name, value)
         },
@@ -351,6 +362,86 @@ pub fn open(path: &str) -> Option<std::fs::File> {
     open_from(path, roots)
 }
 
+/// Each app's directories as its storage opened them, by their paths,
+/// pinned by their handles from then on, as the Mac pins them for a share
+/// (LLP 1125 D12): a drag reads through its own session's and never reopens
+/// a root by name, so a root or an ancestor of it renamed or replaced later
+/// changes nothing a drag reads (LLP 1094.000 D3).
+#[cfg(target_os = "linux")]
+static PINNED: Mutex<std::collections::BTreeMap<[PathBuf; 3], Result<AppDirectories, String>>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+/// Pin `roots`' handles for a drag's reads ([`PINNED`]).
+#[cfg(target_os = "linux")]
+fn pin(roots: &[PathBuf; 3]) {
+    let opened = open_pinned(roots);
+    PINNED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(roots.clone(), opened);
+}
+
+/// The roots' handles, opened as the request executor opens them: made if
+/// missing, a root that is itself a link refused.
+#[cfg(target_os = "linux")]
+fn open_pinned(roots: &[PathBuf; 3]) -> Result<AppDirectories, String> {
+    if roots
+        .iter()
+        .any(|r| std::fs::symlink_metadata(r).is_ok_and(|m| m.is_symlink()))
+    {
+        return Err("an app root is a symbolic link".into());
+    }
+    for root in roots {
+        std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    }
+    AppDirectories::new(&roots[0], &roots[1], &roots[2]).map_err(|e| e.to_string())
+}
+
+/// A session's own files as a drag reads them (LLP 1094.000 D3): its app's
+/// roots' handles as its storage pinned them, and its `fs.read` grants.
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub struct AppFiles {
+    directories: Result<AppDirectories, String>,
+    grants: Result<ibex2::grant::GrantSet, String>,
+}
+
+#[cfg(target_os = "linux")]
+impl AppFiles {
+    /// The files of the session whose app has `roots` and `grants`: none
+    /// before its storage opened them.
+    pub fn of(roots: &[PathBuf; 3], grants: &str) -> Option<AppFiles> {
+        let directories = PINNED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(roots)
+            .cloned()?;
+        let grants = ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
+            .map_err(|e| format!("the app's grants did not parse: {e}"));
+        Some(AppFiles {
+            directories,
+            grants,
+        })
+    }
+
+    /// The regular file the `app:/` path `path` names, as a path alone
+    /// (`O_PATH`): admitted by the app's `fs.read` grants and opened
+    /// relative to the pinned roots, following no link at any part, as the
+    /// app's own `readFile` opens it. Closing it drops none of the
+    /// process's POSIX locks on the file, so another process reopens and
+    /// reads it (LLP 1094.000 D13).
+    pub fn open_path(&self, path: &str) -> Result<std::fs::File, String> {
+        let directories = self
+            .directories
+            .as_ref()
+            .map_err(|e| format!("the app's files would not open: {e}"))?;
+        let grants = self.grants.as_ref()?;
+        directories
+            .open_path(grants, path)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// [`open`] once the reader's boot has made the app's directories known
 /// ([`know_roots`], [`set_roots`]), and `None` before: in a process Android
 /// started for the app's content provider alone, an `app:/` path names
@@ -454,17 +545,19 @@ pub(crate) fn place_from(path: &str, roots: [PathBuf; 3]) -> Option<PathBuf> {
     Some(at)
 }
 
+/// The app roots' read grants, which [`open`] reads under.
+static APP_READ: std::sync::LazyLock<ibex2::grant::GrantSet> = std::sync::LazyLock::new(|| {
+    ibex2::grant::GrantSet::parse("fs.read app:/data\nfs.read app:/cache\nfs.read app:/tmp")
+        .expect("the app roots' read grants parse")
+});
+
 fn open_from(path: &str, roots: impl FnOnce() -> [PathBuf; 3]) -> Option<std::fs::File> {
-    static READ: std::sync::LazyLock<ibex2::grant::GrantSet> = std::sync::LazyLock::new(|| {
-        ibex2::grant::GrantSet::parse("fs.read app:/data\nfs.read app:/cache\nfs.read app:/tmp")
-            .expect("the app roots' read grants parse")
-    });
     let (index, _) = parse(path)?;
     let root = roots().into_iter().nth(index)?;
     // The named root stands for all three: another may not exist yet (a
     // picked photo's `app:/tmp` before any storage request made `app:/data`).
     let directories = ibex2::stdlib::app_fs::AppDirectories::new(&root, &root, &root).ok()?;
-    directories.open_file(&READ, path).ok()
+    directories.open_file(&APP_READ, path).ok()
 }
 
 /// The root an `app:/` path is under, by index, and its names below it.
@@ -1103,6 +1196,47 @@ mod tests {
                 .unwrap()
                 .join("exact/test.exact.roots/agent/s1/data/photos/a.jpg")
         );
+    }
+
+    /// A drag's `app:/` file opens through the roots its app's storage
+    /// pinned, under the app's own `fs.read` grants: not a root put in a
+    /// pinned one's place since, nor a file the grants leave out, nor any
+    /// app whose storage has not opened (LLP 1094.000 D3).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_drags_app_files_open_through_the_pinned_roots_under_the_apps_grants() {
+        let base = std::env::temp_dir().join(format!("exact-app-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let roots = ["data", "cache", "tmp"].map(|r| base.join(r));
+        for root in &roots {
+            std::fs::create_dir_all(root).unwrap();
+        }
+        std::fs::write(roots[0].join("notes.txt"), "Fuji").unwrap();
+        std::fs::write(roots[1].join("secret.txt"), "secret").unwrap();
+        pin(&roots);
+        let files = AppFiles::of(&roots, "fs.read app:/data").unwrap();
+        let read = |path: &str| {
+            use std::os::fd::AsRawFd;
+            let file = files.open_path(path)?;
+            std::fs::read_to_string(format!("/proc/self/fd/{}", file.as_raw_fd()))
+                .map_err(|e| e.to_string())
+        };
+        assert_eq!(read("app:/data/notes.txt"), Ok("Fuji".to_owned()));
+        assert!(
+            read("app:/cache/secret.txt").is_err(),
+            "outside the app's grants"
+        );
+        std::fs::rename(&roots[0], base.join("moved")).unwrap();
+        std::fs::create_dir(&roots[0]).unwrap();
+        std::fs::write(roots[0].join("notes.txt"), "replacement").unwrap();
+        assert_eq!(
+            read("app:/data/notes.txt"),
+            Ok("Fuji".to_owned()),
+            "the pinned root, not the one now at its path"
+        );
+        let unpinned = ["data", "cache", "tmp"].map(|r| base.join("other").join(r));
+        assert!(AppFiles::of(&unpinned, "fs.read app:/data").is_none());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 

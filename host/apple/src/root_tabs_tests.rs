@@ -397,3 +397,140 @@ fn the_rule_refuses_an_element_that_cannot_stand_beside_the_tab_bar() {
         );
     }
 }
+
+/// A row written between the panels and the tablist, which a native tab bar's room moves above
+/// the bar (LLP 1083.000 D4), is named in `rowsAbove`; the element the tablist names as its
+/// accessory, which UIKit shows in a view of its own, is not such a row, and neither is a row
+/// that hides.
+#[test]
+fn a_row_between_the_panels_and_the_tablist_is_said_unless_it_is_the_accessory() {
+    let (mut host, _) = boot(&accessory_app("", "", PLAYER));
+    let played = press(&mut host, "play-home");
+    let said = root_tabs(&played).expect("the batch that mounts the player says the tabs");
+    assert_eq!(said[0]["accessory"], view(&host, "player"), "{said}");
+    assert!(
+        said[0].get("rowsAbove").is_none(),
+        "the accessory is not a row: {said}"
+    );
+    let unnamed = press(&mut host, "unname-home");
+    let said = root_tabs(&unnamed).expect("the batch that unnames it says the tabs");
+    assert_eq!(
+        said[0]["rowsAbove"],
+        serde_json::json!([view(&host, "player")]),
+        "{said}"
+    );
+    let hidden = press(&mut host, "hide-home");
+    let said = root_tabs(&hidden).expect("the batch that hides it says the tabs");
+    assert!(said[0].get("rowsAbove").is_none(), "a hidden row: {said}");
+}
+
+/// Two tabs whose panels sit in `{inner}` inside a column of `{outer}`, with a row after the
+/// panels there, and the tablist after that column with `{list}`.
+fn nested_row_app(outer: &str, inner: &str, list: &str) -> String {
+    format!(
+        r#"routes nav
+  tab home "/"
+  tab other "/other"
+component App
+  action pick(n: string)
+    nav = select(nav, n)
+  view
+    main navigationKey=`${{top(nav).id}}` navigationBack="back" display="flex" flex-direction="column" testId="root"
+      column {outer}
+        column {inner} position="relative"
+          for t in nav.tabs key = t.name
+            column role="tabpanel" id=`panel-${{t.name}}` position="absolute" inset=0
+              for e in t.stack key = e.id
+                column navigationKey=`${{e.id}}`
+                  text "Route"
+        row testId="player" height=56
+          text "Now playing"
+      row role="tablist" testId="tabs" {list}
+        button role="tab" aria-controls="panel-home" press=pick("home") testId="home"
+          text "Home"
+        button role="tab" aria-controls="panel-other" press=pick("other") testId="other"
+          text "Other"
+"#
+    )
+}
+
+/// A row after the panels inside the column that holds them is one the room moves only while
+/// every level down to the panels grows to fill its column, so the row ends where the column
+/// does, and the tablist is in flow at the end of its own, in the order the column lays it out.
+#[test]
+fn a_row_after_the_panels_counts_only_where_the_room_moves_it() {
+    let said =
+        |source: &str| root_tabs(&boot(source).1).expect("the boot batch says the tabs")[0].clone();
+    let rows = |source: &str| said(source).get("rowsAbove").cloned();
+    let (host, batch) = boot(&nested_row_app("flex=1", "flex=1", ""));
+    let said_once = root_tabs(&batch).expect("the boot batch says the tabs");
+    assert_eq!(
+        said_once[0]["rowsAbove"],
+        serde_json::json!([view(&host, "player")]),
+        "{said_once}"
+    );
+    assert_eq!(
+        rows(&nested_row_app(
+            r#"flex=1 position="absolute" inset=0"#,
+            "flex=1",
+            ""
+        )),
+        None,
+        "a column of the panels out of flow"
+    );
+    assert_eq!(
+        rows(&nested_row_app("height=600", "flex=1", "")),
+        None,
+        "a column that does not grow"
+    );
+    assert_eq!(
+        rows(&nested_row_app("flex=1", "height=400", "")),
+        None,
+        "panels that do not grow"
+    );
+    assert_eq!(
+        rows(&nested_row_app(
+            "flex=1",
+            "flex=1",
+            r#"position="absolute" bottom=0"#
+        )),
+        None,
+        "a tablist out of flow"
+    );
+    assert_eq!(
+        rows(&nested_row_app("flex=1", "flex=1", "order=-1")),
+        None,
+        "a tablist the column lays out first"
+    );
+}
+
+/// A tablist that holds a panel it links keeps that panel in the page, so the bar keeps no room
+/// in it, whatever is written between the other panels and it.
+#[test]
+fn a_tablist_that_holds_a_panel_keeps_no_room() {
+    let source = r#"routes nav
+  tab home "/"
+  tab other "/other"
+component App
+  action pick(n: string)
+    nav = select(nav, n)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" display="flex" flex-direction="column" testId="root"
+      column flex=1
+        column role="tabpanel" id="panel-home"
+          column navigationKey="home"
+            text "Home"
+      row testId="player" height=56
+        text "Now playing"
+      row role="tablist" testId="tabs"
+        button role="tab" aria-controls="panel-home" press=pick("home") testId="home"
+          text "Home"
+        button role="tab" aria-controls="panel-other" press=pick("other") testId="other"
+          text "Other"
+        column role="tabpanel" id="panel-other"
+          column navigationKey="other"
+            text "Other"
+"#;
+    let said = root_tabs(&boot(source).1).expect("the boot batch says the tabs");
+    assert!(said[0].get("rowsAbove").is_none(), "{said}");
+}

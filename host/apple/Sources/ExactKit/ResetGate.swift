@@ -37,6 +37,7 @@ enum ResetGate {
         "tick(now:frame:presentOnly:)": (.advance, "a frame's tick is the clock's: the new runtime's due work advances once its tree is in"),
         "frame(now:wall:admitted:)": (.advance, "a display frame is the clock's, as a tick is"),
         "covers(_:)": (.covers, "the old tree's covers clearing is moot, but the new tree's bar covers its content: they are told again"),
+        "coversAsync(_:done:)": (.covers, "a cover report sent to the owner, as `covers`'s"),
         "view(_:)": (.fit, "a resize the teardown set off (a keyboard it ended) is the window's: the view fits again"),
         "resize(width:height:)": (.fit, "the AppKit view's size, as `view` is the UIKit one's: it fits again"),
         "insets(top:right:bottom:left:)": (.fit, "the AppKit view's insets, told with its size: it fits again"),
@@ -149,6 +150,7 @@ enum ResetGate {
         "listMargins(_:)": "UIKit's cell margins: the presenter's reset clears what was told (`RowCells.reset`), and the new rows report their own",
         "groupedMargins(_:)": "UIKit's grouped-card margins: the new tree's grouped lists measure and report their own",
         "localInsets(_:)": "content owners' local insets (LLP 1123 D9): the navigation's reset clears what was told, and each route and block reports its own as the new tree lays out",
+        "localInsetsAsync(_:done:)": "content owners' local insets sent to the owner, as `localInsets`'s",
         "resizeBox(_:width:height:)": "a resize grip's drag on the old tree: a restart takes the size back to the plan's, as a reload does the browser's",
         "setTime(epochAtZero:utcOffset:)": "the date, told by a check an input the teardown sets off makes (`followOffset`): forgotten when held, so the next check tells it again (boot and the agent tell it outside the hold)",
         // Never reached while held: their entry points wait for the replay first.

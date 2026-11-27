@@ -74,7 +74,7 @@ mod walk;
 use answers::{diagnostic, located, modes_of, no_token, refused, temp_name};
 
 /// The protocol this server speaks (D13: minor versions only add).
-pub const PROTOCOL: &str = "forma/1.18";
+pub const PROTOCOL: &str = "forma/1.20";
 
 /// The longest request line it reads; a longer one is refused whole.
 const LINE_LIMIT: usize = 1 << 20;
@@ -82,16 +82,21 @@ const LINE_LIMIT: usize = 1 << 20;
 /// How many inverses it keeps; the oldest goes first.
 const ISSUED_LIMIT: usize = 256;
 
-/// `contract forma serve --stdio <app dir>`.
+/// `contract forma serve --stdio [--wait-lock] <app dir>`.
 pub fn run(args: &[String]) -> ExitCode {
-    let dir = match args {
-        [flag, dir] | [dir, flag] if flag == "--stdio" => PathBuf::from(dir),
+    let (dir, wait_lock) = match args {
+        [flag, dir] | [dir, flag] if flag == "--stdio" && dir != "--wait-lock" => {
+            (PathBuf::from(dir), false)
+        }
+        [stdio, wait, dir] if stdio == "--stdio" && wait == "--wait-lock" => {
+            (PathBuf::from(dir), true)
+        }
         _ => {
-            eprintln!("usage: contract forma serve --stdio <app dir>");
+            eprintln!("usage: contract forma serve --stdio [--wait-lock] <app dir>");
             return ExitCode::from(2);
         }
     };
-    let mut server = match Server::start(&dir) {
+    let mut server = match Server::start(&dir, wait_lock) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("contract forma serve: {e}");
@@ -317,7 +322,7 @@ fn refuse_former_state(dir: &Path) -> Result<(), String> {
 }
 
 impl Server {
-    fn start(dir: &Path) -> Result<Server, String> {
+    fn start(dir: &Path, wait_lock: bool) -> Result<Server, String> {
         if !cfg!(unix) {
             return Err(
                 "the forma server runs on macOS and Linux: its commit flushes directories".into(),
@@ -382,11 +387,50 @@ impl Server {
         let lock = no_follow(OpenOptions::new().create(true).truncate(false).write(true))
             .open(state.join("forma.lock"))
             .map_err(|e| format!("the lock: {e}"))?;
-        if lock.try_lock().is_err() {
-            return Err(format!(
-                "another forma server writes {} (its lock is .exact/forma.lock)",
-                dir.display()
-            ));
+        #[cfg(unix)]
+        let mut reported = false;
+        #[cfg(not(unix))]
+        let _ = wait_lock;
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break,
+                #[cfg(unix)]
+                Err(std::fs::TryLockError::WouldBlock) if wait_lock => {
+                    if !reported {
+                        reported = true;
+                        println!(r#"{{"event":"writer-busy"}}"#);
+                    }
+                    // EOF on the dev loop's pipe cancels the wait even when its launcher was killed.
+                    let mut pipe = libc::pollfd {
+                        fd: libc::STDIN_FILENO,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    // SAFETY: poll writes one pollfd in the live local variable.
+                    let result = unsafe { libc::poll(&mut pipe, 1, 0) };
+                    if pipe.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                        return Err(
+                            "the dev loop closed its pipe while waiting for the writer".into()
+                        );
+                    }
+                    if result < 0
+                        && std::io::Error::last_os_error().kind() != ErrorKind::Interrupted
+                    {
+                        return Err(format!(
+                            "the dev loop's pipe: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(format!(
+                        "another forma server writes {} (its lock is .exact/forma.lock)",
+                        dir.display()
+                    ))
+                }
+                Err(std::fs::TryLockError::Error(e)) => return Err(format!("the lock: {e}")),
+            }
         }
         let started = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -867,17 +911,24 @@ impl Server {
     /// up: a param's token where it names one in full or short, else the
     /// name as given (a design token, which may read a param). A short name
     /// two components share is refused, not read as a design token.
-    fn lookup(&self, request: &Value) -> Result<(Snapshot, exact_forma::Folding, String), Value> {
-        let app = self.app_params();
-        let token = Self::token_of(&app, &required(request, "token")?)?;
-        let (snap, folding, _) = self.design_with(request, &app)?;
-        Ok((snap, folding, token))
+    fn lookup(
+        &self,
+        request: &Value,
+        app: &contract::forma_params::AppParams,
+    ) -> Result<(Snapshot, exact_forma::Folding, exact_forma::Design, String), Value> {
+        let given = required(request, "token")?;
+        let token = Self::token_of(&app.resolver(), &given)?;
+        let (snap, folding, design) = self.design_with(request, app)?;
+        Ok((snap, folding, design, token))
     }
 
     /// The name [`Self::lookup`] looks `name` up by: a param's token where
     /// it names one in full or short, else `name`.
-    fn token_of(app: &contract::forma_params::AppParams, name: &str) -> Result<String, Value> {
-        match contract_lower::params::resolve(&app.tokens, &app.identities, name) {
+    fn token_of(
+        resolver: &contract_lower::params::Resolver<'_>,
+        name: &str,
+    ) -> Result<String, Value> {
+        match resolver.resolve(name) {
             Ok(p) => Ok(p.token.clone()),
             Err(e) if e.id == "forma-param-ambiguous" => {
                 Err(json!({"message": format!("{}: {}", e.id, e.message), "id": e.id}))
@@ -912,12 +963,7 @@ impl Server {
     /// A reply with each param named by its full name (D15), never by its
     /// name below the IR.
     fn present(&self, v: Value) -> Value {
-        let app = self.app_params();
-        if app.tokens.is_empty() {
-            return v;
-        }
-        let text = app.shown(&v.to_string());
-        serde_json::from_str(&text).unwrap_or(v)
+        self.app_params().present(v)
     }
 
     fn design(&self, request: &Value) -> Result<(Snapshot, exact_forma::Folding), Value> {
@@ -964,7 +1010,8 @@ impl Server {
     /// joins the spans through its own source map (LLP 1122 T2b's
     /// `outline`).
     fn uses(&mut self, request: &Value) -> Result<Value, Value> {
-        let (snap, folding, name) = self.lookup(request)?;
+        let app = self.app_params();
+        let (snap, folding, _, name) = self.lookup(request, &app)?;
         let icon = folding.icons.iter().any(|i| i.name == name);
         if !icon && !folding.tokens.iter().any(|t| t.name == name) {
             return Err(no_token(&folding, &name));
@@ -977,13 +1024,7 @@ impl Server {
         }
         // An icon's image sites, an icon param's too (stage 9 C2, *1.12*).
         if icon {
-            return crate::forma_explain::icon_uses(
-                &self.dir,
-                &self.design,
-                &self.app_params(),
-                &snap,
-                &name,
-            );
+            return crate::forma_explain::icon_uses(&self.dir, &self.design, &app, &snap, &name);
         }
         let aliases = contract::forma_uses::aliases(
             &name,

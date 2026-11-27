@@ -259,6 +259,15 @@ impl NodeArena {
 
     /// [`crate::NodeRef::says`].
     pub(crate) fn says(&self, slot: u32, id: StyleId) -> bool {
+        // A platform text style the author wrote (`font="-exact-..."` or
+        // `font-size="-exact-..."`) owns its weight and leading (LLP 1115.000 D12.2).
+        if start_rows().has(id)
+            && self
+                .text_style_source(slot, id)
+                .is_some_and(|source| self.style(source).written.has(StyleId::FontSize))
+        {
+            return true;
+        }
         let mut current = Some(slot);
         while let Some(s) = current {
             let own = self.style(s);

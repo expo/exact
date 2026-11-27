@@ -370,6 +370,16 @@ final class FrameHealthOverlay: UIView {
             if !observing { card.chart.follow(!paused && !card.minimized) }
             UIAccessibility.post(notification: .announcement, argument: paused ? "Paused" : "Resumed")
             if paused { render() } else { refresh() }
+        case .clear:
+            health?.clear()
+            screen?.clear()
+            reader.reset()
+            screenReader.reset()
+            card.chart.reset()
+            needsShow = false
+            sample(now: CACurrentMediaTime(), force: true)
+            alone { render() }
+            UIAccessibility.post(notification: .announcement, argument: "Frame health cleared")
         case .close: hideReadout()
         case .minimize:
             guard !card.minimized || fullCardFits else {
@@ -944,7 +954,7 @@ final class FrameHealthCardView: UIView {
     // MARK: Accessibility: an element for each region the card draws.
 
     fileprivate final class Element: UIAccessibilityElement {
-        enum Role { case close, title, status, details, share, minimize, context, figures, pacing, charts, table, rateChart, timeChart, tableView, detailsView }
+        enum Role { case close, title, status, clear, details, share, minimize, context, figures, pacing, charts, table, rateChart, timeChart, tableView, detailsView }
         let role: Role
         weak var card: FrameHealthCardView?
         init(_ role: Role, card: FrameHealthCardView) {
@@ -953,7 +963,7 @@ final class FrameHealthCardView: UIView {
             super.init(accessibilityContainer: card)
         }
         static func all(_ card: FrameHealthCardView) -> [Element] {
-            [.close, .title, .status, .details, .share, .minimize, .context, .figures, .pacing, .charts, .table, .rateChart, .timeChart, .tableView,
+            [.close, .title, .status, .clear, .details, .share, .minimize, .context, .figures, .pacing, .charts, .table, .rateChart, .timeChart, .tableView,
              .detailsView].map { Element($0, card: card) }
         }
         override func accessibilityActivate() -> Bool {
@@ -962,6 +972,7 @@ final class FrameHealthCardView: UIView {
             case .close: card.activate?(.close)
             case .title: card.activate?(.title)
             case .status: card.activate?(.status)
+            case .clear: card.activate?(.clear)
             case .details: card.activate?(.details)
             case .share: card.activate?(.share)
             case .minimize: card.activate?(.minimize)
@@ -990,6 +1001,7 @@ final class FrameHealthCardView: UIView {
                 frame = l.status; traits = .button
                 label = state.status == .paused ? "Resume frame health" : "Pause frame health"
                 element.accessibilityValue = state.status == .paused ? "Paused" : state.status == .live ? "Live" : "Idle"
+            case .clear: frame = l.clear; label = "Clear frame health"; traits = .button
             case .details: frame = l.details; label = state.showsDetails ? "Done" : "Frame health details"; traits = .button
             case .share: frame = l.share; label = "Share frame health"; traits = .button
             case .minimize:
@@ -999,7 +1011,7 @@ final class FrameHealthCardView: UIView {
                 element.accessibilityValue = minimized ? state.minimizedText : nil
                 element.accessibilityHint = "Actions move the card to an edge."
             case .context:
-                frame = CGRect(x: 0, y: l.context.minY, width: l.details.minX, height: l.context.height)
+                frame = CGRect(x: 0, y: l.context.minY, width: l.clear.minX, height: l.context.height)
                 label = [state.request.0, state.request.1, state.display].filter { !$0.isEmpty }.joined(separator: ", ")
             case .figures:
                 frame = CGRect(x: 0, y: 80, width: l.width, height: 45)
@@ -1031,7 +1043,7 @@ final class FrameHealthCardView: UIView {
                 label = p.details.map { "\($0.name): \($0.value)" + ($0.reason.map { ", " + $0 } ?? "") }.joined(separator: ". ") + ". " + p.detailsCaption
             }
             // Details replaces the figures and charts
-            if state.showsDetails, ![.close, .title, .status, .details, .share, .minimize, .context, .detailsView].contains(element.role) { hidden = true }
+            if state.showsDetails, ![.close, .title, .status, .clear, .details, .share, .minimize, .context, .detailsView].contains(element.role) { hidden = true }
             if element.role == .detailsView, !state.showsDetails { hidden = true }
             if minimized { hidden = element.role != .minimize }
             if element.role == .title || element.role == .minimize {

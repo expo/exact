@@ -20,9 +20,10 @@ use ibex2::boundary::HostError;
 use ibex2::host::{Bindings, Host, Kv, Secrets};
 #[path = "store_secrets.rs"]
 mod shared_secrets;
+pub use shared_secrets::reconcile_presence;
 pub(crate) use shared_secrets::{launch_backend, launch_secrets};
 #[cfg(test)]
-pub(crate) use shared_secrets::{launch_backend_in, read_launch_secrets};
+pub(crate) use shared_secrets::{launch_backend_in, read_launch_secrets, DELETE_LOCKED_ITEM};
 use shared_secrets::{secret_directory, secret_namespace, SecretBackend};
 
 /// The kv scope the runner's kept answers live in (LLP 1027 D4): beside the
@@ -169,8 +170,12 @@ fn with_shared_secrets(
 /// a process and before anything is written there (`picker::empty_fresh_tree`).
 pub fn endow_bound(grants: &str, app_id: &str, fresh: bool) -> (Option<Bindings>, Option<String>) {
     if fresh {
-        if let Err(e) = crate::picker::empty_fresh_tree(app_id) {
-            return (None, Some(format!("{e:?}")));
+        if let Err(e) = crate::picker::empty_fresh_tree(app_id, grants) {
+            let msg = match &e {
+                exact_runner::DataError::Unavailable(s) if s.starts_with("stored: ") => s.clone(),
+                _ => format!("{e:?}"),
+            };
+            return (None, Some(msg));
         }
     }
     match endow_for(grants, app_id) {
@@ -388,42 +393,35 @@ impl Endowed {
     }
 }
 
-/// [`endow_bound`] and, for a fresh session, what its stores held (a reload
-/// carries the running store): [`crate::link::IoLinks`]'s endowment.
-/// `PRESENCE` links the vault only when the composition names it.
+/// [`endow_bound`] and, for a fresh session, a read-only snapshot of what its
+/// stores held (a reload carries the running store): [`crate::link::IoLinks`]'s
+/// endowment. Presence vault reconciliation runs only at commit
+/// ([`reconcile_presence`]); `PRESENCE` links the vault only when the
+/// composition names it.
 pub fn endowed<const PRESENCE: bool>(grants: &str, app_id: &str, fresh: bool) -> Endowed {
     let (bindings, unbound) = endow_bound(grants, app_id, fresh);
     let prefs = Prefs::of(app_id);
-    let agent = std::env::var_os("EXACT_AGENT").is_some();
-    // A drive that asks for the platform's stores (`EXACT_STORE=real`) keeps
-    // locked items in the keychain too, behind the platform's check, which it
-    // binds (`--bind local-auth`): the conformance suite's real items.
-    let platform = !agent || std::env::var("EXACT_STORE").as_deref() == Ok("real");
-    let presence = match (PRESENCE, !platform) {
-        (false, _) => None,
-        (true, true) => crate::presence_secrets::agent_backend(bindings.as_ref(), grants, agent)
-            .map(|b| (b, None)),
-        (true, false) => {
-            crate::presence_secrets::keychain_backend(bindings.as_ref(), grants, app_id)
-                .map(|(b, service)| (b, Some(service)))
-        }
-    };
-    let (mut snapshot, unread_kept) = match bindings.as_ref().filter(|_| fresh) {
+    let (snapshot, unread_kept) = match bindings.as_ref().filter(|_| fresh) {
         Some(b) => {
             let mut read = snapshot_parts(&b.secrets, &b.kv, &prefs, Vec::new());
             crate::picker::seed_first_window(app_id, &mut read.values);
+            if PRESENCE {
+                let (agent, platform) = shared_secrets::presence_mode();
+                let entries = if !platform {
+                    crate::presence_secrets::agent_snapshot(Some(b), grants, agent)
+                } else {
+                    crate::presence_secrets::keychain_snapshot(Some(b), grants, app_id)
+                };
+                read.values.extend(entries);
+            }
             (read.values, read.omitted)
         }
         None => Default::default(),
     };
-    if let Some((backend, keystore)) = presence.as_ref().filter(|_| fresh && PRESENCE) {
-        let capable = keystore.is_none() || crate::presence_secrets::keychain_capable();
-        snapshot.extend(backend.snapshot_entries(capable));
-    }
     Endowed {
         snapshot,
         unread_kept,
-        presence,
+        presence: None,
         secrets: bindings.as_ref().map(|b| {
             Box::new(
                 Platform::of(b)

@@ -222,6 +222,11 @@ fn the_sheet_choices_take_their_words() {
         ),
         ("navigationScrollExpands", &["true", "false"], &["auto", ""]),
         (
+            "navigationWidthFollowsPreferredContentSize",
+            &["true", "false"],
+            &["preferred", ""],
+        ),
+        (
             "navigationSizing",
             &["page", "form", "automatic"],
             &["fitted", "full", ""],

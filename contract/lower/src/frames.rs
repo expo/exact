@@ -9,7 +9,7 @@ use crate::{err, LowerError};
 use contract_syntax::{Attr, Expr};
 
 /// What only an `iframe` takes.
-const FRAME_ONLY: [&str; 12] = [
+const FRAME_ONLY: [&str; 13] = [
     "partition",
     "zoom",
     "currententrychange",
@@ -21,6 +21,7 @@ const FRAME_ONLY: [&str; 12] = [
     "userpromptopened",
     "apple.allowsBackForwardNavigationGestures",
     "apple.allowsMagnification",
+    "apple.magnification",
     "apple.inactiveSchedulingPolicy",
 ];
 
@@ -48,6 +49,17 @@ pub(crate) fn check(tag: &str, positional: &[Expr], attrs: &[Attr]) -> Result<()
             ),
             None => Ok(()),
         };
+    }
+    if let Some(a) = attrs.iter().find(|a| a.name == "apple.magnification") {
+        if let Some(n) = crate::values::numeric_literal(&a.value) {
+            if !(0.001..=256.0).contains(&n) {
+                return err(
+                    "lower-attr-value",
+                    format!("`apple.magnification` needs a finite number from 0.001 through 256, got {n}"),
+                    a.span,
+                );
+            }
+        }
     }
     if let Some(a) = attrs
         .iter()

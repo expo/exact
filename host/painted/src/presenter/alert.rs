@@ -811,7 +811,8 @@ impl<D: DataSource> Presenter<D> {
                     .node(*id)
                     .is_some_and(|n| n.node_type == NodeType::TextInput)
             }) {
-                self.field_key(id, name, now);
+                let chord = self.chord_key(name, code);
+                self.field_key(id, chord, now);
                 return true;
             }
         }

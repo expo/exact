@@ -68,7 +68,7 @@ class LocalNetworkModule(context: ExtensionContext) : ExactExtension(context) {
 
     private fun leave(wanted: (String) -> Boolean) {
         browses.entries.removeAll { (type, b) -> wanted("browseServices $type").also { if (it) b.stop() } }
-        resolves.entries.removeAll { (key, r) -> wanted("resolveService $key").also { if (it) r.stop() } }
+        resolves.entries.removeAll { (key, r) -> wanted("resolveService $key").also { if (it) r.dispose() } }
     }
 
     override fun foreground(shown: Boolean) {
@@ -117,10 +117,10 @@ class LocalNetworkModule(context: ExtensionContext) : ExactExtension(context) {
             val l = object : NsdManager.DiscoveryListener {
                 override fun onDiscoveryStarted(serviceType: String) {}
                 override fun onDiscoveryStopped(serviceType: String) {}
-                override fun onStartDiscoveryFailed(serviceType: String, code: Int) = main.post { fail(error("NetworkError", "discovery failed: $code")) }.let {}
+                override fun onStartDiscoveryFailed(serviceType: String, code: Int) = main.post { if (listener === this) fail(error("NetworkError", "discovery failed: $code")) }.let {}
                 override fun onStopDiscoveryFailed(serviceType: String, code: Int) {}
-                override fun onServiceFound(info: NsdServiceInfo) = main.post { moved(info.serviceName, +1) }.let {}
-                override fun onServiceLost(info: NsdServiceInfo) = main.post { moved(info.serviceName, -1) }.let {}
+                override fun onServiceFound(info: NsdServiceInfo) = main.post { if (listener === this) moved(info.serviceName, +1) }.let {}
+                override fun onServiceLost(info: NsdServiceInfo) = main.post { if (listener === this) moved(info.serviceName, -1) }.let {}
             }
             listener = l
             manager.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, l)
@@ -162,32 +162,58 @@ class LocalNetworkModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     private inner class Resolve(val name: String, val type: String) {
+        private inner class Waiter(val reply: (JSONObject) -> Unit, var timer: Runnable? = null)
+
         private var info: JSONObject? = null
-        private val waiting = ArrayList<(JSONObject) -> Unit>()
+        private val waiting = ArrayList<Waiter>()
         private var callback: NsdManager.ServiceInfoCallback? = null
         private var asked = false
+        private var generation = 0
 
         fun read(timeout: Double, reply: (JSONObject) -> Unit) {
             info?.let { return reply(it) }
-            waiting.add(reply)
+            val waiter = Waiter(reply)
+            val runnable = Runnable { timedOut(waiter) }
+            waiter.timer = runnable
+            waiting.add(waiter)
             start()
-            main.postDelayed({ if (info == null) finish(error("NotFoundError")) }, timeout.toLong())
+            if (waiter in waiting) main.postDelayed(runnable, maxOf(0L, timeout.toLong()))
+        }
+
+        private fun timedOut(waiter: Waiter) {
+            if (!waiting.remove(waiter)) return
+            waiter.timer = null
+            waiter.reply(error("NotFoundError"))
+            if (waiting.isEmpty() && !resolves.containsValue(this)) stop()
         }
 
         private fun start() {
             if (asked || !shown) return
             asked = true
+            val gen = generation
             val wanted = NsdServiceInfo().apply { serviceName = name; serviceType = type }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 val c = object : NsdManager.ServiceInfoCallback {
-                    override fun onServiceInfoCallbackRegistrationFailed(code: Int) = main.post { finish(error("NetworkError", "resolve failed: $code")) }.let {}
-                    override fun onServiceUpdated(found: NsdServiceInfo) = main.post { took(found, found.hostAddresses) }.let {}
-                    override fun onServiceLost() = main.post { info = null; finish(error("NotFoundError")); context.changed("local-network.resolveService") }.let {}
+                    override fun onServiceInfoCallbackRegistrationFailed(code: Int) = main.post {
+                        if (callback === this && generation == gen) finish(error("NetworkError", "resolve failed: $code"))
+                    }.let {}
+                    override fun onServiceUpdated(found: NsdServiceInfo) = main.post {
+                        if (callback === this && generation == gen) took(found, found.hostAddresses)
+                    }.let {}
+                    override fun onServiceLost() = main.post {
+                        if (callback === this && generation == gen) { info = null; finish(error("NotFoundError")); context.changed("local-network.resolveService") }
+                    }.let {}
                     override fun onServiceInfoCallbackUnregistered() {}
                 }
                 callback = c
                 manager.registerServiceInfoCallback(wanted, onMain, c)
-            } else Serial.ask(manager, wanted) { found, code -> main.post { if (found != null) @Suppress("DEPRECATION") took(found, listOfNotNull(found.host)) else finish(error("NotFoundError", "resolve failed: $code")) } }
+            } else Serial.ask(manager, wanted) { found, code ->
+                main.post {
+                    if (generation != gen) return@post
+                    if (found != null) @Suppress("DEPRECATION") took(found, listOfNotNull(found.host))
+                    else finish(error("NotFoundError", "resolve failed: $code"))
+                }
+            }
         }
 
         private fun took(found: NsdServiceInfo, addresses: List<InetAddress>) {
@@ -204,23 +230,41 @@ class LocalNetworkModule(context: ExtensionContext) : ExactExtension(context) {
             val hostName = if (Build.VERSION.SDK_INT >= 36) found.hostname else null
             val fresh = JSONObject().put("name", name).put("type", type).put("host", host).put("hostName", hostName ?: JSONObject.NULL)
                 .put("port", found.port).put("addresses", JSONArray(usable.map { it.hostAddress })).put("txt", JSONArray(txt))
-            val changed = info != null && info.toString() != fresh.toString()
+            val changed = info == null || info.toString() != fresh.toString()
             info = fresh
             if (waiting.isNotEmpty()) finish(fresh) else if (changed) context.changed("local-network.resolveService")
         }
 
         private fun finish(answer: JSONObject) {
-            val replies = ArrayList(waiting)
+            val waiters = ArrayList(waiting)
             waiting.clear()
-            replies.forEach { it(answer) }
+            waiters.forEach {
+                it.timer?.let(main::removeCallbacks)
+                it.timer = null
+                it.reply(answer)
+            }
             if (answer.has("error")) stop()
         }
 
         fun pause(hidden: Boolean) {
-            if (hidden) stop() else { info = null; context.changed("local-network.resolveService") }
+            if (hidden) stop() else {
+                info = null
+                if (waiting.isNotEmpty()) start()
+                context.changed("local-network.resolveService")
+            }
+        }
+
+        fun dispose() {
+            waiting.forEach {
+                it.timer?.let(main::removeCallbacks)
+                it.timer = null
+            }
+            waiting.clear()
+            stop()
         }
 
         fun stop() {
+            generation += 1
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) callback?.let { runCatching { manager.unregisterServiceInfoCallback(it) } }
             callback = null
             asked = false

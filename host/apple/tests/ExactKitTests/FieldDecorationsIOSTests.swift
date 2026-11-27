@@ -131,5 +131,22 @@ final class FieldDecorationsIOSTests: XCTestCase {
         XCTAssertGreaterThan(all.height, word.height * 1.5)
         XCTAssertNil(p.rangeFrame(2, start: 0, end: UInt32(value.utf16.count + 1)))
     }
+
+    /// A new width rewraps the text, and the lines its decorations draw are
+    /// drawn again with it, not stretched from the old picture.
+    func testANewWidthDrawsTheLinesAgain() throws {
+        let value = "word word word word word word @alice end"
+        let (p, _, field) = try presenter(value, spans: [("mention", 30, 36)])
+        XCTAssertEqual(field.decorations?.drawsLines, true)
+        field.layoutIfNeeded()
+        field.layer.displayIfNeeded()
+        XCTAssertFalse(field.layer.needsDisplay())
+        let before = try XCTUnwrap(p.rangeFrame(2, start: 30, end: 36))
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 0, "w": 150, "h": 120]]))
+        field.layoutIfNeeded()
+        XCTAssertTrue(field.layer.needsDisplay(), "the lines are drawn again at the new width")
+        let after = try XCTUnwrap(p.rangeFrame(2, start: 30, end: 36))
+        XCTAssertGreaterThan(after.minY, before.minY + 1, "the decorated run moved to a later line")
+    }
 }
 #endif

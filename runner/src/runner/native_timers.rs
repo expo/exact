@@ -164,10 +164,10 @@ impl<D: DataSource> Runner<D> {
         }
         self.now_ms = self.now_ms.max(cutoff);
         match self.fire_timer(i, nominal, self.now_ms, cutoff, false) {
-            Ok(receipt) => result.receipts.push(Timed {
+            Ok(receipt) => result.receipts.extend(receipt.map(|receipt| Timed {
                 at_ms: self.now_ms,
                 receipt,
-            }),
+            })),
             Err(e) => {
                 let what = format!(
                     "native timer {} ({})",

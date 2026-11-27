@@ -1,3 +1,4 @@
+import { carry } from "./inputs.js";
 import { queue, sheet, commit, root, log, settled } from "./routes.js";
 // LLP 1047 D5: calls to motion-glue.js and collection-glue.js queue in order until their after-paint piece loads. Before use, drop no-op reconciliations and write styles immediately.
 // `o.wasm(name, bytes)` returns a wasm reply, or null before boot; `o.replayed()` reconciles after replay.
@@ -46,7 +47,8 @@ export function afterPaintPieces(load, o) {
     const motion = m.motionController({
       ...common,
       releaseInteraction: (pointer) => collections.releaseInteraction(pointer),
-      request
+      request,
+      carry
     });
     const arrange = m.arrangeController({
       ...common,
@@ -102,7 +104,7 @@ export function afterPaintPieces(load, o) {
       }
       const el = o.views.get(id);
       if (el) {
-        el.style.cssText = text;
+        el.style.cssText = carry(el, text);
       }
     },
     keyframes
@@ -269,8 +271,11 @@ export function presenceLoader(load, root, apply, log) {
 export function animationClock(now, settled, synced, early = () => undefined) {
   const starts = new WeakMap(), held = new WeakSet(), clocks = animationClocks(document);
   const startOf = a => starts.get(a) ?? now();
-  // A scroll-driven animation follows its scroll, not a clock.
-  const timed = () => document.getAnimations().filter((a) => !a.timeline || a.timeline instanceof DocumentTimeline);
+  // Only document-timed animations follow the clock: scroll/view-driven animations follow
+  // scroll progress, and an unresolved named timeline has `timeline === null` (where Chromium
+  // throws TypeError on numeric `currentTime`).
+  const isTimed = (a) => a.timeline instanceof DocumentTimeline;
+  const timed = () => document.getAnimations().filter(isTimed);
   return {
     register(t) {
       clocks.commit();
@@ -286,7 +291,7 @@ export function animationClock(now, settled, synced, early = () => undefined) {
         }
       }
     },
-    runs: a => (!a.timeline || a.timeline instanceof DocumentTimeline) && (starts.has(a) ? !held.has(a) : a.playState !== "paused" || early(a) !== undefined),
+    runs: a => isTimed(a) && (starts.has(a) ? !held.has(a) : a.playState !== "paused" || early(a) !== undefined),
     seek(to, sync = true) {
       for (const a of timed()) {
         const timing = a.effect?.getComputedTiming();
@@ -436,6 +441,9 @@ export function animationClocks(root) {
         return;
       }
       for (const a of document.getAnimations()) {
+        if (!(a.timeline instanceof DocumentTimeline)) {
+          continue;
+        }
         const is = a.playState === "paused", was = paused.get(a), c = clockOf(a), had = clocked.get(a) ?? "";
         // On a clock and not its member: new, moved onto it, or let go
         // while it was off one (its name taken away and given back).

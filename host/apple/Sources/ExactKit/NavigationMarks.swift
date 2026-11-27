@@ -57,9 +57,9 @@ package final class NavigationMarks: NSObject {
         }
     }
 
-    /// Who made a queued act that presses as a tap does (`Presenter.hatchAct`):
-    /// a native control in the person's input, which happened `at`, or a
-    /// script's `click()`, the program's.
+    /// Who made a queued act that presses as a tap does (`Presenter.pressFromBar`,
+    /// `Presenter.hatchAct`): a native control in the person's input, which
+    /// happened `at`, or a script's `click()`, the program's.
     package enum Origin { case person(at: Double), program }
     private var acting: Origin?
 

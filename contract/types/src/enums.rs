@@ -163,28 +163,37 @@ pub(super) fn check_authored_root(
 
 /// An assignment diagnostic keeps the rejected literal visible through wrappers.
 pub(super) fn assignment_error(target: &str, want: &Ty, expr: &Expr, have: &Ty) -> String {
-    let mut message = format!("`{target}` is `{want}`, cannot assign `{have}`");
-    if let Some(value) = rejected(want, expr) {
-        message.push_str(&format!("; {value:?} is not a declared member"));
-    }
-    message
+    format!(
+        "`{target}` is `{want}`, cannot assign `{have}`{}",
+        rejection(want, expr)
+    )
 }
 
 /// A state's initializer that does not fit its declared type, worded as an
 /// assignment's refusal is.
 pub(super) fn initializer_error(state: &str, want: &Ty, expr: &Expr, have: &Ty) -> String {
-    let mut message =
-        format!("state `{state}` is declared `{want}`, and its initializer is `{have}`");
-    if let Some(value) = rejected(want, expr) {
-        message.push_str(&format!("; {value:?} is not a declared member"));
-    }
-    message.push_str(": start it from a value of the declared type, or declare the type it holds");
-    message
+    format!(
+        "state `{state}` is declared `{want}`, and its initializer is `{have}`{}: start it from a value of the declared type, or declare the type it holds",
+        rejection(want, expr)
+    )
 }
 
-fn rejected<'a>(want: &Ty, expr: &'a Expr) -> Option<&'a str> {
+/// The literal in `expr` that `want`'s enum refuses, and the member it most
+/// plausibly misspells, as a clause to append; empty when there is none.
+pub(super) fn rejection(want: &Ty, expr: &Expr) -> String {
+    let Some((value, members)) = rejected(want, expr) else {
+        return String::new();
+    };
+    let mut clause = format!("; {value:?} is not a declared member");
+    if let Some(meant) = contract_syntax::suggestion(value, members.iter().map(String::as_str)) {
+        clause.push_str(&format!("; did you mean {meant:?}?"));
+    }
+    clause
+}
+
+fn rejected<'a>(want: &'a Ty, expr: &'a Expr) -> Option<(&'a str, &'a [String])> {
     match (want, expr) {
-        (Ty::Enum(values), Expr::Str(value, _)) if !values.contains(value) => Some(value),
+        (Ty::Enum(values), Expr::Str(value, _)) if !values.contains(value) => Some((value, values)),
         (Ty::Option(inner), Expr::Some(value, _)) => rejected(inner, value),
         (Ty::List(inner), Expr::List(values, _)) => values.iter().find_map(|v| rejected(inner, v)),
         (_, Expr::Ternary(_, a, b, _)) => rejected(want, a).or_else(|| rejected(want, b)),

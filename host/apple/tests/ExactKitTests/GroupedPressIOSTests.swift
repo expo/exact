@@ -5,6 +5,153 @@ import XCTest
 @testable import ExactGroupedLists
 
 final class GroupedPressIOSTests: GroupedListFixture {
+    /// A custom row whose author left its press to the platform shows it as
+    /// its cell's highlight, not a dim, through UIKit configuring its cell
+    /// again, while the finger stays on it (LLP 1084 §4, LLP 1115.000 D16).
+    func testAHeldCustomRowIsItsCellsHighlight() throws {
+        let p = presenter { self.model(custom: true) }
+        let row = try XCTUnwrap(p.views[21])
+        let held = { try XCTUnwrap(try self.cell(p, 21) as? GroupedCell).configurationState.isHighlighted }
+        XCTAssertFalse(try held())
+        row.pressed = true
+        XCTAssertTrue(try held(), "the cell highlights")
+        XCTAssertNil(row.layer.animation(forKey: "pressDim"), "the row does not dim")
+        let l = try list(p)
+        try XCTUnwrap(try cell(p, 21) as? GroupedCell).forcedPressed = false
+        var snapshot = l.source.snapshot()
+        snapshot.reconfigureItems([21])
+        l.source.apply(snapshot, animatingDifferences: false)
+        XCTAssertTrue(try held(), "configuring the cell again shows the held press")
+        row.pressFollows(inside: false)
+        XCTAssertFalse(try held(), "a finger that leaves the row lets it go")
+        row.pressFollows(inside: true)
+        XCTAssertTrue(try held(), "and one that comes back shows it again")
+        row.pressed = false
+        XCTAssertFalse(try held(), "the release lets it go")
+        XCTAssertNil(row.layer.animation(forKey: "pressDim"))
+    }
+
+    /// A tapped custom row whose press is its cell's runs its press with its
+    /// cell selected, as UIKit runs a tapped standard row's, and lets go when
+    /// the press pushed nothing; a standard row's press is UIKit's own.
+    func testATappedCustomRowsPressRunsWithItsCellSelected() throws {
+        let p = presenter { self.model(custom: true) }
+        let row = try XCTUnwrap(p.views[21]), lists = try XCTUnwrap(p.groupedLists)
+        _ = try cell(p, 21)
+        var selectedWhilePressed = false
+        XCTAssertTrue(lists.pressSelected(row) { selectedWhilePressed = (try? self.cell(p, 21).isSelected) == true })
+        XCTAssertTrue(selectedWhilePressed, "selected while its press runs")
+        XCTAssertFalse(try cell(p, 21).isSelected, "and let go when it pushed nothing")
+        XCTAssertFalse(lists.pressSelected(try XCTUnwrap(p.views[20])) {}, "a standard row's press is UIKit's selection")
+    }
+
+    /// A context menu on a custom row whose press is its cell's lifts the
+    /// cell, the row's full width with its highlight, as a collection view
+    /// lifts its own cell; a row with its own press look lifts itself.
+    func testAContextMenuLiftsACustomRowsCell() throws {
+        let p = presenter { self.model(custom: true) }
+        let lists = try XCTUnwrap(p.groupedLists), row = try XCTUnwrap(p.views[21])
+        XCTAssertTrue(lists.cell(carrying: row) === (try cell(p, 21)))
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "press_background_color": [0, 0, 255, 255]]]]))
+        XCTAssertNil(lists.cell(carrying: row))
+    }
+
+    /// A row that takes a press look of its own while its menu is open
+    /// still returns to the cell that lifted it: the cell that shows it,
+    /// whatever its press.
+    func testALiftedRowsCellStaysItsCarrier() throws {
+        let p = presenter { self.model(custom: true) }
+        let lists = try XCTUnwrap(p.groupedLists), row = try XCTUnwrap(p.views[21])
+        let cell = try self.cell(p, 21)
+        XCTAssertTrue(lists.cell(carrying: row) === cell)
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "press_background_color": [0, 0, 255, 255]]]]))
+        XCTAssertNil(lists.cell(carrying: row), "no longer one to lift")
+        XCTAssertTrue(lists.carrier(of: row) === cell, "but still the one to return to")
+        XCTAssertNil(lists.carrier(of: try XCTUnwrap(p.views[20])), "a standard row's is UIKit's")
+    }
+
+    /// A custom row with a press look of its own shows that look: its cell
+    /// takes no highlight.
+    func testACustomRowWithItsOwnPressLookTakesNoCellHighlight() throws {
+        let p = presenter { self.model(custom: true) }
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "press_background_color": [0, 0, 255, 255]]]]))
+        let row = try XCTUnwrap(p.views[21])
+        row.pressed = true
+        XCTAssertFalse(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        row.pressed = false
+    }
+
+    /// A custom row the list does not press (a box with a press handler)
+    /// keeps its dim: its cell takes no highlight.
+    func testACustomRowTheListDoesNotPressDims() throws {
+        let p = presenter {
+            var m = self.model(custom: true)
+            m.sections[1].rows[1].pressable = false
+            return m
+        }
+        let row = try XCTUnwrap(p.views[21])
+        row.pressed = true
+        XCTAssertFalse(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        XCTAssertNotNil(row.layer.animation(forKey: "pressDim"), "the row dims")
+        row.pressed = false
+    }
+
+    /// In a card-less section, where a cell is clear at rest, a held custom
+    /// row's cell draws UIKit's highlight, as a standard row's does.
+    func testAHeldCustomRowInACardlessSectionDrawsItsCellsHighlight() throws {
+        let p = presenter {
+            var m = self.model(custom: true)
+            m.sections[1].card = false
+            return m
+        }
+        let row = try XCTUnwrap(p.views[21])
+        XCTAssertEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear)
+        row.pressed = true
+        XCTAssertNotEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear, "highlighted on the list's background")
+        row.pressed = false
+        XCTAssertEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear)
+        // A ground of its own when the cell is configured, then none with no
+        // configuration since: the cell reads the row as it is now
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "background_color": [255, 255, 255, 255], "written": ["background_color"]]]]))
+        let configured = try cell(p, 21), l = try list(p)
+        var snapshot = l.source.snapshot()
+        snapshot.reconfigureItems([21])
+        l.source.apply(snapshot, animatingDifferences: false)
+        row.style["background_color"] = nil
+        row.style["written"] = nil
+        XCTAssertTrue(try cell(p, 21) === configured, "the same cell")
+        row.pressed = true
+        XCTAssertNotEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear, "highlighted once its ground is gone")
+        row.pressed = false
+    }
+
+    /// A custom row as tall as the window still shows its press as its
+    /// cell's highlight: the dim's exception for a scrim over the window is
+    /// the dim's alone.
+    func testAWindowTallCustomRowIsItsCellsHighlight() throws {
+        let p = presenter(props: ["listStyle": "plain"]) { self.model("plain", custom: true) }
+        p.apply(wireBatch([["op": "frame", "id": 21, "x": 0.0, "y": 52.0, "w": 402.0, "h": 860.0]]))
+        let row = try XCTUnwrap(p.views[21])
+        _ = try cell(p, 21)
+        let window = try XCTUnwrap(row.window), shown = row.convert(row.bounds, to: window)
+        XCTAssertTrue(shown.width >= window.bounds.width && shown.height >= window.bounds.height * 0.9, "as tall and wide as the window: \(shown)")
+        row.pressed = true
+        XCTAssertTrue(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        row.pressed = false
+    }
+
+    /// A custom row with a background of its own would cover its cell's
+    /// highlight, so it dims instead, as a plain list's row does.
+    func testACustomRowWithItsOwnGroundDims() throws {
+        let p = presenter { self.model(custom: true) }
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "background_color": [255, 255, 255, 255], "written": ["background_color"]]]]))
+        let row = try XCTUnwrap(p.views[21])
+        row.pressed = true
+        XCTAssertFalse(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        XCTAssertNotNil(row.layer.animation(forKey: "pressDim"), "the row dims")
+        row.pressed = false
+    }
+
     func testViewlessNativeRowKeepsTheTitlesColorOwnership() throws {
         var face = ButtonFace()
         face.title = "Profile"

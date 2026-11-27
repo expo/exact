@@ -59,6 +59,63 @@ impl Pictures {
     }
 }
 
+/// Deduplicates Android JNI op streams against what the reader already shows.
+/// Move-only (`SHIFT`, op 22) frames and `Native_moved` clear both `last` and
+/// `drawn` so the next full paint always delivers and resets translated groups.
+#[derive(Default)]
+pub struct StreamDedup {
+    last: Vec<u32>,
+    moved: Vec<u32>,
+    drawn: Option<Vec<u32>>,
+}
+
+impl StreamDedup {
+    /// An empty deduplicator: the next paint is delivered.
+    pub const fn new() -> Self {
+        Self {
+            last: Vec::new(),
+            moved: Vec::new(),
+            drawn: None,
+        }
+    }
+
+    /// Forgets everything delivered, so the next paint is delivered whole.
+    pub fn clear(&mut self) {
+        self.last.clear();
+        self.moved.clear();
+        self.drawn = None;
+    }
+
+    /// Called after a move-only frame, so the next full paint is delivered.
+    pub fn reset_moved(&mut self) {
+        self.last.clear();
+        self.drawn = None;
+    }
+
+    /// The ops to deliver for this frame, or `None` when the reader already shows them.
+    pub fn emit(&mut self, ops: Vec<u32>) -> Option<&mut [u32]> {
+        if ops.first() == Some(&22) {
+            self.reset_moved();
+            self.moved = ops;
+            return Some(&mut self.moved);
+        }
+        // The same stream draws the same pixels: no new frame for Android.
+        if self.last == ops {
+            return None;
+        }
+        // What the reader draws already, with nothing to define (a touch down
+        // after a stream that defined rows): no frame.
+        let now = super::drawing(&ops);
+        let same = matches!((&now, &self.drawn), (Some((n, false)), Some(o)) if n == o);
+        self.drawn = now.map(|(n, _)| n);
+        if same {
+            return None;
+        }
+        self.last = ops;
+        Some(&mut self.last)
+    }
+}
+
 /// A `CLOCK_MONOTONIC` instant in ns (`System.nanoTime`, Choreographer's
 /// vsyncs) on the loop's clock, `now_ms` being that clock now: the loop's
 /// `Instant` reads `CLOCK_MONOTONIC` too.
@@ -258,5 +315,52 @@ mod tests {
         let tti = report["metrics"]["timeToInteractive"].as_f64().unwrap();
         let ttr = report["metrics"]["timeToFirstRender"].as_f64().unwrap();
         assert!((tti - ttr - (at - first_at)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn move_frames_and_native_moved_clear_last_so_same_full_stream_reemits() {
+        // Minimal valid full stream: one solid rect (op 1, 9 words).
+        let full = vec![
+            1,
+            0,
+            0,
+            100f32.to_bits(),
+            100f32.to_bits(),
+            0,
+            0,
+            0,
+            0xff00_0000,
+        ];
+        // A SHIFT move-only stream (op 22).
+        let shift = vec![22, 1, 0, (-100f32).to_bits()];
+
+        let mut dedup = super::StreamDedup::new();
+        assert_eq!(dedup.emit(full.clone()).as_deref(), Some(full.as_slice()));
+        assert_eq!(
+            dedup.emit(full.clone()),
+            None,
+            "identical full frame is deduped"
+        );
+
+        // After a SHIFT frame, returning to the same full stream must emit.
+        assert_eq!(dedup.emit(shift.clone()).as_deref(), Some(shift.as_slice()));
+        assert_eq!(
+            dedup.emit(full.clone()).as_deref(),
+            Some(full.as_slice()),
+            "full paint after SHIFT must not be suppressed by stale LAST"
+        );
+        assert_eq!(dedup.emit(full.clone()), None);
+
+        // After Native_moved, returning to the same full stream must emit.
+        dedup.reset_moved();
+        assert_eq!(
+            dedup.emit(full.clone()).as_deref(),
+            Some(full.as_slice()),
+            "full paint after Native_moved must not be suppressed by stale LAST"
+        );
+
+        // Adoption clears all cached streams.
+        dedup.clear();
+        assert_eq!(dedup.emit(full.clone()).as_deref(), Some(full.as_slice()));
     }
 }

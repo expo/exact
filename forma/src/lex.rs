@@ -11,6 +11,7 @@ use crate::Diagnostic;
 pub(crate) struct Line {
     pub indent: usize,
     pub text: String,
+    pub comment: Option<String>,
     pub line: u32,
     /// The column of `text`'s first character, 1-based.
     pub col: u32,
@@ -22,7 +23,8 @@ pub(crate) fn lines(src: &str) -> (Vec<Line>, Vec<Diagnostic>) {
     let mut errors = Vec::new();
     for (i, raw) in src.lines().enumerate() {
         let line = i as u32 + 1;
-        let body = strip_comment(raw).trim_end();
+        let (body, comment) = split_comment(raw);
+        let body = body.trim_end();
         let text = body.trim_start_matches(' ');
         if text.is_empty() {
             continue;
@@ -40,6 +42,7 @@ pub(crate) fn lines(src: &str) -> (Vec<Line>, Vec<Diagnostic>) {
         out.push(Line {
             indent,
             text: text.to_string(),
+            comment: comment.map(str::to_owned),
             line,
             col: indent as u32 + 1,
         });

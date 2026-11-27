@@ -208,6 +208,8 @@ struct Sheet {
     /// ancestors it is lifted out of, and keeps as it slides out; `None`
     /// follows the session's.
     scheme: Option<bool>,
+    /// The sheet route's projected top app bar picture, kept for `Closing`.
+    bar: Option<Rc<Tape>>,
 }
 
 /// A sheet whose route has gone, sliding out of the window.
@@ -223,6 +225,7 @@ struct Closing {
     /// What a predictive Back had shrunk it to.
     scale: f32,
     scheme: Option<bool>,
+    bar: Option<Rc<Tape>>,
 }
 
 /// A route crossing.
@@ -422,6 +425,13 @@ impl<D: DataSource> Presenter<D> {
         sheet_span(self.viewport.0)
     }
 
+    /// Where the stage shows the sheet `modal` opened, its left edge and top
+    /// in the page, points, while it shows one.
+    pub(super) fn sheet_origin(&self, modal: NodeKey) -> Option<(f32, f32)> {
+        let sheet = self.stage.sheets.iter().find(|s| s.modal == modal)?;
+        Some((self.sheet_span().0, self.sheet_top_now(sheet)))
+    }
+
     fn sheet_top_now(&self, sheet: &Sheet) -> f32 {
         let now = self.host.now();
         match &self.stage.gesture {
@@ -510,6 +520,7 @@ impl<D: DataSource> Presenter<D> {
                     from,
                     scale,
                     scheme: sheet.scheme,
+                    bar: sheet.bar,
                 });
             }
             if matches!(&self.stage.gesture, Some(touch::Gesture::Drag { modal, .. }) if *modal == sheet.modal)
@@ -629,6 +640,7 @@ impl<D: DataSource> Presenter<D> {
                         handle,
                         covered,
                         scheme,
+                        bar: None,
                     });
                 }
             }
@@ -844,9 +856,18 @@ impl<D: DataSource> Presenter<D> {
         if still {
             return;
         }
-        let bar = (self.stage.bar.as_ref())
-            .filter(|(route, ..)| route == old && sheet.is_none())
-            .map(|(_, tape, frame)| (tape.clone(), *frame));
+        let bar = match sheet {
+            None => (self.stage.bar.as_ref())
+                .filter(|(route, ..)| route == old)
+                .map(|(_, tape, frame)| (tape.clone(), *frame)),
+            Some(modal) => self
+                .stage
+                .sheets
+                .iter()
+                .find(|s| s.modal == modal)
+                .and_then(|s| s.bar.clone())
+                .map(|tape| (tape, (0.0, 0.0, 0.0, 0.0))),
+        };
         self.stage.shift = Some(Shift {
             forward,
             outgoing: *old,
@@ -944,6 +965,44 @@ impl<D: DataSource> Presenter<D> {
     /// Whether a sheet is open in front.
     pub(crate) fn sheet_open(&self) -> bool {
         self.stage_presents() && self.front_sheets().next().is_some()
+    }
+
+    pub(super) fn sheet_bar_slots(
+        &self,
+    ) -> (f32, Option<NodeKey>, Vec<(NodeKey, NodeKey)>, Vec<NodeKey>) {
+        let (_, width) = self.sheet_span();
+        let top_modal = self.front_sheets().last().map(|s| s.modal);
+        let sheets = self
+            .stage
+            .sheets
+            .iter()
+            .map(|s| (s.modal, s.shown))
+            .collect();
+        let crossing = (self.stage.shift.as_ref())
+            .filter(|s| s.sheet.is_some())
+            .map(|s| [s.outgoing, s.incoming])
+            .into_iter()
+            .flatten()
+            .chain(
+                self.stage
+                    .preview
+                    .as_ref()
+                    .and_then(|p| p.pair())
+                    .into_iter()
+                    .flat_map(|(o, i)| [o, i]),
+            )
+            .collect();
+        (width, top_modal, sheets, crossing)
+    }
+
+    pub(super) fn set_sheet_bar(&mut self, modal: NodeKey, bar: Option<Rc<Tape>>) {
+        if let Some(sheet) = self.stage.sheets.iter_mut().find(|s| s.modal == modal) {
+            sheet.bar = bar;
+        }
+    }
+
+    pub(super) fn top_sheet_handle(&self) -> f32 {
+        self.front_sheets().last().map_or(0.0, |s| s.handle)
     }
 
     /// The route the top sheet shows, and its frame (x, top, width, the
@@ -1112,7 +1171,8 @@ impl<D: DataSource> Presenter<D> {
                 .items
                 .push(Item::Picture(tape.clone(), self.window_to_page(*frame)));
         }
-        self.stage_sheets(&mut stage, now);
+        let crossing_bars = self.prepare_sheet_bars();
+        self.stage_sheets(&mut stage, now, &crossing_bars);
         stage
     }
 
@@ -1211,7 +1271,12 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Each open sheet over its scrim, then the sheets sliding out.
-    fn stage_sheets(&self, stage: &mut Stage, now: f64) {
+    fn stage_sheets(
+        &self,
+        stage: &mut Stage,
+        now: f64,
+        crossing_bars: &std::collections::BTreeMap<NodeKey, Rc<Tape>>,
+    ) {
         let kernel = self.host.kernel();
         let (w, h) = self.viewport;
         let page = self.chrome().frame;
@@ -1293,6 +1358,13 @@ impl<D: DataSource> Presenter<D> {
                     for (key, pose) in order {
                         let ts = ts.pre_concat(pose.transform((0.0, 0.0)));
                         items.push(Item::Opacity(pose.opacity));
+                        let route_bar = crossing_bars.get(&key).cloned().or_else(|| {
+                            self.stage
+                                .shift
+                                .as_ref()
+                                .filter(|s| s.sheet == Some(sheet.modal) && s.outgoing == key)
+                                .and_then(|s| s.bar.as_ref().map(|(t, _)| t.clone()))
+                        });
                         match kernel.node_by_key(key) {
                             Some(n) => {
                                 stage.skip.push(n.id);
@@ -1304,6 +1376,9 @@ impl<D: DataSource> Presenter<D> {
                                 });
                             }
                             None => items.push(Item::Taped(key, ts)),
+                        }
+                        if let Some(tape) = route_bar {
+                            items.push(Item::Picture(tape, ts.pre_translate(0.0, sheet.handle)));
                         }
                         items.push(Item::PopOpacity);
                     }
@@ -1317,6 +1392,12 @@ impl<D: DataSource> Presenter<D> {
                         ts,
                         tape,
                     });
+                    if let Some(tape) = &sheet.bar {
+                        items.push(Item::Picture(
+                            tape.clone(),
+                            ts.pre_translate(0.0, sheet.handle),
+                        ));
+                    }
                 }
             }
             if sheet.handle > 0.0 {
@@ -1350,6 +1431,12 @@ impl<D: DataSource> Presenter<D> {
                 .sheets
                 .push(Item::Fill(shape, container(None, dark), ts));
             stage.sheets.push(Item::Taped(closing.shown, ts));
+            if let Some(tape) = &closing.bar {
+                stage.sheets.push(Item::Picture(
+                    tape.clone(),
+                    ts.pre_translate(0.0, closing.handle),
+                ));
+            }
             if closing.handle > 0.0 {
                 stage.sheets.push(grip(closing.width, dark, ts));
             }

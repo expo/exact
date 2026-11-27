@@ -256,7 +256,10 @@ fn six_reads_at_the_unsaid_ceiling_overlap_and_the_seventh_waits() {
             assert_eq!(server.state.0.lock().unwrap().held.len(), 6);
             assert_eq!(state.running.len(), 6);
             assert_eq!(state.jobs[0].front().unwrap().ticket, 7);
-            assert_eq!(state.ordered, (1..=7).collect::<VecDeque<_>>());
+            assert_eq!(
+                state.ordered.iter().map(|e| e.ticket).collect::<Vec<_>>(),
+                (1..=7).collect::<Vec<_>>()
+            );
             assert_eq!(state.counts, [7, 0]);
             assert!(state.bytes[0] < 7 * MAX_BODY);
             assert_eq!(state.bytes[1], 0);
@@ -273,7 +276,10 @@ fn six_reads_at_the_unsaid_ceiling_overlap_and_the_seventh_waits() {
             server.reply(ticket, b"done");
         }
         let done = collect(&core, &woke, 7);
-        assert_eq!(tickets(&done), (1..=7).collect::<Vec<_>>());
+        assert_eq!(done[0].0, 1);
+        let mut got = tickets(&done);
+        got.sort_unstable();
+        assert_eq!(got, (1..=7).collect::<Vec<_>>());
         assert!(done.iter().all(|(_, o)| matches!(o, Outcome::Response(_))));
         assert!(core.ordered_idle());
         wait_state(&core, |s| s.bytes == [0, 0]);
@@ -282,7 +288,7 @@ fn six_reads_at_the_unsaid_ceiling_overlap_and_the_seventh_waits() {
 }
 
 #[test]
-fn replies_released_in_reverse_order_drain_in_admission_order() {
+fn replies_released_in_reverse_order_drain_on_arrival() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let (core, woke) = server.core(asynchronous);
@@ -294,14 +300,13 @@ fn replies_released_in_reverse_order_drain_in_admission_order() {
             core.run(r, None).unwrap();
         }
         server.seen(&[30, 10, 20]);
-        for ticket in [20, 10] {
-            server.reply(ticket, b"");
-            completed(&core, ticket);
-            assert!(core.drain().is_empty());
-            assert!(!core.ordered_idle());
+        let mut drained = Vec::new();
+        for ticket in [20, 10, 30] {
+            server.reply(ticket, if ticket == 30 { b"first" } else { b"" });
+            drained.extend(tickets(&collect(&core, &woke, 1)));
         }
-        server.reply(30, b"first");
-        assert_eq!(tickets(&collect(&core, &woke, 3)), [30, 10, 20]);
+        assert_eq!(drained, [20, 10, 30]);
+        assert!(core.ordered_idle());
         assert!(server
             .state
             .0
@@ -317,10 +322,13 @@ fn a_read_held_behind_an_earlier_reply_reports_its_delivery_wait() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let (core, _) = server.core(asynchronous);
-        for ticket in [1, 2] {
-            core.run(read_job(&server, ticket), None).unwrap();
-        }
-        server.seen(&[1, 2]);
+        core.run(job(1, server.post(1), RequestClass::Ordered), None)
+            .unwrap();
+        core.run(read_job(&server, 2), None).unwrap();
+        server.seen(&[1]);
+        server.reply(1, b"first");
+        completed(&core, 1);
+        server.seen(&[2]);
         server.reply(2, b"second");
         completed(&core, 2);
         let (finished_at, elapsed_ms) = {
@@ -330,10 +338,6 @@ fn a_read_held_behind_an_earlier_reply_reports_its_delivery_wait() {
         };
         let hold = Duration::from_millis(375);
         let now = finished_at + hold;
-        assert!(core.drain_with_clock(|| now).is_empty());
-        server.reply(1, b"first");
-        completed(&core, 1);
-        let now = now.max(Instant::now());
         assert_eq!(core.drain_with_clock(|| now)[0].0, 1);
         let (ticket, outcome, timing) = core.drain_with_clock(|| now).pop().unwrap();
         assert_eq!(ticket, 2);
@@ -423,7 +427,7 @@ fn reads_keep_posts_storage_work_and_handoffs_in_their_places() {
         reply.send(Outcome::Storage(vec![7]));
         server.reply(8, b"eight");
         let done = collect(&core, &woke, 8);
-        assert_eq!(tickets(&done), (1..=8).collect::<Vec<_>>());
+        assert_eq!(tickets(&done), [2, 1, 3, 4, 5, 6, 7, 8]);
         assert!(matches!(
             done[2].1,
             Outcome::Failed {
@@ -489,14 +493,12 @@ fn short_ordered_bytes_wait_without_stalling_an_earlier_read_or_its_delivery() {
         server.reply(2, &vec![42; size]);
         completed(&core, 2);
         assert_queued(&core, 3);
-        assert!(core.drain().is_empty());
-        server.reply(1, b"slow");
-        server.seen(&[3]);
-        server.reply(3, b"last");
-        let done = collect(&core, &woke, 3);
-        assert_eq!(tickets(&done), [1, 2, 3]);
-        let Outcome::Response(reply) = &done[1].1 else {
-            panic!("{:?}", done[1]);
+        // Ticket 2 completes and drains while ticket 1 is still held; its
+        // buffer stays exact-sized/bounded and freeing it lets ticket 3 start.
+        let second = collect(&core, &woke, 1);
+        assert_eq!(tickets(&second), [2]);
+        let Outcome::Response(reply) = &second[0].1 else {
+            panic!("{:?}", second[0]);
         };
         assert_eq!(reply.body.len(), size);
         assert!(reply.body.capacity() <= MAX_BODY);
@@ -506,6 +508,13 @@ fn short_ordered_bytes_wait_without_stalling_an_earlier_read_or_its_delivery() {
             assert_eq!(reply.body.capacity(), size);
         }
         assert!(reply.body.iter().all(|b| *b == 42));
+        server.seen(&[3]);
+        server.reply(1, b"slow");
+        server.reply(3, b"last");
+        let rest = collect(&core, &woke, 2);
+        let mut rest_tickets = tickets(&rest);
+        rest_tickets.sort_unstable();
+        assert_eq!(rest_tickets, [1, 3]);
         wait_state(&core, |s| s.bytes == [held, 0]);
         let mut state = core.shared.state.lock().unwrap();
         assert_eq!(state.bytes, [held, 0]);
@@ -552,16 +561,18 @@ fn a_reads_deadline_covers_neither_its_queue_wait_nor_its_completed_wait() {
         server.reply(4, b"in");
         completed(&core, 4);
         pass_deadline();
-        assert!(core.drain().is_empty());
+        let fourth = collect(&core, &woke, 1);
+        assert_eq!(tickets(&fourth), [4]);
+        assert!(matches!(fourth[0].1, Outcome::Response(_)));
         server.reply(3, b"slow");
-        let done = collect(&core, &woke, 2);
-        assert_eq!(tickets(&done), [3, 4]);
-        assert!(done.iter().all(|(_, o)| matches!(o, Outcome::Response(_))));
+        let third = collect(&core, &woke, 1);
+        assert_eq!(tickets(&third), [3]);
+        assert!(matches!(third[0].1, Outcome::Response(_)));
     }
 }
 
 #[test]
-fn a_read_that_times_out_delivers_failure_in_its_ordered_place() {
+fn a_read_that_times_out_delivers_failure_without_waiting_on_a_held_read() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let (core, woke) = server.core(asynchronous);
@@ -572,17 +583,19 @@ fn a_read_that_times_out_delivers_failure_in_its_ordered_place() {
         // Its deadline may pass before the transport has sent it.
         server.seen(&[1]);
         completed(&core, 2);
-        assert!(core.drain().is_empty());
-        server.reply(1, b"first");
-        let done = collect(&core, &woke, 2);
-        assert_eq!(tickets(&done), [1, 2]);
+        let timed = collect(&core, &woke, 1);
+        assert_eq!(tickets(&timed), [2]);
         assert!(matches!(
-            done[1].1,
+            timed[0].1,
             Outcome::Failed {
                 kind: FailureKind::Timeout,
                 ..
             }
         ));
+        server.reply(1, b"first");
+        let first = collect(&core, &woke, 1);
+        assert_eq!(tickets(&first), [1]);
+        assert!(matches!(first[0].1, Outcome::Response(_)));
         assert!(core.ordered_idle());
     }
 }
@@ -720,10 +733,15 @@ fn a_waiting_post_read_is_admitted_on_an_out_of_order_completion_wake() {
         woke.recv_timeout(HANG)
             .expect("a freed effect slot wakes the host");
         core.begin_pump();
-        assert!(core.drain().is_empty(), "ticket 1 still holds delivery");
+        let mut done: Vec<_> = core
+            .drain()
+            .into_iter()
+            .map(|(ticket, outcome, _)| (ticket, outcome))
+            .collect();
+        assert_eq!(tickets(&done), [2]);
         {
             let state = core.shared.state.lock().unwrap();
-            assert!(state.ordered.contains(&17));
+            assert!(state.ordered.iter().any(|entry| entry.ticket == 17));
             assert_eq!(state.fenced.front().unwrap().ticket(), 18);
         }
         for ticket in 3..=16 {
@@ -734,7 +752,6 @@ fn a_waiting_post_read_is_admitted_on_an_out_of_order_completion_wake() {
         assert!(server.state.0.lock().unwrap().held.contains_key(&1));
         server.reply(17, b"post");
         server.reply(1, b"first");
-        let mut done = Vec::new();
         for count in [17, 18] {
             if count == 18 {
                 server.seen(&[18]);
@@ -750,7 +767,9 @@ fn a_waiting_post_read_is_admitted_on_an_out_of_order_completion_wake() {
                 );
             }
         }
-        assert_eq!(tickets(&done), (1..=18).collect::<Vec<_>>());
+        let mut got = tickets(&done);
+        got.sort_unstable();
+        assert_eq!(got, (1..=18).collect::<Vec<_>>());
         assert!(done
             .iter()
             .all(|(_, outcome)| matches!(outcome, Outcome::Response(_))));
@@ -759,7 +778,7 @@ fn a_waiting_post_read_is_admitted_on_an_out_of_order_completion_wake() {
 }
 
 #[test]
-fn a_refusal_from_waiting_admission_wakes_even_when_no_reply_can_drain() {
+fn a_refusal_from_waiting_admission_wakes_and_reports_the_deferred_refusal() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let (core, woke) = server.core(asynchronous);
@@ -777,13 +796,15 @@ fn a_refusal_from_waiting_admission_wakes_even_when_no_reply_can_drain() {
         core.notify();
         woke.recv_timeout(HANG).expect("the host pumps");
         core.begin_pump();
-        assert!(core.drain().is_empty(), "ticket 1 still holds delivery");
-        woke.recv_timeout(HANG).expect("the deferred refusal wakes");
         assert_eq!(
             core.resume_ordered(),
-            [(129, "native executor admission limit reached")]
+            [(
+                129,
+                "129 ordered requests requested (128 in use, maximum 128)".into()
+            )]
         );
         assert!(core.resume_ordered().is_empty());
+        assert_eq!(core.drain().len(), 1);
         core.forget(|_| false);
         wait_state(&core, |s| s.counts[0] == 0);
         assert!(core.ordered_idle());
@@ -801,7 +822,7 @@ fn read_admission_forgetting_and_the_refusal_fence_stay_on_the_ordered_lane() {
         server.seen(&[1, 2, 3, 4, 5, 6]);
         assert_eq!(
             core.run(read_job(&server, 129), None),
-            Err("native executor admission limit reached")
+            Err("129 ordered requests requested (128 in use, maximum 128)".into())
         );
         core.run(read_job(&server, 130), None).unwrap();
         assert_eq!(
@@ -881,7 +902,14 @@ fn reads_and_parallel_sends_wait_for_a_handoff_to_be_made_but_not_completed() {
             assert_eq!(tickets(&collect(&core, &woke, 1)), [1]);
             assert!(core.drain().is_empty());
             reply.send(Outcome::Storage(vec![2]));
-            assert_eq!(tickets(&collect(&core, &woke, 3)), [2, 3, 4]);
+            assert_eq!(
+                tickets(&collect(&core, &woke, 3)),
+                if class == RequestClass::Read {
+                    [2, 4, 3]
+                } else {
+                    [2, 3, 4]
+                }
+            );
         }
     }
 }
@@ -928,7 +956,11 @@ fn twenty_four_post_reads_wait_at_sixteen_and_drain_in_order_without_a_refusal()
                 assert!(!state.ordered_barrier);
             }
         }
-        assert_eq!(tickets(&done), (1..=24).collect::<Vec<_>>());
+        let expected: Vec<u64> = [1u64, 7, 13, 19]
+            .into_iter()
+            .flat_map(|first| (first..first + 6).rev())
+            .collect();
+        assert_eq!(tickets(&done), expected);
         assert!(done.iter().all(|(_, o)| matches!(o, Outcome::Response(_))));
         server.seen(&[25]);
         assert_queued(&core, 26);
@@ -1116,7 +1148,7 @@ fn a_seventeenth_parallel_send_is_refused_and_forgotten_sends_still_run() {
         server.seen(&[1, 2, 3]);
         assert_eq!(
             core.run(job(17, server.post(17), RequestClass::Parallel(0)), None),
-            Err("native executor admission limit reached")
+            Err("17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into())
         );
         core.forget(|_| false);
         for ticket in 1..=16 {
@@ -1208,4 +1240,171 @@ fn held_portable_workers_at_other_origins_leave_the_ordered_read_and_send_free()
         .all(|s| s.state.0.lock().unwrap().held.len() == 1));
     core.forget(|_| false);
     wait_state(&core, |s| s.running.is_empty() && s.bytes == [0, 0]);
+}
+
+/// Local continuations (`RequestClass::Local`) run on worker 0 and deliver
+/// while all six shared workers are occupied by held HTTP reads, stay FIFO
+/// with each other, and still respect an earlier `Ordered` send barrier.
+#[test]
+fn local_continuations_pass_six_held_reads_stay_fifo_and_respect_ordered_barriers() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, woke) = server.core(asynchronous);
+        for ticket in 1..=6 {
+            core.run(read_job(&server, ticket), None).unwrap();
+        }
+        server.seen(&[1, 2, 3, 4, 5, 6]);
+
+        // Two local continuations run FIFO on worker 0 while 1..=6 are held.
+        struct LocalWork;
+        impl exact_runner::HostWork for LocalWork {
+            const LOCAL: bool = true;
+        }
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (started_7, wait_7) = channel();
+        let (release_7, hold_7) = channel();
+        let order_7 = order.clone();
+        let local_7 = job(
+            7,
+            Request::continuation::<LocalWork>(7),
+            RequestClass::Local,
+        );
+        core.run(
+            local_7,
+            Some(Box::new(move || {
+                order_7.lock().unwrap().push(7);
+                let _ = started_7.send(());
+                let _ = hold_7.recv_timeout(HANG);
+                Outcome::Storage(vec![7])
+            })),
+        )
+        .unwrap();
+        let order_8 = order.clone();
+        let local_8 = job(
+            8,
+            Request::continuation::<LocalWork>(8),
+            RequestClass::Local,
+        );
+        core.run(
+            local_8,
+            Some(Box::new(move || {
+                order_8.lock().unwrap().push(8);
+                Outcome::Storage(vec![8])
+            })),
+        )
+        .unwrap();
+
+        wait_7
+            .recv_timeout(HANG)
+            .expect("local continuation 7 must start while 6 reads are held");
+        assert_eq!(*order.lock().unwrap(), [7], "local 8 stays FIFO behind 7");
+        release_7.send(()).unwrap();
+        let locals = collect(&core, &woke, 2);
+        assert_eq!(tickets(&locals), [7, 8]);
+        assert_eq!(*order.lock().unwrap(), [7, 8]);
+
+        // An Ordered POST barrier after held reads blocks a later Local continuation.
+        core.run(job(9, server.post(9), RequestClass::Ordered), None)
+            .unwrap();
+        let local_10 = job(
+            10,
+            Request::continuation::<LocalWork>(10),
+            RequestClass::Local,
+        );
+        core.run(local_10, Some(Box::new(|| Outcome::Storage(vec![10]))))
+            .unwrap();
+        assert!(
+            core.drain().is_empty(),
+            "local 10 must wait behind ordered POST 9"
+        );
+
+        for ticket in 1..=6 {
+            server.reply(ticket, b"read");
+        }
+        let reads_done = collect(&core, &woke, 6);
+        let mut got = tickets(&reads_done);
+        got.sort_unstable();
+        assert_eq!(got, [1, 2, 3, 4, 5, 6]);
+        server.seen(&[9]);
+        assert!(
+            core.drain().is_empty(),
+            "local 10 still waits while POST 9 runs"
+        );
+        server.reply(9, b"post");
+        let tail = collect(&core, &woke, 2);
+        assert_eq!(tickets(&tail), [9, 10]);
+        assert!(core.ordered_idle());
+    }
+}
+
+#[test]
+fn batched_read_completions_drain_in_completion_order() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, woke) = server.core(asynchronous);
+        core.run(read_job(&server, 1), None).unwrap();
+        core.run(read_job(&server, 2), None).unwrap();
+        server.seen(&[1, 2]);
+        // Complete 2 first, wait until 2 is in `completed[0]`, then complete 1
+        // before draining so both are ready in the same pump.
+        let wait_completed = |ticket: u64| {
+            let deadline = std::time::Instant::now() + HANG;
+            while !core.shared.state.lock().unwrap().completed[0]
+                .iter()
+                .any(|d| d.ticket == ticket)
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "ticket {ticket} did not reach completed[0]"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        server.reply(2, b"second");
+        wait_completed(2);
+        server.reply(1, b"first");
+        wait_completed(1);
+        let got = collect(&core, &woke, 2);
+        assert_eq!(tickets(&got), [2, 1]);
+        assert!(core.ordered_idle());
+    }
+}
+
+#[test]
+fn forgotten_handoff_releases_tombstone_when_hand_returns() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, woke) = server.core(asynchronous);
+        let (entered, entering) = channel();
+        let (release_hand, hold_hand) = channel();
+        let (handed, replies) = channel();
+        core.run_owned(
+            job(
+                1,
+                Request::continuation::<TestWork>(1),
+                RequestClass::Ordered,
+            ),
+            Some(OwnedWork::Later(Box::new(move |reply| {
+                entered.send(()).unwrap();
+                hold_hand.recv_timeout(HANG).unwrap();
+                handed.send(reply).unwrap();
+            }))),
+        )
+        .unwrap();
+        entering.recv_timeout(HANG).unwrap();
+        core.again(2, RequestClass::Local).unwrap();
+        // Forget handoff 1 while `hand` is still executing.
+        core.forget(|ticket| ticket != 1);
+        assert!(
+            core.drain().is_empty(),
+            "re-ask 2 waits while forgotten handoff 1's hand() is running"
+        );
+        release_hand.send(()).unwrap();
+        let reply = replies.recv_timeout(HANG).unwrap();
+        // Once `hand` returns, the tombstone drops and re-ask 2 drains before `reply` settles.
+        let got = collect(&core, &woke, 1);
+        assert_eq!(tickets(&got), [2]);
+        reply.send(Outcome::Storage(vec![1]));
+        wait_state(&core, |s| s.counts == [0, 0]);
+    }
 }

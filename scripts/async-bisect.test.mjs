@@ -31,7 +31,9 @@ test('only a finished probe can clear a failure; a failure it found still counts
   expect(probeOutcomes({ failures: [], checks: { test: { complete: true, status: 1 } } }, ['test: absent'])).toEqual({ 'test: absent': 'pass' });
 });
 
-import { checkout, withLaneEdits, run as runCheck, failureSelection, nothing, probeSteps, extraChecks, checks, fullCoverage, covers, failureAffected, failures, retainSkippedFailures } from './async.mjs';
+import { checkout, withLaneEdits, run as runCheck, failureSelection, nothing, probeSteps, extraChecks, checks, fullCoverage, hostFullCoverage, shouldRunFull, nextFullState, gatedOutcome, covers, failureAffected, failures, retainSkippedFailures } from './async.mjs';
+import { Store, fingerprint } from './async-inputs.mjs';
+import { stoppedEarly } from './known.mjs';
 
 test('a byte-budget row is a new failure at each further step over its ceiling, and not at a step down', async () => {
   const row = (over) => failures('metrics', `  iOS: hello app, optimized for size   12.69 MB   production; budget 12,590,000 B, 12,690,000 B VIOLATION by ${over} MB\n`, 1)[0];
@@ -272,5 +274,72 @@ test('only a workspace test check covering the owner clears its earlier failure'
     const result = { checks: { test: { status: 0, complete: true, covers: [`cargo:${owner}`] } }, failures: [] };
     retainSkippedFailures([failure], result, { [failure]: ['cargo:one'] });
     expect(result.failures).toEqual(owner === 'one' ? [] : [failure]);
+  }
+});
+
+test('a macOS full sweep advances daily scheduling despite other-OS notRun steps and absent vm-extract', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'exact-lane-schedule-')), log = join(root, 'check.log');
+  const fd = openSync(log, 'w');
+  try {
+    const otherHost = process.platform === 'win32' ? 'linux' : 'windows';
+    const extra = extraChecks([
+      { suite: { kind: 'app', app: 'shelf', host: otherHost, files: ['apps/shelf/screen.test.contract'] } },
+    ], []);
+    const fullSteps = checks('tip', 'base', { full: true, glue: [], extra });
+    const otherOs = fullSteps.filter(step => step[3]?.platform && step[3].platform !== process.platform);
+    expect(otherOs.length).toBeGreaterThan(0);
+    const checkResults = { test: { status: 0, complete: true }, 'vm-extract': { status: 77, complete: false } };
+    for (const [name, cmd, args, opts] of otherOs) {
+      checkResults[name] = { ...(await runCheck(cmd, args, process.env, fd, opts)), complete: false };
+    }
+    const result = { sha: 'abc12345', full: true, checks: checkResults };
+    expect(fullCoverage(result)).toBe(false);
+    expect(hostFullCoverage(result)).toBe(true);
+    const now = Date.parse('2026-11-25T12:00:00Z');
+    const state = { last: result.sha, ...nextFullState(result, new Date(now).toISOString()) };
+    expect(state.fullAt).toBe('2026-11-25T12:00:00.000Z');
+    expect(state.fullSha).toBe('abc12345');
+    // An hour later, idle ticks return early and commit ticks use affected selection instead of forcing full.
+    expect(shouldRunFull(state, { tier: 1, now: now + 3600_000 })).toBe(false);
+    expect(shouldRunFull(state, { tier: 1, now: now + 24 * 3600_000 })).toBe(true);
+    // An unexpected 77 on a host-applicable check still blocks hostFullCoverage.
+    expect(hostFullCoverage({ sha: 'abc', full: true, checks: { ...checkResults, test: { status: 77, complete: false } } })).toBe(false);
+  } finally { closeSync(fd); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a gated check exiting 0 with logged failures is recorded as fail, never cached as pass', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-lane-gate-fail-'));
+  try {
+    const log = 'EXPECT corpus/x.contract: line 1:1\n';
+    const found = failures('difftest-js', log, 0);
+    expect(found).toEqual(['difftest-js: EXPECT corpus/x.contract']);
+    const outcome = gatedOutcome(0, false, found);
+    expect(outcome).toBe('fail');
+    const store = new Store(dir), fp = fingerprint('sh', ['-c', 'difftest'], {}, { g: ['1'] });
+    store.record('difftest-js', fp, outcome, { sha: 'abc' });
+    expect(store.passed('difftest-js', fp)).toBeNull();
+    expect(gatedOutcome(0, false, [])).toBe('pass');
+    expect(gatedOutcome(77, false, [])).toBe('unavailable');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('difftest failure extraction captures ACCOUNTING, UNDECODED, OPCODES, EXPAND, STRUCTURE, and SKIPPED emit', () => {
+  const cases = [
+    ['ACCOUNTING 4: runner `a`, Lean `b`\n', 'difftest: ACCOUNTING 4'],
+    ['UNDECODED action inc: bad opcode  [corpus/a.contract:1]\n', 'difftest: UNDECODED action inc'],
+    ["OPCODES the plan's table differs from Vm.opcodes\n", "difftest: OPCODES the plan's table differs from Vm.opcodes"],
+    ['OPCODES 12: plan LoadConst [], lean Push []\n', 'difftest: OPCODES 12'],
+    ['OPCODES plan has 50, lean 49\n', 'difftest: OPCODES plan has 50, lean 49'],
+    ['EXPAND corpus/a.contract: the Lean expander refused it: bad\n', 'difftest: EXPAND corpus/a.contract'],
+    ['STRUCTURE corpus/a.contract: mismatch\n', 'difftest: STRUCTURE corpus/a.contract'],
+    ['SKIPPED corpus/a.contract: emit: unsupported\n', 'difftest: EMIT corpus/a.contract'],
+  ];
+  for (const [line, expected] of cases) {
+    const alone = failures('difftest', line, 1);
+    expect(alone).toEqual([expected]);
+    expect(stoppedEarly('difftest', alone)).toBe(false);
+    const paired = failures('difftest', `DIVERGE other: diff\n${line}`, 1);
+    expect(paired).toContain('difftest: DIVERGE other');
+    expect(paired).toContain(expected);
   }
 });

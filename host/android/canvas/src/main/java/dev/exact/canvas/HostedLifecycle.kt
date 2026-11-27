@@ -18,8 +18,16 @@ interface NativeModule {
     fun sizing(view: View, events: NativeViewSizing) {}
     /** Activity callbacks; CREATE receives saved state, SAVE_INSTANCE_STATE fills its private bundle (LLP 1133.021). */
     fun lifecycle(view: View, event: ViewLifecycle, state: android.os.Bundle? = null) {}
+    /** Drag axes this view claims over an ancestor `pan`, same-axis scroller or sheet (LLP 1133.008 D8 item 6).
+     * Bitmask of [DRAG_HORIZONTAL] and [DRAG_VERTICAL]; 0 preserves the default rule. */
+    fun dragAxes(view: View): Int = 0
     fun reset(view: View): Boolean = false
     fun destroy(view: View) {}
+
+    companion object {
+        const val DRAG_HORIZONTAL = 1
+        const val DRAG_VERTICAL = 2
+    }
 }
 
 /** The app's optional module roster, compiled from `modules/android` as `class exact.app.Modules`. */

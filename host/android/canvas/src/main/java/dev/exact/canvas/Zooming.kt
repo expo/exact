@@ -141,8 +141,9 @@ internal class Zooming(private val view: ExactView, private val host: Host) {
         return caught
     }
 
-    /** [e], an event after the touch's down: whether it is this one's. */
-    fun touch(e: MotionEvent): Boolean {
+    /** [e], an event after the touch's down: whether it is this one's. [disallowPan] holds off single-finger
+     * panning while a hosted view keeps its drag ([Contacts]). */
+    fun touch(e: MotionEvent, disallowPan: Boolean = false): Boolean {
         if (target == null) return false
         tracker?.addMovement(e)
         scale.onTouchEvent(e)
@@ -150,6 +151,7 @@ internal class Zooming(private val view: ExactView, private val host: Host) {
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
                 if (scaling || e.pointerCount > 1) return owns
+                if (!panning && disallowPan) return false
                 val i = e.findPointerIndex(pointer).takeIf { it >= 0 } ?: 0.also { pointer = e.getPointerId(0) }
                 val x = e.getX(i); val y = e.getY(i)
                 if (!panning && pans && !doubled && (owns || hypot(x - downX, y - downY) > slop)) {

@@ -11,6 +11,8 @@ use crate::{BOLD, CODE, IMAGE, ITALIC, LINK, STRIKE};
 const NO_CODE: usize = usize::MAX - 1;
 // Beyond this depth a link label stays literal; source text is never discarded.
 const MAX_LABEL_DEPTH: usize = 32;
+// CommonMark 0.31.2 §6.3 asks for at least three levels.
+const MAX_DESTINATION_DEPTH: usize = 32;
 
 pub(crate) struct Mark {
     pub range: B,
@@ -204,11 +206,46 @@ pub(crate) fn angle_destination(
         return None;
     }
     let target = cs[start + 1].0..cs[end].0;
-    let mut close = end + 1;
+    Some((title_end(cs, end + 1, hi)?, target))
+}
+
+/// The link's `)`, and the destination outside `<…>` that white space ends.
+/// `None` leaves the link to [`Scanner::destination_end`].
+pub(crate) fn titled_destination(
+    cs: &[(usize, char)],
+    start: usize,
+    hi: usize,
+) -> Option<(usize, B)> {
+    // Each unclosed link before a character is a level open there, so the
+    // bound on depth also bounds how many links read that character.
+    let mut depth = 0;
+    let mut end = start;
+    while end < hi && !cs[end].1.is_whitespace() {
+        match cs[end].1 {
+            '\\' if end + 1 < hi && cs[end + 1].1.is_ascii_punctuation() => end += 1,
+            '(' if depth == MAX_DESTINATION_DEPTH => return None,
+            '(' => depth += 1,
+            ')' if depth == 0 => return None,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        end += 1;
+    }
+    if end == start || end == hi || depth > 0 {
+        return None;
+    }
+    Some((title_end(cs, end, hi)?, cs[start].0..cs[end].0))
+}
+
+/// The link's `)`, after white space and a title, if any, from its destination's
+/// end. A failed title stops at the next opener of its kind, which bounds failed
+/// scans across links.
+fn title_end(cs: &[(usize, char)], end: usize, hi: usize) -> Option<usize> {
+    let mut close = end;
     while close < hi && matches!(cs[close].1, ' ' | '\t' | '\n' | '\r') {
         close += 1;
     }
-    if close < hi && close > end + 1 && cs[close].1 != ')' {
+    if close < hi && close > end && cs[close].1 != ')' {
         let delimiter = match cs[close].1 {
             '\'' => '\'',
             '"' => '"',
@@ -234,7 +271,7 @@ pub(crate) fn angle_destination(
             close += 1;
         }
     }
-    (close < hi && cs[close].1 == ')').then_some((close, target))
+    (close < hi && cs[close].1 == ')').then_some(close)
 }
 
 pub(crate) fn decode_destination(target: &str) -> Cow<'_, str> {
@@ -310,7 +347,10 @@ impl Scanner<'_> {
                 '<' => self.autolink(i, hi, &mut autolink_end),
                 '!' if i + 1 < hi && self.ch(i + 1) == '[' => self.bracket(i + 1, hi, true, depth),
                 '[' => self.bracket(i, hi, false, depth),
-                'h' if i == lo || self.ch(i - 1).is_whitespace() || self.ch(i - 1) == '(' => {
+                // Past depth 0 is a link's label, where GFM links no bare URL.
+                'h' if depth == 0
+                    && (i == lo || self.ch(i - 1).is_whitespace() || self.ch(i - 1) == '(') =>
+                {
                     self.bare_url(i, hi)
                 }
                 '*' | '_' | '~' => {
@@ -473,6 +513,8 @@ impl Scanner<'_> {
         }
         let (k, href) = if start < hi && self.ch(start) == '<' {
             let (k, target) = angle_destination(&self.cs, start, hi)?;
+            (k, &self.source[target])
+        } else if let Some((k, target)) = titled_destination(&self.cs, start, hi) {
             (k, &self.source[target])
         } else {
             let k = self.destination_end(j + 1, hi)?;

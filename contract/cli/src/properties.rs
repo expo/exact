@@ -1,7 +1,7 @@
 //! Authored tests and property read validation.
 
 use crate::CompileError;
-use contract_syntax::{PropertyDecl, Step, TestDecl};
+use contract_syntax::{PropertyDecl, Step, TestDecl, TicketAnswer};
 use std::path::Path;
 
 /// Parse properties without compiling an application.
@@ -72,7 +72,27 @@ pub fn check_test_substitutes(
             _ => None,
         })
         .collect();
-    if steps.is_empty() {
+    fn collect_tickets<'a>(
+        steps: &'a [Step],
+        out: &mut Vec<(&'a str, &'a TicketAnswer, contract_syntax::Span)>,
+    ) {
+        for step in steps {
+            match step {
+                Step::Ticket {
+                    target,
+                    answer,
+                    span,
+                } => out.push((target.as_str(), answer, *span)),
+                Step::Perf { steps, .. } => collect_tickets(steps, out),
+                _ => {}
+            }
+        }
+    }
+    let mut ticket_steps = Vec::new();
+    for test in &file.tests {
+        collect_tickets(&test.steps, &mut ticket_steps);
+    }
+    if steps.is_empty() && ticket_steps.is_empty() {
         return Ok(());
     }
     let built;
@@ -98,10 +118,96 @@ pub fn check_test_substitutes(
         }
     }
     check_launch_arrivals(plan, file, &mut errors);
+    check_test_tickets(plan, &ticket_steps, &mut errors);
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+/// Check authored held-ticket answers against package `choose` declarations linked into `plan`.
+/// Targets not declared as a package `choose` ticket (built-in host capabilities or picker ids)
+/// pass unchecked here and are matched at runtime by the driver.
+fn check_test_tickets(
+    plan: &exact_plan::Plan,
+    ticket_steps: &[(&str, &TicketAnswer, contract_syntax::Span)],
+    errors: &mut Vec<CompileError>,
+) {
+    use serde_json::Value;
+    use std::collections::{BTreeMap, BTreeSet};
+    if ticket_steps.is_empty() {
+        return;
+    }
+    let mut declared: BTreeMap<String, (BTreeSet<String>, bool)> = BTreeMap::new();
+    for row in &plan.modules {
+        let sub: Value = serde_json::from_str(plan.str(row.substitute)).unwrap_or_default();
+        let Some(choose) = sub.get("choose").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(ticket) = choose.get("ticket").and_then(Value::as_str) else {
+            continue;
+        };
+        let entry = declared.entry(ticket.to_owned()).or_default();
+        if let Some(choices) = choose.get("choices").and_then(Value::as_array) {
+            for c in choices.iter().filter_map(Value::as_str) {
+                entry.0.insert(c.to_owned());
+            }
+        }
+        if choose.get("typed").and_then(Value::as_bool).unwrap_or(true) {
+            entry.1 = true;
+        }
+    }
+    const BUILTIN_HOST_TICKETS: &[&str] = &[
+        "share",
+        "auth",
+        "presence",
+        "pick",
+        "open-file",
+        "open-directory",
+        "save-file",
+        "export",
+    ];
+    for &(target, answer, span) in ticket_steps {
+        if BUILTIN_HOST_TICKETS.contains(&target) {
+            continue;
+        }
+        let Some((choices, typed_allowed)) = declared.get(target) else {
+            continue;
+        };
+        let allowed = || {
+            let mut list: Vec<&str> = choices.iter().map(String::as_str).collect();
+            if !choices.contains("cancel") {
+                list.push("cancel");
+            }
+            list.join(", ")
+        };
+        match answer {
+            TicketAnswer::Choice(choice) => {
+                if choice != "cancel" && !choices.contains(choice.as_str()) {
+                    errors.push(crate::modules::error(
+                        "test-ticket-choice",
+                        format!(
+                            "tap \"@{target}\" {choice}: unknown choice for `@{target}`; expected one of: {}",
+                            allowed()
+                        ),
+                        span,
+                    ));
+                }
+            }
+            TicketAnswer::Text(_) => {
+                if !typed_allowed {
+                    errors.push(crate::modules::error(
+                        "test-ticket-choice",
+                        format!(
+                            "type \"@{target}\": `@{target}` takes a choice, not typed text; use `tap \"@{target}\" <choice>` ({})",
+                            allowed()
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
     }
 }
 

@@ -111,6 +111,9 @@ pub(crate) struct Folded {
     pub by_class: Vec<bool>,
     /// Each fold's sources, parallel to `by_class`, for the map.
     pub folds: Vec<Fold>,
+    /// Whether each folded `:disabled`/`:checked` row (`base_len..pressed`)
+    /// has an absent base arm and must keep an earlier implied row underneath.
+    pub fallbacks: Vec<bool>,
 }
 
 /// Where a folded row's value comes from (LLP 1122's queue item (2)):
@@ -222,12 +225,16 @@ fn longhands(row: &Attr) -> Result<Vec<(String, Expr)>, LowerError> {
         .collect())
 }
 
-/// The base's value for longhand `l`: the last of `base` that writes it,
-/// a shorthand's part for it (`border-color`, `border`, `border-top` …),
-/// with that attribute's index; `None` where none does.
+/// The authored base's value for longhand `l`: the last written attribute of
+/// `base` that writes it, a shorthand's part for it (`border-color`,
+/// `border`, `border-top` …), with that attribute's index; `None` where no
+/// authored row writes it (leaving any implied sheet or tag row underneath).
 fn base_of(base: &[Attr], l: &str) -> Result<Option<(Expr, usize)>, LowerError> {
     let mut out = None;
     for (i, a) in base.iter().enumerate() {
+        if !a.written {
+            continue;
+        }
         if a.name == l {
             out = Some((a.value.clone(), i));
             continue;
@@ -317,18 +324,6 @@ fn over(value: Expr, under: &Expr) -> Expr {
 /// The name a state's base is bound to where a `match` arm would hide it.
 const BASE: &str = "$state-base";
 
-/// Whether `e` names a metric the compiler writes anywhere in it (a grouped
-/// list's ground), which no author's row may.
-pub(crate) fn metric_in(e: &Expr) -> bool {
-    match e {
-        Expr::Str(t, _) => exact_kernel::style::metrics::named(t).is_some(),
-        Expr::Ternary(_, a, b, _) => metric_in(a) || metric_in(b),
-        Expr::Match { some, none, .. } => metric_in(some) || metric_in(none),
-        Expr::Let { body, .. } => metric_in(body),
-        _ => false,
-    }
-}
-
 /// Whether `e` is a choice with no value somewhere in it.
 fn unset_in(e: &Expr) -> bool {
     match e {
@@ -397,37 +392,17 @@ fn choose(condition: Expr, value: Expr, under: Expr, span: Span) -> Result<Expr,
         }))
 }
 
-/// The CSS name of a row a state takes, for a tag's fixed row.
-pub(crate) fn row_name(id: exact_kernel::StyleId) -> Option<&'static str> {
-    use exact_kernel::StyleId::*;
-    Some(match id {
-        TextColor => "color",
-        BackgroundColor => "background-color",
-        Opacity => "opacity",
-        BoxShadow => "box-shadow",
-        TintColor => "-exact-tint-color",
-        PressScale => "-exact-press-scale",
-        BorderColorTop => SIDES[0],
-        BorderColorRight => SIDES[1],
-        BorderColorBottom => SIDES[2],
-        BorderColorLeft => SIDES[3],
-        _ => return None,
-    })
-}
-
 impl Lowerer<'_> {
     /// Fold `expanded`'s state parts; `None` when it has none. `target` is
     /// which states the platform alone handles (all on other native controls,
-    /// non-press states on a native button or list row); `implied`
-    /// the rows the node takes when its author writes none (a link's text
-    /// colour), a base a state's row falls back to; `class_len` how many of
-    /// `expanded` are its sheet's and class's.
+    /// non-press states on a native button or list row); `class_len` how many
+    /// of `expanded` are its sheet's and class's.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn fold_states(
         &mut self,
         expanded: &[Attr],
         target: Option<StateTarget>,
-        implied: &[(&str, Expr)],
+        class_fallbacks: &std::collections::BTreeSet<(String, Span)>,
         class_len: usize,
         scope: &Scope,
         locals: u16,
@@ -538,9 +513,10 @@ impl Lowerer<'_> {
                 None => v,
             });
         }
-        // Each folded longhand: its value, where, written, and whether its
-        // class wrote every state row in it.
-        let mut folded: Vec<(String, Expr, Span, bool, bool, Fold)> = Vec::new();
+        // Each folded longhand: its value, where, written, whether its class
+        // wrote every state row in it, its sources, and whether its base may
+        // evaluate to `none` over an implied row.
+        let mut folded: Vec<(String, Expr, Span, bool, bool, Fold, bool)> = Vec::new();
         let mut looks: Vec<(String, Vec<Attr>)> = Vec::new();
         for (state, row, _) in &parts {
             if !matches!(*state, "disabled" | "checked" | "active") {
@@ -571,45 +547,34 @@ impl Lowerer<'_> {
             let Some(condition) = condition else { continue };
             for (_, row, class) in parts.iter().filter(|(s, ..)| *s == state) {
                 for (l, v) in longhands(row)? {
-                    let (under, by_class, mut fold) =
+                    let (under, by_class, mut fold, fallback) =
                         match folded.iter().rposition(|(n, ..)| *n == l) {
                             Some(i) => {
                                 let f = folded.remove(i);
-                                (f.1, f.4 && *class, f.5)
+                                (f.1, f.4 && *class, f.5, f.6)
                             }
-                            // The base's, else what the node takes unwritten (a
-                            // link's colour), else no row.
+                            // The authored base's, else `none` so any earlier
+                            // implied row (a link's colour, a grouped sheet)
+                            // stays underneath with `written = false`.
                             None => match base_of(&base, &l)? {
                                 Some((value, i)) => {
                                     let a = &base[i];
                                     let fold = Fold {
-                                        base: a.written.then(|| (a.span, a.name.clone())),
+                                        base: Some((a.span, a.name.clone())),
                                         parts: Vec::new(),
                                     };
-                                    (value, *class, fold)
+                                    let fallback =
+                                        class_fallbacks.contains(&(a.name.clone(), a.span));
+                                    (value, *class, fold, fallback)
                                 }
-                                None => {
-                                    let base = implied
-                                        .iter()
-                                        .rfind(|(n, _)| *n == l)
-                                        .map(|(_, e)| e.clone())
-                                        .unwrap_or(Expr::None(row.span));
-                                    (base, *class, Fold::default())
-                                }
+                                None => (Expr::None(row.span), *class, Fold::default(), true),
                             },
                         };
-                    // The author's row owns what it folds, unless its base is
-                    // a metric the compiler writes, which no author may (a
-                    // grouped list's ground): then the fold stays implied.
-                    let metric = metric_in(&under);
-                    if metric {
-                        fold.base = None;
-                    }
                     // (Two parts of one state each stay: a later one with a
                     // `none` arm, or over fewer sides, leaves the earlier's.)
                     fold.parts.push((state, row.span));
                     let value = choose(condition.clone(), v, under, row.span)?;
-                    folded.push((l, value, row.span, row.written && !metric, by_class, fold));
+                    folded.push((l, value, row.span, row.written, by_class, fold, fallback));
                 }
             }
         }
@@ -621,8 +586,8 @@ impl Lowerer<'_> {
             .count();
         let mut attrs = base;
         let base_len = attrs.len();
-        let (mut by_class, mut folds) = (Vec::new(), Vec::new());
-        for (name, value, span, written, class, fold) in folded {
+        let (mut by_class, mut folds, mut fallbacks) = (Vec::new(), Vec::new(), Vec::new());
+        for (name, value, span, written, class, fold, fallback) in folded {
             attrs.push(Attr {
                 name,
                 value,
@@ -631,6 +596,7 @@ impl Lowerer<'_> {
             });
             by_class.push(class);
             folds.push(fold);
+            fallbacks.push(fallback);
         }
         // `:active`'s rows as the press paint's, the class's then the
         // node's (the node's wins), each at its `:active` row's span.
@@ -656,6 +622,7 @@ impl Lowerer<'_> {
             pressed,
             by_class,
             folds,
+            fallbacks,
         }))
     }
 }

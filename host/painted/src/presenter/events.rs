@@ -180,6 +180,38 @@ impl<D: DataSource> Presenter<D> {
         true
     }
 
+    /// An unpartitioned iframe's `window.postMessage` string, for this
+    /// session and allocation (LLP 1020 §11; LLP 1156.008.001 B1).
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_frame_message(
+        &mut self,
+        id: ViewId,
+        key: exact_kernel::NodeKey,
+        session: u64,
+        text: &str,
+    ) -> bool {
+        if session != self.brush.native_session
+            || !self.host.kernel().node(id).is_some_and(|node| {
+                node.node_type == NodeType::WebView
+                    && node.key == key
+                    && node.props.str(PropId::Partition).is_none()
+            })
+            || !self
+                .host
+                .runner()
+                .handlers_of(id)
+                .contains(&EventKind::Message)
+        {
+            return false;
+        }
+        let dispatched = self.host.dispatch_now(id, Event::Message(text.to_owned()));
+        let committed = self.after_commit();
+        if let Some(error) = dispatched.or(committed) {
+            self.host.log(error);
+        }
+        true
+    }
+
     /// A record of the iframe for this session and allocation (LLP 1020.002 D2).
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_frame_event(
@@ -261,11 +293,12 @@ impl<D: DataSource> Presenter<D> {
         let Some(id) = self.focus else {
             return (false, None);
         };
-        // A control a commit disabled loses the focus, except under a TV
-        // remote, where there is nowhere else for it until an arrow moves it
-        // (remote_tests.rs), and where its route hid it too: the route's path
-        // below keeps it to restore (`route_focus.inert`).
-        if !self.remote() && self.focus_fixup(id) && !self.host.route_visibility(id).1 {
+        // A control a commit disabled or hid via CSS loses the focus (except a
+        // disabled control under a TV remote, where there is nowhere else for
+        // it until an arrow moves it; remote_tests.rs), unless its route hid it
+        // too, in which case the route's path below keeps it to restore
+        // (`route_focus.inert`).
+        if self.focus_fixup(id) && !self.host.route_visibility(id).1 {
             return self.blur_disabled_focus(id);
         }
         // A hidden `portal` mover is live and shown nowhere: its focus goes as
@@ -305,31 +338,36 @@ impl<D: DataSource> Presenter<D> {
         (sent, error)
     }
 
-    /// Whether `id` is a control HTML disables (`surfaces::controls`
-    /// `disabled_control`: a button, an input, a select; not a link) and is
-    /// disabled: the web's focus fixup drops its focus. A disabled box, a
-    /// control inside one or a progress (a `div` or a `progress` on the web)
-    /// keeps it there (host/web/glue.js).
+    /// Whether `id` loses focus under HTML's focus fixup: hidden via CSS
+    /// (`visibility: hidden`/`collapse`, or `display: none` on itself or an
+    /// ancestor), or a disabled HTML form control (a button, an input, a
+    /// select; not a link, box, or progress — and kept on a TV remote until an
+    /// arrow leaves it).
     pub(crate) fn focus_fixup(&self, id: ViewId) -> bool {
-        self.host.kernel().node(id).is_some_and(|node| {
-            crate::surfaces::controls::disabled_control(&node)
-                && !matches!(
-                    exact_kernel::ControlKind::of(node.node_type, node.props),
-                    Some(
-                        exact_kernel::ControlKind::Progress
-                            | exact_kernel::ControlKind::ProgressBar
+        let kernel = self.host.kernel();
+        if css_hidden(kernel, id, self.alert_root()) {
+            return true;
+        }
+        !self.remote()
+            && kernel.node(id).is_some_and(|node| {
+                crate::surfaces::controls::disabled_control(&node)
+                    && !matches!(
+                        exact_kernel::ControlKind::of(node.node_type, node.props),
+                        Some(
+                            exact_kernel::ControlKind::Progress
+                                | exact_kernel::ControlKind::ProgressBar
+                        )
                     )
-                )
-        })
+            })
     }
 
     /// Between one press's events (a checkbox's click, input and change), a
-    /// focused control the last one disabled loses the focus before the next
-    /// runs, as the web's fixup runs at once; `clear_removed_focus` after the
-    /// commit is otherwise where it does.
+    /// focused control the last one disabled or hid loses the focus before the
+    /// next runs, as the web's fixup runs at once; `clear_removed_focus` after
+    /// the commit is otherwise where it does.
     pub(crate) fn blur_disabled_now(&mut self) -> Option<String> {
         let id = self.focus?;
-        if self.remote() || !self.focus_fixup(id) || self.host.route_visibility(id).1 {
+        if !self.focus_fixup(id) || self.host.route_visibility(id).1 {
             return None;
         }
         self.blur_disabled_focus(id).1
@@ -427,6 +465,9 @@ impl<D: DataSource> Presenter<D> {
         let skipped_pending = region
             .filter(|r| matches!(self.brush.published_region(r), Ok(Some(_))))
             .map(|r| r.binding().pending);
+        if !crate::paint::paints(kernel, id, None) {
+            return Some("not rendered");
+        }
         // Paint starts at an open alert's root, independently of its page
         // ancestors. Every inherited eligibility check ends there too.
         let mut at = kernel.node(id);
@@ -727,6 +768,25 @@ impl<D: DataSource> Presenter<D> {
         } else {
             self.held &= !bit;
         }
+    }
+
+    /// Run `pointer` with `modifiers` held, as the seat that sent a pointer
+    /// event held them when it sent it, then give the keyboard back its own:
+    /// a host whose pointer and keys reach it on separate queues (Linux's
+    /// Wayland window) keeps each event's modifiers in that event's order.
+    pub fn with_pointer_modifiers<R>(
+        &mut self,
+        modifiers: exact_runner::KeyModifiers,
+        pointer: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let keyboard = self.held;
+        self.held = u8::from(modifiers.shift)
+            | u8::from(modifiers.ctrl) << 2
+            | u8::from(modifiers.alt) << 4
+            | u8::from(modifiers.meta) << 6;
+        let result = pointer(self);
+        self.held = keyboard;
+        result
     }
 
     /// The modifiers held, as a `key` event carries them.
@@ -1119,6 +1179,28 @@ impl<D: DataSource> Presenter<D> {
         }
         Ok((x, y))
     }
+}
+
+/// Whether `id` is hidden by CSS `visibility` (inherited) or by
+/// `display: none` on itself or an ancestor, stopping at an open alert's root.
+pub(crate) fn css_hidden(kernel: &exact_kernel::Kernel, id: ViewId, shown: Option<ViewId>) -> bool {
+    let Some(node) = kernel.node(id) else {
+        return false;
+    };
+    if !crate::paint::paints(kernel, id, None) {
+        return true;
+    }
+    let mut at = Some(node);
+    while let Some(node) = at {
+        if node.style.display == exact_kernel::Display::None {
+            return true;
+        }
+        if Some(node.id) == shown {
+            break;
+        }
+        at = node.parent.and_then(|parent| kernel.node(parent));
+    }
+    false
 }
 
 #[cfg(test)]

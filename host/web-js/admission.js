@@ -2,6 +2,8 @@ import { rt } from './rt-link.js';
 import { bundledAsset, admittingGrant, admitsFetchHop, isSelfGrant, sameOriginRequest, selfWithoutPage, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 import { answeredFetch, countFault, delayFixture, faultMessage, matchFault } from '../web/faults.js';
 import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';
+import { loadOnce } from '../web/load-once.js';
+
 export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, trimGrant, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 // A driver's fixtures and faults answer only where the agent may drive the page: a release has none, and its bundle
 // drops their code (agent-gate.mjs writes this false).
@@ -224,7 +226,8 @@ export function fetchHostAsset(input, init = {}) {
 }
 
 export function createRequestExecutor(appId, sourceSet, readBody = response => response.arrayBuffer()) {
-  let storage = null;
+  const loads = {};
+
   return async (req, signal, controller, call) => {
     const admitted = scopedGrantSet(sourceSet, req.scope);
     const why = grantError(admitted);
@@ -243,8 +246,8 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
     }
     if (req.storage != null) {
       if (globalThis.__exactRender) return { refused: 'storage request' };
-      storage ??= import(new URL('./storage-request.js', import.meta.url).href).then(m => m.createStorageRequests(appId, sourceSet));
-      return { storage: await (await storage).run(req.storage, admitted) };
+      loadOnce(loads, "storage", () => import(new URL('./storage-request.js', import.meta.url).href).then(m => m.createStorageRequests(appId, sourceSet)));
+      return { storage: await (await loads.storage).run(req.storage, admitted) };
     }
     try {
       // Its ceiling bounds the read inside `fetchWith` too, so an oversized body that never ends is refused, not awaited.

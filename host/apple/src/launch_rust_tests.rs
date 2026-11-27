@@ -982,39 +982,38 @@ fn an_equal_refresh_drops_a_rust_reply_and_cancels_its_exchange() {
                     server.release(response);
                 }
                 let mut executor = Executing::new(&launch, &source.base.grants);
+                let req = &source.request;
                 if pending {
-                    executor
-                        .io
-                        .run(app_read(1, source.request.clone()), None)
-                        .unwrap();
+                    executor.io.run(app_read(1, req.clone()), None).unwrap();
                 }
-                let mut refresh = app_read(2, source.request.clone());
+                let mut refresh = app_read(2, req.clone());
                 match mode {
                     0 => refresh.forced = true,
                     1 => refresh.request.cache = exact_runner::CacheMode::Reload,
                     _ => refresh.request.cache = exact_runner::CacheMode::NoCache,
                 }
                 executor.io.run(refresh, None).unwrap();
-                assert!(launch
+                let dropped = launch
                     .journal()
-                    .iter()
-                    .any(|f| f.name == "rust-feed" && f.outcome == PreloadEvent::DroppedByRefresh));
+                    .into_iter()
+                    .any(|f| f.name == "rust-feed" && f.outcome == PreloadEvent::DroppedByRefresh);
+                assert!(dropped);
                 server.release(0);
-                for ticket in if pending { vec![1, 2] } else { vec![2] } {
+                let take = |executor: &mut Executing| {
                     server.request();
-                    let (got, outcome, timing) = executor.next();
-                    assert_eq!(got, ticket);
-                    assert!(!timing.cached);
-                    assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
-                }
-                executor
-                    .io
-                    .run(read(3, source.request.clone()), None)
-                    .unwrap();
-                server.request();
-                let (_, outcome, timing) = executor.next();
-                assert!(!timing.cached);
-                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
+                    let (got, out, timing) = executor.next();
+                    assert!(
+                        !timing.cached && matches!(out, Outcome::Response(r) if r.body == b"new")
+                    );
+                    got
+                };
+                let mut seen: Vec<_> = (0..if pending { 2 } else { 1 })
+                    .map(|_| take(&mut executor))
+                    .collect();
+                seen.sort_unstable();
+                assert_eq!(seen, if pending { vec![1, 2] } else { vec![2] });
+                executor.io.run(read(3, req.clone()), None).unwrap();
+                take(&mut executor);
                 assert_eq!(
                     server.count.load(Ordering::Acquire),
                     if pending { 4 } else { 3 }
@@ -1025,7 +1024,7 @@ fn an_equal_refresh_drops_a_rust_reply_and_cancels_its_exchange() {
 }
 
 #[test]
-fn boot_settles_rust_replies_once_in_ticket_order() {
+fn boot_settles_rust_replies_once_and_delivers_adopted_reads_on_completion() {
     for asynchronous in [false, true] {
         ASYNCHRONOUS.with(|v| v.set(asynchronous));
         for reask in [false, true] {
@@ -1061,13 +1060,18 @@ fn boot_settles_rust_replies_once_in_ticket_order() {
                         .contains("feed")
                 );
             } else {
+                let pump_to = |drive: &mut Drive, n| {
+                    while source.base.parsed.load(Ordering::Acquire) < n {
+                        drive.wakes.recv_timeout(HANG).unwrap();
+                        drive.bridge.pump(0.);
+                    }
+                };
                 assert!(server.request().contains("/first"));
+                pump_to(&mut drive, 1);
+                assert_eq!(*source.base.order.lock().unwrap(), ["read"]);
                 server.release(1);
-                while source.base.parsed.load(Ordering::Acquire) < 2 {
-                    drive.wakes.recv_timeout(HANG).unwrap();
-                    drive.bridge.pump(0.);
-                }
-                assert_eq!(*source.base.order.lock().unwrap(), ["first", "read"]);
+                pump_to(&mut drive, 2);
+                assert_eq!(*source.base.order.lock().unwrap(), ["read", "first"]);
             }
         }
     }

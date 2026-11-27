@@ -12,7 +12,6 @@ import { addedSwiftPackageInputs, swiftPackageInputChanged } from './package-lib
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
-import { hostname, userInfo } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Refusal, refuse, assetIndex, canonicalBytes, canonicalJson, envelopeBytes, portableAssetNames } from './deploy-signing.mjs';
@@ -193,9 +192,12 @@ function planGraph(tool, app, plan, compat, env, entries) {
       if (!name.startsWith('plans/') || !name.endsWith('.plan')) continue;
       const entry = planGraph(tool, app, bytes, compat, env);
       icons.push(...(entry.appleIcons ?? []));
-      const raster = entry.artifacts[0].requires.appleRasterIcons;
-      const uses = entry.artifacts[0].requires.appleUses;
-      graph.artifacts.push({ ...entry.artifacts[0], name, requires: { ...(raster ? { appleRasterIcons: raster } : {}), ...(uses ? { appleUses: uses } : {}) } });
+      const req = entry.artifacts[0].requires;
+      const copied = {};
+      for (const key of ['appleRasterIcons', 'appleUses', 'iconFillRules', 'atomFace']) {
+        if (req[key] !== undefined) copied[key] = req[key];
+      }
+      graph.artifacts.push({ ...entry.artifacts[0], name, requires: copied });
     }
     graph.appleIcons = [...new Map(icons.sort((a, b) => Buffer.compare(Buffer.from(a.svg), Buffer.from(b.svg))).map(icon => [icon.svg, icon])).values()];
     return graph;
@@ -531,9 +533,11 @@ export async function publishStream({ origin, row, bundle, compat, app, signer, 
     log(`  ${row.platform} ${row.compatibilityId.slice(0, 8)}: ${files.length} blobs on the origin (${written} written, ${files.length - written} present), each read back and checked`);
     const originDigest = sha256(bytes);
     const entryDigest = sha256(canonicalBytes(head));
+    // Public release record allowlist (LLP 1156.008.000 D1): omit machine identity
+    // (`by`, `host`) and local dirty-file inventories (`snapshot.changes`).
     const record = {
-      release, at: new Date().toISOString(), by: userInfo().username, host: hostname(),
-      platform: row.platform, stream: head.stream, seq, snapshot,
+      release, at: new Date().toISOString(),
+      platform: row.platform, stream: head.stream, seq, snapshot: publicSnapshot(snapshot),
       head: { entryDigest, originDigest, bytes: bytes.length, keyId: signer.keyId }, previous: previousDigest,
       compat: { id: compat.id, inputs: compat.inputs }, row: { action: row.action, changes },
       // The asset index as JSON: its blob is this value's canonical bytes,
@@ -558,6 +562,24 @@ export async function publishStream({ origin, row, bundle, compat, app, signer, 
     }
     return { ...row, action: 'published', seq, changes, head: { seq, sha256: originDigest, entryDigest, release }, previous: previousDigest };
   });
+}
+
+/** The snapshot provenance safe to publish on a public update origin (LLP 1156.008.000 D1):
+ * commits and working-tree digests only, never local file-change lists or machine paths. */
+export function publicSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return {};
+  const out = {};
+  if (typeof snapshot.id === 'string') out.id = snapshot.id;
+  if (typeof snapshot.commit === 'string') out.commit = snapshot.commit;
+  if (typeof snapshot.dirty === 'boolean') out.dirty = snapshot.dirty;
+  if (Array.isArray(snapshot.sources)) {
+    out.sources = snapshot.sources.map((s) => ({
+      ...(Array.isArray(s?.roles) ? { roles: s.roles } : {}),
+      ...(typeof s?.commit === 'string' ? { commit: s.commit } : {}),
+      ...(typeof s?.workingSha256 === 'string' ? { workingSha256: s.workingSha256 } : {}),
+    }));
+  }
+  return out;
 }
 
 async function putVerifiedBlob(origin, file) {

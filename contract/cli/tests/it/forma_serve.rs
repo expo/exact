@@ -138,7 +138,7 @@ fn reads_answer_on_the_clones_design() {
     let dir = app("reads", CLONE);
     let mut s = Serve::start(&dir, &[]);
     let (hello, _) = s.ask(json!({"method": "hello", "client": "test"}));
-    assert_eq!(hello["ok"]["protocol"], "forma/1.18");
+    assert_eq!(hello["ok"]["protocol"], "forma/1.20");
     for protocol in ["tamber/1", "tamber/1.18"] {
         let (reply, events) = s.ask(json!({"method": "hello", "protocol": protocol}));
         assert_eq!(
@@ -257,6 +257,74 @@ fn a_transaction_writes_a_line_its_inverse_undoes_and_a_stale_digest_conflicts()
         s.ask(json!({"method": "undo", "client": "one", "inverse": done["ok"]["inverse"]}));
     assert!(again["error"].is_object());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn removing_an_axis_and_its_when_is_one_undo() {
+    let src = "forma example\r\naxes\r\n  dc-preset = base | bold  // order\r\ntheme\r\n  surface.card = #f1f3f5\r\n    when dc-preset=bold: #ffe4e6";
+    let dir = app("remove-axis", src);
+    let path = dir.join("app.forma");
+    std::fs::write(&path, src).unwrap();
+    let mut s = Serve::start(&dir, &[]);
+    let files = json!({"app.forma": digest(&path)});
+    let remove = json!({"op": "remove-axis", "name": "dc-preset"});
+    let unset = json!({"op": "unset-token-when", "name": "surface.card", "when": [{"axis":"dc-preset","value":"bold"}]});
+    let write =
+        |ops: Value| json!({"method":"transaction","client":"canvas","files":files,"ops":ops});
+    for op in [
+        &remove,
+        &json!({"op":"remove-axis-value","axis":"dc-preset","value":"bold"}),
+    ] {
+        let (reply, _) = s.ask(write(json!([op])));
+        let refs = reply["error"]["diagnostics"].as_array().expect("referrers");
+        assert_eq!(refs.len(), 1, "{reply}");
+        assert_eq!(refs[0]["file"], "app.forma");
+        assert_eq!(refs[0]["line"], 6);
+        let words = refs[0]["message"].as_str().unwrap();
+        assert!(
+            words.contains("surface.card") && words.contains("dc-preset=bold"),
+            "{words}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), src);
+    }
+    let branch = json!({"op":"set-token","name":"surface.card","when":[{"axis":"dc-preset","value":"base"}],"value":"#abcdef"});
+    let (refused, _) = s.ask(write(json!([branch, remove])));
+    let refs = refused["error"]["diagnostics"].as_array().unwrap();
+    assert!(refs.iter().any(|d| d["line"] == 5
+        && d["message"]
+            .as_str()
+            .unwrap()
+            .contains("condition added by this transaction")));
+    let mut recreated = branch.clone();
+    recreated["when"] = unset["when"].clone();
+    let (reply, _) = s.ask(write(json!([unset, remove, recreated])));
+    let refs = reply["error"]["diagnostics"].as_array().unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!((&refs[0]["line"], &refs[0]["col"]), (&json!(5), &json!(3)));
+    assert_eq!(refs[0]["message"], "token `surface.card` still uses `when dc-preset=bold` (condition added by this transaction)");
+    let (missing, _) = s.ask(write(json!([{"op":"remove-axis","name":"absent"}])));
+    assert!(
+        missing["error"].to_string().contains("no axis `absent`"),
+        "{missing}"
+    );
+    let rename = json!({"op":"rename-token","from":"surface.card","to":"surface.panel"});
+    let mut renamed_unset = unset.clone();
+    renamed_unset["name"] = json!("surface.panel");
+    for ops in [
+        json!([unset, remove]),
+        json!([remove, unset]),
+        json!([remove, rename, renamed_unset]),
+    ] {
+        let (done, _) = s.ask(write(ops));
+        assert_eq!(done["ok"]["class"], "rebuild", "{done}");
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("dc-preset"));
+        let (back, _) =
+            s.ask(json!({"method":"undo","client":"canvas","inverse":done["ok"]["inverse"]}));
+        assert!(back["ok"].is_object(), "{back}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), src);
+    }
 }
 
 #[test]
@@ -441,7 +509,7 @@ fn requests_are_typed_bounded_and_attributed() {
         assert!(v["error"].is_object(), "{v}");
     }
     let (hello, _) = s.ask(json!({"method": "hello"}));
-    assert_eq!(hello["ok"]["protocol"], "forma/1.18");
+    assert_eq!(hello["ok"]["protocol"], "forma/1.20");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

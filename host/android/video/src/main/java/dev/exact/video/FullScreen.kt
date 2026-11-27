@@ -73,7 +73,17 @@ internal class FullScreen(private val context: Context, private val exo: ExoPlay
         }
     }
 
-    fun leave() { dialog?.dismiss() }
+    /** Leave full screen synchronously; [notify] runs [left] to return the player and announce the change. */
+    fun leave(notify: Boolean = true) {
+        val shown = dialog ?: return
+        val made = view ?: return
+        dialog = null; view = null
+        try {
+            if (notify) left(made) else made.player = null
+        } finally {
+            shown.dismiss()
+        }
+    }
 
     private fun finish() {
         val made = view ?: return

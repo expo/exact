@@ -213,10 +213,9 @@ fn a_refresh_prevents_an_earlier_running_read_from_storing() {
             refresh.forced = mode == CacheMode::Default;
             core.run(refresh, None).unwrap();
             wait_for_reply(&core, 10);
-            assert!(core.drain().is_empty());
+            expect_reply(&core, &woke, 10, b"new");
             release.send(()).unwrap();
             expect_reply(&core, &woke, 20, b"old");
-            expect_reply(&core, &woke, 10, b"new");
             let (reply, cached) = read(&core, &woke, &server, 30, "/feed");
             if reply.body != b"new" {
                 wrong.push((asynchronous, mode));
@@ -275,9 +274,9 @@ fn a_refresh_prevents_an_earlier_queued_or_fenced_read_from_storing() {
                 expect_reply(&core, &woke, 90, b"lane");
                 server.seen(3);
                 wait_for_reply(&core, 10);
+                expect_reply(&core, &woke, 10, b"new");
                 release.send(()).unwrap();
                 expect_reply(&core, &woke, 20, b"old");
-                expect_reply(&core, &woke, 10, b"new");
                 let (reply, cached) = read(&core, &woke, &server, 30, "/feed");
                 if reply.body != b"new" {
                     wrong.push((asynchronous, mode, fenced));
@@ -311,12 +310,12 @@ fn an_earlier_304_answers_its_caller_without_renewing_over_a_refresh() {
             refresh.forced = mode == CacheMode::Default;
             core.run(refresh, None).unwrap();
             wait_for_reply(&core, 10);
+            expect_reply(&core, &woke, 10, b"new");
             release.send(()).unwrap();
             let (ticket, outcome, timing) = collect(&core, &woke);
             assert_eq!(ticket, 20);
             assert!(timing.cached);
             assert!(matches!(outcome, Outcome::Response(r) if r.status == 200 && r.body == b"old"));
-            expect_reply(&core, &woke, 10, b"new");
             let (reply, cached) = read(&core, &woke, &server, 30, "/feed");
             if reply.body != b"new" {
                 wrong.push((asynchronous, mode));
@@ -364,6 +363,8 @@ fn dropping_a_validations_previous_entry_releases_its_retired_bytes() {
                     wait_for_reply(&core, 10);
                     let state = core.shared.state.lock().unwrap();
                     assert_eq!(state.cache.as_ref().unwrap().retired.len(), 1);
+                    drop(state);
+                    expect_reply(&core, &woke, 10, b"new");
                 }
                 release.send(()).unwrap();
                 let (ticket, outcome, timing) = collect(&core, &woke);
@@ -375,9 +376,6 @@ fn dropping_a_validations_previous_entry_releases_its_retired_bytes() {
                 if status == 304 {
                     assert!(timing.cached);
                     assert_eq!(reply.body, b"old");
-                }
-                if withheld {
-                    expect_reply(&core, &woke, 10, b"new");
                 }
                 let state = core.shared.state.lock().unwrap();
                 let cache = state.cache.as_ref().unwrap();
@@ -411,6 +409,7 @@ fn a_redirected_304_releases_retired_bytes_before_its_unconditional_retry() {
         refresh.forced = true;
         core.run(refresh, None).unwrap();
         wait_for_reply(&core, 10);
+        expect_reply(&core, &woke, 10, b"new");
         let (finish_retry, held) = channel();
         let mut retry = Plan::new(200, FRESH, b"retry");
         retry.held = Some(held);
@@ -428,7 +427,6 @@ fn a_redirected_304_releases_retired_bytes_before_its_unconditional_retry() {
         }
         finish_retry.send(()).unwrap();
         expect_reply(&core, &woke, 20, b"retry");
-        expect_reply(&core, &woke, 10, b"new");
         let (reply, cached) = read(&core, &woke, &server, 30, "/feed");
         assert!(cached);
         assert_eq!(reply.body, b"new");
@@ -491,15 +489,15 @@ fn plain_overlapping_reads_store_whichever_reply_completes_last() {
             server.seen(2);
             if reverse {
                 release_second.send(()).unwrap();
-                wait_for_reply(&core, 10);
+                expect_reply(&core, &woke, 10, b"second");
                 release_first.send(()).unwrap();
                 expect_reply(&core, &woke, 20, b"first");
             } else {
                 release_first.send(()).unwrap();
                 expect_reply(&core, &woke, 20, b"first");
                 release_second.send(()).unwrap();
+                expect_reply(&core, &woke, 10, b"second");
             }
-            expect_reply(&core, &woke, 10, b"second");
             let (reply, cached) = read(&core, &woke, &server, 30, "/feed");
             assert_eq!(
                 reply.body,
@@ -554,7 +552,10 @@ fn a_read_after_a_queued_or_running_refresh_cannot_hit_the_copy_being_replaced()
                 ),
                 queued(10, server.request("/a"), false),
             ] {
-                state.ordered.push_back(job.ticket);
+                state.ordered.push_back(reads::OrderedEntry::new(
+                    job.ticket,
+                    reads::OrderedKind::Read,
+                ));
                 state.bytes[0] += job.charge;
                 state.counts[0] += 1;
                 state.jobs[0].push_back(job);
@@ -596,13 +597,16 @@ fn a_worker_or_async_starter_treats_a_read_after_a_refresh_as_a_miss() {
                 ),
                 queued(10, server.request("/a"), false),
             ] {
-                state.ordered.push_back(job.ticket);
+                state.ordered.push_back(reads::OrderedEntry::new(
+                    job.ticket,
+                    reads::OrderedKind::Read,
+                ));
                 state.bytes[0] += job.charge;
                 state.counts[0] += 1;
                 state.jobs[0].push_back(job);
             }
             for _ in 0..2 {
-                reads::next_job(&core.shared, &mut state, 0).unwrap();
+                reads::next_job(&core.shared, &mut state, 1).unwrap();
             }
         }
         let mut request = server.request("/a");
@@ -645,16 +649,20 @@ fn a_later_read_uses_the_network_beside_a_refresh_and_never_returns_the_old_hit(
             if !stale {
                 server.seen(3);
             }
-            release.send(()).unwrap();
             assert!(!stale, "asynchronous {asynchronous}, mode {mode:?}");
-            for ticket in [2, 3] {
-                let (got, outcome, _) = collect(&core, &woke);
-                assert_eq!(got, ticket);
-                let Outcome::Response(response) = outcome else {
-                    panic!("{outcome:?}");
-                };
-                assert_ne!(response.body, b"v1");
-            }
+            let (got, outcome, _) = collect(&core, &woke);
+            assert_eq!(got, 3);
+            let Outcome::Response(response) = outcome else {
+                panic!("{outcome:?}");
+            };
+            assert_eq!(response.body, b"v3");
+            release.send(()).unwrap();
+            let (got, outcome, _) = collect(&core, &woke);
+            assert_eq!(got, 2);
+            let Outcome::Response(response) = outcome else {
+                panic!("{outcome:?}");
+            };
+            assert_eq!(response.body, b"v2");
         }
     }
 }
@@ -678,6 +686,12 @@ fn equal_uncacheable_reads_have_their_own_exchanges_even_for_posts_and_errors() 
                 if inflight {
                     core.run(job(2, request.clone()), None).unwrap();
                     server.seen(2);
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert_eq!(ticket, 2);
+                    assert!(!timing.cached);
+                    assert!(
+                        matches!(outcome, Outcome::Response(r) if r.status == 200 && r.body == b"second")
+                    );
                 }
                 release.send(()).unwrap();
                 let (ticket, outcome, timing) = collect(&core, &woke);
@@ -689,13 +703,13 @@ fn equal_uncacheable_reads_have_their_own_exchanges_even_for_posts_and_errors() 
                 if !inflight {
                     core.run(job(2, request), None).unwrap();
                     server.seen(2);
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert_eq!(ticket, 2);
+                    assert!(!timing.cached);
+                    assert!(
+                        matches!(outcome, Outcome::Response(r) if r.status == 200 && r.body == b"second")
+                    );
                 }
-                let (ticket, outcome, timing) = collect(&core, &woke);
-                assert_eq!(ticket, 2);
-                assert!(!timing.cached);
-                assert!(
-                    matches!(outcome, Outcome::Response(r) if r.status == 200 && r.body == b"second")
-                );
                 assert_eq!(server.count(), 2);
             }
         }
@@ -744,7 +758,7 @@ fn prefetch_refuses_sends_streams_files_and_independent_requests() {
             }
             assert_eq!(
                 core.run(r, None),
-                Err("exactPrefetch requires a plain HTTP read")
+                Err("exactPrefetch requires a plain HTTP read".into())
             );
         }
         assert_eq!(server.count(), 0);

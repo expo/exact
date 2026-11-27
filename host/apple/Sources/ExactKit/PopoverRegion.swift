@@ -90,7 +90,8 @@ extension Presenter {
             }
             #else
             if let scroller = view as? UIScrollView, !layer.isDescendant(of: scroller) || layer.superview === scroller {
-                sum.x += scroller.contentOffset.x
+                // A side inset that comes or goes scrolls nothing
+                sum.x += scroller.contentOffset.x + scroller.adjustedContentInset.left
                 sum.y += scroller.contentOffset.y
             }
             #endif
@@ -102,7 +103,9 @@ extension Presenter {
     /// The kernel told the region a painted popover is sized in (nil: back to
     /// the viewport its top layer implies): after the batch being applied, or
     /// on the next turn when none is, since a placement runs inside the menus'
-    /// layout, which the batch's own layout would enter again. The latest
+    /// layout, which the batch's own layout would enter again. Queued through
+    /// `ExactSession.whenIdle` so a block release from `BlockHost` during the
+    /// same batch runs before the painted region that replaces it. The latest
     /// for a popover is what is told, once, however the waits interleave (a
     /// close's next turn and a reopening's batch end), and only to the view
     /// it was for: not to another the id names by then.
@@ -117,12 +120,22 @@ extension Presenter {
             guard let session = self.session, let now = self.views[id], ObjectIdentifier(now) == pending.view else { return }
             session.applyUnlessEmpty(session.runtime.blocks([(id, pending.block)]))
         }
+        let enqueue = { [weak self] in
+            guard let self else { return }
+            if let session = self.session {
+                session.whenIdle(bound: true, tell, cancelled: { [weak self] in
+                    if self?.regionsUntold[id]?.view == view { self?.regionsUntold.removeValue(forKey: id) }
+                })
+            } else {
+                tell()
+            }
+        }
         #if os(macOS)
         let inBatch = isApplying
         #else
         let inBatch = applying
         #endif
-        if inBatch { afterBatch(tell) } else { DispatchQueue.main.async(execute: tell) }
+        if inBatch { afterBatch(enqueue) } else { DispatchQueue.main.async(execute: enqueue) }
     }
 }
 

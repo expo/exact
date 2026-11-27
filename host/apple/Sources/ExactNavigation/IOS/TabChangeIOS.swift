@@ -5,10 +5,11 @@ import ExactKit
 
 /// What UIKit's change of a container's tabs leaves to its end: a
 /// projection's layout of the container; the fit of the session that a
-/// transition's end makes, and the focus and scrolls that follow it; and
-/// `reportCovers`, whoever calls it.
+/// transition's end makes, and the focus and scrolls that follow it;
+/// `reportCovers`, whoever calls it; and the projection that writes back what
+/// UIKit dropped.
 struct LeftToTabsChange {
-    var layout = false, fit = false, input = false, covers = false
+    var layout = false, fit = false, input = false, covers = false, dropped = false
 }
 
 extension NavigationHost {
@@ -21,10 +22,24 @@ extension NavigationHost {
     /// the layout too, since a batch answers them and does what the app asks.
     func whileTabsChange(_ tabs: TabController, _ change: () -> Void) {
         let presenter = presenter
+        let outer = tabs.moving
+        tabs.moving = outer.filter { !$0.root.inStack } + tabPanels.indices.compactMap { index in
+            guard let routes = routesStack(index)?.stackRoutes as? [RouteController], routes.count > 1 else { return nil }
+            return (routes[0], Array(routes.dropFirst()))
+        }
         tabs.changes += 1
         change()
         tabs.changes -= 1
+        tabs.moving = outer
         guard tabs.changes == 0 else { return }
+        // No pop of the person's: a projection writes back the dropped routes the router shows, and animates no push of them
+        let dropped = tabs.dropped.filter { !$0.inStack }
+        tabs.dropped = []
+        for route in dropped { route.held = false }
+        if !dropped.isEmpty {
+            unanimated = true
+            tabs.left.dropped = true
+        }
         let left = tabs.left
         tabs.left.layout = false
         tabs.left.fit = false
@@ -51,6 +66,27 @@ extension NavigationHost {
             presenter.flushPendingFocus()
             presenter.elementScrolls.flush()
         }
+        // Ask for that projection now, so that it need not wait for the sync the root's move owes in the next turn
+        if tabs.left.dropped {
+            tabs.left.dropped = false
+            presenter.afterBatch { [weak self] in self?.resync() }
+        }
+    }
+
+    /// Whether UIKit, changing its tabs, took `route` from its stack with the tab's root: it has put the root in no other yet,
+    /// or did without the route.
+    func leftWithRoot(_ route: RouteController) -> Bool {
+        guard let tabs = tabController as? TabController, tabs.changes > 0 else { return false }
+        return tabs.dropped.contains { $0 === route }
+            || tabs.moving.contains { !$0.root.inStack && $0.pushed.contains { $0 === route } }
+    }
+
+    /// A route is moving into a stack. If it is a root UIKit moves as it changes its tabs, the routes over it that no stack
+    /// holds yet count as dropped until the outermost change ends: those in a stack by then were moved too, and UIKit left the
+    /// others out, as it can one that hides the tab bar (LLP 1075.003 §9.16).
+    func moved(root: RouteController) {
+        guard let tabs = tabController as? TabController, let moving = tabs.moving.first(where: { $0.root === root }) else { return }
+        tabs.dropped += moving.pushed.filter { !$0.inStack }
     }
 
     /// Leave work to the end of UIKit's change of its container's tabs, if one is under way. Whether it is left.

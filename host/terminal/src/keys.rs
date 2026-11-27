@@ -19,14 +19,43 @@ use unicode_segmentation::UnicodeSegmentation;
 
 impl<D: DataSource> Host<D> {
     fn edit(&mut self, id: ViewId, change: impl FnOnce(&mut Vec<String>, &mut usize)) {
-        let mut clusters: Vec<String> =
-            self.value(id).graphemes(true).map(str::to_string).collect();
+        let previous = self.value(id);
+        let mut clusters: Vec<String> = previous.graphemes(true).map(str::to_string).collect();
         let mut caret = self.caret.min(clusters.len());
         change(&mut clusters, &mut caret);
         let next = clusters.concat();
         self.caret = caret;
         // `input=` hears every keystroke; `change=` hears the commit (Enter, blur).
-        self.dispatch(id, Event::Input(ControlValue::Text(next)));
+        let receipt = self
+            .runner
+            .dispatch(id, Event::Input(ControlValue::Text(next)));
+        self.after_commit();
+        let accepted = self
+            .kernel()
+            .node(id)
+            .and_then(|n| n.props.str(PropId::Value))
+            .unwrap_or_default();
+        if self.focus == Some(id)
+            && (accepted != previous || receipt.is_ok_and(|r| r.reconcile_field.is_some()))
+            && !accepted.bytes().eq(clusters.iter().flat_map(|s| s.bytes()))
+        {
+            let next = clusters.concat();
+            let carried = exact_runner::FieldSelection::at_end(
+                &next[..clusters[..caret].iter().map(String::len).sum()],
+            )
+            .through_rewrite(&next, accepted)
+            .end as usize;
+            let mut units = 0;
+            self.caret = accepted
+                .graphemes(true)
+                .take_while(|g| {
+                    let before = units;
+                    units += g.encode_utf16().count();
+                    units <= carried
+                        || carried.saturating_sub(before) > units.saturating_sub(carried)
+                })
+                .count();
+        }
     }
 
     fn insert(&mut self, id: ViewId, text: &str) {

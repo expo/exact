@@ -83,12 +83,12 @@ pub fn pages<D: DataSource>(
         };
         match dispatch {
             Dispatch::Run(work) => executor.run(out, Some(work)),
-            Dispatch::Held => Err("its work was held"),
+            Dispatch::Held => Err("its work was held".into()),
             // A source asks its answer again: it settles with no work.
             Dispatch::Again => executor.again(&out),
             Dispatch::Host(_) | Dispatch::Missing => executor.run(out, None),
         }
-        .map_err(|e| fail(e.into()))?;
+        .map_err(&fail)?;
         let outcome = loop {
             executor.begin_pump();
             if let Some((_, outcome, _)) = executor.drain().pop() {

@@ -26,8 +26,15 @@ struct Ready {
     plan: String,
 }
 
+/// Why a case was not prepared for Lean.
+enum PrepFailure {
+    Refused(String),
+    Emit(String),
+    Unsupported(String),
+}
+
 /// A case, ready for Lean or why not.
-type Entry = (Case, Option<Ready>, Option<String>);
+type Entry = (Case, Option<Ready>, Option<PrepFailure>);
 
 /// What one case's check reported.
 #[derive(Default)]
@@ -354,7 +361,12 @@ fn category(line: &str) -> String {
 }
 
 /// Run the cases; print divergences and categories; whether all agreed.
-pub fn run(cases: Vec<Case>, batch: usize, tag: &str) -> Result<bool, String> {
+pub fn run(
+    cases: Vec<Case>,
+    batch: usize,
+    tag: &str,
+    strict_refusals: bool,
+) -> Result<bool, String> {
     let accounting = crate::accounting::run()?;
     leanrun::build()?;
     let mut prepared: Vec<Entry> = Vec::new();
@@ -371,9 +383,16 @@ pub fn run(cases: Vec<Case>, batch: usize, tag: &str) -> Result<bool, String> {
                 };
                 prepared.push((case, Some(ready), None));
             }
-            Err(Verdict::Refused(e)) => prepared.push((case, None, Some(format!("refused: {e}")))),
-            Err(Verdict::Emit(e)) => prepared.push((case, None, Some(format!("emit: {e}")))),
-            Err(_) => prepared.push((case, None, Some("not prepared".into()))),
+            Err(Verdict::Refused(e)) => prepared.push((case, None, Some(PrepFailure::Refused(e)))),
+            Err(Verdict::Emit(e)) => prepared.push((case, None, Some(PrepFailure::Emit(e)))),
+            Err(Verdict::Unsupported(why)) => {
+                prepared.push((case, None, Some(PrepFailure::Unsupported(why))))
+            }
+            Err(_) => prepared.push((
+                case,
+                None,
+                Some(PrepFailure::Unsupported("not prepared".into())),
+            )),
         }
     }
     let chunks: Vec<&[Entry]> = prepared.chunks(batch.max(1)).collect();
@@ -406,6 +425,23 @@ pub fn run(cases: Vec<Case>, batch: usize, tag: &str) -> Result<bool, String> {
             });
         }
     });
+    let batches: Vec<(Vec<String>, Vec<Report>)> = results
+        .into_iter()
+        .map(|r| {
+            r.into_inner()
+                .expect("result slot")
+                .expect("every batch ran")
+        })
+        .collect::<Result<_, _>>()?;
+    summarize_chunks(&chunks, batches, accounting, strict_refusals)
+}
+
+fn summarize_chunks(
+    chunks: &[&[Entry]],
+    batches: Vec<(Vec<String>, Vec<Report>)>,
+    accounting: bool,
+    strict_refusals: bool,
+) -> Result<bool, String> {
     let dir = work_dir().join("failures");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut failed = false;
@@ -414,11 +450,7 @@ pub fn run(cases: Vec<Case>, batch: usize, tag: &str) -> Result<bool, String> {
     let mut total = [0u64; 7];
     let (mut checked, mut skipped, mut boot_refused) = (0, 0, 0);
     let mut categories: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
-    for (chunk, result) in chunks.iter().zip(results) {
-        let (head, reports) = result
-            .into_inner()
-            .expect("result slot")
-            .expect("every batch ran")?;
+    for (chunk, (head, reports)) in chunks.iter().zip(batches) {
         if !opcodes_reported {
             for l in &head {
                 println!("{l}");
@@ -430,10 +462,21 @@ pub fn run(cases: Vec<Case>, batch: usize, tag: &str) -> Result<bool, String> {
         for (case, ready, why) in chunk.iter() {
             if ready.is_none() {
                 skipped += 1;
-                if let Some(why) = why {
-                    if !why.starts_with("refused") {
+                match why {
+                    Some(PrepFailure::Emit(e)) => {
+                        println!("EMIT {}: {e}", case.name);
+                        failed = true;
+                    }
+                    Some(PrepFailure::Refused(e)) => {
+                        if strict_refusals {
+                            println!("REFUSED {}: {e}", case.name);
+                            failed = true;
+                        }
+                    }
+                    Some(PrepFailure::Unsupported(why)) => {
                         println!("SKIPPED {}: {why}", case.name);
                     }
+                    None => {}
                 }
                 continue;
             }
@@ -494,6 +537,65 @@ mod tests {
         asm::Asm, builder::PlanBuilder, ArmsId, DerivesId, RegionKind, RegionsId, ResourcesId,
         SlotsId, Value,
     };
+
+    #[test]
+    fn emit_failures_always_fail_lowering_and_refusals_fail_in_corpus_mode() {
+        let case = |name: &str| Case {
+            name: name.into(),
+            seed: None,
+            path: None,
+            source: String::new(),
+            events: Vec::new(),
+            answers: Vec::new(),
+            stored: false,
+            launch: Default::default(),
+            prerendered: false,
+        };
+        let emit_entries: Vec<Entry> = vec![(
+            case("corpus/emit.contract:1"),
+            None,
+            Some(PrepFailure::Emit("unsupported syntax".into())),
+        )];
+        assert_eq!(
+            summarize_chunks(
+                &[&emit_entries],
+                vec![(Vec::new(), Vec::new())],
+                true,
+                false
+            )
+            .unwrap(),
+            false
+        );
+        assert_eq!(
+            summarize_chunks(&[&emit_entries], vec![(Vec::new(), Vec::new())], true, true).unwrap(),
+            false
+        );
+        let refused_entries: Vec<Entry> = vec![(
+            case("corpus/refused.contract:1"),
+            None,
+            Some(PrepFailure::Refused("compile error".into())),
+        )];
+        assert_eq!(
+            summarize_chunks(
+                &[&refused_entries],
+                vec![(Vec::new(), Vec::new())],
+                true,
+                false
+            )
+            .unwrap(),
+            true
+        );
+        assert_eq!(
+            summarize_chunks(
+                &[&refused_entries],
+                vec![(Vec::new(), Vec::new())],
+                true,
+                true
+            )
+            .unwrap(),
+            false
+        );
+    }
 
     #[test]
     #[ignore = "async lane: needs the Lean toolchain"]

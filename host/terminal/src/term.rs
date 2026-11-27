@@ -134,11 +134,11 @@ pub(crate) fn with_mods(name: &'static str, mods: u16) -> Key {
 }
 
 /// A text key with modifiers. The protocol sends the unshifted key with
-/// Shift as a modifier, so Shift alone capitalizes a letter; Control with
-/// or without Shift is the control key.
+/// Shift as a modifier, so Shift alone capitalizes a letter. Other
+/// combinations keep every modifier in the chord.
 pub(crate) fn text_with_mods(c: char, mods: u16) -> Key {
-    match mods & !1 {
-        0 if mods == 1 => Key::Char(c.to_ascii_uppercase()),
+    match mods {
+        1 => Key::Char(c.to_ascii_uppercase()),
         0 => Key::Char(c),
         4 => Key::Ctrl(c.to_ascii_lowercase()),
         m => Key::Chord(chord_words(m) + c.encode_utf8(&mut [0; 4])),
@@ -875,6 +875,31 @@ mod tests {
         assert_eq!(key(b"\x1b[57400;5u"), Some(Key::Ctrl('1')));
         // Another functional key (here Caps Lock itself) types nothing.
         assert_eq!(key(b"\x1b[57358u"), None);
+    }
+
+    #[test]
+    fn modified_printable_keys_keep_shift_in_the_decoded_and_driven_chord() {
+        for (mods, name, expected) in [
+            (0, "o", "o"),
+            (1, "Shift+o", "Shift+O"),
+            (2, "Alt+o", "Alt+o"),
+            (3, "Alt+Shift+o", "Alt+Shift+o"),
+            (4, "Control+o", "Control+o"),
+            (5, "Control+Shift+o", "Control+Shift+o"),
+            (6, "Control+Alt+o", "Control+Alt+o"),
+            (7, "Control+Alt+Shift+o", "Control+Alt+Shift+o"),
+            (8, "Meta+o", "Meta+o"),
+            (9, "Meta+Shift+o", "Shift+Meta+o"),
+            (15, "Meta+Alt+Control+Shift+o", "Control+Alt+Shift+Meta+o"),
+        ] {
+            let bytes = format!("\x1b[111;{}u", mods + 1);
+            let decoded = keys(bytes.as_bytes());
+            let [Input::Key(key)] = &decoded[..] else {
+                panic!("{name}: {decoded:?}");
+            };
+            assert_eq!(key.chord(), expected, "decoded {name}");
+            assert_eq!(crate::cli::key_of(name).unwrap(), *key, "driven {name}");
+        }
     }
 
     #[test]

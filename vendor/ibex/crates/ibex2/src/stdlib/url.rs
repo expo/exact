@@ -66,78 +66,40 @@ pub fn parse(input: &str, base: Option<&str>) -> Result<ParsedUrl, HostError> {
 
 /// A WHATWG setter — `url.<field> = value` — returning the URL as it is after.
 ///
-/// The setters' semantics are the `url` crate's, which are the spec's: a
-/// scheme change between special and non-special is refused, a host cannot be
-/// set on a cannot-be-a-base URL, and every refusal leaves the URL unchanged —
-/// the spec's setters fail silently, and only `href` throws. `search` and
-/// `hash` drop one leading sigil, `protocol` one trailing colon, and `port`
-/// takes its leading digits, as the spec's state overrides do.
+/// `url::quirks` is the crate's own implementation of the URL Standard's
+/// setters, checked against WPT's setters_tests.json: each runs the basic URL
+/// parser with the setter's state override, so a host stops at `/`, `?` or
+/// `#`, a hostname with a port is refused, `?` and `#` alone leave an empty
+/// query or fragment, and a host cannot be emptied while a port or
+/// credentials need it. Every refusal leaves the URL unchanged; only `href`
+/// throws.
 pub fn set(href: &str, field: &str, value: &str) -> Result<ParsedUrl, HostError> {
-    let mut url =
-        Url::parse(href).map_err(|e| HostError::Failed(format!("TypeError: invalid URL: {e}")))?;
+    use url::quirks;
+    let invalid = |e| HostError::Failed(format!("TypeError: invalid URL: {e}"));
+    let mut url = Url::parse(href).map_err(invalid)?;
     match field {
-        "href" => {
-            url = Url::parse(value)
-                .map_err(|e| HostError::Failed(format!("TypeError: invalid URL: {e}")))?;
-        }
+        "href" => quirks::set_href(&mut url, value).map_err(invalid)?,
         "protocol" => {
-            // Scheme start state with a state override: everything before the
-            // first colon is the scheme, and the rest is ignored — so
-            // `http:garbage` sets `http:`.
-            let _ = url.set_scheme(value.split(':').next().unwrap_or(""));
+            let _ = quirks::set_protocol(&mut url, value);
         }
         "username" => {
-            let _ = url.set_username(value);
+            let _ = quirks::set_username(&mut url, value);
         }
         "password" => {
-            let _ = url.set_password(if value.is_empty() { None } else { Some(value) });
+            let _ = quirks::set_password(&mut url, value);
         }
         "host" => {
-            // Host state, then port state, each with a state override: the
-            // host runs to the first colon outside brackets; the port takes
-            // its leading digits and stops — `x:80abc` is host `x`, port 80 —
-            // and an empty port buffer leaves the port as it was, so `x:`
-            // changes the host and nothing else.
-            let after_bracket = if value.starts_with('[') {
-                value.find(']').map(|at| at + 1).unwrap_or(value.len())
-            } else {
-                0
-            };
-            match value[after_bracket..]
-                .find(':')
-                .map(|at| at + after_bracket)
-            {
-                Some(at) => {
-                    if url.set_host(Some(&value[..at])).is_ok() {
-                        set_port_prefix(&mut url, &value[at + 1..]);
-                    }
-                }
-                None => {
-                    let _ = url.set_host(Some(value));
-                }
-            }
+            let _ = quirks::set_host(&mut url, value);
         }
         "hostname" => {
-            let _ = url.set_host(Some(value));
+            let _ = quirks::set_hostname(&mut url, value);
         }
-        "port" => set_port_digits(&mut url, value),
-        "pathname" => {
-            if !url.cannot_be_a_base() {
-                url.set_path(value);
-            }
+        "port" => {
+            let _ = quirks::set_port(&mut url, value);
         }
-        "search" => {
-            let query = value.strip_prefix('?').unwrap_or(value);
-            url.set_query(if query.is_empty() { None } else { Some(query) });
-        }
-        "hash" => {
-            let fragment = value.strip_prefix('#').unwrap_or(value);
-            url.set_fragment(if fragment.is_empty() {
-                None
-            } else {
-                Some(fragment)
-            });
-        }
+        "pathname" => quirks::set_pathname(&mut url, value),
+        "search" => quirks::set_search(&mut url, value),
+        "hash" => quirks::set_hash(&mut url, value),
         other => {
             return Err(HostError::InvalidArgument(format!(
                 "not a URL field: {other}"
@@ -145,25 +107,6 @@ pub fn set(href: &str, field: &str, value: &str) -> Result<ParsedUrl, HostError>
         }
     }
     Ok(components(&url))
-}
-
-/// The port setter: empty clears; otherwise the leading digits, if they make
-/// a port; anything else is a silent no-op.
-fn set_port_digits(url: &mut Url, value: &str) {
-    if value.is_empty() {
-        let _ = url.set_port(None);
-        return;
-    }
-    set_port_prefix(url, value);
-}
-
-/// The port state under the host setter: leading digits set the port; no
-/// digits at all leaves it alone, which is what an empty buffer means there.
-fn set_port_prefix(url: &mut Url, value: &str) {
-    let digits: String = value.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if let Ok(port) = digits.parse::<u16>() {
-        let _ = url.set_port(Some(port));
-    }
 }
 
 fn components(parsed: &Url) -> ParsedUrl {
@@ -480,6 +423,41 @@ mod tests {
         );
         let u = set("mailto:a@b", "pathname", "x").unwrap();
         assert_eq!(u.pathname, "a@b", "cannot-be-a-base: no-op");
+    }
+
+    /// Cases from WPT's url/resources/setters_tests.json that the hand-written
+    /// setters got wrong; the last one panicked inside the `url` crate.
+    #[test]
+    fn setters_take_the_standard_state_overrides() {
+        let href = |base: &str, field: &str, value: &str| set(base, field, value).unwrap().href;
+        let net = "http://example.net/path";
+        assert_eq!(
+            href(net, "host", "example.com/stuff"),
+            "http://example.com/path"
+        );
+        assert_eq!(
+            href(net, "hostname", "example.com?stuff"),
+            "http://example.com/path"
+        );
+        assert_eq!(
+            href(net, "hostname", "example.com:8080"),
+            net,
+            "a port refuses the hostname"
+        );
+        let nav = "https://example.net?lang=en-US#nav";
+        assert_eq!(href(nav, "search", "?"), "https://example.net/?#nav");
+        assert_eq!(href(nav, "hash", "#"), "https://example.net/?lang=en-US#");
+        assert_eq!(
+            href("https://domain.com:443", "port", "\t8080"),
+            "https://domain.com:8080/"
+        );
+        assert_eq!(
+            href("sc://example.net", "pathname", "?"),
+            "sc://example.net/%3F"
+        );
+        assert_eq!(href("file://hi/x", "host", ""), "file:///x");
+        assert_eq!(href("sc://test@test/", "host", ""), "sc://test@test/");
+        assert_eq!(href("sc://test:12/", "host", ""), "sc://test:12/");
     }
 
     #[test]

@@ -29,6 +29,13 @@
 import Foundation
 
 extension NodeView {
+    var fieldIsTextEntry: Bool {
+        switch props["type"]?.lowercased() {
+        case nil, "text", "search", "url", "tel", "email", "password": return true
+        default: return false
+        }
+    }
+
     /// The editor's text is now `value`, marked text and all. The app is
     /// told when that is not the text it knows: what it was last told
     /// (`toldText`), or the value it last set, compared as UTF-16 units.

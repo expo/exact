@@ -28,7 +28,7 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29, 33], manifest = Config.NONE, shadows = [DragInTest.Journal::class])
 class DragInTest {
-    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear(); Journal.release = 0; Journal.owner = 2; Journal.asked = 0 }
+    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear(); Journal.release = 0; Journal.owner = 2; Journal.asked = 0; Journal.lastFieldDrop = null }
 
     /** exact2's journal, as the reader writes to it with no owner. */
     @Implements(Native::class, isInAndroidSdk = false)
@@ -51,7 +51,8 @@ class DragInTest {
             @JvmStatic @Implementation fun dropLanded(id: Int, items: String) { drags += "landed $id $items" }
             /** How often exact2 was asked who takes a drop on a field. */
             var asked = 0
-            @JvmStatic @Implementation fun fieldDrop(id: Int, x: Float, y: Float): Int { asked++; return owner }
+            var lastFieldDrop: Pair<Int, Int>? = null
+            @JvmStatic @Implementation fun fieldDrop(id: Int, x: Float, y: Float): Int { asked++; lastFieldDrop = x.toInt() to y.toInt(); return owner }
         }
     }
 
@@ -303,6 +304,49 @@ class DragInTest {
         assertEquals(listOf(0, 0), (two.second.parent as View).let { listOf(it.width, it.height) })
         drag(two.root, 170f, 230f)
         assertEquals("2", two.second.text.toString())
+    }
+
+    @Test fun insetPageTranslatesRootAndFieldDragsIntoPagePixels() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val root = Root(activity)
+        val fields = Fields(activity)
+        val page = View(activity)
+        val insetX = 48
+        val insetY = 96
+        fun insetParams() = FrameLayout.LayoutParams(400 - insetX, 400 - insetY).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.LEFT
+            leftMargin = insetX
+            topMargin = insetY
+        }
+        root.addView(fields, insetParams())
+        root.addView(page, insetParams())
+        root.drags.page = page
+        activity.setContentView(root)
+        val two = Two(root, fields, FieldText(activity), FieldText(activity))
+        two.tell(state = 1)
+        root.measure(View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY))
+        root.layout(0, 0, 400, 400)
+        val texts = (0 until fields.childCount).map { (fields.getChildAt(it) as FrameLayout).getChildAt(0) as FieldText }
+        val second = texts.first { it.text.toString() == "2" }
+
+        // A drag over the page outside any field goes through Root.onDragEvent and subtracts the page inset.
+        drag(root, insetX + 10f, insetY + 15f)
+        assertEquals(listOf("over 10 15", "released 10 15"), Journal.drags)
+
+        // A drag onto a hosted field kept by the field reports page-local coordinates to dragOver, fieldDrop and dragDropped.
+        Journal.drags.clear()
+        Journal.owner = 2
+        drag(root, insetX + 170f, insetY + 230f)
+        assertEquals(170 to 230, Journal.lastFieldDrop)
+        assertEquals(listOf("over 170 230", "dropped 170 230"), Journal.drags)
+        assertTrue(second.text.toString(), second.text.toString().contains("Fuji"))
+
+        // A drag onto a hosted field taken by an Exact drop node reports page-local coordinates to fieldDrop and dropReleased.
+        Journal.drags.clear()
+        Journal.owner = 1
+        drag(root, insetX + 170f, insetY + 70f)
+        assertEquals(170 to 70, Journal.lastFieldDrop)
+        assertEquals(listOf("over 170 70", "released 170 70"), Journal.drags)
     }
 
     class Folders : android.content.ContentProvider() {

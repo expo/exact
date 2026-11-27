@@ -223,3 +223,34 @@ test('a state change reports the ports again', async () => {
   expect(m.lines.at(-1)).toBe('midi: out is not connected; message 1 not sent');
   m.c.restore();
 });
+
+test('boot closes open inputs and a subsequent request re-delivers granted or unavailable ports', async () => {
+  const m = midi();
+  m.out.ops([{ op: 'request' }]);
+  await settle(); await settle();
+  const keys = m.access.inputs.get('keys');
+  m.out.ops([{ op: 'open', inputs: ['keys'], clock: ['keys'] }]);
+  expect(typeof keys.onmidimessage).toBe('function');
+  keys.onmidimessage({ data: Uint8Array.of(0xf8), timeStamp: 1000 });
+  m.delivered.length = 0;
+  // Reload: boot clears open inputs, drops buffered ticks, and lets a fresh request re-report ports.
+  m.out.ops([], true);
+  expect(keys.onmidimessage).toBe(null);
+  expect(keys.closed).toBe(1);
+  m.c.advance(100);
+  m.c.paint();
+  expect(m.delivered).toEqual([]);
+  m.out.ops([{ op: 'request' }]);
+  expect(m.delivered.length).toBe(1);
+  expect(m.delivered[0].ports.state).toBe('granted');
+  expect(m.asked()).toBe(1);
+  m.c.restore();
+
+  // Unavailable browser: a reloaded runner's request receives unavailable again.
+  const u = midi({ api: false });
+  u.delivered.length = 0;
+  u.out.ops([], true);
+  u.out.ops([{ op: 'request' }]);
+  expect(u.delivered).toEqual([{ ports: { state: 'unavailable' } }]);
+  u.c.restore();
+});

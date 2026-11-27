@@ -124,6 +124,7 @@ internal class Requests(private val activity: ExactActivity) {
                     HATCH -> activity.hatches()?.told(words, body, i)
                     MODULE -> Extensions.call(id, string(words, body).first, module)
                     PRESENCE -> Presence.check(string(words, body).first)
+                    VIDEO_PICTURE -> activity.picture.request(if (i == body) null else pictureTarget(words, body))
                     ACTIVITY -> Activities.request(string(words, body).first)
                     ORIENTATION -> orientation.told(words, body)
                     // The surface, then its message's JSON.
@@ -282,7 +283,8 @@ internal class Requests(private val activity: ExactActivity) {
     }
 
     /** A node's drag out of the app ([DragOut]): the node, its box and the finger in the view's pixels, 1 when an
-     * assistive service started it, its text and URL, then its files' count and each file as the node names it. */
+     * assistive service started it, its text and URL, then its files' count and each file as the node names it and
+     * the name it is offered under. */
     private fun drag(w: IntArray, at: Int) {
         val view = view ?: return
         val ask = DragOut.read(w, at)
@@ -338,6 +340,7 @@ internal class Requests(private val activity: ExactActivity) {
                     AUTH_END -> Auth.end(words[body])
                     MODULE -> Extensions.call(id, string(words, body).first, module)
                     PRESENCE -> Presence.check(string(words, body).first)
+                    VIDEO_PICTURE -> if (i != body) pictureTarget(words, body).tell("pictureinpictureerror", "activity unavailable", "")
                     ACTIVITY -> Activities.request(string(words, body).first)
                 }
             }
@@ -405,6 +408,9 @@ internal class Requests(private val activity: ExactActivity) {
         const val WINDOW_TITLE = 22
         const val DRAG = 23
         const val ACTIVITY = 24
+        const val VIDEO_PICTURE = 25
+        private fun pictureTarget(words: IntArray, at: Int) = MediaAllocation(words[at], words[at + 1], words[at + 2],
+            (words[at + 3].toLong() and 0xffffffffL) or (words[at + 4].toLong() shl 32))
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         private const val DISMISSED_MS = 500L
     }

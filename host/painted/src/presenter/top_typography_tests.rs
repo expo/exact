@@ -137,6 +137,7 @@ fn the_dialog_and_the_menu_keep_materials_metrics() {
         enabled: true,
         cancel,
         checked: false,
+        checkable: false,
         opens: None,
     };
     let alert = |rows: Vec<Row>| Plan::Alert {

@@ -14,7 +14,7 @@
 //   surface's published record, decoded against each reader's shape.
 import { data, Resources, commit, R, Refusal, Kept, say, Sounds } from "./rt.js";
 import * as rt from "./rt.js";
-import { environment, screenOrientation, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode } from "./navigation.js";
+import { environment, screenOrientation, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode, drawnBox } from "./navigation.js";
 
 const again = (source, why, snaps) => {
   const changed = () => {
@@ -85,7 +85,7 @@ function shareReporter() {
   if (!facts) return;
   (globalThis.exact ??= {}).page = { prefer: p => { facts.prefer(p); pageChanged(); if (p?.["gpu-tier"] || p?.["screen-reader"]) viewportChanged(); return facts.read(); }, read: () => facts.read() };
 }
-const pageFields = f => ({ platform: "web", visibilityState: f["visibility-state"], frozen: f.frozen, onLine: f.online, canShare: f["can-share"], canShareFiles: f["can-share-files"], canSharePictures: f["can-share-pictures"], canOpenFiles: f["can-open-files"], hasFocus: f["has-focus"], navigationType: f["navigation-type"], persisted: f.persisted, restores: f.restores, iframePartition: f["iframe-partition"] === true, name: windowName(), presented: f.presented === true });
+const pageFields = f => ({ platform: "web", visibilityState: f["visibility-state"], frozen: f.frozen, onLine: f.online, canShare: f["can-share"], canShareFiles: f["can-share-files"], canSharePictures: f["can-share-pictures"], canOpenFiles: f["can-open-files"], pictureInPictureEnabled: globalThis.document?.pictureInPictureEnabled === true, hasFocus: f["has-focus"], navigationType: f["navigation-type"], persisted: f.persisted, restores: f.restores, iframePartition: f["iframe-partition"] === true, name: windowName(), presented: f.presented === true });
 // `window.name`, an empty one set to `main` the first time it is read, so the tab the person opened is `main` and one a
 // link's `target` opened keeps its name (LLP 1030.004 D2). A render has no window: `main`.
 const windowName = () => typeof window === "object" && typeof window.name === "string" ? (window.name ||= "main") : "main";
@@ -148,12 +148,56 @@ export function activities(readers) {
   (data.reserved ??= {}).exactActivities = (_, a, name) => byName(readers, name, { activities: [], frequentPushesEnabled: false, linked: false, pushToStartToken: null, pushToStartActivities: [] });
 }
 
-/** The geometry facts (LLP 1123 D6), which the web does not have until its owners report
- * them (D17): unavailable, each quantity `none`, the unsettled list too. */
 const geometryAbsent = { available: false, generation: 0, size: null, frame: null, observations: null, cornerInsets: null, cornerRadii: null, margins: null, regions: null, scroll: null, keyboard: null, chrome: null };
+/** The geometry facts (LLP 1123 D6) as the browser has laid the page out, read after each commit settles: of the
+ * element whose `id` a reader names, its border box's size and its frame in the space it asks for, as the browser
+ * draws it, the document's outside every owner, the viewport's for `"window"` and a node's border box's for `"node"`,
+ * `none` there where that node or an ancestor of it is transformed, since a bounding rectangle does not recover its
+ * own coordinates; unavailable where the element is gone or has no box. The quantities only a native host has, and the observations and
+ * margins until the web's owners report them (D17), are `none`. An answer the layout moves is answered again in a
+ * commit of its own, its `generation` the number of the layout it reads; at D6's bound of eight such commits in a row
+ * the answers hold until a commit or a resize with another cause. */
 export function geometry(readers) {
-  (data.reserved ??= {}).exactGeometry = (_, a, name) => byName(readers, name, geometryAbsent);
+  let generation = 0, chain = 0, ours = false;
+  // What each reader was told, by its name and arguments, so instances of one declaration reading other elements keep
+  // their own; compared with the generation left out, which a refresh moves for every reader
+  const told = new Map();
+  const answer = (args, generation) => {
+    const find = (id) => typeof id === "string" ? globalThis.document?.getElementById?.(id) : null;
+    const space = args?.[1] ?? "owner", box = drawnBox(find(args?.[0]), space, space === "node" ? find(args[2]) : null);
+    if (!box) return { ...geometryAbsent, generation };
+    const [width, height] = box.size, frame = box.frame && { x: box.frame[0], y: box.frame[1], width, height };
+    return { ...geometryAbsent, available: true, generation, size: { width, height }, frame };
+  };
+  const shapedAnswer = (name, args, at = generation) => {
+    const [fields, shape] = readers[name], v = answer(args, at);
+    return shape ? shaped(shape, v, "geometry", name) : fields.map(n => v[n]);
+  };
+  const key = (name, args) => JSON.stringify([name, args ?? []]);
+  (data.reserved ??= {}).exactGeometry = (_, args, name) => {
+    told.set(key(name, args), { name, args, json: JSON.stringify(shapedAnswer(name, args, 0)) });
+    return shapedAnswer(name, args);
+  };
+  // An answer the layout moved since it was read, answered again; at the bound, held
+  const check = (cause) => {
+    chain = cause === "geometry" ? chain + 1 : 0;
+    // Only what a live instance reads now is kept: arguments a reader has left, and a reader gone, leave nothing
+    const live = new Set(Resources.filter((r) => r.source === "exactGeometry" && !r.gone).map((r) => key(r.name, r.asked)));
+    for (const k of told.keys()) if (!live.has(k)) told.delete(k);
+    const moved = [...new Set([...told.values()].filter((t) => JSON.stringify(shapedAnswer(t.name, t.args, 0)) !== t.json).map((t) => t.name))];
+    if (!moved.length) return;
+    if (chain >= 8) return say("geometry-feedback: a geometry fact moved its own layout eight times in a row; its answers hold until another cause lays the page out (LLP 1123 D6)");
+    generation++;
+    ours = true;
+    // A refreshed name's snapshots go, and those its readers still read come back with the reads: an instance that
+    // has gone reads nothing and leaves none
+    for (const [k, t] of told) if (moved.includes(t.name)) told.delete(k);
+    commit(() => { for (const r of Resources) if (r.source === "exactGeometry" && moved.includes(r.name)) R(r); }, "geometry");
+  };
+  rt.After?.push(() => { const cause = ours ? "geometry" : "commit"; ours = false; check(cause); });
+  if (typeof addEventListener === "function") addEventListener("resize", () => check("resize"));
 }
+/** The web has no native chain, and no settle loop that leaves a box unsettled until D17: each answered unavailable. */
 export function nativeChain(readers) {
   (data.reserved ??= {}).exactNativeChain = (_, a, name) => byName(readers, name, { available: false, generation: 0, entries: null });
 }

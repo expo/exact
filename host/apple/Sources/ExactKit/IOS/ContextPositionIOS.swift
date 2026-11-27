@@ -5,7 +5,7 @@ import UIKit
 extension Presenter {
     /// Context actions belong to the existing editing session. Resigning
     /// it before dispatch can move the panel out from under the same tap.
-    func contextRetainsFocus(_ view: UIView) -> Bool {
+    package func contextRetainsFocus(_ view: UIView) -> Bool {
         retainsFocus(view, through: { self.eventParent(of: $0) }) || carrying("contextTarget").contains { preview in
             guard preview.props["contextTarget"] != nil, let panel = contextPanel(preview) else { return false }
             return view.isDescendant(of: panel)

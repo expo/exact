@@ -82,6 +82,8 @@ function dropStreams(prefix) {
 import { inertAncestor, displayMode, environment, navigation, routeFlags, foldEnv, preferFold, FOLD_EVENT, preferDisplayMode, typedControl, settleValue, animationClock, pageReporter } from './navigation.js';
 import { backButton } from './input-glue.js';
 import { guestOutline, guestTap, guestType, viewBox, textBaseline, reveal, selectAll, scrollRange, typeControl, watchGlides, glidesSettled, scrollsSeen } from './agent-input.js';
+import { loadOnce } from '../web/load-once.js';
+
 // A zoomable scroller's zoom and range (zoom.js, LLP 1057.001.000 §6).
 const zoomOf = e => (e.$zoomRange ? { scrollZoom: e.$zoom, minZoom: e.$zoomRange[0], maxZoom: e.$zoomRange[1] } : {});
 // How long `clock settle` waits for a scroller gliding on its own, as a native host waits (agent.mjs reason `scroll`).
@@ -93,7 +95,7 @@ const typed = (v, t) => v == null || typeof t === 'string' ? v : Array.isArray(t
 const masked = (req, reply) => { const secrets = req.reveal ? [] : [...document.querySelectorAll('#exact-root input[type=password]')].map(e => e.value).filter(Boolean), hide = v => typeof v === 'string' ? secrets.includes(v) ? '•••' : v : Array.isArray(v) ? v.map(hide) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hide(x)])) : v; return secrets.length ? hide(reply) : reply; };
 const PROPS = [['aria-live', 'accessibilityLive'], ['role', 'accessibilityRole'], ['data-alertpart', 'alertPart'], ['aria-controls', 'accessibilityControls'], ['aria-activedescendant', 'accessibilityActiveDescendant'], ['id', 'id'], ['aria-description', 'accessibilityHint'], ['aria-keyshortcuts', 'accessibilityKeyShortcuts'], ['aria-orientation', 'accessibilityOrientation'], ['aria-pressed', 'accessibilityPressed'], ['aria-current', 'accessibilityCurrent'], ['aria-sort', 'accessibilitySort'], ['colspan', 'colSpan', 1], ['rowspan', 'rowSpan', 1], ['scope', 'scope'], ['aria-level', 'accessibilityHeadingLevel', 1], ['aria-posinset', 'accessibilityPosInSet', 1], ['aria-setsize', 'accessibilitySetSize', 1], ['aria-valuenow', 'accessibilityValueNow'], ['aria-valuemin', 'accessibilityValueMin'], ['aria-valuemax', 'accessibilityValueMax'], ['aria-valuetext', 'accessibilityValueText'], ['placeholder', 'placeholder'], ['autocomplete', 'autocomplete'], ['viewportFit', 'viewportFit'], ['interactiveWidget', 'interactiveWidget'], ['data-hatch', 'hatch'], ['data-nativeviewmodulename', 'nativeViewModuleName'], ['data-nativeviewprops', 'nativeViewProps'],
   ['aria-invalid', 'accessibilityInvalid'],
-  ['data-datatransfertext', 'dataTransferText'], ['data-datatransferurl', 'dataTransferUrl'], ['data-datatransferfiles', 'dataTransferFiles'],
+  ['data-datatransfertext', 'dataTransferText'], ['data-datatransferurl', 'dataTransferUrl'], ['data-datatransferfiles', 'dataTransferFiles'], ['data-datatransfernames', 'dataTransferNames'],
   ['navigationKey', 'navigationKey'], ['navigationBack', 'navigationBack'], ['data-navigationbar', 'navigationBar'],
   ['navigationPresentation', 'navigationPresentation'], ['type', 'type'], ['popover', 'popover'],
   ['popovertarget', 'popovertarget'], ['popovertargetaction', 'popovertargetaction'], ['commandfor', 'commandfor'], ['command', 'command'],
@@ -158,9 +160,10 @@ export function install(exact, { passive = false } = {}) {
     // A checkbox's or radio's model value, as the runner's tree gives its `checked` row.
     if (el.$checked !== undefined) props.checked = el.$checked;
     // The runner's props that element.rs writes as attributes, by its names. A sheet's `role="dialog"` and `aria-modal`
-    // are the host's presentation of a modal route, not props (input-glue.js marks them; LLP 1115.000 D4.5).
+    // are the host's presentation of a modal route, not props (input-glue.js marks them; LLP 1115.000 D4.5), as is the
+    // `popover` of a popover route the browser presents (route-popovers.js).
     const sheet = el.hasAttribute('data-exact-dialog');
-    for (const [attr, prop, num] of PROPS) if (el.hasAttribute(attr) && !(hostRole && attr === 'role')) props[prop] = num ? Number(el.getAttribute(attr)) : el.getAttribute(attr);
+    for (const [attr, prop, num] of PROPS) if (el.hasAttribute(attr) && !(hostRole && attr === 'role') && !(attr === 'popover' && el.hasAttribute('data-exact-route-popover'))) props[prop] = num ? Number(el.getAttribute(attr)) : el.getAttribute(attr);
     if (el.exactDraggable != null) props.draggable = el.exactDraggable;
     // The intent `tree --ax` reads (LLP 1080.002 D7), as the runner names it.
     if (el.hasAttribute('inert')) props.inert = true;
@@ -336,10 +339,10 @@ export function install(exact, { passive = false } = {}) {
   // Animated images held to the agent's clock (LLP 1011.000): the web host's
   // own `image-glue.js`, fetched at the first seek of a page with a GIF or
   // WebP (the only images it holds; a page without one does no work).
-  let images = null;
+  const loads = {};
   const holdImages = () => {
-    if (!images && document.querySelector('#exact-root img[src*=".gif" i], #exact-root img[src*=".webp" i]')) images = import('./image-glue.js').then(() => exact.holdImages({ root: document.getElementById('exact-root'), now: () => exact.clock.now }));
-    images?.then(h => h.seek());
+    if (!loads.images && document.querySelector('#exact-root img[src*=".gif" i], #exact-root img[src*=".webp" i]')) loadOnce(loads, 'images', () => import('./image-glue.js').then(() => exact.holdImages({ root: document.getElementById('exact-root'), now: () => exact.clock.now })), error => journal.push(`images: ${error.message}`));
+    loads.images?.then(h => h?.seek());
   };
   const seek = (sync = true) => { anim.register(exact.clock.now); anim.seek(exact.clock.now, sync); holdImages(); };
   // Deliver world records before later timers (LLP 1012, LLP 1046.003).
@@ -367,7 +370,7 @@ export function install(exact, { passive = false } = {}) {
   const unwaited = () => holds().length + (exact.extensions?.spans?.() ?? 0);
   // Asks the server holds (`exactHeld`, LLP 1016.000 D9): no clock waited on them; the reply says which.
   const heldNamed = r => { const h = exact.heldAsks?.() ?? []; return h.length && r && !r.error ? { ...r, held: h.length, heldTargets: h.map(x => x.name) } : r; };
-  const settleGpu = async () => await exact.gpu?.settled?.() ?? [];
+  const settleGpu = async (wakes = false) => await exact.gpu?.settled?.(wakes) ?? [];
   const gpuPendingReply = (req, pending) => {
     const names = pending.map(item => item.name ?? 'GPU work');
     return req.op === 'clock' ? heldNamed({ ...tags(), settled: false, reason: 'gpu', pending: names })
@@ -401,6 +404,8 @@ export function install(exact, { passive = false } = {}) {
         // A hatch's regions and parts, under their node (LLP 1075.003.000.001 §3.4, §3.5; hatches.js).
         if (exact.hatchRegions) nodes = nodes.map(n => { const o = exact.hatchRegions.of(views.get(n.id)); return o ? { ...n, ...o } : n; });
         nodes = nodes.map(n => { const ids = packaged(views.get(n.id))?.partIds?.(); return ids?.length ? { ...n, parts: ids.map(id => ({ id, live: true })) } : n; });
+        const floating = document.pictureInPictureElement;
+        if (floating) for (const n of nodes) if (views.get(n.id) === floating) n.pictureInPicture = { presentation: "system" };
         if (req.plan) for (const n of nodes) { const site = views.get(n.id)?.dataset?.site; if (site != null) n.site = Number(site); }
         return { nodes, roots, ...tags(), ...(req.plan && exact.plan ? { planDigest: exact.plan } : {}) };
       }
@@ -540,7 +545,7 @@ export function install(exact, { passive = false } = {}) {
             // round, so a run of sends never spends the rounds. Past the deadline,
             // or 4096 stops, the rest is one advance.
             // An answer's own timer (ts-fetch.js) is due as a task is: the settle goes to it, while its answer is live.
-            const gpuPending = await settleGpu();
+            const gpuPending = await settleGpu(true);
             if (gpuPending.length) return gpuPendingReply(req, gpuPending);
             world = exact.gpu?.clock?.(true) ?? {};
             const at = exact.clock.now, epoch = exact.clock.epoch, to = Math.max(anim.settle(), world.settleAt ?? 0, ...exact.clock.timers.filter(t => t.data && t.live()).map(t => t.due));
@@ -565,7 +570,7 @@ export function install(exact, { passive = false } = {}) {
             seek();
             await new Promise(r => requestAnimationFrame(() => r()));
           }
-          const gpuPending = await settleGpu();
+          const gpuPending = await settleGpu(true);
           if (gpuPending.length) return gpuPendingReply(req, gpuPending);
           const waiting = holds();
           if (waiting.length) return { clock: exact.clock.now, settled: false, reason: 'device', tickets: waiting.map(h => h.ticket) };
@@ -607,7 +612,7 @@ export function install(exact, { passive = false } = {}) {
         for (const end = performance.now() + 20000; exact.extensions?.polling?.() && performance.now() < end;) await new Promise(r => setTimeout(r, 1));
         seek();
         await new Promise(r => requestAnimationFrame(() => r()));
-        const gpuPending = await settleGpu();
+        const gpuPending = await settleGpu(true);
         if (gpuPending.length) return gpuPendingReply(req, gpuPending);
         // Requests still in flight on real time, which a jump does not wait for (`clock settle` does): the driver says so.
         const inflight = exact.inflight.n - unwaited(), b = exact.data?.background?.(), background = b ? b.queued + b.inFlight : 0;

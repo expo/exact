@@ -109,6 +109,10 @@ fn plain_http_requests_are_classified_by_their_target_for_every_method() {
 
 #[test]
 fn other_work_stays_ordered_for_resources_and_parallel_sends() {
+    struct LocalWork;
+    impl exact_runner::HostWork for LocalWork {
+        const LOCAL: bool = true;
+    }
     let get = || Request::get("https://example.test/data");
     for request in [
         get().body_to("app:/cache/reply"),
@@ -117,7 +121,6 @@ fn other_work_stays_ordered_for_resources_and_parallel_sends() {
             stream: true,
             ..get()
         },
-        Request::storage(b"{}".to_vec()),
         Request::continuation::<TestWork>(1),
         Request::capture_surface("canvas"),
         Request {
@@ -134,6 +137,31 @@ fn other_work_stays_ordered_for_resources_and_parallel_sends() {
         get().independent_http(4096),
     ] {
         let mut r = boot(request.clone());
+        assert_eq!(
+            one_request(&mut r).class,
+            RequestClass::Ordered,
+            "{request:?}"
+        );
+        r.act("parallel", vec![]).unwrap();
+        assert_eq!(
+            one_request(&mut r).class,
+            RequestClass::Ordered,
+            "{request:?}"
+        );
+    }
+    // Local storage and local JS module continuations commute with resource HTTP reads,
+    // while mutation continuations stay ordered.
+    for request in [
+        Request::storage(b"{}".to_vec()),
+        Request::continuation::<LocalWork>(1),
+    ] {
+        let mut r = boot(request.clone());
+        assert_eq!(
+            one_request(&mut r).class,
+            RequestClass::Local,
+            "{request:?}"
+        );
+        r.act("ordinary", vec![]).unwrap();
         assert_eq!(
             one_request(&mut r).class,
             RequestClass::Ordered,

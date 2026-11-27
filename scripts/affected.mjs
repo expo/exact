@@ -136,7 +136,7 @@ export function suites(repo) {
   }
   for (const f of repo.files) if (TEST_FILE.test(f) && !repo.absent.has(f) && !/^(?:vendor|snapback4)\//.test(f) && !f.includes('/node_modules/')) out.push({ id: `bun:${f}`, kind: 'bun', file: f, roots: [`test:${f}`] });
   for (const app of repo.apps) {
-    const files = repo.under(app).filter(f => dirname(f) === app && f.endsWith('.test.contract') && !repo.absent.has(f));
+    const files = repo.under(app).filter(f => (dirname(f) === app || dirname(f) === `${app}/tests`) && f.endsWith('.test.contract') && !repo.absent.has(f));
     if (!files.length) continue;
     for (const [platform, hosts] of Object.entries(APP_HOSTS)) {
       const crate = repo.packageAt.get(`${app}/${platform}`);

@@ -97,6 +97,14 @@ impl<D: DataSource> Host<D> {
     /// Observe the viewport at the host's time, laying out due timer commits
     /// before resize notifications choose their depth threshold.
     pub fn resize_at(&mut self, width: f32, height: f32, now_ms: f64) -> String {
+        let candidate = exact_runner::Viewport {
+            width: f64::from(width),
+            height: f64::from(height),
+            ..self.runner.viewport()
+        };
+        if let Err(e) = candidate.validate() {
+            return self.finish(Batch::new(), Some(format!("viewport: {e:?}")));
+        }
         self.now_ms = now_ms.max(self.now_ms);
         let (batch, error) = self.settle_resize_clock(Batch::new(), None);
         self.resize_inner(width, height, None, batch, error, None)

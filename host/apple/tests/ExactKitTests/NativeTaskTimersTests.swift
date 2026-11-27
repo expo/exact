@@ -357,4 +357,91 @@ final class NativeTaskTimersTests: XCTestCase {
             XCTAssertThrowsError(try JSONDecoder().decode(Batch.self, from: Data(wire.utf8)))
         }
     }
+
+    /// A one-shot timer whose Foundation callback fires before monotonic `row.due`
+    /// must re-arm a fresh valid timer rather than leaving an invalidated handle behind.
+    func testOneShotRearmsWhenFiredEarlyOrRetainedAfterCompletion() throws {
+        var now = 0.0
+        let timers = NativeTaskTimers(now: { now }, date: { self.date }, ready: {})
+        defer { timers.cancel() }
+        let a = row(due: 100, interval: 100, once: true)
+        timers.update([a], epoch: 1, enabled: true)
+        let first = try XCTUnwrap(timers.timerForTests(0))
+        now = 40.0
+        first.fire()
+        XCTAssertFalse(first.isValid)
+        XCTAssertNil(timers.take(), "an early one-shot wake queues no delivery")
+        let rearmed = try XCTUnwrap(timers.timerForTests(0))
+        XCTAssertFalse(rearmed === first)
+        XCTAssertTrue(rearmed.isValid)
+        XCTAssertEqual(rearmed.fireDate, date.addingTimeInterval(0.06))
+        now = 100.0
+        rearmed.fire()
+        let delivery = try XCTUnwrap(timers.take())
+        XCTAssertEqual(delivery.row, a)
+
+        let later = row(due: 150, interval: 100, once: true)
+        timers.complete(delivery, retry: false, remaining: [later])
+        let afterComplete = try XCTUnwrap(timers.timerForTests(0))
+        XCTAssertFalse(afterComplete === rearmed)
+        XCTAssertTrue(afterComplete.isValid)
+        XCTAssertEqual(afterComplete.fireDate, date.addingTimeInterval(0.05))
+
+        afterComplete.invalidate()
+        XCTAssertFalse(timers.matches([later]), "an invalidated idle timer must not match")
+        timers.update([later], epoch: 1, enabled: true)
+        let replaced = try XCTUnwrap(timers.timerForTests(0))
+        XCTAssertFalse(replaced === afterComplete)
+        XCTAssertTrue(replaced.isValid)
+    }
+
+    /// The post-update retry wake uses its own slot so a later deadline in another wait lane
+    /// or a fired nominal wake that returned early cannot block it.
+    func testTimerAdmissionsRecentWakeIsNotBlockedByLaterDeadlineOrFiredNominalWake() throws {
+        let session = ExactApp.shared.makeSession(label: "admission-recent-wake")
+        session.postsTimerAdvances = false
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("TIMER_ADMISSION"), size: CGSize(width: 390, height: 844)).error)
+        session.clock = nil
+        session.apply(session.runtime.tick(now: session.now(), frame: session.now() + 16))
+        let admissions = session.timerAdmissions
+        XCTAssertTrue(admissions.enabled)
+
+        let start = session.now()
+        admissions.update([-1, -1, start + 30_000, -2])
+        let nominal = try XCTUnwrap(admissions.wakeForTests)
+        XCTAssertTrue(nominal.isValid)
+        XCTAssertGreaterThan(nominal.fireDate.timeIntervalSinceNow, 10)
+        admissions.setLastUpdateForTests(session.now())
+        admissions.check(idle: true)
+        let recent = try XCTUnwrap(admissions.recentWakeForTests, "a later nominal deadline must not block recentWake")
+        XCTAssertFalse(recent === nominal)
+        XCTAssertTrue(recent.isValid)
+        XCTAssertLessThan(recent.fireDate.timeIntervalSinceNow, 1.0)
+        XCTAssertTrue(nominal.isValid)
+
+        admissions.update([-1, -1, start + 30_000, -1])
+        XCTAssertNil(admissions.recentWakeForTests)
+        XCTAssertFalse(recent.isValid)
+
+        admissions.update([-1, -1, -1, session.now()])
+        let dueWake = try XCTUnwrap(admissions.wakeForTests)
+        session.holdFillForTests()
+        dueWake.fire()
+        XCTAssertFalse(dueWake.isValid)
+        XCTAssertNil(admissions.wakeForTests, "a fired nominal wake clears its slot even when check returns early")
+        var fill = Batch(ops: [], timers: true, motion: false, clock: nil, error: nil)
+        fill.timerWaits = [-1, -1, -1, -2]
+        session.publishFillForTests(0, fill, lease: session.runtime.completionLease)
+        session.landFill()
+        spin(until: { !session.ownerInFlight }, "owner work drained")
+        XCTAssertTrue(admissions.enabled)
+        XCTAssertEqual(admissions.waits, [-1, -1, -1, -2])
+
+        admissions.setLastUpdateForTests(session.now())
+        admissions.check(idle: true)
+        let retry = try XCTUnwrap(admissions.recentWakeForTests, "a fired nominal wake must not block recentWake")
+        XCTAssertTrue(retry.isValid)
+        spin(until: { admissions.recentWakeForTests == nil }, "recentWake fires on the run loop and clears itself")
+    }
 }

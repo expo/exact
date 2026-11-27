@@ -189,7 +189,7 @@ impl Lowerer<'_> {
                 }
             }
         }
-        self.check_group(virtualized, attrs, children, scope)?;
+        self.check_group(tag, virtualized, attrs, children, scope)?;
         let Some(opt) = attrs.iter().find(|a| a.name == "virtualized") else {
             return Ok(());
         };
@@ -299,9 +299,11 @@ impl Lowerer<'_> {
     /// so each takes the drop (`reorderdrop`), is named by its `id` in the
     /// drop's `ReorderEvent`, and keys its rows by strings, the keys a row
     /// carries from one list to another. A row list and a nested list are
-    /// refused by their own reorder rules (LLP 1094 §7).
+    /// refused by their own reorder rules, and a grouped list, which builds
+    /// every row and reorders within itself, joins none (LLP 1094 §7).
     fn check_group(
         &self,
+        tag: &str,
         virtualized: bool,
         attrs: &[Attr],
         children: &[Node],
@@ -318,6 +320,10 @@ impl Lowerer<'_> {
             return Ok(());
         };
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
+        // Its repair is not `virtualized=true`, which a grouped list refuses too
+        if let Ok(Some(_)) = crate::grouped::style(tag, &self.with_class_rows(attrs)) {
+            return err("lower-reorder-group", "a grouped list's rows move only within it, so it joins no `reorderGroup`: remove `reorderGroup`, or, for rows that move between lists, give up the grouping: write `list appearance=\"none\" virtualized=true` without `listStyle`, its sections flattened into one keyed `for` directly in the list", group.span);
+        }
         if !virtualized || !has("reorderdrop") || !has("id") {
             return err("lower-reorder-group", "`reorderGroup` joins lists that take a drop: give this `list virtualized=true` a `reorderdrop` and an `id`", group.span);
         }

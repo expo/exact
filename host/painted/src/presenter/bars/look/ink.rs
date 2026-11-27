@@ -10,7 +10,7 @@ use material_colors::{
 pub(super) const TEXT: f32 = 4.5;
 pub(super) const SYMBOL: f32 = 3.0;
 
-pub(in crate::presenter::bars) fn over(fill: [u8; 4], base: [u8; 4]) -> [u8; 4] {
+pub(in crate::presenter) fn over(fill: [u8; 4], base: [u8; 4]) -> [u8; 4] {
     let a = u32::from(fill[3]);
     let mut result = [255; 4];
     for i in 0..3 {

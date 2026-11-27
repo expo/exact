@@ -227,7 +227,7 @@ impl Fonts {
                 .rfind(|s| s.name == name)
                 .map(|s| s.attrs.as_slice())
         };
-        let class = crate::class::rows(attrs, &style, &[]).ok()?;
+        let class = crate::class::rows(attrs, &style).ok()?;
         let all = class.map(|(_, rows)| rows).unwrap_or_default();
         let attrs = all
             .iter()

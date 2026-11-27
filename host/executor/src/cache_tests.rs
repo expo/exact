@@ -546,7 +546,7 @@ fn driver_faults_and_answers_precede_a_hit_and_never_replace_it() {
 }
 
 #[test]
-fn a_hit_takes_no_worker_and_drains_after_an_earlier_slow_read() {
+fn a_hit_takes_no_worker_and_drains_past_an_earlier_slow_read() {
     for (asynchronous, method) in [
         (false, "GET"),
         (false, "POST"),
@@ -571,10 +571,12 @@ fn a_hit_takes_no_worker_and_drains_after_an_earlier_slow_read() {
             assert!(state.completed[0].iter().any(|d| d.ticket == 3 && d.cached));
             assert!(!state.running.iter().any(|r| r.ticket == 3));
         }
+        let (got, _, timing) = collect(&core, &woke);
+        assert_eq!(got, 3);
+        assert!(timing.cached);
         assert!(core.drain().is_empty());
         release.send(()).unwrap();
         assert_eq!(collect(&core, &woke).0, 2);
-        assert_eq!(collect(&core, &woke).0, 3);
         assert_eq!(server.count(), 2);
     }
 }
@@ -1122,8 +1124,10 @@ fn hit_completions_wait_for_lane_bytes_before_copying_the_body() {
                     .unwrap();
             }
         }
+        let mut drained: Vec<u64> = completed.iter().map(|c| c.0).collect();
+        drained.sort_unstable();
         assert_eq!(
-            completed.iter().map(|c| c.0).collect::<Vec<_>>(),
+            drained,
             (2..40)
                 .filter(|ticket| !forget_hit || *ticket != 8)
                 .collect::<Vec<_>>()
@@ -1150,7 +1154,9 @@ fn a_non_app_read_checks_its_reach_outside_the_state_lock_and_can_hit() {
             let (lane, charge, limit) = reads::reservation(&request, true).unwrap();
             state.bytes[lane] += charge;
             state.counts[lane] += 1;
-            state.ordered.push_back(2);
+            state
+                .ordered
+                .push_back(reads::OrderedEntry::new(2, reads::OrderedKind::Read));
             state.jobs[lane].push_back(Job {
                 ticket: 2,
                 cache_store_withheld: false,
@@ -1320,6 +1326,7 @@ fn a_held_fresh_hit_is_admitted_on_a_freed_slot_without_taking_a_worker_or_effec
             }
         }
     }
+    assert!(core.resume_ordered().is_empty());
     {
         let state = core.shared.state.lock().unwrap();
         assert!(state.completed[0]
@@ -1330,16 +1337,33 @@ fn a_held_fresh_hit_is_admitted_on_a_freed_slot_without_taking_a_worker_or_effec
         assert!(state.fenced.is_empty());
         assert_eq!(state.counts[0] - state.light, 15);
     }
-    assert!(core.drain().is_empty(), "ticket 1 still holds delivery");
+    let mut early = Vec::new();
+    for _ in 0..3 {
+        let (got, outcome, timing) = collect(&core, &woke);
+        assert!(matches!(outcome, Outcome::Response(_)));
+        assert_eq!(timing.cached, got == 18);
+        early.push(got);
+    }
+    early.sort_unstable();
+    assert_eq!(
+        early,
+        [2, 3, 18],
+        "completed reads and cached hit drain while ticket 1 is held"
+    );
+    assert!(core.drain().is_empty());
     for release in releases.into_iter().flatten() {
         release.send(()).unwrap();
     }
-    for ticket in 1..=18 {
+    let mut rest = Vec::new();
+    for _ in 0..15 {
         let (got, outcome, timing) = collect(&core, &woke);
-        assert_eq!(got, ticket);
         assert!(matches!(outcome, Outcome::Response(_)));
-        assert_eq!(timing.cached, ticket == 18);
+        assert!(!timing.cached);
+        rest.push(got);
     }
+    rest.sort_unstable();
+    let expected: Vec<u64> = (1..=17).filter(|t| *t != 2 && *t != 3).collect();
+    assert_eq!(rest, expected);
     let state = core.shared.state.lock().unwrap();
     assert_eq!(state.counts, [0, 0]);
     assert_eq!(state.light, 0);

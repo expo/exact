@@ -25,6 +25,10 @@ import Foundation
 import ExactKit
 
 public enum TransferCarrier {
+    struct Key: Hashable {
+        var package: String, id: String
+    }
+
     struct Record: Codable {
         var id: String, package: String, discretionary: Bool
         var requests: [Item]
@@ -34,6 +38,8 @@ public enum TransferCarrier {
         var delivered = 0
         /// The web's ceiling on the bytes downloaded, past which it fails.
         var downloadTotal: Int64?
+        /// Per-start token distinguishing live tasks from retired or replaced ones.
+        var generation: String?
         var ended: Bool { requests.allSatisfy(\.ended) }
     }
 
@@ -55,17 +61,21 @@ public enum TransferCarrier {
         var size: Int64?, sent: Int64?, received: Int64?
     }
 
-    private static var records: [String: Record] = [:]
-    private static var preparing: Set<String> = []
+    static var records: [Key: Record] = [:]
+    /// On-disk folder per key: namespaced `<package>.<id>`, or a legacy `<id>` folder loaded on launch.
+    private static var folders: [Key: URL] = [:]
+    private static var preparing: Set<Key> = []
     private static var sessions: [Bool: URLSession] = [:]
     /// The completion handler of a relaunch for each session's events.
     private static var relaunched: [String: () -> Void] = [:]
     private static let delegate = Delegate()
     private static var installed = false
     /// Registrations in a wake now, not offered again until it is done.
-    private static var offering: Set<String> = []
+    private static var offering: Set<Key> = []
     /// When each registration's progress was last told.
-    private static var told: [String: Date] = [:]
+    private static var told: [Key: Date] = [:]
+    /// Test hook replacing background `URLSession.getAllTasks` cancellation.
+    static var cancelSessionTasks: ((Bool, String) -> Void)?
 
     private static var bundle: String { Bundle.main.bundleIdentifier ?? "app" }
     private static func identifier(_ discretionary: Bool) -> String { bundle + (discretionary ? ".transfers.discretionary" : ".transfers") }
@@ -82,8 +92,10 @@ public enum TransferCarrier {
         return dir
     }()
 
-    private static func folder(_ id: String) -> URL { directory.appendingPathComponent(safe(id)) }
-    private static func body(_ id: String, _ index: Int) -> URL { folder(id).appendingPathComponent("\(index)") }
+    private static func defaultFolderName(_ key: Key) -> String { safe(key.package) + "." + safe(key.id) }
+    private static func defaultFolder(_ key: Key) -> URL { directory.appendingPathComponent(defaultFolderName(key)) }
+    static func folder(_ key: Key) -> URL { folders[key] ?? defaultFolder(key) }
+    private static func body(_ key: Key, _ index: Int) -> URL { folder(key).appendingPathComponent("\(index)") }
     private static func safe(_ id: String) -> String {
         id.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_"))) ?? id
     }
@@ -98,8 +110,15 @@ public enum TransferCarrier {
                 try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
                 continue
             }
-            let file = directory.appendingPathComponent(name).appendingPathComponent("record.json")
-            if let data = try? Data(contentsOf: file), let r = try? JSONDecoder().decode(Record.self, from: data) { records[r.id] = r }
+            let dir = directory.appendingPathComponent(name)
+            let file = dir.appendingPathComponent("record.json")
+            if let data = try? Data(contentsOf: file), let r = try? JSONDecoder().decode(Record.self, from: data) {
+                let key = Key(package: r.package, id: r.id)
+                if records[key] == nil || name == defaultFolderName(key) {
+                    records[key] = r
+                    folders[key] = dir
+                }
+            }
         }
         NotificationCenter.default.addObserver(forName: Notification.Name("exact.transfers"), object: nil, queue: nil) { note in
             guard let box = note.object as? NSMutableDictionary else { return }
@@ -139,41 +158,57 @@ public enum TransferCarrier {
     }
 
     private static func keep(_ r: Record) {
-        records[r.id] = r
-        try? FileManager.default.createDirectory(at: folder(r.id), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(r) { try? data.write(to: folder(r.id).appendingPathComponent("record.json"), options: .atomic) }
+        let key = Key(package: r.package, id: r.id)
+        records[key] = r
+        let dir = folder(key)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(r) { try? data.write(to: dir.appendingPathComponent("record.json"), options: .atomic) }
+    }
+
+    private static func cancelTasks(for r: Record) {
+        let token = r.generation ?? r.id
+        if let cancel = cancelSessionTasks { cancel(r.discretionary, token); return }
+        guard !r.ended || sessions[r.discretionary] != nil else { return }
+        let s = sessions[r.discretionary] ?? session(r.discretionary)
+        s.getAllTasks { tasks in
+            for t in tasks where belongs(t.taskDescription, to: token) { t.cancel() }
+        }
     }
 
     private static func handle(_ box: [String: Any]) -> Any? {
         guard let package = box["package"] as? String else { return nil }
         let id = box["id"] as? String ?? ""
+        let key = Key(package: package, id: id)
         switch box["op"] as? String {
         case "start":
             let total = (box["downloadTotal"] as? NSNumber)?.int64Value
             return start(package, id, box["requests"] as? [[String: Any]] ?? [], discretionary: box["discretionary"] as? Bool ?? false, downloadTotal: total, roots: box["roots"] as? [String: URL] ?? [:])
         case "abort":
-            guard let r = records[id], r.package == package, !r.ended else { return false }
-            session(r.discretionary).getAllTasks { tasks in
-                for t in tasks where belongs(t.taskDescription, to: id) { t.cancel() }
-            }
+            guard let r = records[key], !r.ended else { return false }
+            cancelTasks(for: r)
             return true
         case "retire":
-            guard records[id]?.package == package else { return nil }
-            records[id] = nil
-            try? FileManager.default.removeItem(at: folder(id))
+            guard let r = records.removeValue(forKey: key) else { return nil }
+            let dir = folder(key)
+            folders[key] = nil
+            told[key] = nil
+            offering.remove(key)
+            try? FileManager.default.removeItem(at: dir)
+            cancelTasks(for: r)
             return nil
-        case "record": return records[id].flatMap { $0.package == package ? shown($0) : nil }
+        case "record": return records[key].map(shown)
         case "ids": return records.values.filter { $0.package == package }.map(\.id).sorted()
         default: return nil
         }
     }
 
-    /// Reserve the id on the main queue while the caller prepares immutable upload files.
+    /// Reserve the key on the main queue while the caller prepares immutable upload files.
     private static func start(_ package: String, _ id: String, _ requests: [[String: Any]], discretionary: Bool, downloadTotal: Int64?, roots: [String: URL]) -> String? {
+        let key = Key(package: package, id: id)
         guard !id.isEmpty, !requests.isEmpty, onMain({
-            (records[id].map { $0.ended } ?? true) && preparing.insert(id).inserted
+            (records[key].map { $0.ended } ?? true) && preparing.insert(key).inserted
         }) else { return "TypeError" }
-        defer { _ = onMain { preparing.remove(id) } }
+        defer { _ = onMain { preparing.remove(key) } }
         var planned: [(request: URLRequest, item: Item, boundary: String?)] = []
         for (index, r) in requests.enumerated() {
             guard let text = r["url"] as? String, let url = URL(string: text), ["http", "https"].contains(url.scheme ?? "") else { return "TypeError" }
@@ -205,7 +240,8 @@ public enum TransferCarrier {
         // Beside the registrations' folders, under a name none has: `safe`
         // escapes a dot.
         let files = FileManager.default
-        let staging = directory.appendingPathComponent(".start-" + safe(id))
+        let generation = UUID().uuidString
+        let staging = directory.appendingPathComponent(".start-" + generation)
         try? files.removeItem(at: staging)
         do { try files.createDirectory(at: staging, withIntermediateDirectories: true) } catch { return "UnknownError" }
         for (index, r) in requests.enumerated() {
@@ -226,6 +262,7 @@ public enum TransferCarrier {
         }
         var record = Record(id: id, package: package, discretionary: discretionary, requests: planned.map(\.item))
         record.downloadTotal = downloadTotal
+        record.generation = generation
         do {
             try JSONEncoder().encode(record).write(to: staging.appendingPathComponent("record.json"))
         } catch {
@@ -233,17 +270,21 @@ public enum TransferCarrier {
             return "UnknownError"
         }
         return onMain {
+            let target = defaultFolder(key), previous = folders[key]
             do {
-                if files.fileExists(atPath: folder(id).path) { _ = try files.replaceItemAt(folder(id), withItemAt: staging) } else { try files.moveItem(at: staging, to: folder(id)) }
+                if files.fileExists(atPath: target.path) { _ = try files.replaceItemAt(target, withItemAt: staging) } else { try files.moveItem(at: staging, to: target) }
             } catch {
                 try? files.removeItem(at: staging)
                 return "UnknownError"
             }
-            records[id] = record
+            if let previous, previous != target { try? files.removeItem(at: previous) }
+            folders[key] = target
+            records[key] = record
+            told[key] = nil
             let s = session(discretionary)
             for (request, item, _) in planned {
-                let task = item.upload ? s.uploadTask(with: request, fromFile: folder(id).appendingPathComponent("upload-\(item.index)")) : s.downloadTask(with: request)
-                task.taskDescription = "\(id) \(item.index)"
+                let task = item.upload ? s.uploadTask(with: request, fromFile: target.appendingPathComponent("upload-\(item.index)")) : s.downloadTask(with: request)
+                task.taskDescription = "\(generation) \(item.index)"
                 task.resume()
             }
             return nil
@@ -295,12 +336,13 @@ public enum TransferCarrier {
     /// What a package reads of a record: never a header, a query or a
     /// user name or password.
     private static func shown(_ r: Record) -> [String: Any] {
+        let key = Key(package: r.package, id: r.id)
         var out: [String: Any] = ["id": r.id, "result": r.result, "failureReason": r.failureReason,
                                   "uploadTotal": r.requests.reduce(0) { $0 + ($1.size ?? 0) }, "uploaded": r.requests.reduce(0) { $0 + ($1.sent ?? 0) },
                                   "downloadTotal": r.downloadTotal ?? 0, "downloaded": r.requests.reduce(0) { $0 + ($1.received ?? 0) }]
         if let c = r.cancelledReason { out["apple"] = ["cancelledReason": c] }
         out["records"] = r.requests.map { i -> [String: Any] in
-            let file = body(r.id, i.index)
+            let file = body(key, i.index)
             var o: [String: Any] = ["index": i.index, "url": i.url, "status": i.status ?? 0, "contentType": i.contentType ?? "", "bodyLost": i.bodyLost]
             if FileManager.default.fileExists(atPath: file.path) { o["path"] = file.path }
             if let l = i.location { o["location"] = l }
@@ -312,26 +354,40 @@ public enum TransferCarrier {
 
     // MARK: endings
 
-    fileprivate static func received(_ task: URLSessionTask, _ data: Data) {
-        guard let (id, index) = which(task), records[id] != nil else { return }
-        let file = body(id, index)
+    private static func resolve(_ task: URLSessionTask) -> (key: Key, record: Record, index: Int)? {
+        guard let (token, index) = which(task.taskDescription), index >= 0 else { return nil }
+        if let found = records.first(where: { $0.value.generation == token }), index < found.value.requests.count {
+            return (found.key, found.value, index)
+        }
+        let legacy = records.filter { $0.value.generation == nil && $0.value.id == token }
+        if legacy.count == 1, let found = legacy.first, index < found.value.requests.count {
+            return (found.key, found.value, index)
+        }
+        return nil
+    }
+
+    static func received(_ task: URLSessionTask, _ data: Data) {
+        guard let (key, _, index) = resolve(task) else { return }
+        let file = body(key, index)
+        try? FileManager.default.createDirectory(at: folder(key), withIntermediateDirectories: true)
         if let h = try? FileHandle(forWritingTo: file) { h.seekToEndOfFile(); h.write(data); h.closeFile() } else { try? data.write(to: file) }
         progressed(task) { $0.received = ($0.received ?? 0) + Int64(data.count) }
     }
 
     /// A request's bytes moved: kept in memory, written with the ending, and
-    /// told at most once a second. A download past `downloadTotal` is
-    /// cancelled and fails `download-total-exceeded`.
-    fileprivate static func progressed(_ task: URLSessionTask, _ change: (inout Item) -> Void) {
-        guard let (id, index) = which(task), var r = records[id], index < r.requests.count else { return }
+    /// told at most once a second. A download past `downloadTotal` cancels
+    /// every task in the registration and fails `download-total-exceeded`.
+    static func progressed(_ task: URLSessionTask, _ change: (inout Item) -> Void) {
+        guard var (key, r, index) = resolve(task) else { return }
         change(&r.requests[index])
         if let ceiling = r.downloadTotal, ceiling > 0, r.requests.reduce(0, { $0 + ($1.received ?? 0) }) > ceiling, r.failureReason.isEmpty {
             r.failureReason = "download-total-exceeded"
             task.cancel()
+            cancelTasks(for: r)
         }
-        records[id] = r
-        if told[id].map({ Date().timeIntervalSince($0) >= 1 }) ?? true {
-            told[id] = Date()
+        records[key] = r
+        if told[key].map({ Date().timeIntervalSince($0) >= 1 }) ?? true {
+            told[key] = Date()
             tell(r)
         }
     }
@@ -341,15 +397,16 @@ public enum TransferCarrier {
         NotificationCenter.default.post(name: Notification.Name("exact.transfers.changed"), object: body as NSDictionary)
     }
 
-    fileprivate static func downloaded(_ task: URLSessionTask, to location: URL) {
-        guard let (id, index) = which(task), records[id] != nil else { return }
-        let file = body(id, index)
+    static func downloaded(_ task: URLSessionTask, to location: URL) {
+        guard let (key, _, index) = resolve(task) else { return }
+        let file = body(key, index)
+        try? FileManager.default.createDirectory(at: folder(key), withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: file)
         try? FileManager.default.moveItem(at: location, to: file)
     }
 
-    fileprivate static func completed(_ task: URLSessionTask, _ error: Error?) {
-        guard let (id, index) = which(task), var r = records[id], index < r.requests.count else { return }
+    static func completed(_ task: URLSessionTask, _ error: Error?) {
+        guard var (key, r, index) = resolve(task) else { return }
         var i = r.requests[index]
         let http = task.response as? HTTPURLResponse
         i.ended = true
@@ -360,7 +417,7 @@ public enum TransferCarrier {
         // A small body's progress may never be told; the task's counts are final here.
         i.sent = max(i.sent ?? 0, task.countOfBytesSent)
         i.received = max(i.received ?? 0, task.countOfBytesReceived)
-        let have = (try? FileManager.default.attributesOfItem(atPath: body(id, index).path)[.size] as? Int64) ?? 0
+        let have = (try? FileManager.default.attributesOfItem(atPath: body(key, index).path)[.size] as? Int64) ?? 0
         i.bodyLost = error == nil && (i.length ?? 0) > have
         if let e = error as NSError? {
             i.error = e.localizedDescription
@@ -379,31 +436,31 @@ public enum TransferCarrier {
         if r.ended { r.result = r.failureReason.isEmpty ? "success" : "failure" }
         keep(r)
         tell(r)
-        WakeStore.log("transfers: \(id) \(index) ended \(i.status.map(String.init) ?? i.error ?? "?")\(i.bodyLost ? ", its body lost" : "")")
+        WakeStore.log("transfers: \(r.id) \(index) ended \(i.status.map(String.init) ?? i.error ?? "?")\(i.bodyLost ? ", its body lost" : "")")
         // While the app runs and no relaunch waits on these events, the ending is offered now.
-        if r.ended, relaunched[identifier(r.discretionary)] == nil { offer([id]) }
+        if r.ended, relaunched[identifier(r.discretionary)] == nil { offer([key]) }
     }
 
     fileprivate static func finished(_ session: URLSession) {
         guard let identifier = session.configuration.identifier, let completion = relaunched.removeValue(forKey: identifier) else { return }
         let discretionary = identifier == self.identifier(true)
-        let ended = records.values.filter { $0.discretionary == discretionary && $0.ended && $0.delivered < 3 }.map(\.id)
+        let ended = records.filter { $0.value.discretionary == discretionary && $0.value.ended && $0.value.delivered < 3 }.map(\.key)
         WakeStore.log("transfers: \(identifier)'s events are in: \(ended.count) ended")
         offer(ended, completion: completion)
     }
 
     /// The ended registrations not yet retired, once a module is ready at a launch (D10).
     static func ready() {
-        let held = records.values.filter { $0.ended && !offering.contains($0.id) }.map(\.id)
+        let held = records.filter { $0.value.ended && !offering.contains($0.key) }.map(\.key)
         if !held.isEmpty { offer(held) }
     }
 
-    private static func offer(_ ids: [String], completion: (() -> Void)? = nil) {
-        guard !ids.isEmpty else { completion?(); return }
-        offering.formUnion(ids)
-        for id in ids { records[id]?.delivered += 1; records[id].map(keep) }
-        WakeStore.transfer(ids.compactMap { id in records[id].map { ($0.package, id) } }) { _ in
-            offering.subtract(ids)
+    private static func offer(_ keys: [Key], completion: (() -> Void)? = nil) {
+        guard !keys.isEmpty else { completion?(); return }
+        offering.formUnion(keys)
+        for key in keys { records[key]?.delivered += 1; records[key].map(keep) }
+        WakeStore.transfer(keys.compactMap { key in records[key].map { ($0.package, $0.id) } }) { _ in
+            offering.subtract(keys)
             completion?()
         }
     }

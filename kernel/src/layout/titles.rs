@@ -45,7 +45,7 @@ impl LayoutTree {
             style.margin.bottom = authored.margin.bottom;
             if title {
                 let text = arena.text_style(slot);
-                let line = match text.line_height {
+                let line = match text.used_line_height() {
                     Some(line) => line,
                     None => {
                         let run = TextRun {

@@ -314,11 +314,19 @@ impl Lexer {
                             next_line = i + 1 + json.bytes().filter(|&c| c == b'\n').count();
                             out.push(Token {
                                 kind: TokenKind::Punct("="),
-                                span: col_of(equal),
+                                span: Span {
+                                    end_col: col_of(equal + 1).col,
+                                    ..col_of(equal)
+                                },
                             });
+                            // A value spanning lines ends its span on the first.
+                            let first = json.lines().next().map_or(0, str::len);
                             out.push(Token {
                                 kind: TokenKind::Json(json.into()),
-                                span: col_of(start),
+                                span: Span {
+                                    end_col: col_of(start + first).col,
+                                    ..col_of(start)
+                                },
                             });
                             break;
                         }
@@ -361,11 +369,23 @@ impl Lexer {
                     // A custom property's name, only ever an attribute's, takes
                     // every character CSS's does (`--gap-2`)
                     let custom = dashes == 2;
+                    // Data attributes admit any following digits and hyphens
+                    // (LLP 1075.003 §3.3); an expression still reads `data-x-1`
+                    // as subtraction.
+                    let data = trimmed[pos..].starts_with("data-") && {
+                        let rest = &trimmed[pos..];
+                        let end = rest
+                            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                            .unwrap_or(rest.len());
+                        let after = rest[end..].trim_start_matches([' ', '\t']);
+                        after.starts_with('=') && !after.starts_with("==")
+                    };
                     while pos < bytes.len()
                         && ((bytes[pos] as char).is_ascii_alphanumeric()
                             || bytes[pos] == b'_'
                             || (bytes[pos] == b'-'
                                 && (custom
+                                    || data
                                     || bytes
                                         .get(pos + 1)
                                         .is_some_and(|n| (*n as char).is_ascii_alphabetic()))))
@@ -414,10 +434,20 @@ impl Lexer {
                             });
                         }
                     }
+                    // A number after `.` is a list index, digits only, so
+                    // `rows.1.0` is two indexes, not `rows` and the number `1.0`.
+                    let index = matches!(
+                        out.last(),
+                        Some(Token {
+                            kind: TokenKind::Punct("."),
+                            ..
+                        })
+                    );
                     // A dot is the decimal point only when a digit follows, so
                     // `rows.0.steps` is an index and then a field, not the
                     // number `0.` (drums R7).
-                    if bytes.get(pos) == Some(&b'.')
+                    if !index
+                        && bytes.get(pos) == Some(&b'.')
                         && bytes
                             .get(pos + 1)
                             .is_some_and(|n| (*n as char).is_ascii_digit())
@@ -432,7 +462,7 @@ impl Lexer {
                     // least one digit. Without the digit the `e` is not part of
                     // the number, so a unit written against it (`2em`) is still
                     // the unquoted length it was.
-                    if matches!(bytes.get(pos), Some(b'e' | b'E')) {
+                    if !index && matches!(bytes.get(pos), Some(b'e' | b'E')) {
                         let sign = usize::from(matches!(bytes.get(pos + 1), Some(b'+' | b'-')));
                         if bytes
                             .get(pos + 1 + sign)
@@ -539,7 +569,11 @@ impl Lexer {
                     let c = trimmed[pos..].chars().next().unwrap_or(c);
                     LexError {
                         id: "syntax-unexpected-char",
-                        message: format!("unexpected `{c}`"),
+                        message: if c == '@' {
+                            "unexpected `@`: quote a held ticket target in a test step, as `tap \"@browser\" dismissed` or `type \"@date\" \"2026-10-10\"`".into()
+                        } else {
+                            format!("unexpected `{c}`")
+                        },
                         span: Span {
                             end_col: col_of(pos + c.len_utf8()).col,
                             ..span

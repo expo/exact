@@ -317,21 +317,23 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
 
     private fun asset(c: android.database.Cursor): JSONObject {
         val id = ContentUris.withAppendedId(IMAGES, c.getLong(0)).toString()
-        val turned = c.getInt(3) % 180 != 0
-        val (w, h) = c.getInt(1) to c.getInt(2)
+        val (w, h) = upright(c.getInt(1), c.getInt(2), c.getInt(3))
         val taken = if (c.isNull(4)) null else c.getLong(4).toDouble()
         val text = { i: Int -> if (c.isNull(i)) JSONObject.NULL else c.getString(i) }
         return JSONObject()
             .put("id", id)
             .put("mediaType", "image")
-            .put("width", if (turned) h else w)
-            .put("height", if (turned) w else h)
+            .put("width", w)
+            .put("height", h)
             .put("creationDate", taken ?: (c.getLong(5) * 1000.0))
             .put("favorite", c.columnCount > 11 && c.getInt(11) == 1)
             .put("picture", "photos:$id")
             .put("apple", JSONObject.NULL)
             .put("android", JSONObject().put("relativePath", text(6)).put("bucketDisplayName", text(7)).put("ownerPackageName", text(8)))
     }
+
+    /** A photo's sides as it is shown: MediaStore keeps them as stored, before its [orientation] turns it. */
+    private fun upright(width: Int, height: Int, orientation: Int) = if (orientation % 180 != 0) height to width else width to height
 
     /** Whether the app may no longer open [uri]: refused, or no row. A query that fails otherwise, or answers no
      * cursor, is no answer, and the picture stays. */
@@ -350,8 +352,9 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
         val uri = Uri.parse(id)
         work.execute {
             try {
-                val size = app.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT), null, null, null)
-                    ?.use { if (it.moveToFirst()) it.getInt(0) to it.getInt(1) else null }
+                val columns = arrayOf(MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT, MediaStore.Images.Media.ORIENTATION)
+                val size = app.contentResolver.query(uri, columns, null, null, null)
+                    ?.use { if (it.moveToFirst()) upright(it.getInt(0), it.getInt(1), it.getInt(2)) else null }
                     ?: return@execute reply(null, "NotFoundError")
                 val longest = longest(size, width, height, fit)
                 val bitmap = app.contentResolver.loadThumbnail(uri, Size(longest, longest), null)

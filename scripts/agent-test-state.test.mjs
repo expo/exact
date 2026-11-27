@@ -127,7 +127,7 @@ test "the next install owns its store"
     const build = spawnSync(process.execPath, ['host/web-js/build.mjs', 'ui-gallery', '--plan', plan, '--out', dist, '--render', 'none'], { cwd: root, encoding: 'utf8' });
     expect(build.status, build.stderr).toBe(0);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const r = await runTests({ host: 'web', file, app: 'ui-gallery', url: `http://127.0.0.1:${server.address().port}/` });
+    const r = await runTests({ host: 'web', file, app: dir, url: `http://127.0.0.1:${server.address().port}/` });
     expect(r.results.slice(4).map(t => t.failures)).toEqual([[], []]);
     expect([r.passed, r.failed]).toEqual([4, 2]);
     expect(r.results[0].failures).toEqual([]);

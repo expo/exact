@@ -431,10 +431,12 @@ impl Editor {
     fn snap(&self, p: u32) -> u32 {
         self.proj.canonical(p)
     }
-
-    /// The app wrote a value. The changed middle is replaced and the selection
-    /// carried through it; the history resets, as it does on Apple (LLP 1045 D1).
+    /// Replace the changed middle and clear undo (LLP 1045 D1).
     pub fn set_value(&mut self, text: &[u16]) -> Change {
+        self.rewrite_value(text, false)
+    }
+    /// A filter preserves an endpoint inside the replaced span.
+    pub fn rewrite_value(&mut self, text: &[u16], filtered: bool) -> Change {
         let text = clean(text);
         if text == self.source {
             return Change::default();
@@ -467,6 +469,8 @@ impl Editor {
                 p
             } else if p >= end {
                 p + inserted - (end - a)
+            } else if filtered {
+                p.min(a + inserted)
             } else {
                 a + inserted
             }) as u32
@@ -1297,32 +1301,32 @@ impl Editor {
                 place = c.1;
                 stick = true;
             } else if let Some(edit) = self.edit(format.name(), "", (p, p)) {
-                if let [(oa, ob, _), (ca, cb, _)] = edit.reps.as_slice() {
-                    // Close before whitespace and reopen after it: a marker
-                    // beside the gap cannot close or open CommonMark emphasis.
-                    let left = if format == Format::Code {
-                        p
-                    } else {
-                        (trimmed(&self.source[..p as usize]) as u32).max(*ob)
-                    };
-                    let tail = &self.source[p as usize..*ca as usize];
-                    let right = if format == Format::Code {
-                        p
-                    } else {
-                        p + (tail.len() - utf16(utf8(tail).trim_start()).len()) as u32
-                    };
-                    let closer = &self.source[*ca as usize..*cb as usize];
-                    let opener = &self.source[*oa as usize..*ob as usize];
-                    if left == p {
-                        open.splice(0..0, closer.iter().copied());
-                    } else {
-                        before.push((left, left, closer.to_vec()));
+                match edit.reps.as_slice() {
+                    [(oa, ob, _), (ca, cb, _)] if (*ob..=*ca).contains(&p) => {
+                        // Close before whitespace and reopen after it (CommonMark).
+                        let tail = &self.source[p as usize..*ca as usize];
+                        let (left, right) = if format == Format::Code {
+                            (p, p)
+                        } else {
+                            (
+                                (trimmed(&self.source[..p as usize]) as u32).max(*ob),
+                                p + (tail.len() - utf16(utf8(tail).trim_start()).len()) as u32,
+                            )
+                        };
+                        let closer = &self.source[*ca as usize..*cb as usize];
+                        let opener = &self.source[*oa as usize..*ob as usize];
+                        if left == p {
+                            open.splice(0..0, closer.iter().copied());
+                        } else {
+                            before.push((left, left, closer.to_vec()));
+                        }
+                        if right == p {
+                            close.extend_from_slice(opener);
+                        } else {
+                            after.push((right, right, opener.to_vec()));
+                        }
                     }
-                    if right == p {
-                        close.extend_from_slice(opener);
-                    } else {
-                        after.push((right, right, opener.to_vec()));
-                    }
+                    _ => {}
                 }
             }
         }

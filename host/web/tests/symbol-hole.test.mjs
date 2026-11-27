@@ -10,6 +10,7 @@ import { expect } from 'bun:test';
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
+import { decodePng } from '../../../scripts/png.mjs';
 import { withLook } from '../look.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
 import { engineTests } from '../../../scripts/coverage.mjs';
@@ -63,6 +64,33 @@ for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand
     await suite.close();
   }
 }, 20000);
+
+// Firefox forces the inherited foreground and paints a literal currentColor
+// background even though it lacks preserve-parent-color.
+for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest.firefox(`forced-colour masks follow disabled button ink (${file})`, async () => {
+  const source = readFileSync(resolve(ROOT, file), 'utf8');
+  const browser = await suiteBrowser('firefox');
+  try {
+    const page = await browser.newPage({ forcedColors: 'active', colorScheme: 'light' });
+    await page.setContent(`<!doctype html><style>
+      ${symbolSheet(source)}
+      #exact-root { display: flex; width: max-content; }
+      button { border: 0; padding: 0; }
+      img, svg { display: block; }
+      </style><div id="exact-root">
+        <button disabled>${img('mask', 'evenodd')}</button>
+        <button disabled><svg width="48" height="48" viewBox="0 0 24 24">
+          <path d="${ring}" fill="currentColor" fill-rule="evenodd"/>
+        </svg></button>
+      </div><script>${stand} ${glueDeclarations(source, names)} ${run}</script>`);
+    await page.waitForFunction(() => document.getElementById('mask').naturalWidth > 0);
+    const { width, data } = decodePng(await page.locator('#exact-root').screenshot());
+    const pixel = (x, y = 8) => [...data.subarray((y * width + x) * 4, (y * width + x) * 4 + 4)];
+    expect(pixel(48 + 8)).not.toEqual(pixel(48 + 24, 24));
+    expect(pixel(8)).toEqual(pixel(48 + 8));
+    expect(pixel(24, 24)).toEqual(pixel(48 + 24, 24));
+  } finally { await browser.close(); }
+}, 10000);
 
 // The JS target's `iconForm` reads a source form as exact_kernel::Icon::parse does: each shared case
 // (kernel/tests/fixtures/icon-forms.json, which contract/cli/tests/it/icon_forms.rs holds Icon::parse to). And `draw` puts

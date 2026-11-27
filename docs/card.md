@@ -90,6 +90,7 @@ parts: use X from "exact:content"; an option is none or some(…)
 test steps (app.test.contract, docs/contract-grammar.md)
   tap "id" (… contextmenu)
   type "id" "text", type "id" key "Enter"
+  tap "@browser" dismissed, type "@date" "…"
   expect text "id" == "…"
   expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
@@ -163,7 +164,7 @@ colour: Leave the accent unsaid (a brand is an app.forma) and controls unpainted
     text "Total" color="-exact-secondary-label"
     view padding=12 background-color="-exact-secondary-background"
       text "Over" color="-exact-system-red"
-reading and writing data: app.ts's `loadItems`, `addItem` answer exactly their shape; a refusal is a reply (`ok: false`), not a throw. `then act` after `refreshes` clears the field on ok; `pending(added)` stops a second send, `parallel` runs both.
+reading and writing data: app.ts's `loadItems`, `addItem` match their shape; refusals reply (`ok: false`), never throw. `then act` after `refreshes` runs on ok; `pending(added)` guards resends, `parallel` runs both.
   shape Reply
     ok: bool
   resource items = loadItems() as shape string[] else empty()
@@ -180,7 +181,7 @@ a dated record: The write reads the clock, not a ticked `now`; `performanceNow()
   action log
     let at = time.epochAtZero + performanceNow()
     days = days.concat([formatDate(at, time.utcOffset, "iso")])
-a test, and verify: Fresh store per test. `reload` keeps it. `clock data` lands replies, `clock settle` ends transitions. `bun exact.mjs verify` checks ends and relaunches. Run `verify ios` last. Keep its `contract verify` receipt and `--shots <dir>`.
+a test, and verify: Fresh store per test; `reload` keeps it. `clock data` lands replies, `clock settle` ends motion. `bun exact.mjs verify` checks ends and relaunches (`verify ios` last; keep receipt and `--shots <dir>`).
   test "a pick survives a relaunch"
     tap "pick"
     clock data
@@ -213,5 +214,5 @@ component App
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
 - No announce call: a screen reader reads a mounted `text role="status"` (or `"alert"`) as its text changes (`vocab live`).
 - Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
-idioms with code: viewport-and-container-units bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics symbol-effect status-bar live toast titlebar share use members svg env safe-area var media css cache rtl :active
-symbol roles ("symbol:<role>"; * has a <role>-fill; symbol:sf/<name> is Apple-only): back close compose add microphone send search copy select-text more delete forward home* person* messages notifications* settings repeat activity bookmark* document select* reorder list cart sort filter heart* reply share ellipsis photo play* pause* skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop* circle alert* minus-circle pencil waveform info* camera star* minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag* phone smartphone article radio running walking stopwatch timer history ruler speed location* location-off* skip-next* finish
+idioms with code: viewport-and-container-units bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics symbol-effect status-bar live toast titlebar share use members svg env edges safe-area var media css cache rtl :active
+symbol roles ("symbol:<role>"; * has a <role>-fill; symbol:sf/<name> is Apple-only): back close compose add microphone send search copy select-text more delete forward home* person* messages notifications* settings repeat activity bookmark* document select* reorder list cart sort filter heart* reply share ellipsis photo play* pause* skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop* circle alert* minus-circle pencil waveform info* camera star* minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag* phone smartphone article radio running walking stopwatch timer history ruler speed location* location-off* skip-next* finish globe sim-card*

@@ -49,17 +49,18 @@ pub(super) fn empty_bounds(
     Some((x, y, w, h))
 }
 
-fn has_inline_live_region(node: &NodeRef<'_>) -> bool {
+fn has_inline_live_region(kernel: &Kernel, node: &NodeRef<'_>) -> bool {
     node.child_nodes().any(|child| {
         child.node_type == NodeType::Text
             && child.style.display != Display::None
             && child.props.bool(PropId::AccessibilityElementsHidden) != Some(true)
-            && (child.props.str(PropId::AccessibilityLive).is_some()
-                || matches!(
-                    child.props.str(PropId::AccessibilityRole),
-                    Some("status" | "alert")
-                )
-                || has_inline_live_region(&child))
+            && (crate::paint::paints(kernel, child.id, None)
+                && (child.props.str(PropId::AccessibilityLive).is_some()
+                    || matches!(
+                        child.props.str(PropId::AccessibilityRole),
+                        Some("status" | "alert")
+                    ))
+                || has_inline_live_region(kernel, &child))
     })
 }
 
@@ -96,7 +97,9 @@ impl<D: DataSource> Presenter<D> {
             {
                 continue;
             }
-            if self.access_pressable(&child) || self.action_group(&child) {
+            let visible = child.computed_row(StyleId::Visibility, |s| s.visibility)
+                == exact_kernel::Visibility::Visible;
+            if visible && (self.access_pressable(&child) || self.action_group(&child)) {
                 self.access_walk(b, child.id, scope);
             } else {
                 self.access_inline_controls(b, &child, scope.with_live(&child));
@@ -164,309 +167,388 @@ impl<D: DataSource> Presenter<D> {
         let id = node.id;
         let aria = node.props.str(PropId::AccessibilityRole);
         let control = ControlKind::of(node.node_type, node.props);
-        // A grouped list's toggle row is one node, as Material's list item
-        // with a trailing switch is to TalkBack: the switch's kind and
-        // state, named by the row, else the switch, else the row's words.
-        // A press on it is a press on the switch. A switch left out of the
-        // tree leaves the row as it is, and the switch's `aria-disabled` is
-        // the node's, as it would be its own.
-        // A row with a text or an image that has a press of its own is no such row:
-        // each of its parts is walked as it is written.
         let kernel = self.host.kernel();
-        let acts = |id| (self.host.runner().handlers_of(id)).contains(&EventKind::Press);
-        let toggle = (kernel
-            .grouped_toggle(id, &acts)
-            .and_then(|t| kernel.node(t)))
-        .filter(|t| !self.access_excluded(t));
-        if let Some((target, kind)) =
-            toggle.and_then(|t| Some((t, ControlKind::of(t.node_type, t.props)?)))
-        {
-            let (role, mut flags, range, value) = self.access_control(&target, kind);
-            if target.props.bool(PropId::Disabled) == Some(true) {
-                flags = (flags | flag::DISABLED) & !(flag::CLICK | flag::LONG_CLICK | flag::DRAG);
-            }
-            if let Some(said) = target.props.bool(PropId::AccessibilityDisabled) {
-                scope.disabled = said;
-            }
-            let name = (self.access_label(&node))
-                .or_else(|| self.access_label(&target))
-                .unwrap_or_else(|| self.access_words(&node, false));
-            let words = || Some((name, value));
-            if self
-                .access_emit(b, &scope, &node, role, flags, range, words)
-                .is_some()
-            {
-                if let Some(own) = b.out.last_mut() {
-                    own.view = target.id;
-                    for action in self.access_actions(&target) {
-                        if !own.actions.iter().any(|a| a.0 == action.0) {
-                            own.actions.push(action);
-                        }
-                    }
-                }
-            }
-            return;
-        }
-        // What is one node, with nothing under it.
-        let leaf = match (node.node_type, control) {
-            (NodeType::TextInput, _) => {
-                let hosted = self.hosts_field(id);
-                let role = if hosted { role::FIELD } else { role::EDIT };
-                let name = self.access_label(&node).unwrap_or_default();
-                let value = match hosted {
-                    true => node
-                        .props
-                        .str(PropId::Placeholder)
-                        .unwrap_or_default()
-                        .into(),
-                    false => self.field_text(id),
-                };
-                Some((role, flag::CLICK, [0.0; 3], (name, value)))
-            }
-            // @ref LLP 1042.001 D11 — one node: what is in a controller
-            // is the controller's to report.
-            (NodeType::Video, _) => {
-                let name = self.access_label(&node).unwrap_or_default();
-                Some((role::MEDIA, 0, [0.0; 3], (name, String::new())))
-            }
-            (_, Some(kind)) if kind != ControlKind::Button => {
-                let (role, flags, range, value) = self.access_control(&node, kind);
-                let name = self.access_label(&node).unwrap_or_default();
-                Some((role, flags, range, (name, value)))
-            }
-            _ => None,
-        };
-        if let Some((role, flags, range, words)) = leaf {
-            self.access_emit(b, &scope, &node, role, flags, range, || Some(words));
-            return;
-        }
-        if self.access_pressable(&node) {
-            let (role, flags) = self.access_pressed(&node);
-            let name = || Some((self.access_name(&node), String::new()));
-            let Some(own) = self.access_emit(b, &scope, &node, role, flags, [0.0; 3], name) else {
-                return;
-            };
-            scope.parent = own;
-            scope.inside = true;
-        } else if Self::drags(&node)
-            && self.lifts()
-            && !matches!(
-                node.node_type,
-                NodeType::Text | NodeType::Image | NodeType::Svg
-            )
-            && !self.access_name(&node).trim().is_empty()
-        {
-            // @ref LLP 1094.000 D9 — a box a held press drags, on a host that
-            // lifts it, is one element named by its words, as a pressable
-            // is, so a service can start its drag; a text or an image is an
-            // element already.
-            let name = || Some((self.access_name(&node), String::new()));
-            let flags = self.access_menu_flag(&node);
-            let Some(own) = self.access_emit(b, &scope, &node, role::GROUP, flags, [0.0; 3], name)
-            else {
-                return;
-            };
-            scope.parent = own;
-            scope.inside = true;
-        } else if matches!(
-            node.node_type,
-            NodeType::Text | NodeType::Image | NodeType::Svg
-        ) {
-            if scope.inside {
-                return;
-            }
-            let text = node.node_type == NodeType::Text;
-            // A single label cannot give its spans different announcement priorities.
-            if text && self.access_label(&node).is_none() && has_inline_live_region(&node) {
-                let role = if node.props.heading().is_some() {
-                    role::HEADING
-                } else {
-                    role::GROUP
-                };
-                if let Some(own) = self.access_emit(b, &scope, &node, role, 0, [0.; 3], || {
-                    Some((String::new(), String::new()))
-                }) {
-                    scope.parent = own;
-                    for child in node
-                        .child_nodes()
-                        .filter(|child| child.node_type == NodeType::Text)
-                    {
+        // `visibility: hidden` and `collapse` suppress this element without
+        // pruning its subtree: a descendant computing `visible` still exposes
+        // under its container's scroll and clip.
+        if !crate::paint::paints(kernel, id, None) {
+            if node.node_type == NodeType::Text {
+                if node.props.str(PropId::Text).is_none() {
+                    for child in node.child_nodes().filter(|c| c.node_type == NodeType::Text) {
                         self.access_walk(b, child.id, scope);
                     }
                 }
                 return;
             }
-            let name = || {
-                let label = self.access_label(&node);
-                let name = label.unwrap_or_else(|| match text {
-                    true => self.access_inline_words(&node),
-                    false => String::new(),
-                });
-                (!name.trim().is_empty()
-                    || text && matches!(scope.live, flag::POLITE | flag::ASSERTIVE))
-                .then_some((name, String::new()))
-            };
-            // @ref LLP 1115.000 D12.5 — a heading by its role, never by an
-            // `aria-level` alone (the kernel's `Props::heading`).
-            let heading = node.props.heading().is_some();
-            let role = match (text, heading, aria) {
-                (true, true, _) => role::HEADING,
-                (true, false, Some("listitem")) => role::LIST_ITEM,
-                (true, false, _) => role::TEXT,
-                _ => role::IMAGE,
-            };
-            if let Some(own) = self.access_emit(b, &scope, &node, role, 0, [0.0; 3], name) {
-                scope.parent = own;
+            if matches!(
+                node.node_type,
+                NodeType::TextInput | NodeType::Video | NodeType::Image | NodeType::Svg
+            ) || control.is_some_and(|k| k != ControlKind::Button)
+            {
+                return;
             }
-            if text {
-                self.access_inline_controls(b, &node, scope);
-            }
-            return;
-        } else if let Some(now) =
-            number(node.props.str(PropId::AccessibilityValueNow)).filter(|_| {
-                matches!(
-                    aria,
-                    Some("progressbar" | "slider" | "meter" | "scrollbar" | "spinbutton")
-                )
-            })
-        {
-            // A range role is one element, its children presentational.
-            let said_min = number(node.props.str(PropId::AccessibilityValueMin));
-            let said_max = number(node.props.str(PropId::AccessibilityValueMax));
-            let (min, max) = (said_min.unwrap_or(0.0), said_max.unwrap_or(100.0));
-            let role = match aria {
-                Some("slider") => role::SLIDER,
-                Some("spinbutton") => role::SPIN_BUTTON,
-                _ => role::PROGRESS,
-            };
-            // A slider or spin button steps by its author's keys
-            // (`access_step_range`) while it is short of a bound: ARIA's 0
-            // and 100 for a slider, and only the bounds a spin button says.
-            let (low, high) = match aria {
-                Some("slider") => (min, max),
-                Some("spinbutton") => (
-                    said_min.unwrap_or(f32::NEG_INFINITY),
-                    said_max.unwrap_or(f32::INFINITY),
-                ),
-                _ => (f32::INFINITY, f32::NEG_INFINITY),
-            };
-            let mut flags = flag::RANGE;
-            if now < high {
-                flags |= flag::FORWARD;
-            }
-            if now > low {
-                flags |= flag::BACKWARD;
-            }
-            let text = node
-                .props
-                .str(PropId::AccessibilityValueText)
-                .unwrap_or_default();
-            let words = (
-                self.access_label(&node).unwrap_or_default(),
-                text.to_string(),
-            );
-            self.access_emit(b, &scope, &node, role, flags, [min, max, now], || {
-                Some(words)
-            });
-            return;
-        } else {
-            // A swipe row is written as a scroller, and is the presenter's
-            // own gesture: its actions are not a place to scroll to. What
-            // scrolls is what the painter and the wheel scroll, a neutral
-            // alert's message box by the alert's defaults too.
             let (ox, oy) = crate::paint::effective_overflow(&node);
-            let may = !scope.inside
-                && node.props.str(PropId::SwipeContent).is_none()
-                && [ox, oy]
-                    .iter()
-                    .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto));
-            let scroller = (may.then(|| self.scroller(id, &b.limits)).flatten())
-                .filter(|s| s.axes.0 || s.axes.1);
-            let label = self.access_label(&node);
-            let dialog = match aria {
-                Some("dialog") => Some(role::DIALOG),
-                Some("alertdialog") => Some(role::ALERT_DIALOG),
-                None if node.props.str(PropId::SemanticTag) == Some("dialog") => Some(role::DIALOG),
-                _ => None,
-            };
-            if let Some(role) = dialog {
-                let modal = self.alert_inert() && self.alert_root() == Some(id);
-                let flags = if modal { flag::MODAL } else { 0 };
-                let name = label
-                    .clone()
-                    .or_else(|| node.props.str(PropId::Title).map(str::to_owned))
-                    .unwrap_or_default();
-                if let Some(parent) =
-                    self.access_emit(b, &scope, &node, role, flags, [0.; 3], || {
-                        Some((name, String::new()))
-                    })
+            if [ox, oy]
+                .iter()
+                .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto))
+            {
+                if let Some(s) = self
+                    .scroller(id, &b.limits)
+                    .filter(|s| s.axes.0 || s.axes.1)
                 {
-                    scope.parent = parent;
+                    if let Some(painted) = b.boxes.get(&id) {
+                        let was = painted.scroll.unwrap_or(s.offset);
+                        let port = (
+                            painted.rect.0 + scope.shift.0,
+                            painted.rect.1 + scope.shift.1,
+                            painted.rect.2,
+                            painted.rect.3,
+                        );
+                        let Some(clip) = intersect(port, scope.clip) else {
+                            return;
+                        };
+                        scope.clip = clip;
+                        scope.shift.0 += was.0 - s.offset.0;
+                        scope.shift.1 += was.1 - s.offset.1;
+                    }
                 }
             }
-            if let Some(s) = scroller {
-                let (flags, range) = Self::access_scroll(&s);
-                let words = (
-                    label.filter(|_| dialog.is_none()).unwrap_or_default(),
-                    String::new(),
-                );
-                let painted = b.boxes.get(&id).cloned();
+        } else {
+            // A grouped list's toggle row is one node, as Material's list item
+            // with a trailing switch is to TalkBack: the switch's kind and
+            // state, named by the row, else the switch, else the row's words.
+            // A press on it is a press on the switch. A switch left out of the
+            // tree leaves the row as it is, and the switch's `aria-disabled` is
+            // the node's, as it would be its own.
+            // A row with a text or an image that has a press of its own is no such row:
+            // each of its parts is walked as it is written.
+            let acts = |id| (self.host.runner().handlers_of(id)).contains(&EventKind::Press);
+            let toggle = (kernel
+                .grouped_toggle(id, &acts)
+                .and_then(|t| kernel.node(t)))
+            .filter(|t| !self.access_excluded(t) && crate::paint::paints(kernel, t.id, None));
+            if let Some((target, kind)) =
+                toggle.and_then(|t| Some((t, ControlKind::of(t.node_type, t.props)?)))
+            {
+                let (role, mut flags, range, value) = self.access_control(&target, kind);
+                if target.props.bool(PropId::Disabled) == Some(true) {
+                    flags =
+                        (flags | flag::DISABLED) & !(flag::CLICK | flag::LONG_CLICK | flag::DRAG);
+                }
+                if let Some(said) = target.props.bool(PropId::AccessibilityDisabled) {
+                    scope.disabled = said;
+                }
+                let name = (self.access_label(&node))
+                    .or_else(|| self.access_label(&target))
+                    .unwrap_or_else(|| self.access_words(&node, false));
+                let words = || Some((name, value));
+                if self
+                    .access_emit(b, &scope, &node, role, flags, range, words)
+                    .is_some()
+                {
+                    if let Some(own) = b.out.last_mut() {
+                        own.view = target.id;
+                        for action in self.access_actions(&target) {
+                            if !own.actions.iter().any(|a| a.0 == action.0) {
+                                own.actions.push(action);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            // What is one node, with nothing under it.
+            let leaf = match (node.node_type, control) {
+                (NodeType::TextInput, _) => {
+                    let hosted = self.hosts_field(id);
+                    let role = if hosted { role::FIELD } else { role::EDIT };
+                    let name = self.access_label(&node).unwrap_or_default();
+                    let value = match hosted {
+                        true => node
+                            .props
+                            .str(PropId::Placeholder)
+                            .unwrap_or_default()
+                            .into(),
+                        false => self.field_text(id),
+                    };
+                    Some((role, flag::CLICK, [0.0; 3], (name, value)))
+                }
+                // @ref LLP 1042.001 D11 — one node: what is in a controller
+                // is the controller's to report.
+                (NodeType::Video, _) => {
+                    let name = self.access_label(&node).unwrap_or_default();
+                    Some((role::MEDIA, 0, [0.0; 3], (name, String::new())))
+                }
+                (_, Some(kind)) if kind != ControlKind::Button => {
+                    let (role, flags, range, value) = self.access_control(&node, kind);
+                    let name = self.access_label(&node).unwrap_or_default();
+                    Some((role, flags, range, (name, value)))
+                }
+                _ => None,
+            };
+            if let Some((role, flags, range, words)) = leaf {
+                self.access_emit(b, &scope, &node, role, flags, range, || Some(words));
+                return;
+            }
+            if self.access_pressable(&node) {
+                let (role, flags) = self.access_pressed(&node);
+                let name = || Some((self.access_name(&node), String::new()));
+                let Some(own) = self.access_emit(b, &scope, &node, role, flags, [0.0; 3], name)
+                else {
+                    return;
+                };
+                scope.parent = own;
+                scope.inside = true;
+            } else if Self::drags(&node)
+                && self.lifts()
+                && !matches!(
+                    node.node_type,
+                    NodeType::Text | NodeType::Image | NodeType::Svg
+                )
+                && !self.access_name(&node).trim().is_empty()
+            {
+                // @ref LLP 1094.000 D9 — a box a held press drags, on a host that
+                // lifts it, is one element named by its words, as a pressable
+                // is, so a service can start its drag; a text or an image is an
+                // element already.
+                let name = || Some((self.access_name(&node), String::new()));
+                let flags = self.access_menu_flag(&node);
                 let Some(own) =
-                    self.access_emit(b, &scope, &node, role::SCROLLER, flags, range, || {
-                        Some(words)
+                    self.access_emit(b, &scope, &node, role::GROUP, flags, [0.0; 3], name)
+                else {
+                    return;
+                };
+                scope.parent = own;
+                scope.inside = true;
+            } else if self.access_menu_flag(&node) != 0
+                && !matches!(
+                    node.node_type,
+                    NodeType::Text | NodeType::Image | NodeType::Svg
+                )
+            {
+                // @ref LLP 1156.008.000 D7.4 — a non-pressable box with a context
+                // menu is exposed with `ACTION_LONG_CLICK` so assistive services
+                // can open its menu.
+                let label = self.access_name(&node);
+                let named = !label.trim().is_empty();
+                let flags = self.access_menu_flag(&node);
+                let Some(own) =
+                    self.access_emit(b, &scope, &node, role::GROUP, flags, [0.0; 3], || {
+                        Some((label, String::new()))
                     })
                 else {
                     return;
                 };
-                if let Some(painted) = painted {
-                    // What is in it was painted at the offset it had then.
-                    let was = painted.scroll.unwrap_or(s.offset);
-                    let port = (
-                        painted.rect.0 + scope.shift.0,
-                        painted.rect.1 + scope.shift.1,
-                        painted.rect.2,
-                        painted.rect.3,
-                    );
-                    scope.clip = intersect(port, scope.clip).unwrap_or(scope.clip);
-                    scope.shift.0 += was.0 - s.offset.0;
-                    scope.shift.1 += was.1 - s.offset.1;
-                }
                 scope.parent = own;
-            } else if let Some(role) = match aria {
-                // A virtual row lends its place to the first accessible child.
-                // The native list already publishes its own scroll container.
-                Some("list") if node.node_type != NodeType::List => Some(role::LIST),
-                Some("listitem") if node.props.str(PropId::ListItemKey).is_none() => {
-                    Some(role::LIST_ITEM)
+                if named {
+                    scope.inside = true;
                 }
-                Some("tablist") => Some(role::TABLIST),
-                None => structure_role(&node),
-                _ => None,
-            } {
-                let words = (label.unwrap_or_default(), String::new());
-                if let Some(own) =
-                    self.access_emit(b, &scope, &node, role, 0, [0.0; 3], || Some(words))
+            } else if matches!(
+                node.node_type,
+                NodeType::Text | NodeType::Image | NodeType::Svg
+            ) {
+                if scope.inside {
+                    return;
+                }
+                let text = node.node_type == NodeType::Text;
+                // A single label cannot give its spans different announcement priorities.
+                if text
+                    && self.access_label(&node).is_none()
+                    && has_inline_live_region(kernel, &node)
                 {
-                    scope.parent = own;
-                }
-            } else if (dialog.is_none()
-                && (matches!(scope.live, flag::POLITE | flag::ASSERTIVE)
-                    || self.action_group(&node)))
-                || (label.is_some() && matches!(aria, Some("group" | "radiogroup" | "region")))
-                || (node.props.get(PropId::TabIndex).is_some() && self.focusable(node.id))
-            {
-                let name = label.unwrap_or_else(|| {
-                    if node.props.str(PropId::AccessibilityActions).is_some() {
-                        self.access_name(&node)
+                    let role = if node.props.heading().is_some() {
+                        role::HEADING
                     } else {
-                        String::new()
+                        role::GROUP
+                    };
+                    if let Some(own) = self.access_emit(b, &scope, &node, role, 0, [0.; 3], || {
+                        Some((String::new(), String::new()))
+                    }) {
+                        scope.parent = own;
+                        for child in node
+                            .child_nodes()
+                            .filter(|child| child.node_type == NodeType::Text)
+                        {
+                            self.access_walk(b, child.id, scope);
+                        }
                     }
-                });
-                let words = (name, String::new());
-                if let Some(own) =
-                    self.access_emit(b, &scope, &node, role::GROUP, 0, [0.0; 3], || Some(words))
-                {
+                    return;
+                }
+                let name = || {
+                    let label = self.access_label(&node);
+                    let name = label.unwrap_or_else(|| match text {
+                        true => self.access_inline_words(&node, false),
+                        false => String::new(),
+                    });
+                    (!name.trim().is_empty()
+                        || text && matches!(scope.live, flag::POLITE | flag::ASSERTIVE))
+                    .then_some((name, String::new()))
+                };
+                // @ref LLP 1115.000 D12.5 — a heading by its role, never by an
+                // `aria-level` alone (the kernel's `Props::heading`).
+                let heading = node.props.heading().is_some();
+                let role = match (text, heading, aria) {
+                    (true, true, _) => role::HEADING,
+                    (true, false, Some("listitem")) => role::LIST_ITEM,
+                    (true, false, _) => role::TEXT,
+                    _ => role::IMAGE,
+                };
+                let flags = self.access_menu_flag(&node);
+                if let Some(own) = self.access_emit(b, &scope, &node, role, flags, [0.0; 3], name) {
                     scope.parent = own;
+                }
+                if text {
+                    self.access_inline_controls(b, &node, scope);
+                }
+                return;
+            } else if let Some(now) =
+                number(node.props.str(PropId::AccessibilityValueNow)).filter(|_| {
+                    matches!(
+                        aria,
+                        Some("progressbar" | "slider" | "meter" | "scrollbar" | "spinbutton")
+                    )
+                })
+            {
+                // A range role is one element, its children presentational.
+                let said_min = number(node.props.str(PropId::AccessibilityValueMin));
+                let said_max = number(node.props.str(PropId::AccessibilityValueMax));
+                let (min, max) = (said_min.unwrap_or(0.0), said_max.unwrap_or(100.0));
+                let role = match aria {
+                    Some("slider") => role::SLIDER,
+                    Some("spinbutton") => role::SPIN_BUTTON,
+                    _ => role::PROGRESS,
+                };
+                // A slider or spin button steps by its author's keys
+                // (`access_step_range`) while it is short of a bound: ARIA's 0
+                // and 100 for a slider, and only the bounds a spin button says.
+                let (low, high) = match aria {
+                    Some("slider") => (min, max),
+                    Some("spinbutton") => (
+                        said_min.unwrap_or(f32::NEG_INFINITY),
+                        said_max.unwrap_or(f32::INFINITY),
+                    ),
+                    _ => (f32::INFINITY, f32::NEG_INFINITY),
+                };
+                let mut flags = flag::RANGE;
+                if now < high {
+                    flags |= flag::FORWARD;
+                }
+                if now > low {
+                    flags |= flag::BACKWARD;
+                }
+                let text = node
+                    .props
+                    .str(PropId::AccessibilityValueText)
+                    .unwrap_or_default();
+                let words = (
+                    self.access_label(&node).unwrap_or_default(),
+                    text.to_string(),
+                );
+                self.access_emit(b, &scope, &node, role, flags, [min, max, now], || {
+                    Some(words)
+                });
+                return;
+            } else {
+                // A swipe row is written as a scroller, and is the presenter's
+                // own gesture: its actions are not a place to scroll to. What
+                // scrolls is what the painter and the wheel scroll, a neutral
+                // alert's message box by the alert's defaults too.
+                let (ox, oy) = crate::paint::effective_overflow(&node);
+                let may = !scope.inside
+                    && node.props.str(PropId::SwipeContent).is_none()
+                    && [ox, oy]
+                        .iter()
+                        .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto));
+                let scroller = (may.then(|| self.scroller(id, &b.limits)).flatten())
+                    .filter(|s| s.axes.0 || s.axes.1);
+                let label = self.access_label(&node);
+                let dialog = match aria {
+                    Some("dialog") => Some(role::DIALOG),
+                    Some("alertdialog") => Some(role::ALERT_DIALOG),
+                    None if node.props.str(PropId::SemanticTag) == Some("dialog") => {
+                        Some(role::DIALOG)
+                    }
+                    _ => None,
+                };
+                if let Some(role) = dialog {
+                    let modal = self.alert_inert() && self.alert_root() == Some(id);
+                    let flags = if modal { flag::MODAL } else { 0 };
+                    let name = label
+                        .clone()
+                        .or_else(|| node.props.str(PropId::Title).map(str::to_owned))
+                        .unwrap_or_default();
+                    if let Some(parent) =
+                        self.access_emit(b, &scope, &node, role, flags, [0.; 3], || {
+                            Some((name, String::new()))
+                        })
+                    {
+                        scope.parent = parent;
+                    }
+                }
+                if let Some(s) = scroller {
+                    let (flags, range) = Self::access_scroll(&s);
+                    let words = (
+                        label.filter(|_| dialog.is_none()).unwrap_or_default(),
+                        String::new(),
+                    );
+                    let painted = b.boxes.get(&id).cloned();
+                    let Some(own) =
+                        self.access_emit(b, &scope, &node, role::SCROLLER, flags, range, || {
+                            Some(words)
+                        })
+                    else {
+                        return;
+                    };
+                    if let Some(painted) = painted {
+                        // What is in it was painted at the offset it had then.
+                        let was = painted.scroll.unwrap_or(s.offset);
+                        let port = (
+                            painted.rect.0 + scope.shift.0,
+                            painted.rect.1 + scope.shift.1,
+                            painted.rect.2,
+                            painted.rect.3,
+                        );
+                        scope.clip = intersect(port, scope.clip).unwrap_or(scope.clip);
+                        scope.shift.0 += was.0 - s.offset.0;
+                        scope.shift.1 += was.1 - s.offset.1;
+                    }
+                    scope.parent = own;
+                } else if let Some(role) = match aria {
+                    // A virtual row lends its place to the first accessible child.
+                    // The native list already publishes its own scroll container.
+                    Some("list") if node.node_type != NodeType::List => Some(role::LIST),
+                    Some("listitem") if node.props.str(PropId::ListItemKey).is_none() => {
+                        Some(role::LIST_ITEM)
+                    }
+                    Some("tablist") => Some(role::TABLIST),
+                    None => structure_role(&node),
+                    _ => None,
+                } {
+                    let words = (label.unwrap_or_default(), String::new());
+                    if let Some(own) =
+                        self.access_emit(b, &scope, &node, role, 0, [0.0; 3], || Some(words))
+                    {
+                        scope.parent = own;
+                    }
+                } else if (dialog.is_none()
+                    && (matches!(scope.live, flag::POLITE | flag::ASSERTIVE)
+                        || self.action_group(&node)))
+                    || (label.is_some() && matches!(aria, Some("group" | "radiogroup" | "region")))
+                    || (node.props.get(PropId::TabIndex).is_some() && self.focusable(node.id))
+                {
+                    let name = label.unwrap_or_else(|| {
+                        if node.props.str(PropId::AccessibilityActions).is_some() {
+                            self.access_name(&node)
+                        } else {
+                            String::new()
+                        }
+                    });
+                    let words = (name, String::new());
+                    if let Some(own) =
+                        self.access_emit(b, &scope, &node, role::GROUP, 0, [0.0; 3], || Some(words))
+                    {
+                        scope.parent = own;
+                    }
                 }
             }
         }
@@ -500,4 +582,228 @@ impl<D: DataSource> Presenter<D> {
                 .for_each(|(i, c)| visit(i, c)),
         }
     }
+
+    /// `aria-labelledby`'s words, else `aria-label`, unless empty.
+    pub(in crate::presenter) fn access_label(&self, node: &NodeRef<'_>) -> Option<String> {
+        self.access_label_in(node, &mut BTreeSet::new())
+    }
+
+    /// Resolve `aria-labelledby` without recursing into `aria-labelledby` on
+    /// referenced targets or their descendants (W3C AccName 1.2 §4.3.1 step 2B),
+    /// guarding against cycles via `seen`.
+    fn access_label_in(&self, node: &NodeRef<'_>, seen: &mut BTreeSet<ViewId>) -> Option<String> {
+        let kernel = self.host.kernel();
+        let named = node.props.str(PropId::AccessibilityLabelledBy).map(|refs| {
+            (refs.split_ascii_whitespace())
+                .filter_map(|name| kernel.find_by_id(name).into_iter().next())
+                .filter_map(|key| kernel.node_by_key(key))
+                .filter_map(|n| {
+                    (!seen.contains(&n.id)).then(|| {
+                        own_access_label(&n).unwrap_or_else(|| {
+                            let include_hidden = !crate::paint::paints(kernel, n.id, None);
+                            self.access_words_in(&n, true, false, include_hidden, seen)
+                        })
+                    })
+                })
+                .filter(|words| !words.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+        named
+            .filter(|words| !words.is_empty())
+            .or_else(|| own_access_label(node))
+    }
+
+    /// A node's description: the words of what `aria-describedby` names,
+    /// else its `aria-description`, else its `title` where that is not its
+    /// name (HTML-AAM's accessible description).
+    pub(super) fn access_hint(&self, node: &NodeRef<'_>) -> String {
+        let kernel = self.host.kernel();
+        let described = node
+            .props
+            .str(PropId::AccessibilityDescribedBy)
+            .map(|refs| {
+                (refs.split_ascii_whitespace())
+                    .filter_map(|name| kernel.find_by_id(name).into_iter().next())
+                    .filter_map(|key| kernel.node_by_key(key))
+                    .map(|n| {
+                        let include_hidden = !crate::paint::paints(kernel, n.id, None);
+                        self.access_name_in(&n, include_hidden)
+                    })
+                    .filter(|words| !words.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+        (described.filter(|words| !words.is_empty()))
+            .or_else(|| (node.props.str(PropId::AccessibilityHint)).map(str::to_string))
+            .or_else(|| {
+                let title = node.props.str(PropId::Title).filter(|t| !t.is_empty())?;
+                (self.access_name(node) != title).then(|| title.to_string())
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether a press on `node` is its own: a button, a link, a node with
+    /// a `press` handler.
+    fn access_pressable(&self, node: &NodeRef<'_>) -> bool {
+        node.node_type == NodeType::Pressable
+            || ControlKind::of(node.node_type, node.props) == Some(ControlKind::Button)
+            || node.props.link().is_some()
+            || (self.host.runner().handlers_of(node.id)).contains(&EventKind::Press)
+    }
+
+    /// A node's words: a text's own, an image's label, and for anything
+    /// else its children's, a space between them, less what is hidden from
+    /// assistive technology and, unless `all`, less the controls inside it,
+    /// which are named apart.
+    pub(in crate::presenter) fn access_words(&self, node: &NodeRef<'_>, all: bool) -> String {
+        self.access_words_in(node, all, true, false, &mut BTreeSet::new())
+    }
+
+    fn access_words_in(
+        &self,
+        node: &NodeRef<'_>,
+        all: bool,
+        follow_labelledby: bool,
+        include_hidden: bool,
+        seen: &mut BTreeSet<ViewId>,
+    ) -> String {
+        if !seen.insert(node.id) {
+            return String::new();
+        }
+        let kernel = self.host.kernel();
+        let visible = include_hidden || crate::paint::paints(kernel, node.id, None);
+        let words = match node.node_type {
+            NodeType::Text => self.access_inline_words(node, include_hidden),
+            NodeType::Image | NodeType::Svg if visible => node
+                .props
+                .str(PropId::AccessibilityLabel)
+                .unwrap_or_default()
+                .to_string(),
+            NodeType::Image | NodeType::Svg => String::new(),
+            NodeType::TextInput | NodeType::Control
+                if ControlKind::of(node.node_type, node.props) != Some(ControlKind::Button) =>
+            {
+                String::new()
+            }
+            _ => (node.children().into_iter())
+                .filter_map(|id| kernel.node(id))
+                .filter(|n| {
+                    let child_visible = include_hidden || crate::paint::paints(kernel, n.id, None);
+                    n.props.bool(PropId::AccessibilityElementsHidden) != Some(true)
+                        && n.style.display != Display::None
+                        && (all || !(child_visible && self.access_pressable(n)))
+                })
+                .map(|n| {
+                    let child_visible = include_hidden || crate::paint::paints(kernel, n.id, None);
+                    let label = child_visible
+                        .then(|| match follow_labelledby {
+                            true => self.access_label_in(&n, seen),
+                            false => own_access_label(&n),
+                        })
+                        .flatten();
+                    label.unwrap_or_else(|| {
+                        self.access_words_in(&n, all, follow_labelledby, include_hidden, seen)
+                    })
+                })
+                .filter(|words| !words.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
+        };
+        seen.remove(&node.id);
+        words
+    }
+
+    fn access_inline_words(&self, node: &NodeRef<'_>, include_hidden: bool) -> String {
+        let kernel = self.host.kernel();
+        if let Some(text) = node.props.str(PropId::Text) {
+            if !include_hidden && !crate::paint::paints(kernel, node.id, None) {
+                return String::new();
+            }
+            // A Markdown text reads as the pieces `markup::expand` draws,
+            // which has no atoms: one is drawn and read as its source
+            // (LLP 1045.000's host table).
+            return match node.props.str(PropId::Markup) {
+                Some("markdown") => exact_markdown::spoken(&exact_markdown::pieces(text)),
+                _ => kernel.bar_text(node.id).unwrap_or_default(),
+            };
+        }
+        type RunLabel<'a> = (bool, Option<(ViewId, &'a str)>);
+        fn collect<'a>(
+            kernel: &Kernel,
+            node: &NodeRef<'a>,
+            hidden: bool,
+            include_hidden: bool,
+            label: Option<(ViewId, &'a str)>,
+            out: &mut Vec<RunLabel<'a>>,
+        ) {
+            let hidden = hidden
+                || node.style.display == Display::None
+                || node.props.bool(PropId::AccessibilityElementsHidden) == Some(true);
+            let visible = include_hidden || crate::paint::paints(kernel, node.id, None);
+            let label = label.or_else(|| {
+                visible
+                    .then(|| node.props.str(PropId::AccessibilityLabel))
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| (node.id, s))
+            });
+            if node.props.str(PropId::Text).is_some() {
+                out.push((hidden || !visible, label));
+            } else {
+                for child in node.child_nodes().filter(|n| n.node_type == NodeType::Text) {
+                    collect(kernel, &child, hidden, include_hidden, label, out);
+                }
+            }
+        }
+        let mut semantics = Vec::new();
+        collect(kernel, node, false, include_hidden, None, &mut semantics);
+        let runs = node.text_runs();
+        let mut said = BTreeSet::new();
+        let words: Vec<&str> = runs
+            .iter()
+            .zip(semantics)
+            .map(|(run, (hidden, label))| {
+                if hidden {
+                    return "";
+                }
+                match label {
+                    Some((id, label)) if said.insert(id) => label,
+                    Some(_) => "",
+                    None => &run.text,
+                }
+            })
+            .collect();
+        match exact_textflow::collapse(&words, node.paragraph().white_space.model()) {
+            Some(collapsed) => collapsed.runs.concat(),
+            None => words.concat(),
+        }
+    }
+
+    /// A node's accessible name: its label, else a button's face, else its
+    /// words, else its `title` (accname's tooltip attribute, step 2I).
+    pub(super) fn access_name(&self, node: &NodeRef<'_>) -> String {
+        self.access_name_in(node, false)
+    }
+
+    fn access_name_in(&self, node: &NodeRef<'_>, include_hidden: bool) -> String {
+        if let Some(label) = self.access_label(node) {
+            return label;
+        }
+        if node.node_type == NodeType::Text {
+            return self.access_inline_words(node, include_hidden);
+        }
+        let words = self.access_words_in(node, false, true, include_hidden, &mut BTreeSet::new());
+        match node.props.str(PropId::Title) {
+            Some(title) if words.trim().is_empty() && !title.is_empty() => title.to_string(),
+            _ => words,
+        }
+    }
+}
+
+fn own_access_label(node: &NodeRef<'_>) -> Option<String> {
+    node.props
+        .str(PropId::AccessibilityLabel)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
 }

@@ -23,13 +23,13 @@ pub(super) fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[derive(Default)]
-struct Fixture {
+pub(super) struct Fixture {
     state: Mutex<(usize, bool, Vec<String>)>,
     requests: Mutex<Vec<(String, Option<Vec<u8>>)>>,
     ready: Condvar,
 }
 impl Fixture {
-    fn wait_held(&self, count: usize) {
+    pub(super) fn wait_held(&self, count: usize) {
         let guard = self.state.lock().unwrap();
         let (state, result) = self
             .ready
@@ -46,7 +46,7 @@ impl Fixture {
         self.ready.notify_all();
     }
 }
-struct Fake(Arc<Fixture>);
+pub(super) struct Fake(pub(super) Arc<Fixture>);
 impl Transport for Fake {
     fn open(
         &self,
@@ -846,7 +846,7 @@ fn ordered_reads_queue_in_order_and_count_undrained_results() {
     }
     assert_eq!(
         core.run(job(128, Request::get("https://example.test/read")), None),
-        Err("native executor admission limit reached")
+        Err("129 ordered requests requested (128 in use, maximum 128)".into())
     );
     fixture.release();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -860,7 +860,7 @@ fn ordered_reads_queue_in_order_and_count_undrained_results() {
     core.resume_ordered();
     assert_eq!(
         core.run(job(129, Request::get("https://example.test/read")), None),
-        Err("native executor admission limit reached"),
+        Err("129 ordered requests requested (128 in use, maximum 128)".into()),
         "completed but undrained reads still count"
     );
     assert_eq!(
@@ -900,9 +900,18 @@ fn ordered_waiting_bytes_include_writes_and_leave_room_for_progress() {
     }
     let mut request = Request::get("https://example.test/refused");
     request.body = Vec::with_capacity(3 << 20);
+    let waiting: usize = core.shared.state.lock().unwrap().jobs[0]
+        .iter()
+        .map(|j| j.waiting_charge)
+        .sum();
+    let charge = reservation(&request).unwrap().1;
     assert_eq!(
-        core.run(job(22, request), None),
-        Err("native ordered queue byte limit reached")
+        core.run(job(22, request), None).unwrap_err(),
+        format!(
+            "{} queued ordered request bytes requested ({waiting} in use, maximum {})",
+            waiting + charge,
+            ORDERED_WAITING_BYTES
+        )
     );
     {
         let state = core.shared.state.lock().unwrap();
@@ -955,7 +964,7 @@ fn writes_and_opaque_work_keep_the_sixteen_ticket_admission_bound() {
         core.resume_ordered();
         assert_eq!(
             core.run(job(16, request), None),
-            Err("native executor admission limit reached")
+            Err("17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into())
         );
     }
     let called = Arc::new(AtomicUsize::new(0));
@@ -969,7 +978,7 @@ fn writes_and_opaque_work_keep_the_sixteen_ticket_admission_bound() {
                 Outcome::Storage(vec![])
             })),
         ),
-        Err("native executor admission limit reached")
+        Err("17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into())
     );
     fixture.release();
     assert_eq!(collect(&core, &woke, 16).len(), 16);
@@ -993,7 +1002,7 @@ fn ordered_requests_after_a_capacity_refusal_wait_for_it_to_settle() {
     }
     assert_eq!(
         core.run(job(16, write(16)), None),
-        Err("native executor admission limit reached")
+        Err("17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into())
     );
     // Later ordered work is held, not refused, while the refusal is retained.
     for ticket in 17..=18 {
@@ -1059,7 +1068,10 @@ fn held_ordered_requests_past_the_limit_refuse_one_and_wait_again() {
     // 17..=36 less 20 is 19 held: sixteen admitted, the seventeenth (34) refused.
     assert_eq!(
         core.resume_ordered(),
-        [(34, "native executor admission limit reached")]
+        [(
+            34,
+            "17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into()
+        )]
     );
     let next = collect(&core, &woke, 16);
     let expected: Vec<u64> = (17..=33).filter(|t| *t != 20).collect();
@@ -1092,7 +1104,7 @@ fn fenced_core() -> (Core, Arc<Fixture>, Receiver<()>) {
     }
     assert_eq!(
         core.run(job(16, write(16)), None),
-        Err("native executor admission limit reached")
+        Err("17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot".into())
     );
     (core, fixture, woke)
 }
@@ -1145,13 +1157,14 @@ fn the_request_past_the_held_count_is_refused_after_the_held_ones() {
     assert!(core.shared.state.lock().unwrap().fenced_bytes > 0);
     fixture.release();
     assert_eq!(collect(&core, &woke, 16).len(), 16);
-    let fence = "earlier ordered admission refusal must settle first";
-    assert_eq!(core.resume_ordered(), [(145, fence)]);
+    let fence =
+        "129 ordered requests waiting behind earlier work requested (128 in use, maximum 128)";
+    assert_eq!(core.resume_ordered(), [(145, fence.into())]);
     assert_eq!(
         tickets(collect(&core, &woke, 128)),
         (17..=144).collect::<Vec<_>>()
     );
-    assert_eq!(core.resume_ordered(), [(146, fence)]);
+    assert_eq!(core.resume_ordered(), [(146, fence.into())]);
     assert_eq!(core.resume_ordered(), []);
     until_settled(&core);
 }
@@ -1178,9 +1191,14 @@ fn the_request_past_the_held_bytes_is_refused_in_its_place() {
     }
     fixture.release();
     assert_eq!(collect(&core, &woke, 16).len(), 16);
-    assert_eq!(
-        core.resume_ordered(),
-        [(38, "earlier ordered admission refusal must settle first")]
+    let refused = core.resume_ordered();
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0].0, 38);
+    assert!(
+        refused[0]
+            .1
+            .contains("ordered request bytes waiting behind earlier work requested"),
+        "{refused:?}"
     );
     assert_eq!(
         tickets(collect(&core, &woke, 21)),

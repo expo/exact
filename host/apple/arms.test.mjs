@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { armArgs, armKey, armOutput, evictArms, keepRoster, keptRoster, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
+import { armArgs, armKey, armSourceKey, armOutput, evictArms, keepRoster, keptRoster, packageKeyArgs, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
 
 test('a qualified native roster is bound to the exact probe bytes, including when imported from a simulator run', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-roster-'));
@@ -128,4 +128,78 @@ test('every arm compiles anew under the own-name output layout, the ones armArgs
   }
   expect(armKey(probe, ['let x = 1'], 'swiftc-6', '')).toBe(armKey(probe, ['let x = 1'], 'swiftc-6', ''));
   expect(armKey(probe, ['let x = 2'], 'swiftc-6', '')).not.toBe(armKey(probe, ['let x = 1'], 'swiftc-6', ''));
+});
+
+test('relocating generated sources keeps private Swift arms only while all inputs match', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-arm-keys-'));
+  const key = (run, { name = 'forma.swift', text = 'let x = 1', flag = '-O',
+    swiftc = 'swift-6', sdk = '/sdk', target = 'arm64-apple-ios-simulator', extra = 'dependencies',
+    authored = 'modules', userText = 'let y = 1', packageText = null, outside = false, packageSuffix = '' } = {}) => {
+    const work = resolve(dir, run), linkRoot = resolve(work, 'link');
+    const source = resolve(outside ? resolve(dir, 'other') : linkRoot, name);
+    const user = resolve(dir, authored, 'User.swift');
+    for (const path of [linkRoot, resolve(dir, 'other'), resolve(dir, authored)]) mkdirSync(path, { recursive: true });
+    writeFileSync(source, text);
+    writeFileSync(user, userText);
+    const snapshot = snapshotSources([user], resolve(work, 'copies'));
+    const packageDir = resolve(work, 'packages');
+    const extraFiles = [];
+    if (packageText !== null) {
+      const pkg = resolve(packageDir, 'src-Pkg', '0-Pkg.swift');
+      mkdirSync(resolve(packageDir, 'src-Pkg'), { recursive: true });
+      writeFileSync(pkg, packageText);
+      extraFiles.push(pkg);
+    }
+    const files = [source, ...snapshot.copies, ...extraFiles];
+    const built = resolve(work, 'module.dylib');
+    const packages = packageDir + packageSuffix;
+    const args = armArgs(['swiftc', '-sdk', sdk, '-target', target, '-emit-library', flag, source, ...snapshot.copies,
+      '-I', packages, resolve(packages, 'ExactPackage.o'), '-o', built], built);
+    const packageDirs = [packageDir, ...[true, false].flatMap(device =>
+      rosterRoutes({ packageDir, device, missingSlice: () => false }).map(r => r.packages + '-probe'))];
+    return armSourceKey(args, files, { built, snapshot, packageDir, packageDirs, linkRoot, swiftc, extra });
+  };
+  try {
+    for (const name of ['forma.swift', 'ExactDataKeys-example.swift', 'ExactComposed-example.swift', 'ExactRosterProbe.swift'])
+      expect(key('first', { name })).toBe(key('second', { name }));
+    // Package sources that use #filePath compile separately with #sourceLocation and do not invalidate app modules.
+    expect(key('first', { packageText: '#sourceLocation(file: "/pkg/Contacts.swift", line: 1)\nlet p = #filePath' }))
+      .toBe(key('second', { packageText: '#sourceLocation(file: "/pkg/Contacts.swift", line: 1)\nlet p = #filePath' }));
+    // An authored file in scratch or next to a package directory retains its path.
+    expect(key('first', { name: 'Other.swift' })).not.toBe(key('second', { name: 'Other.swift' }));
+    expect(key('first', { authored: 'first/packages-local' })).not.toBe(key('second', { authored: 'second/packages-local' }));
+    expect(key('first', { userText: 'let p = #filePath' })).not.toBe(key('second', { userText: 'let p = #filePath' }));
+    for (const packageSuffix of ['-macos-probe', '-simulator-probe', '-maccatalyst-probe', '-probe'])
+      expect(key('first', { packageSuffix })).toBe(key('second', { packageSuffix }));
+    expect(key('first', { packageSuffix: '-unrelated' })).not.toBe(key('second', { packageSuffix: '-unrelated' }));
+    const before = key('first');
+    for (const changed of [{ name: 'ExactRosterProbe.swift' }, { text: 'let x = 2' }, { flag: '-Onone' },
+      { swiftc: 'swift-7' }, { sdk: '/sdk-2' }, { target: 'arm64-apple-ios' }, { extra: 'changed' },
+      { authored: 'other-module' }, { userText: 'let y = 2' }, { outside: true }, { packageSuffix: '-macos-probe' }])
+      expect(key('second', changed)).not.toBe(before);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('package probe keys follow the copied source, not the private build directory', () => {
+  const key = (run, probe, { module = 'A', target = 'simulator', authored = '/app/Shared.swift' } = {}) => {
+    const packageDir = resolve(tmpdir(), run, 'packages'), dir = packageDir + (probe ? '-probe' : '');
+    const copied = resolve(packageDir, 'src-' + module, '0-Shared.swift');
+    return packageKeyArgs(['swiftc', '-target', target, '-I', dir, copied, authored,
+      resolve(dir, `adapter-${module}.swift`), '-o', resolve(dir, `${module}.o`)], dir, packageDir, new Set([copied]), module);
+  };
+  const app = key('first', false);
+  expect(key('first', true)).toEqual(app);
+  expect(key('second', true)).toEqual(app);
+  expect(key('second', true, { target: 'macabi' })).not.toEqual(app);
+  expect(key('second', true, { module: 'B' })).not.toEqual(app);
+  expect(key('second', true, { authored: '/other/Shared.swift' })).not.toEqual(app);
+});
+
+test('package keys retain unrelated arguments even when they contain the private directory', () => {
+  const dir = resolve(tmpdir(), 'packages');
+  const other = ['-sdk', dir, '-I', dir + '-external', resolve(dir, 'User.swift'), `-DROOT=${dir}`];
+  const outputs = ['-L', dir, '-emit-module-path', resolve(dir, 'M.swiftmodule'), '-o', resolve(dir, 'M.dylib')];
+  const key = packageKeyArgs([...other, ...outputs], dir, dir, new Set(), 'M');
+  expect(key.slice(0, other.length)).toEqual(other);
+  expect(key.slice(other.length)).toEqual(['-L', '<dir>', '-emit-module-path', join('<dir>', 'M.swiftmodule'), '-o', join('<dir>', 'M.dylib')]);
 });

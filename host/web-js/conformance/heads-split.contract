@@ -24,7 +24,7 @@ component HeadsSplit
         button press=toggle testId="toggle-head"
           text "Toggle detail head"
       for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" top=40 right=0 bottom=0 left=0 background-color="#ffffff"
+        column navigationKey=`${e.id}` navigationSplit="split" testId=`route-${e.name}` position="absolute" top=40 right=0 bottom=0 left=0 background-color="#ffffff"
           if e.name == "items"
             head title="Items" description="All items" canonical="/"
             list

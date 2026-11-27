@@ -109,7 +109,7 @@ fn the_reader_crosses_an_alerts_part_boxes_only_when_they_hold_their_parts() {
                 message,
                 rows.into_iter().map(|r| r.title).collect::<Vec<_>>(),
             ),
-            Plan::Menu(_) => unreachable!("an alertdialog is no menu"),
+            Plan::Menu { .. } => unreachable!("an alertdialog is no menu"),
         })
     };
     use NodeType::{Pressable, Text, View};

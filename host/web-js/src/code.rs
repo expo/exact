@@ -34,6 +34,8 @@ pub struct Scope {
     pub frames: Vec<Frame>,
     /// Arm-owned derives are lexical bindings. Their local names are independent of the plan row.
     pub local_derives: std::rc::Rc<BTreeMap<usize, (String, usize)>>,
+    /// Enclosing status-owner elements: node index -> (local element name, scope depth).
+    pub status_owners: std::rc::Rc<BTreeMap<u32, (String, usize)>>,
     /// Emit root getters, handlers and literals as operands a shared body can take as arguments.
     pub capture: bool,
     /// Sites after variable-length slot content have no fixed offset from the enclosing mount.
@@ -47,6 +49,8 @@ pub struct Scope {
     pub rows: Option<String>,
     /// Row slots available in this scope, excluding slots owned by descendants.
     pub row_slots: BTreeSet<usize>,
+    /// Enclosing arms whose owned state, resources and mutations live on `rows`.
+    pub owned_arms: BTreeSet<u32>,
     /// The JavaScript expression of the instance path in force, where the
     /// plan has a child's resource (LLP 1035.005.004 D8): each region
     /// crossed, with its arm or its row's key.
@@ -62,7 +66,7 @@ impl Scope {
         }
     }
 
-    fn row_member(&self, rows: &str, name: String) -> String {
+    pub(crate) fn row_member(&self, rows: &str, name: String) -> String {
         if self.capture {
             format!(
                 "{rows}[{}]",
@@ -75,9 +79,25 @@ impl Scope {
 
     pub fn derive(&self, i: usize) -> String {
         match self.local_derives.get(&i) {
-            Some((name, depth)) if self.capture => lexical_operand(name, *depth),
+            Some((name, depth)) if self.capture && *depth > 0 => binder_ref(*depth, "d_L", name),
             Some((name, _)) => name.clone(),
             None => self.operand(format!("d_{i}")),
+        }
+    }
+
+    pub(crate) fn frame_binding(&self, name: &str, depth: usize) -> String {
+        if self.capture && depth > 0 {
+            binder_ref(depth, name, "")
+        } else {
+            name.to_string()
+        }
+    }
+
+    pub(crate) fn status_owner(&self, node: u32) -> String {
+        match self.status_owners.get(&node) {
+            Some((name, depth)) if self.capture && *depth > 0 => lexical_operand(name, *depth),
+            Some((name, _)) => name.clone(),
+            None => format!("e{node}"),
         }
     }
 }
@@ -85,6 +105,17 @@ impl Scope {
 /// A nested mount may take this binding as an argument up to its declaring scope.
 pub(crate) fn lexical_operand(name: &str, depth: usize) -> String {
     format!("\0l{depth}:{name}\0")
+}
+
+/// A depth-indexed lexical binder declared at `depth` (`templates.rs` normalizes
+/// declarations inside a shared mount to relative depths and shifts inlined copies).
+pub(crate) fn binder_decl(depth: usize, prefix: &str, suffix: &str) -> String {
+    format!("\0D{depth}:{prefix}:{suffix}\0")
+}
+
+/// A reference to a depth-indexed lexical binder declared at `depth`.
+pub(crate) fn binder_ref(depth: usize, prefix: &str, suffix: &str) -> String {
+    format!("\0R{depth}:{prefix}:{suffix}\0")
 }
 
 /// Signals and settled derives ignore arguments. An at-read derive charges
@@ -107,6 +138,8 @@ pub struct Frame {
     pub item: Option<String>,
     pub index: Option<String>,
     pub bound: Option<String>,
+    /// Lexical scope depth declaring this frame's bindings (`templates.rs`), or 0 when local.
+    pub depth: usize,
 }
 
 /// Runtime names the generated code uses (for the import lists).
@@ -600,8 +633,9 @@ impl Translator<'_> {
                         Opcode::LoadIndex => &f.index,
                         _ => &f.bound,
                     }
-                    .clone()
+                    .as_deref()
                     .ok_or("a frame read the frame does not hold")?;
+                    let g = self.scope.frame_binding(g, f.depth);
                     self.push(format!("{g}()"))
                 }
                 Opcode::Field => {

@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dropPushes, pushDrops, readerReply } from './agent-android-requests.mjs';
+import { adbInstallError, dropPushes, pushDrops, readerReply, readerScreenshotReply } from './agent-android-requests.mjs';
 
 test('the Android carrier waits for the hold duration acknowledged by the host', async () => {
   const request = { op: 'tap', phase: 'hold', ms: 250 };
@@ -21,6 +21,20 @@ test('the Android carrier waits for the hold duration acknowledged by the host',
   for (const line of ['{"phase":"hold","clock":250}', '{"error":"no contact is down"}']) {
     expect(await readerReply(request, () => line, () => { throw new Error('unexpected wait'); })).toBe(line);
   }
+});
+
+test('an Android module tap waits for the reader to acknowledge each injected edge', async () => {
+  const replies = ['DOWN', 'UP'].map(moduleMotion => JSON.stringify({moduleMotion, display:2, x:30, y:42.5}));
+  const result = '{"tapped":7,"delivery":"platform"}';
+  replies.push(result);
+  const edges = [], confirmations = [];
+  const got = await readerReply({op:'tap'}, next => {
+    if (next) confirmations.push(JSON.parse(next));
+    return replies.shift();
+  }, undefined, (...args) => { edges.push(args); return {status:0}; });
+  expect(got).toBe(result);
+  expect(edges).toEqual(['DOWN', 'UP'].map(action => ['shell','input','touchscreen','-d','2','motionevent',action,'30','42.5']));
+  expect(confirmations).toEqual(Array(2).fill({op:'moduleMotion', error:''}));
 });
 
 test("a drop's files go to the device, each in a folder of its own, and the request names them there; an enter's stay", () => {
@@ -54,4 +68,28 @@ test("a file that cannot be put on the device is named, and no request goes on",
     .toEqual({ error: `the drop's file ${import.meta.path} could not be put on the device: no space left on device` });
   expect(calls.some(([verb]) => verb === 'chmod')).toBe(false);
   expect(pushDrops({ op: 'tree' }, '/base', sh)).toEqual({});
+});
+
+test('readerScreenshotReply attaches logical viewport w/h from layout alongside tags', async () => {
+  const asked = [];
+  const ask = (line) => {
+    asked.push(line);
+    if (line === '{"op":"tags"}') return '{"epoch":2,"incarnation":1,"clock":100}';
+    if (line === '{"op":"layout"}') return '{"viewport":{"w":412,"h":915},"boxes":[]}';
+    throw new Error(`unexpected ${line}`);
+  };
+  expect(await readerScreenshotReply('/tmp/a.png', { status: 0 }, ask))
+    .toEqual({ screenshot: '/tmp/a.png', device: true, w: 412, h: 915, epoch: 2, incarnation: 1, clock: 100 });
+  expect(asked).toEqual(['{"op":"tags"}', '{"op":"layout"}']);
+  expect(await readerScreenshotReply('/tmp/a.png', { status: 1, stderr: 'denied\n' }, () => '{"epoch":2}'))
+    .toEqual({ error: 'screencap: denied' });
+});
+
+test('adbInstallError adds a MIUI/HyperOS hint for INSTALL_FAILED_USER_RESTRICTED', () => {
+  const restricted = adbInstallError('Failure [INSTALL_FAILED_USER_RESTRICTED: Install canceled by user]', 'adb install app.apk');
+  expect(restricted).toContain('INSTALL_FAILED_USER_RESTRICTED');
+  expect(restricted).toContain('Install via USB');
+  expect(restricted).toContain('MIUI/HyperOS');
+  expect(adbInstallError('Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]'))
+    .toBe('adb install: Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]');
 });

@@ -302,9 +302,9 @@ public final class Agent {
             }
             #else
             #if os(iOS)
-            emit(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --ios --widget-gallery"])
+            emit(["error": "widget gallery is unavailable; rebuild: bun exact.mjs ios --widget-gallery (or bun host/apple/build.mjs --ios --widget-gallery)"])
             #else
-            emit(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --widget-gallery"])
+            emit(["error": "widget gallery is unavailable; rebuild: bun exact.mjs mac --widget-gallery (or bun host/apple/build.mjs --widget-gallery)"])
             #endif
             return
             #endif
@@ -421,6 +421,14 @@ public final class Agent {
             // inputs: they answer at once, within its own deadline.
             if req["aim"] == nil, req["log"] == nil { r = completingInput(r) }
             session.canvases.settle(now: session.now())
+            // Screenshot mode: settle in the tap's own main-queue turn, one request per state. Only a tap that
+            // landed, as agent-session.mjs's `landed`: not a refused one (`delivery: "unsupported"`, no input
+            // delivered) nor one that closed the window (no session left to settle).
+            if ScreenshotMode.tapSettle, r["error"] == nil, r["delivery"] as? String != "unsupported", r["closed"] as? Bool != true,
+               req["aim"] == nil, req["log"] == nil {
+                let c = clock(["op": "clock", "settle": true]); session.tellAgentOffset()
+                r["settle"] = c
+            }
             emit(tagged(r))
         case "type" where req["message"] != nil:
             let r = completingInput(post(req))
@@ -750,6 +758,9 @@ public final class Agent {
         }
         var facts = PageFacts.agent
         var boldText: Bool?, presented: Bool?
+        #if os(iOS) && targetEnvironment(simulator)
+        var askSiri: Bool?
+        #endif
         #if os(macOS)
         var keyboardNavigation: Bool?
         #endif
@@ -781,10 +792,18 @@ public final class Agent {
             case ("presented", "true"), ("presented", "false"): presented = value == "true"
             // The display's scale as the kernel is told it (LLP 1115.000 D10.3): layout follows; the display draws at its own.
             case ("display-scale", _) where (Double(value) ?? 0) > 0 && Float(Double(value)!).isFinite: PageFacts.agentDisplayScale = Double(value)!
+            #if os(iOS) && targetEnvironment(simulator)
+            // Whether UIKit offers Ask Siri in a context menu (LLP 1094.000 D10), which the simulator never does.
+            case ("ask-siri", "available"), ("ask-siri", "unavailable"):
+                if let refusal = askSiriRefusal { return ["error": refusal] }
+                askSiri = value == "available"
+            #elseif os(iOS)
+            case ("ask-siri", "available"), ("ask-siri", "unavailable"): return ["error": "prefer: ask-siri: the device decides whether it offers Ask Siri"]
+            #endif
             default:
                 let message = "prefer: \(name): \(value) is not a page fact this host sets"
                 // A real page fact this host does not set stays a delivery refusal.
-                if name == "keyboard-navigation" { return ["error": message] }
+                if ["keyboard-navigation", "ask-siri"].contains(name) { return ["error": message] }
                 return ["malformed": true, "error": message]
             }
         }
@@ -804,6 +823,9 @@ public final class Agent {
         if page != nil { PageFacts.agent = facts }
         if let boldText { DisplayPreferences.agentBoldText = boldText }
         if let presented { session.apply(session.runtime.preferPresented(presented)); session.presentedHeld = presented }
+        #if os(iOS) && targetEnvironment(simulator)
+        if let askSiri { systemAskSiri(available: askSiri) }
+        #endif
         if let mode {
             // An empty group asks again: the other facts' commits may have run a `setMode`.
             let batch = session.runtime.setModes(mode, check: mode.isEmpty)
@@ -822,6 +844,9 @@ public final class Agent {
         #if os(macOS)
         if let keyboardNavigation { KeyboardNavigation.agent = keyboardNavigation }
         pageFacts["keyboard-navigation"] = KeyboardNavigation.on
+        #endif
+        #if os(iOS)
+        pageFacts["ask-siri"] = systemAskSiri ? "available" : "unavailable"
         #endif
         let keyword = { (on: Bool) in on ? "reduce" : "no-preference" }
         var reply: [String: Any] = ["media": ["prefers-reduced-motion": keyword(DisplayPreferences.reducedMotion),
@@ -1025,12 +1050,21 @@ public final class Agent {
             // Every list reported and filled where it shows, nested ones
             // included, before the fixed point is read (LLP 1070 G3).
             if settle { presenter.settlePump() }
-            // What hatches asked of elements (LLP 1075.003.000.001 §2.5): drained
-            // here, on the thread this loop holds, each drain a snapshot. A hatch
-            // whose acts keep causing acts is named after 16.
-            if settle, presenter.elements.inFlight > 0 {
+            // What hatches asked of elements (LLP 1075.003.000.001 §2.5) and
+            // deferred native bar presses: drained here on the thread this loop
+            // holds, each drain a snapshot. A hatch whose acts keep causing acts
+            // is named after 16.
+            #if os(iOS) || os(tvOS)
+            let deferredInFlight = presenter.deferredPresses.inFlight > 0
+            #else
+            let deferredInFlight = false
+            #endif
+            if settle, presenter.elements.inFlight > 0 || deferredInFlight {
                 hatchDrains += 1
                 if hatchDrains > 16 { return reply(landed, false, reason: "hatches") }
+                #if os(iOS) || os(tvOS)
+                presenter.deferredPresses.drain()
+                #endif
                 presenter.elements.drain()
                 continue
             }
@@ -1055,10 +1089,11 @@ public final class Agent {
                 #else
                 var out = reply(landed)
                 #endif
-                let inflight = pendingCount()
+                let counts = clockCounts()
+                let inflight = counts.inflight + pendingPictures
                 if inflight > 0 { out["inflight"] = inflight }
                 // The module's background storage still to land (LLP 1097 D9).
-                let background = backgroundCount()
+                let background = counts.background
                 if background > 0 { out["background"] = background }
                 return out
             }
@@ -1118,8 +1153,13 @@ public final class Agent {
                 // or queuing its answer's `then` during the wait above. Recheck
                 // the runner before claiming the fixed point (LLP 1012 §2).
                 let afterNative = max(landed, self.settle() ?? landed)
+                #if os(iOS) || os(tvOS)
+                let stillDeferred = presenter.deferredPresses.inFlight > 0
+                #else
+                let stillDeferred = false
+                #endif
                 if pendingCount() > 0 || session.timerDue.map({ $0 <= landed }) == true
-                    || afterNative > landed || launchQueued() || presenter.elements.inFlight > 0 {
+                    || afterNative > landed || launchQueued() || presenter.elements.inFlight > 0 || stillDeferred {
                     rounds += 1
                     if rounds >= 16 || Date() >= deadline { return reply(landed, false) }
                     to = afterNative
@@ -1294,13 +1334,11 @@ public final class Agent {
         return ["clock": from, "settled": false, "reason": "requests"]
     }
 
-    /// The background's storage operations queued or in flight
-    /// (`state.background`, LLP 1097 D8).
-    func backgroundCount() -> Int {
-        guard let d = session.agent("{\"op\":\"state\"}").data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              let b = o["background"] as? [String: Any] else { return 0 }
-        return (b["queued"] as? Int ?? 0) + (b["inFlight"] as? Int ?? 0)
+    /// The two runner counts in a clock reply, from the same owner turn.
+    private func clockCounts() -> (inflight: Int, background: Int) {
+        let data = Data(session.agent("{\"op\":\"clockCounts\"}").utf8)
+        let counts = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (counts?["inflight"] as? Int ?? 0, counts?["background"] as? Int ?? 0)
     }
 
     /// Whether the launch left work for a later main-queue turn.
@@ -1324,14 +1362,15 @@ public final class Agent {
     }
 
     /// How many requests the runner and the presenter's pictures have in flight.
-    func pendingCount() -> Int {
+    func pendingCount() -> Int { clockCounts().inflight + pendingPictures }
+
+    private var pendingPictures: Int {
         #if os(iOS) || os(tvOS)
         let pictures = SvgLink.drawing?() ?? 0
         #else
         let pictures = 0
         #endif
-        // A reply the server holds is no I/O a clock waits on (LLP 1016.000 D9), nor is an answer's own timer (LLP 1027.000 D1).
-        return pendingRequests().filter { $0["held"] == nil && $0["timer"] == nil }.count + session.presenter.canvas2d.loadingCount + pictures
+        return session.presenter.canvas2d.loadingCount + pictures
     }
 
     /// `clock settle`'s bound on requests in flight: a network's worth.

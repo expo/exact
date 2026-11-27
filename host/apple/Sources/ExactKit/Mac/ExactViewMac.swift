@@ -235,6 +235,8 @@ public final class ExactView: NSView {
 
     /// The first root's `viewport-fit` prop (`"cover"` or nothing).
     public var viewportFit: String? { session.presenter.viewportFit }
+    /// What the window's root route says of full-size content (LLP 1123 D16), `nil` where it says nothing.
+    public var fullSizeContent: Bool? { session.presenter.rootFullSizeContent }
 
     public override func layout() {
         super.layout()

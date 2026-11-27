@@ -603,7 +603,31 @@ impl<D: DataSource> Host<D> {
         }
         self.layout_withheld = false;
         self.emit_ranks(batch);
+        self.emit_rides(&moved, batch);
         self.emit_collections(batch)
+    }
+
+    /// The lists whose mounted rows this layout moved, when a runner commit
+    /// made it (`Presence::committed`) and not a resize or a host's fact,
+    /// which take places without motion: the presenter moves their rows
+    /// from where they showed, on one spring (`Batch::rides`), as a
+    /// collection view's batch update moves its cells.
+    fn emit_rides(&self, moved: &IdSet<ViewId>, batch: &mut Batch) {
+        if !self.presence.committed
+            || self.presence.snap
+            || self.presence.unauthored
+            || moved.is_empty()
+            || self.native_mode()
+        {
+            return;
+        }
+        let mut mounted = Vec::new();
+        for head in self.runner.collections_shallow() {
+            self.runner.collection_mounted(head.view, &mut mounted);
+            if mounted.iter().any(|(wrapper, _)| moved.contains(wrapper)) {
+                batch.rides.push(head.view);
+            }
+        }
     }
 
     /// Commits from an entry where only the commits move the tree

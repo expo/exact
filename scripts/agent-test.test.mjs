@@ -355,17 +355,15 @@ for (const [how, padding, browser, policy = 'request'] of [['rust', 0, 'chrome']
   const dist = join(dir, 'dist'), file = join(dir, 'app.test.contract');
   let requests = 0, configs = 0, renderer, lines, server;
   const heard = [];
-  let report;
-  const reported = new Promise(resolve => { report = resolve; });
-  const probe = `<script>
-    const present = Object.hasOwn(globalThis, '__exactLaunchFaults');
-    if (top === self) fetch('/report?present=' + present);
-    else parent.postMessage({fixtureProbe: true, present}, '*');
-  </script>`;
+  let report; const reported = new Promise(resolve => { report = resolve; });
+  const probe = `<script>const present = Object.hasOwn(globalThis, '__exactLaunchFaults');
+    if (top === self) fetch('/report?present=' + present); else parent.postMessage({fixtureProbe: true, present}, '*');</script>`;
   const backend = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
-    if (new URL(req.url).pathname === '/probe') return new Response(probe, {headers: {'content-type': 'text/html'}});
-    if (new URL(req.url).pathname === '/report') { report(new URL(req.url).searchParams.get('present') === 'true'); return new Response('ok'); }
-    if (new URL(req.url).pathname === '/config') { configs++; return Response.json({text: 'Server-only config'}); }
+    const path = new URL(req.url).pathname;
+    if (path === '/probe') return new Response(probe, {headers: {'content-type': 'text/html'}});
+    if (path === '/report') { report(new URL(req.url).searchParams.get('present') === 'true'); return new Response('ok'); }
+    if (path === '/config') { configs++; return Response.json({text: 'Server-only config'}); }
+    if (path !== '/greeting') return new Response('', {status: 404});
     requests++; return Response.json({text: 'Live greeting'}, {headers: {'access-control-allow-origin': '*', 'cache-control': 'public, max-age=60'}});
   } });
   const prefix = new URL('greeting', backend.url).href;
@@ -1050,7 +1048,7 @@ test "a host refuses an unsupported page fact"
     expect(r.results.map(t => t.end?.error)).toEqual(Array(12).fill(undefined));
     expect(r.results.map(t => t.failures.length)).toEqual([0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1]);
     for (const [index, line, name, value] of [[2, 27, 'prefers-color-scheme', 'banana'], [3, 31, 'unknown', 'dark'], [4, 36, 'prefers-color-scheme', 'banana']]) {
-      const hint = name === 'unknown' ? 'did you mean `prefer prefers-color-scheme dark`? ' : '';
+      const hint = name === 'unknown' ? 'did you mean `prefer screen-reader unknown` or `prefer prefers-color-scheme dark`? ' : '';
       expect(r.results[index].failures[0]).toContain(`line ${line}: prefer: ${name} ${value}: ${hint}expected`);
     }
     expect(r.results[9].failures[0]).toContain('prefer: root-font-size 0: expected');

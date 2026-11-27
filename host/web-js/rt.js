@@ -866,7 +866,6 @@ export const DEVELOPMENT_STORE = null;
  * state's kind is "state" (persist.js); the durable store's (LLP 1018, `Store`: name → text, kept after a commit
  * stands) is "secret". */
 export const Kept = kind => `exact.${kind}.${DEVELOPMENT_STORE ? `@${DEVELOPMENT_STORE}/` : ''}`;
-if (DEVELOPMENT_STORE) globalThis.__exactSeedStored?.(Kept('state'), Kept('secret'));
 export const Store = {
   map: new Map(),
   writes: [],

@@ -93,6 +93,11 @@ impl<D: crate::DataSource> super::Runner<D> {
     /// `path`, read through the I/O link: false in an archive without I/O,
     /// as under grants that name no such line.
     pub fn covers(&self, capability: &str, path: &str) -> bool {
-        (self.links.grants).is_some_and(|link| (link.covers)(self.data.grants(), capability, path))
+        self.covers_in(self.data.grants(), capability, path)
+    }
+
+    /// [`Self::covers`] evaluated against an explicit grant string.
+    pub(in crate::runner) fn covers_in(&self, grants: &str, capability: &str, path: &str) -> bool {
+        (self.links.grants).is_some_and(|link| (link.covers)(grants, capability, path))
     }
 }

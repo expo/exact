@@ -184,6 +184,38 @@ check('pulses that mount apart share a phase, and a resumed one rejoins it', asy
       clock.seek(deadline);
       return [deadline, before, animation.playState];
     })()`)).toEqual([4000 + 173 / 240 * 1000, 'paused', 'finished']);
+
+    // Unresolved named scroll timelines have `timeline === null`; seeking/holding them
+    // must skip them instead of throwing TypeError on numeric `currentTime` (#2004).
+    expect(await evaluate(`(async () => {
+      const { animationClock } = await import('./navigation.js');
+      const root = document.getElementById('exact-root');
+      root.replaceChildren();
+      const wrap = document.createElement('div');
+      wrap.style.timelineScope = '--missing, --dup';
+      const orphan = document.createElement('div');
+      orphan.style.animation = 'pulse 1s linear both';
+      orphan.style.animationTimeline = '--missing';
+      orphan.style.animationRange = '0px 28px';
+      const dupTarget = document.createElement('div');
+      dupTarget.style.animation = 'pulse 1s linear both';
+      dupTarget.style.animationTimeline = '--dup';
+      dupTarget.style.animationRange = '0px 28px';
+      const scroller1 = document.createElement('div');
+      scroller1.style.cssText = 'height:100px;overflow-y:auto;scroll-timeline:--dup y';
+      const scroller2 = document.createElement('div');
+      scroller2.style.cssText = 'height:100px;overflow-y:auto;scroll-timeline:--dup y;visibility:hidden';
+      wrap.append(orphan, dupTarget, scroller1, scroller2);
+      root.append(wrap);
+      const clock = animationClock(() => 0, () => null, () => {});
+      clock.register(0);
+      clock.seek(0);
+      clock.seek(500);
+      const held = clock.hold();
+      const settled = clock.settle();
+      const anims = [orphan, dupTarget].flatMap(el => el.getAnimations());
+      return { count: anims.length, timelines: anims.map(a => a.timeline), runs: anims.map(a => clock.runs(a)), held, settled };
+    })()`)).toEqual({ count: 2, timelines: [null, null], runs: [false, false], held: 0, settled: 0 });
   } finally {
     await suite.close();
     server.close();

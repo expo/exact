@@ -9,6 +9,7 @@
 
 use super::*;
 use crate::animation::Animations;
+use crate::clip::ClipValue;
 use crate::filter::FilterValue;
 use crate::path::PathValue;
 
@@ -44,6 +45,7 @@ pub struct EngineLinks {
     pub(super) play_transition: fn(&mut Engine, u64, Property) -> Option<PlayedTransition>,
     pub(super) observe_path: fn(&mut Engine, u64, Option<PathValue>),
     pub(super) observe_filter: fn(&mut Engine, u64, Option<FilterValue>, bool),
+    pub(super) observe_clip: fn(&mut Engine, u64, Option<ClipValue>),
     pub(super) begin_transform_hold: BeginTransformHold,
     pub(super) update_transform_hold:
         fn(&mut Engine, TransformHold, f64, f64, [Value; 2]) -> Answer<bool>,
@@ -79,6 +81,7 @@ impl EngineLinks {
         play_transition: Engine::play_transition_full,
         observe_path: Engine::observe_path_full,
         observe_filter: Engine::observe_filter_full,
+        observe_clip: Engine::observe_clip_full,
         begin_transform_hold: Engine::begin_transform_hold_full,
         update_transform_hold: Engine::update_transform_hold_full,
         begin_hold: Engine::begin_hold_full,
@@ -115,6 +118,7 @@ impl EngineLinks {
         play_transition: |_, _, _| None,
         observe_path: |_, _, _| {},
         observe_filter: |_, _, _, _| {},
+        observe_clip: |_, _, _| {},
         begin_transform_hold: |_, _, _, _| Ok(None),
         update_transform_hold: |_, _, _, _, _| Ok(false),
         begin_hold: |_, _, _, _, _| Ok(None),
@@ -162,6 +166,7 @@ impl Engine {
             clocks: Default::default(),
             paths: Default::default(),
             filters: Default::default(),
+            clips: Default::default(),
             links,
         }
     }

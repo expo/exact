@@ -359,7 +359,7 @@ fn named_agent_storage_keeps_a_secret_across_a_relaunch() {
     assert!(StoreWrites::default()
         .flush(app, &[write("platformer.best", Some("7"))])
         .is_empty());
-    crate::picker::empty_fresh_tree(app).unwrap();
+    crate::picker::empty_fresh_tree(app, "").unwrap();
     assert!(store_snapshot(app, false).contains(&("platformer.best".into(), "7".into())));
     std::env::remove_var("EXACT_AGENT_STORAGE_FRESH");
     assert!(StoreWrites::default()
@@ -425,7 +425,7 @@ fn a_fresh_tree_that_cannot_be_emptied_is_not_read() {
     std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o555)).unwrap();
     std::env::set_var("EXACT_AGENT_STORAGE_FRESH", "1");
     assert!(
-        crate::picker::empty_fresh_tree(app).is_err(),
+        crate::picker::empty_fresh_tree(app, "").is_err(),
         "the wipe fails"
     );
     assert!(

@@ -103,14 +103,17 @@ test('probeTool: refused is listening, a held hello is starting, a token or hell
 
 test('waitForAnswer: one line a reason, the first answer, and the cap bounding a probe in flight', async () => {
   const { waitForAnswer } = await import('./forma-request.mjs');
+  const sigintBefore = process.listenerCount('SIGINT');
   const said = [], answers = [{ wait: 'listening' }, { wait: 'listening' }, { wait: 'starting' }, { answer: { app: '/a' } }];
   expect(await waitForAnswer(async () => answers.shift(), { say: w => said.push(w), capMs: 10_000, everyMs: 5 })).toEqual({ answer: { app: '/a' } });
   expect(said).toEqual(['listening', 'starting']);
   // A probe still out at the cap (a hello held): the wait ends at the cap, its late answer not taken.
-  const t0 = Date.now();
-  const got = await waitForAnswer(() => new Promise(done => setTimeout(() => done({ answer: { app: '/late' } }), 600)), { say: () => {}, capMs: 100, everyMs: 5 });
-  expect(got.waited).toBeGreaterThanOrEqual(90);
-  expect(Date.now() - t0).toBeLessThan(500);
+  let release;
+  const late = new Promise(done => { release = () => done({ answer: { app: '/late' } }); });
+  const got = await waitForAnswer(() => late, { say: () => {}, capMs: 50, everyMs: 5 });
+  release();
+  expect(got.waited).toBeGreaterThanOrEqual(45);
+  expect(got.answer).toBeUndefined();
   // And no signal handler left behind.
-  expect(process.listenerCount('SIGINT')).toBe(0);
+  expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
 });

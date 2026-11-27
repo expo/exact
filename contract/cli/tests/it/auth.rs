@@ -515,8 +515,10 @@ fn android_settles_a_rejected_callback_with_502() {
 fn android_rejects_userinfo_on_the_live_callback_endpoint() {
     let mut r = boot();
     let mut out = press(&mut r, "go");
+    let reach = out.request.reach.clone();
     out.request =
         exact_data::auth::open_auth_session("https://as.test/a", "app.test://host/cb", "s1", false);
+    out.request.reach = reach;
     assert!(matches!(
         auth::arm(&mut r, &out, false, Browser::Android, None),
         Arm::Present(_)
@@ -537,8 +539,10 @@ fn android_a_stale_callback_keeps_the_retry_until_its_own_callback() {
     auth::complete(&mut r, first.ticket, Err((499, "cancelled")));
     assert_eq!(deliver(&mut r), "499 cancelled");
     let mut next = press(&mut r, "go");
+    let reach = next.request.reach.clone();
     next.request =
         exact_data::auth::open_auth_session("https://as.test/a", "app.test:/cb", "s2", false);
+    next.request.reach = reach;
     auth::arm(&mut r, &next, false, Browser::Android, None);
     assert!(auth::receive_callback(
         &mut r,
@@ -629,7 +633,7 @@ fn android_routes_responses_by_state_and_state_less_returns_to_the_oldest_logout
         let mut session =
             auth::Session::from_json(std::str::from_utf8(&out.request.body).unwrap()).unwrap();
         session.logout = i > 0;
-        out.request = exact_runner::Request::auth(session.to_json().into_bytes());
+        out.request.body = session.to_json().into_bytes();
         assert!(matches!(
             auth::arm(&mut r, out, false, Browser::Android, None),
             Arm::Present(_)
@@ -688,7 +692,7 @@ fn an_addressed_logout_sign_in_answer_settles_with_502_on_every_host() {
                             .unwrap();
                     session.callback = endpoint.into();
                     session.logout = true;
-                    out.request = exact_runner::Request::auth(session.to_json().into_bytes());
+                    out.request.body = session.to_json().into_bytes();
                     assert!(matches!(
                         auth::arm(&mut r, &out, false, browser, Some("https://app.test")),
                         Arm::Present(_)
@@ -722,7 +726,7 @@ fn a_sign_in_takes_its_response_when_a_logout_shares_its_state() {
             auth::Session::from_json(std::str::from_utf8(&out.request.body).unwrap()).unwrap();
         session.state = "s1".into();
         session.logout = index == 0;
-        out.request = exact_runner::Request::auth(session.to_json().into_bytes());
+        out.request.body = session.to_json().into_bytes();
         assert!(matches!(
             auth::arm(&mut r, out, false, Browser::Android, None),
             Arm::Present(_)

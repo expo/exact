@@ -190,7 +190,7 @@ struct WindowHeader {
 /// `NSToolbarItemGroup` of titles, which is a segmented control while there
 /// is room and AppKit's pop-up of the same choices when there is not. A
 /// segment chosen presses its authored tab, and the group then shows the
-/// tab the app says is selected, which is the app's to decide.
+/// tab the app says is selected. The toolbar group exposes no selected-segment tint.
 final class HeaderSegments: NSObject {
     private unowned let presenter: Presenter
     private(set) var item: NSToolbarItemGroup?

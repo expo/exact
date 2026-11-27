@@ -154,7 +154,7 @@ internal class SharedElements(
         val height = max(1, ceil(e.box.height().toDouble()).toInt())
         e.content.setPosition(0, 0, width, height)
         val drawing = e.content.beginRecording()
-        player.replayAt(drawing, b, body, end, e.box.left, e.box.top)
+        player.replayAt(drawing, b, body, end, e.box.left, e.box.top, e.content)
         e.content.endRecording()
         e.slot.setPosition(0, 0, width, height)
         val slot = e.slot.beginRecording()

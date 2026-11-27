@@ -707,11 +707,18 @@ fn reimport_within(
         first_of.entry(n.as_str()).or_insert(t);
     }
     let (mut declared_as, mut declared_any) = (HashMap::new(), HashMap::new());
-    for (i, t) in cur.design.tokens.iter().enumerate().take(cur.tokens.len()) {
+    for (i, (t, checked)) in cur.design.tokens.iter().zip(&cur.tokens).enumerate() {
         declared_as.entry(t.name.value.as_str()).or_insert(i);
         declared_any
             .entry(t.name.value.to_ascii_lowercase())
             .or_insert(i);
+        if let Some(role) = &checked.role {
+            declared_as.entry(checked.name.as_str()).or_insert(i);
+            declared_any
+                .entry(checked.name.to_ascii_lowercase())
+                .or_insert(i);
+            declared_any.entry(role.to_ascii_lowercase()).or_insert(i);
+        }
     }
     let report = |unmapped: &mut Vec<Unmapped>, name: &str, block: &str, why: String| {
         unmapped.push(Unmapped {

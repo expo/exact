@@ -332,8 +332,14 @@ async function operate(op, path, bytes, scope, expect = null) {
         }
         const h = found.entry ?? await found.folder.getFileHandle(found.name, { create: true });
         const w = await h.createWritable({ keepExistingData: op === 'appendFile' });
-        if (op === 'appendFile') await w.seek((await h.getFile()).size);
-        await w.write(bytes); await w.close(); return null;
+        try {
+          if (op === 'appendFile') await w.seek((await h.getFile()).size);
+          await w.write(bytes); await w.close();
+        } catch (e) {
+          try { await w.abort?.(); } catch {}
+          throw e;
+        }
+        return null;
       }
       case 'mkdir': {
         if (found.entry) return null;
@@ -419,7 +425,7 @@ function memoryFile(name, data = new Uint8Array()) {
       return { async seek(n) { at = n; }, async write(d) {
         const b = new Uint8Array(await new Blob([d]).arrayBuffer()), out = new Uint8Array(Math.max(next.length, at + b.length));
         out.set(next); out.set(b, at); next = out; at += b.length;
-      }, async close() { data = next; modified = Math.max(Date.now(), modified + 1); } };
+      }, async close() { data = next; modified = Math.max(Date.now(), modified + 1); }, async abort() { next = new Uint8Array(); } };
     },
     async queryPermission() { return 'granted'; } };
 }

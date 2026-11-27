@@ -266,6 +266,7 @@ fn future_b_paint_does_not_become_a_wheel_base_or_override_newer_input() {
     assert!(p.after_commit().is_none());
     let b = submit(&mut p).unwrap();
     let b_top = b
+        .identity
         .picture
         .borrow()
         .as_ref()
@@ -349,6 +350,7 @@ fn older_b_ack_preserves_newer_model_target_on_same_input_sequence() {
     assert!(p.after_commit().is_none());
     let b = submit(&mut p).unwrap();
     let b_top = b
+        .identity
         .picture
         .borrow()
         .as_ref()

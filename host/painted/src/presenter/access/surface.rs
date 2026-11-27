@@ -236,7 +236,7 @@ impl<D: DataSource> Presenter<D> {
         if let Some(key) = row.opens {
             let opens_menu = *menu_targets.entry(key).or_insert_with(|| {
                 self.host.kernel().node_by_key(key).is_some_and(|target| {
-                    matches!(self.surface_plan(target.id, false), Some(Plan::Menu(_)))
+                    matches!(self.surface_plan(target.id, false), Some(Plan::Menu { .. }))
                 })
             });
             if opens_menu {
@@ -438,7 +438,7 @@ fn visit_visible_rows(shown: &Shown<'_>, mut visit: impl FnMut(VisibleRow<'_>, R
     let clip = |rect| shown.clip.map_or(Some(rect), |clip| intersect(rect, clip));
     // A section title is presented before the item it heads.
     let mut headers: Vec<(usize, &String, ViewId)> = Vec::new();
-    if let Plan::Menu(entries) = shown.plan {
+    if let Plan::Menu { entries, .. } = shown.plan {
         let mut items = 0;
         for entry in entries {
             match entry {

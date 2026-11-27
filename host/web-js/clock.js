@@ -165,10 +165,10 @@ export function drive() {
   if (clock.agent || Poisoned) return;
   let next = Infinity;
   // no timer while a wake runs unseen (wakes.js)
-  for (const t of [...(clock.stopped ? clock.timers.filter(t => t.presentation) : clock.timers), ...Mutations])
+  for (const t of clock.stopped ? clock.timers.filter(t => t.presentation) : clock.timers)
     if (!t.frame && (!t.change || t.ready))
       next = Math.min(next, Link.timerWait?.wake(t) ?? t.due + (t.tolerance ?? 0));
-  for (const m of Mutations) if (m.next < next) next = m.next;
+  for (const m of Mutations) next = Math.min(next, m.due, m.next);
   if (!isFinite(next)) return;
   const token = Link.timerWait?.generation();
   driving = setTimeout(

@@ -13,6 +13,9 @@
 //   announces `geolocation.watchPosition`, so readers are asked again;
 //   `releaseArgs` clears a registration when no reader asks with its options,
 //   and `release` every one when the last reader goes (D5).
+// - A refusal ends a registration: the browser sends it nothing more, even
+//   once location is allowed. It is not kept, so a refused reader's next ask
+//   is a new one, and a grant has refused readers asked again (D5).
 // - `requestPreciseLocation` is `NotSupportedError` on the web (D10).
 // - The state is live: `PermissionStatus`'s change, and, since WebKit sends
 //   none, a look again when the page returns to the foreground (where the
@@ -45,11 +48,17 @@ export function implementation({ changed }) {
   const geo = typeof navigator === 'object' ? navigator.geolocation : undefined;
   // Queried afresh each time: WebKit's `PermissionStatus` keeps the state it was made with.
   const query = () => navigator.permissions.query({ name: 'geolocation' });
-  let permission = null, said = null;
+  let permission = null, said = null, refused = false;
   // By options, as `options` writes them: the browser's watch id, its last answer, and the reads awaiting one.
   const watches = new Map();
   const clear = key => { const w = watches.get(key); if (w) { geo.clearWatch(w.id); watches.delete(key); } };
-  const again = () => query().then(p => { if (p.state !== said) changed('geolocation.geolocationStatus'); }, () => {});
+  const again = () => query().then(p => {
+    if (p.state !== said) changed('geolocation.geolocationStatus');
+    // Only a grant: asking again at `prompt` would show a dismissed prompt anew at each focus.
+    if (refused && p.state === 'granted') { refused = false; changed('geolocation.watchPosition'); }
+  }, () => {});
+  // Kept in `permission`, as a `PermissionStatus` no one holds may be collected with its listener.
+  const follow = async () => { permission = await query(); permission.onchange = again; return permission.state; };
   if (typeof addEventListener === 'function') {
     addEventListener('focus', again);
     addEventListener('visibilitychange', again);
@@ -59,9 +68,7 @@ export function implementation({ changed }) {
       if (!geo) return { available: false, state: 'unknown', accuracy: 'unknown', apple: null, android: null };
       let state = 'unknown';
       try {
-        permission = await query();
-        permission.onchange = again;
-        state = said = permission.state;
+        state = said = await follow();
       } catch { /* a browser without the Permissions API's geolocation: unknown */ }
       return { available: true, state, accuracy: 'unknown', apple: null, android: null };
     },
@@ -75,9 +82,17 @@ export function implementation({ changed }) {
       let w = watches.get(key);
       if (!w) {
         w = { id: null, last: null, waiting: [] };
-        const deliver = v => { w.last = v; for (const answer of w.waiting.splice(0)) answer(v); changed('geolocation.watchPosition'); };
+        const tell = v => { const waiting = w.waiting.splice(0); for (const answer of waiting) answer(v); return waiting.length > 0; };
+        const deliver = v => { w.last = v; tell(v); changed('geolocation.watchPosition'); };
+        const refuse = v => {
+          if (watches.get(key) === w) clear(key);
+          refused = true;
+          if (!permission) follow().catch(() => {});
+          // Announced only to readers holding an earlier answer: one just told would ask, and be refused, without end.
+          if (!tell(v)) changed('geolocation.watchPosition');
+        };
         watches.set(key, w);
-        w.id = geo.watchPosition(p => deliver(position(p)), e => deliver(failure(e)), asked);
+        w.id = geo.watchPosition(p => deliver(position(p)), e => (e.code === 1 ? refuse : deliver)(failure(e)), asked);
       }
       return w.last ? Promise.resolve(w.last) : new Promise(answer => w.waiting.push(answer));
     },

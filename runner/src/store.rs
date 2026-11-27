@@ -56,6 +56,10 @@ pub struct Store {
     reads: std::cell::Cell<usize>,
     /// Of those, draws of secure randomness (LLP 1069.005 D2).
     entropy: std::cell::Cell<usize>,
+    /// Ambient wall/monotonic clock reads (LLP 1195.000 D2.2): tracked
+    /// separately from `reads` and `entropy` so a clock read never makes a
+    /// resource a store-contents reader.
+    clock_reads: std::cell::Cell<usize>,
     /// Device topics the answer being made watches (`native.watch`, LLP
     /// 1016.002): taken by the runner after each answer.
     topics: std::cell::RefCell<Vec<String>>,
@@ -86,6 +90,9 @@ pub struct Store {
     /// a TypeScript answer arms now is due (LLP 1027.000 D1). The runner
     /// sets it before each call into its data source.
     clock_ms: f64,
+    /// Unix milliseconds at which `clock_ms` read zero (LLP 1027.000.000 /
+    /// LLP 1195.000 D2.1); zero at bake or until the host reports `set_time`.
+    epoch_at_zero: f64,
     /// Each entry's value before its first write since the open checkpoint:
     /// what a refused transaction puts back. A checkpoint costs what the
     /// transaction writes, not the store's size. Checkpoints do not nest.
@@ -314,6 +321,7 @@ impl Store {
             revision: 0,
             reads: std::cell::Cell::new(0),
             entropy: std::cell::Cell::new(0),
+            clock_reads: std::cell::Cell::new(0),
             topics: Default::default(),
             announced: Default::default(),
             sockets: Vec::new(),
@@ -323,6 +331,7 @@ impl Store {
             socket_call: SocketCall::None,
             socket_overload: None,
             clock_ms: 0.0,
+            epoch_at_zero: 0.0,
             undo: Vec::new(),
             copied: 0,
         }
@@ -670,7 +679,7 @@ impl Store {
                 continue;
             }
             change.any = true;
-            change.read |= !Self::runner_owned(&name);
+            change.read |= !Self::runner_owned(&name) || name.starts_with(Store::PRESENCE);
             self.remember(&name);
             match next.get(&name) {
                 Some(value) => {
@@ -733,6 +742,22 @@ impl Store {
         self.entropy.get()
     }
 
+    /// Record an ambient clock read (LLP 1195.000 D2.2). Distinct from
+    /// [`Self::observe_external_read`] and [`Self::observe_entropy`].
+    pub fn observe_clock(&self) {
+        self.clock_reads.set(self.clock_reads.get() + 1);
+    }
+
+    /// How many ambient clock reads so far.
+    pub fn clock_reads(&self) -> usize {
+        self.clock_reads.get()
+    }
+
+    /// Snapshot of `(reads, entropy_draws, clock_reads)` before an ask.
+    pub fn observations(&self) -> (usize, usize, usize) {
+        (self.reads.get(), self.entropy.get(), self.clock_reads.get())
+    }
+
     /// The answer being made watches `topic`: the device announces when it
     /// changes, and the resource is asked again (LLP 1016.002). A watched
     /// answer is the device's, so it counts as a read too.
@@ -781,6 +806,16 @@ impl Store {
     /// runner set it (a bake's store).
     pub fn clock_ms(&self) -> f64 {
         self.clock_ms
+    }
+
+    /// Set the launch wall-clock epoch at `clock_ms == 0` (LLP 1195.000 D2.1).
+    pub fn set_epoch_at_zero(&mut self, epoch: f64) {
+        self.epoch_at_zero = epoch;
+    }
+
+    /// Unix ms at `clock_ms == 0`; zero at bake or until told by `set_time`.
+    pub fn epoch_at_zero(&self) -> f64 {
+        self.epoch_at_zero
     }
 
     /// The socket operations staged since the last take, left staged.

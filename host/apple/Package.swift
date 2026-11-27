@@ -215,7 +215,8 @@ let tests: [Target] = [
     .target(name: "ExactPackage", path: "modules", exclude: ["ExactExtensions.swift", "ExactNativeModule.swift", "ExactNativeViews.swift", "ExactNativeTabs.swift", "ExactServices.swift", "ExactForma.swift"], sources: ["ExactPackage.swift"]),
     .target(name: "CameraImplementation", dependencies: ["ExactPackage"], path: "tests/CameraImplementation", exclude: ["exact.json"]),
     .target(name: "RecordingImplementation", dependencies: ["ExactPackage"], path: "tests/RecordingImplementation", exclude: ["exact.json"]),
-    .target(name: "MediaCaptureImplementation", dependencies: ["ExactPackage"], path: "tests/MediaCaptureImplementation"),
+    .target(name: "MediaCaptureObjC", path: "tests/MediaCaptureObjC", publicHeadersPath: ".", cSettings: [.unsafeFlags(["-fobjc-arc", "-fobjc-arc-exceptions"])]),
+    .target(name: "MediaCaptureImplementation", dependencies: ["ExactPackage", "MediaCaptureObjC"], path: "tests/MediaCaptureImplementation"),
     .target(name: "SignInImplementation", dependencies: ["ExactPackage"], path: "tests/SignInImplementation"),
     .target(name: "PasskeysImplementation", dependencies: ["ExactPackage"], path: "tests/PasskeysImplementation"),
     .target(name: "ExactWidgetTimeline", dependencies: ["ExactCore", "ExactSnapshot"], path: "widget", exclude: ["Timeline.swift"], sources: ["WidgetTimelineWaiters.swift"]),
@@ -225,7 +226,7 @@ let tests: [Target] = [
     .target(name: "ExactSoundRender", path: "soundarm", exclude: ["SoundArm.swift"], sources: ["sound_mixer.c", "sound_render.c", "sound_engine.m"], publicHeadersPath: ".", cSettings: [.unsafeFlags(["-fobjc-arc", "-fobjc-arc-exceptions"])]),
     // The video arm's media session coordinator (LLP 1098 D7), driven by the
     // tests over stand-in players; the arm itself is build.mjs's dylib.
-    .target(name: "ExactNowPlaying", path: "videoarm", exclude: ["VideoArm.swift", "PictureInPicture.swift"], sources: ["NowPlaying.swift"]),
+    .target(name: "ExactNowPlaying", path: "videoarm", exclude: ["VideoArm.swift", "PictureInPicture.swift", "VideoBackgroundPlayback.swift"], sources: ["NowPlaying.swift"]),
     // The share extension's Swift (LLP 1133.024 D4), which links no Exact runtime; build.mjs compiles the appex itself,
     // with the reading of Safari's page details only for an app that maps `url`.
     .target(name: "ExactShare", path: "share", exclude: ["SharePage.js"], swiftSettings: [.define("EXACT_SHARE_PAGE")]),
@@ -234,7 +235,7 @@ let tests: [Target] = [
     // The test bundle installs the composition as it loads, before any test
     // (`ExactTestsInstall`, `TestsInstall.swift`).
     .target(name: "ExactTestsInstall", path: "tests/ExactTestsInstall"),
-    .testTarget(name: "ExactKitTests", dependencies: ["ExactWatchSync", "ExactPackage", "CameraImplementation", "RecordingImplementation", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactComposition", "ExactTestsInstall"]
+    .testTarget(name: "ExactKitTests", dependencies: ["ExactWatchSync", "ExactPackage", "CameraImplementation", "RecordingImplementation", "MediaCaptureObjC", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactComposition", "ExactTestsInstall"]
                 + allCapabilities.map { .target(name: $0.target) } + ["ExactFormaBinding", "ExactHeavyLeaves", "ExactSoundRender", "ExactNowPlaying", "ExactShare", "ExactSharePlain"], path: "tests/ExactKitTests",
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]

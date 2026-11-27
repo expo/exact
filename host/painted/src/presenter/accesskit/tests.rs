@@ -150,3 +150,75 @@ fn status_alert_and_explicit_live_settings_reach_both_desktop_adapters() {
         assert_eq!(node.live(), expected, "{name}");
     }
 }
+
+#[test]
+fn visibility_hidden_controls_are_omitted_and_reject_stale_set_value() {
+    let mut p = window(
+        r#"component App
+  state hide = false
+  state text = "init"
+  state level = 30
+  action edit(value: string)
+    text = value
+  action slide(value: number)
+    level = value
+  action conceal
+    hide = true
+  view
+    column
+      button "Conceal" press=conceal
+      input aria-label="Always hidden" value="no" visibility="hidden"
+      input aria-label="Draft" value=text input=edit visibility=(hide ? "hidden" : "visible")
+      input type="range" min=0 max=100 step=10 value=level input=slide aria-label="Level" visibility=(hide ? "hidden" : "visible")
+"#,
+    );
+    let mut tree = WindowTree::default();
+    let first = update(&mut tree, &mut p).unwrap();
+    assert!(
+        !first
+            .nodes
+            .iter()
+            .any(|(_, n)| n.label() == Some("Always hidden")),
+        "visibility:hidden input must not appear in AccessKit tree"
+    );
+    let named = |name| {
+        first
+            .nodes
+            .iter()
+            .find(|(_, n)| n.label() == Some(name))
+            .unwrap()
+            .0
+    };
+    let (conceal, draft, level) = (named("Conceal"), named("Draft"), named("Level"));
+
+    // Hide the controls without syncing the AccessKit tree yet.
+    tree.action(&mut p, request(Action::Click, conceal, None), 40.);
+    let focus_before = p.focus();
+
+    // Stale AT actions must not focus or edit the now-hidden controls.
+    tree.action(
+        &mut p,
+        request(
+            Action::SetValue,
+            draft,
+            Some(ActionData::Value("mutated".into())),
+        ),
+        40.,
+    );
+    tree.action(
+        &mut p,
+        request(Action::SetValue, level, Some(ActionData::NumericValue(80.))),
+        40.,
+    );
+    tree.action(&mut p, request(Action::Increment, level, None), 40.);
+
+    assert_eq!(p.focus(), focus_before);
+    assert_eq!(
+        p.host().runner().slot("text"),
+        Some(&exact_runner::Value::str("init"))
+    );
+    assert_eq!(
+        p.host().runner().slot("level"),
+        Some(&exact_runner::Value::Number(30.0))
+    );
+}

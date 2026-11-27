@@ -1,6 +1,6 @@
 // The Apple build's compiled arms, cached by key in a directory every app's build shares.
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, relative, resolve } from 'node:path';
+import { basename, relative, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { machOType } from './assets.mjs';
 import { xcframeworkSlice } from '../../scripts/package-libraries.mjs';
@@ -40,6 +40,51 @@ export function armArgs(args, built) {
  * arguments armArgs leaves as they are (an executable, or a dylib whose arguments name it) is still compiled anew. */
 export const armKey = (args, sources, swiftc, extra) =>
   createHash('sha256').update(JSON.stringify([args, sources, swiftc, extra, 'output-under-own-name'])).digest('hex').slice(0, 16);
+
+// The Swift glue written into linkRoot by build.mjs and writeSwiftNames.
+const generatedSwift = /^(?:forma|ExactRosterProbe|Exact(?:DataKeys|Composed)-[A-Za-z0-9._-]+)\.swift$/;
+
+// Exact's package outputs can move. SDK paths, other search paths and
+// arbitrary arguments that happen to contain the same prefix cannot.
+function packageSearchPath(arg, flag, dir) {
+  return ((flag === '-I' || flag === '-L') && arg === dir)
+    || (flag === '-L' && arg === resolve(dir, 'libExactSwiftDependencies.dylib-dependencies'));
+}
+
+/** A private build restores the previous arms under a fresh linkRoot. Only
+ * Exact's generated Swift files in that root lose their temporary directory
+ * in the key. Their names and contents still count, and the tagged key
+ * cannot collide with an authored path of the same name. */
+export function armSourceKey(args, files, { built, snapshot, packageDir, packageDirs, linkRoot, swiftc, extra }) {
+  const generated = new Set(files.filter(f => generatedSwift.test(basename(f)) && resolve(linkRoot, basename(f)) === f));
+  const sources = files.map(f => readFileSync(f, 'utf8'));
+  // An explicit source path in a compiled Swift file without #sourceLocation may survive in the output.
+  const compiled = new Set(args);
+  const pathSensitive = files.some((f, i) => compiled.has(f) && !sources[i].startsWith('#sourceLocation(') && /#file(?:Path)?\b/.test(sources[i]));
+  const keyArgs = args.map((a, i) => {
+    if (a === built) return '<out>';
+    const authored = snapshot.key(a);
+    if (authored !== a) return pathSensitive ? [authored, a] : authored;
+    if (!pathSensitive && generated.has(a)) return ['generated-swift', basename(a)];
+    if (packageDirs.some(dir => packageSearchPath(a, args[i - 1], dir) || a === resolve(dir, 'ExactPackage.o')))
+      return '<packages>' + a.slice(packageDir.length);
+    return a;
+  });
+  return armKey(keyArgs, sources, swiftc, extra);
+}
+
+/** A roster probe reads package copies in the main build's directory but
+ * writes its objects elsewhere. Name each copied source as the main build
+ * does. Its relative path, #sourceLocation and full text remain in the key. */
+export function packageKeyArgs(args, dir, packageDir, copies, name) {
+  const products = new Set(['o', 'swiftmodule', 'tbd', 'dylib'].map(ext => resolve(dir, `${name}.${ext}`)));
+  products.add(resolve(dir, `adapter-${name}.swift`));
+  return args.map((a, i) => {
+    if (copies.has(a) && a.startsWith(packageDir + sep)) return '<dir>' + a.slice(packageDir.length);
+    if (products.has(a) || packageSearchPath(a, args[i - 1], dir)) return '<dir>' + a.slice(dir.length);
+    return a;
+  });
+}
 
 /** Where an arm compiles before it is renamed to its cached copy: under its own name, in a directory of this compile's
  * own (`<dir>/.<key>-<name>.<pid>.tmp/`, emptied first). lld hashes the output's file name into LC_UUID, so a name

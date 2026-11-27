@@ -712,3 +712,23 @@ export function decodeCopies(text) {
   for (let i = 0, at = 0; i < values.length; i += 2) out.fill(values[i], at, (at += values[i + 1]));
   return out;
 }
+
+/** The resident loop's last eight verified plan maps, announced on the child's private pipe. Only a card from that pipe may start a fetch. */
+export function residentPlanMaps(port) {
+  const residentMaps = new Map(), saidAt = new Map();
+  let residentPlan = null, said = 0;
+  const residentMap = async (internal, card) => {
+    const n = ++said;
+    residentPlan = card.plan;
+    saidAt.delete(card.plan); saidAt.set(card.plan, n);
+    for (const plan of [...saidAt.keys()].slice(0, Math.max(0, saidAt.size - 8))) { saidAt.delete(plan); residentMaps.delete(plan); }
+    if (!card.map) { residentMaps.delete(card.plan); return; }
+    // (A card can come before the child listens: asked again, a while, while it is still the latest.)
+    for (let tries = 0; tries < 20 && saidAt.get(card.plan) === n; tries++) {
+      const got = await pullMap(internal, { plan: card.plan, ...card.map }, `127.0.0.1:${port}`);
+      if (got) { if (saidAt.get(card.plan) === n) residentMaps.set(got.digest, got.bytes); return; }
+      await new Promise((ok) => setTimeout(ok, 250));
+    }
+  };
+  return { keep: residentMap, map: digest => residentMaps.get(digest ?? residentPlan) };
+}

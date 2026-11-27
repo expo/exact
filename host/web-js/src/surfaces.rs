@@ -3,6 +3,40 @@ use super::{commands, Em};
 use crate::code::{self, Scope};
 use std::fmt::Write as _;
 
+/// Typed properties resolve on the canvas. Its invisible pseudo-element inherits them
+/// and sends transition events without changing the canvas's contents or animations.
+pub(super) fn color_observer_css(css: &mut String, plan: &exact_plan::Plan) {
+    let count = plan
+        .surfaces
+        .iter()
+        .map(|surface| {
+            surface
+                .args
+                .iter()
+                .filter(|id| plan.surface_args[id.0 as usize].color.is_some())
+                .count()
+        })
+        .max()
+        .unwrap_or(0);
+    if count == 0 {
+        return;
+    }
+    let mut names: Vec<_> = (0..count).map(|i| format!("--x-gpu-color-{i}")).collect();
+    names.push("--x-gpu-forced".into());
+    for name in &names {
+        let _ = write!(
+            css,
+            "@property {name}{{syntax:\"<color>\";inherits:true;initial-value:transparent}}"
+        );
+    }
+    let canvas = "[data-x-gpu-colors]";
+    let changes = names.join(",");
+    let _ = write!(css, "@media(forced-colors:active){{{canvas}{{--x-gpu-forced:color(from Canvas srgb-linear r g b)}}}}");
+    let _ = write!(css, "{canvas}::before{{content:\"\";visibility:hidden;pointer-events:none;position:absolute;width:0;height:0;opacity:1;transition-property:{changes},forced-color-adjust,opacity;transition-duration:1ms;transition-timing-function:step-start;transition-behavior:allow-discrete}}");
+    // Also notify after a display:none round trip entirely between rendering updates.
+    let _ = write!(css, "@starting-style{{{canvas}::before{{opacity:0}}}}");
+}
+
 impl Em<'_> {
     pub(super) fn surface(&mut self, i: u32, e: &str, scope: &Scope) -> Result<(), String> {
         let plan = self.plan;
@@ -73,26 +107,43 @@ impl Em<'_> {
                 );
             } else {
                 let mut values = Vec::new();
+                let mut colors = Vec::new();
                 for (k, a) in sf.args.iter().enumerate() {
                     let a = &plan.surface_args[a.0 as usize];
-                    let v = code::expression(
-                        plan,
-                        plan.code(a.expr),
-                        &self.site_evaluation(
-                            scope,
-                            i,
-                            format!("surface argument {}", k + 1),
-                            true,
-                        ),
-                        &mut self.uses,
-                    )?;
+                    let v = if let Some(token) = a.color {
+                        let slot = if named {
+                            serde_json::to_string(plan.str(a.name)).unwrap()
+                        } else {
+                            k.to_string()
+                        };
+                        let css = serde_json::to_string(&crate::modes::surface_color(plan, token))
+                            .unwrap();
+                        colors.push(format!("[{slot},{css}]"));
+                        "null".to_owned()
+                    } else {
+                        code::expression(
+                            plan,
+                            plan.code(a.expr),
+                            &self.site_evaluation(
+                                scope,
+                                i,
+                                format!("surface argument {}", k + 1),
+                                true,
+                            ),
+                            &mut self.uses,
+                        )?
+                    };
                     values.push(if named {
                         format!("{}:{v}", serde_json::to_string(plan.str(a.name)).unwrap())
                     } else {
                         v
                     });
                 }
-                let gs = self.uses.rt("gs");
+                let (gs, colors) = if colors.is_empty() {
+                    (self.uses.rt("gs"), String::new())
+                } else {
+                    (self.uses.rt("gsc"), format!(",[{}]", colors.join(",")))
+                };
                 let body = if named {
                     format!("({{{}}})", values.join(","))
                 } else {
@@ -100,7 +151,7 @@ impl Em<'_> {
                 };
                 let _ = write!(
                     self.out,
-                    "{gs}({e},{},()=>{body});",
+                    "{gs}({e},{},()=>{body}{colors});",
                     serde_json::to_string(name).unwrap()
                 );
             }

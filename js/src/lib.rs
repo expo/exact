@@ -60,6 +60,7 @@ mod abort;
 mod background;
 mod compression;
 mod crypto;
+mod crypto_subtle;
 mod door;
 mod engine;
 mod launch;
@@ -220,7 +221,9 @@ const TIMER: u64 = u64::MAX - 3;
 /// executor resumes: the TypeScript bake reports that the module can hand one
 /// out (`typescriptHostWork`), which links I/O (LLP 1047.001 D12).
 pub(crate) struct ModuleTurn;
-impl exact_runner::HostWork for ModuleTurn {}
+impl exact_runner::HostWork for ModuleTurn {
+    const LOCAL: bool = true;
+}
 
 /// Bake and worker timers stay with the runner until due. A live-clock wait
 /// reaches the host now so another turn can wake it early (LLP 1162 D3).
@@ -297,16 +300,32 @@ struct HostState {
     /// Under the agent, the repeatable stream `crypto` draws from instead
     /// of the OS (LLP 1069.005 D2b); this instance's, from its start.
     agent: Option<exact_data::crypto::AgentStream>,
+    /// Isolated `--seed` substreams for `Math.random()` inside answers and at
+    /// module init (LLP 1195.000 D2.3, D2.5) so SDK jitter never shifts crypto draws.
+    agent_random: Option<exact_data::crypto::AgentStream>,
+    agent_random_init: Option<exact_data::crypto::AgentStream>,
+    /// Launch wall-clock epoch at `clock_ms == 0` (LLP 1195.000 D2.1).
+    epoch_at_zero: f64,
+    /// Persistent module-sticky taint latched on any ambient clock or
+    /// `Math.random()` read, even at module init (LLP 1195.000 D2.5).
+    module_tainted_clock: bool,
+    module_tainted_entropy: bool,
     /// Its seed, until the journal has said the first draw is seeded.
     agent_unsaid: Option<u64>,
-    /// `CryptoKey`s by handle, never on the heap (LLP 1069.005 D1b).
-    keys: HashMap<u64, exact_data::crypto::EcKey>,
+    /// `CryptoKey`s by handle, never on the heap (LLP 1069.005 D1b, LLP 1195.000 D5 P0b).
+    keys: HashMap<u64, crypto_subtle::NativeKey>,
     next_key: u64,
     /// `DecompressionStream`s' and `CompressionStream`s' contexts by handle,
     /// from the keys' counter, and what the last write yielded
     /// (`compression.rs`).
     codecs: HashMap<u64, compression::Codec>,
     codec_out: Vec<u8>,
+    /// This module's heap ceiling, bounding native codec allocations.
+    max_heap: usize,
+    /// This module's interrupt watch, checked by long native codec loops.
+    watch: Option<Arc<Watch>>,
+    /// Kept files in-flight TypeScript `atomicWriteFile` calls are replacing.
+    replacing: storage::Replacing,
     /// `authCallback()`: this native build's, from the grants (LLP 1069.006).
     auth_callback: Option<String>,
     /// The engine has app storage: the host configured directories.
@@ -340,6 +359,15 @@ impl HostState {
     /// No device to answer storage: the bake's module, or a validation pass's.
     fn deferring(&self) -> bool {
         self.baking || self.validating
+    }
+
+    /// The heap ceiling in bytes, defaulting when constructed directly in unit tests.
+    fn heap_limit(&self) -> usize {
+        if self.max_heap == 0 {
+            DEFAULT_MAX_HEAP as usize
+        } else {
+            self.max_heap
+        }
     }
 }
 
@@ -468,6 +496,7 @@ impl Module {
             host: Box::new(HostState {
                 auth_callback,
                 launch,
+                max_heap: DEFAULT_MAX_HEAP as usize,
                 ..HostState::default()
             }),
             native_factory: None,
@@ -514,6 +543,22 @@ impl Module {
     pub fn with_agent_seed(mut self, seed: Option<u64>) -> Module {
         self.agent_seed = seed;
         self.host.agent = seed.map(|s| exact_data::crypto::AgentStream::new(s, "typescript"));
+        self.host.agent_random = seed.map(|s| exact_data::crypto::AgentStream::new(s, "ts-random"));
+        self.host.agent_random_init =
+            seed.map(|s| exact_data::crypto::AgentStream::new(s, "ts-init"));
+        self.host.epoch_at_zero = if self.host.baking {
+            0.0
+        } else if seed.is_some() {
+            std::env::var("EXACT_AGENT_EPOCH")
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .unwrap_or(1_767_225_600_000.0)
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_millis() as f64)
+        };
         self.host.agent_unsaid = seed;
         self
     }
@@ -675,6 +720,7 @@ impl Module {
         // The bake's module never draws the agent's stream (LLP 1069.005 D2b).
         let mut module = Self::new(bytecode, "", "").with_agent_seed(None);
         module.host.baking = true;
+        module.host.epoch_at_zero = 0.0;
         let engine = module.load_engine()?;
         module.app_id = engine.string("appId")?;
         module.grants = engine.string("grants")?;
@@ -746,6 +792,8 @@ impl Module {
             self.compression_hold.clone(),
         )?);
         self.storage.as_mut().unwrap().worker_retired = self.worker_retired.clone();
+        self.host.max_heap = self.max_heap as usize;
+        self.host.watch = Some(self.watch.clone());
         let ctx = &mut *self.host as *mut HostState as *mut c_void;
         let host: HostFn = host_door;
         let bytes: engine::BytesFn = crypto::bytes_door;
@@ -805,11 +853,8 @@ impl Module {
             self.host.hosted = self.native_slot.hosted();
             self.host.later = self.native_slot.handler().is_some();
         }
-        // packages live in the host's app module: their synchronous calls reach
-        // it even when the app links a native module of its own (the door)
-        if self.native_slot.hosted() {
-            self.host.hosted_call = self.native_slot.hosted_call();
-        }
+        // Package reads can have a host even when there is no app module.
+        self.host.hosted_call = self.native_slot.hosted_call();
         engine
             .harden()
             .map_err(|e| format!("exact-js: hardening failed: {e}"))?;
@@ -855,10 +900,12 @@ impl Module {
         if let Some(mut engine) = self.engine.take() {
             self.logs.extend(engine.take_log());
         }
-        self.host.keys.clear();
-        self.host.codecs.clear();
-        self.host.codec_out.clear();
-        self.host.binary.clear();
+        self.host.keys = HashMap::new();
+        self.host.codecs = HashMap::new();
+        self.host.codec_out = Vec::new();
+        self.host.binary = Vec::new();
+        self.host.replacing.clear();
+        self.host.watch = None;
         self.host.socket_ops.clear();
         self.host.answer_ops.clear();
         self.host.socket_buffered.clear();
@@ -915,6 +962,7 @@ impl Module {
     /// The heap ceiling for the next [`Module::load`].
     pub fn set_max_heap(&mut self, bytes: u32) {
         self.max_heap = bytes;
+        self.host.max_heap = bytes as usize;
     }
 
     /// Calls that ran over the budget so far.

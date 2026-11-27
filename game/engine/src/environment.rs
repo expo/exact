@@ -400,7 +400,7 @@ impl Default for Bloom {
 }
 
 /// A camera-independent, square sun projection, in light-space metres.
-#[derive(Debug, Clone, Copy, PartialEq, Data)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShadowBox {
     /// World-space centre of the box.
     pub center: crate::Vec3,
@@ -408,6 +408,84 @@ pub struct ShadowBox {
     pub half_width: f32,
     /// Half of the extent along the sun direction.
     pub half_depth: f32,
+}
+
+impl ShadowBox {
+    /// Whether the centre is finite and both extents are finite and positive.
+    pub fn valid(&self) -> bool {
+        self.center.is_finite()
+            && self.half_width.is_finite()
+            && self.half_width > 0.0
+            && self.half_depth.is_finite()
+            && self.half_depth > 0.0
+    }
+}
+
+impl crate::Data for ShadowBox {
+    const TYPE_ID: &'static str = concat!("table:", module_path!(), "::ShadowBox");
+    fn set_field(&mut self, field: &str, text: &str) -> Result<(), crate::DataError> {
+        let mut next = *self;
+        match field {
+            "center" => crate::data::edit_field(&mut next.center, text)?,
+            "half_width" => crate::data::edit_field(&mut next.half_width, text)?,
+            "half_depth" => crate::data::edit_field(&mut next.half_depth, text)?,
+            _ => return Err(crate::DataError::new(format!("unknown field {field}"))),
+        }
+        if !next.valid() {
+            return Err(crate::DataError::new(
+                "sun box must be finite with positive extents",
+            ));
+        }
+        *self = next;
+        Ok(())
+    }
+    fn write(&self, w: &mut dyn crate::Writer) {
+        w.begin_struct();
+        w.field("center");
+        crate::Data::write(&self.center, w);
+        w.field("half_width");
+        crate::Data::write(&self.half_width, w);
+        w.field("half_depth");
+        crate::Data::write(&self.half_depth, w);
+        w.end_struct();
+    }
+    fn read(&mut self, r: &mut dyn crate::Reader) -> Result<(), crate::DataError> {
+        let mut next = *self;
+        let mut seen = [false; 3];
+        r.begin_struct()?;
+        while let Some(field) = r.field()? {
+            match field.as_str() {
+                "center" => {
+                    seen[0] = true;
+                    crate::Data::read(&mut next.center, r).map_err(|e| e.at("center"))?;
+                }
+                "half_width" => {
+                    seen[1] = true;
+                    crate::Data::read(&mut next.half_width, r).map_err(|e| e.at("half_width"))?;
+                }
+                "half_depth" => {
+                    seen[2] = true;
+                    crate::Data::read(&mut next.half_depth, r).map_err(|e| e.at("half_depth"))?;
+                }
+                _ => r.skip().map_err(|e| e.at(&field))?,
+            }
+        }
+        for (index, name) in ["center", "half_width", "half_depth"]
+            .into_iter()
+            .enumerate()
+        {
+            if r.complete() && !seen[index] {
+                return Err(crate::DataError::new("missing field").at(name));
+            }
+        }
+        if !next.valid() {
+            return Err(crate::DataError::new(
+                "sun box must be finite with positive extents",
+            ));
+        }
+        *self = next;
+        Ok(())
+    }
 }
 
 impl Default for ShadowBox {

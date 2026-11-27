@@ -210,5 +210,45 @@ extension NavigationBarIOSTests {
         XCTAssertEqual(commands.map { [$0.input, $0.title] }, [["z", "More"]], "one command, named for the button")
         XCTAssertTrue(session.presenter.shortcut(key: "z", held: "Meta+", focus: nil) === more)
     }
+
+    /// A release app without native modules runs with `NoElementHatches`: bar items
+    /// and header segments must still run their `press` handlers (#1951).
+    func testBarItemsAndSegmentsPressWithoutNativeElementHatches() throws {
+        let session = try fixture("bar-press-no-hatches", module: false)
+        let p = session.presenter
+        p.elements = NoElementHatches()
+        let top = try XCTUnwrap(p.navigationHost.primaryNavigation?.topViewController)
+        let item = try XCTUnwrap(top.navigationItem.rightBarButtonItems?.first { $0.accessibilityLabel == "Compose" })
+        try tap(item)
+        until("bar item pressed without ElementHatches") { self.state(session, "composed") as? Double == 1 }
+
+        // Inert bar buttons are ignored when pressed.
+        let button = try node(session, "compose-home")
+        p.apply(wireBatch([["op": "props", "id": Int(button.id), "set": ["inert": "true"]]]))
+        try tap(item)
+        waitForMainQueue()
+        XCTAssertEqual(state(session, "composed") as? Double, 1, "inert bar item does not fire")
+        p.apply(wireBatch([["op": "props", "id": Int(button.id), "clear": ["inert"]]]))
+
+        // Header segmented control tabs also run without ElementHatches.
+        let control = try XCTUnwrap(top.navigationItem.titleView as? UISegmentedControl)
+        let segment = try XCTUnwrap(control.allTargets.first as? SegmentPress)
+        control.selectedSegmentIndex = 1
+        let action = try XCTUnwrap(control.actions(forTarget: segment, forControlEvent: .valueChanged)?.first)
+        _ = segment.perform(NSSelectorFromString(action), with: control)
+        until("header segment pressed without ElementHatches") { self.state(session, "segment") as? String == "missed" }
+
+        // A queued bar press is dropped if the presenter resets before the next turn.
+        var fired = 0
+        let saved = p.onPress
+        p.onPress = { _ in fired += 1 }
+        defer { p.onPress = saved }
+        try tap(item)
+        XCTAssertEqual(p.deferredPresses.inFlight, 1)
+        p.reset()
+        XCTAssertEqual(p.deferredPresses.inFlight, 0)
+        waitForMainQueue()
+        XCTAssertEqual(fired, 0, "reset cancels queued bar presses")
+    }
 }
 #endif

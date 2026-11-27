@@ -23,6 +23,8 @@ component App
   mutation output as shape Result
   action go(name: string)
     send output = work(name)
+  action chain(name: string)
+    send output = thenChain(name)
   view
     text "context"
 "#,
@@ -74,4 +76,57 @@ fn each_answer_fetches_as_itself_after_awaiting_another_answers_promise() {
             );
         }
     }
+}
+
+/// Plain `.then`, `.catch`, and `.finally` chains preserve answer ownership
+/// without `async`/`await` lowering, and leave no open call records behind.
+#[test]
+fn plain_promise_then_catch_finally_preserves_answer_context() {
+    let mut m = Module::new(HBC.to_vec(), "test.context", GRANTS);
+    m.set_budget_ms(f64::INFINITY);
+    m.bind(&plan());
+    m.activate().unwrap();
+    let mut s = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    let names = ["a", "b", "c"];
+    let answers = names
+        .iter()
+        .map(|n| {
+            let a = vec![Value::str(&format!("then:{n}"))];
+            let answer = m.answer(&mut s, "work", &a).unwrap();
+            (a, answer)
+        })
+        .collect();
+    let seen = Mutex::new(Vec::new());
+    let mut done = drive(&mut m, &mut s, answers, |a, request| {
+        let asker = a[0]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("then:")
+            .to_owned();
+        let path = request.url.trim_start_matches("https://context.test/");
+        seen.lock().unwrap().push((asker, path.to_owned()));
+        Outcome::Response(Response {
+            status: 200,
+            headers: Vec::new(),
+            body: path.as_bytes().to_vec(),
+        })
+    });
+    done.sort();
+    assert_eq!(
+        done,
+        [
+            "shared a/then a/catch a/finally",
+            "shared b/then b/catch b/finally",
+            "shared c/then c/catch c/finally",
+        ]
+    );
+    for (asker, path) in seen.into_inner().unwrap() {
+        if path != "shared" {
+            assert!(
+                path.starts_with(&format!("{asker}/")),
+                "{path} was asked under answer {asker}"
+            );
+        }
+    }
+    assert_eq!(m.in_flight(), 0);
 }

@@ -112,8 +112,10 @@ fn layout_reports_resolved_and_skipped_paragraphs() {
     assert!(agent::node(&runner, 2).contains("\"flow_shapes\""));
     let mut flex = StyleProps::default().with_rows(|rows| {
         rows.display = exact_kernel::Display::Flex;
+        rows.align_items = exact_kernel::AlignItems::FlexStart;
     });
     flex.mask.set(StyleId::Display);
+    flex.mask.set(StyleId::AlignItems);
     runner
         .kernel_mut()
         .apply(

@@ -13,7 +13,7 @@ import { HELP, appleBuildRefusal, guardFlags, helpText, indexText, knownFlags } 
 import { scriptFlags } from './help-parity.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
-const APP_VERBS = ['web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'deploy', 'push', 'update', 'lock', 'add', 'contract', 'forma', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
+const APP_VERBS = ['dev', 'web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'deploy', 'push', 'update', 'lock', 'add', 'contract', 'forma', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
 const timed = (args, options) => {
   const t = performance.now(), r = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 15_000, ...options });
   return { ...r, ms: performance.now() - t };
@@ -129,8 +129,13 @@ test('a flag that takes a value is refused by name when the value is missing or 
   for (const [verb, argv] of [['ios', ['--ios', '--sim', 'iPhone 17', '--optimize', 'size']], ['web', ['--port', '-1']], ['agent', ['macos', '--login']], ['agent', ['macos', '--login', 'hidden', 'tree']]]) {
     assert.deepEqual(guarded(verb, argv), [0, ''], argv.join(' '));
   }
-  assert.equal(appleBuildRefusal(['--ios', '--link', 'all']), '--link takes plan, not all');
-  assert.equal(appleBuildRefusal(['--ios', '--link', 'plan']), null);
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'all'], {}, 'darwin'), '--link takes plan, not all');
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'plan'], {}, 'darwin'), null);
+  assert.match(appleBuildRefusal(['--ios', '--logs'], {}, 'darwin'), /--logs requires a simulator --run/);
+  assert.match(appleBuildRefusal(['--device', '--run', '--logs'], {}, 'darwin'), /--logs requires a simulator --run/);
+  assert.equal(appleBuildRefusal(['--ios', '--run', '--logs'], {}, 'darwin'), null);
+  assert.match(appleBuildRefusal(['--device', '--pick'], {}, 'darwin'), /--pick selects a simulator/);
+  assert.equal(appleBuildRefusal(['--ios', '--run', '--pick'], {}, 'darwin'), null);
 });
 
 test('forma help lists every binding language', () => {

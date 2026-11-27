@@ -31,6 +31,7 @@ mod hit_slop_tests;
 #[cfg(test)]
 mod inline_tests;
 mod intersection;
+mod links;
 mod modal;
 #[cfg(test)]
 mod modal_tests;
@@ -41,6 +42,7 @@ mod scrollport_bar_tests;
 #[cfg(test)]
 mod top_layer_tests;
 pub(crate) use intersection::{block_clip, intersection, Root as IntersectionRoot};
+pub use links::{GeometryLinks, PageBox, PageBoxRead, PageSpace, KERNEL};
 use modal::{behind_modal, modal_dialog, modal_live};
 
 use exact_kernel::{
@@ -423,104 +425,6 @@ impl Scrolled {
             .and_then(|open| open.clip)
     }
 }
-
-/// How a runner answers geometry: `frame` from a borrowed kernel while an
-/// action runs, `measure` from the kernel just before it (natively it lays
-/// out the engine tree). The web's pair asks the page instead and never
-/// reads the kernel, whose layout there is not the page's.
-///
-/// A host hands its reads to [`GeometryLinks::new`], and what every host
-/// shares (naming a view by its id, finding an action's `measure`s, building
-/// the record) rides along in the same value, so an artifact that links no
-/// geometry carries none of it (LLP 1047 D3).
-#[derive(Clone, Copy)]
-pub struct GeometryLinks {
-    scroll_metrics: fn(&Kernel, &Scrolled, ViewId) -> Option<[f64; 6]>,
-    range_frame: fn(&Kernel, &Scrolled, ViewId, u32, u32) -> GeometryAnswer,
-    frame: fn(&Kernel, &Scrolled, ViewId) -> GeometryAnswer,
-    measure: fn(&mut Kernel, &Scrolled, ViewId) -> GeometryAnswer,
-    point: fn(&Kernel, &Scrolled, f64, f64) -> Option<ViewId>,
-    points: fn(&Kernel, &Scrolled, f64, f64) -> Vec<ViewId>,
-    shown: fn(&Kernel, &Scrolled, ViewId, bool) -> bool,
-    ahead: fn(&Plan, &[u8], &mut Kernel, &Scrolled, &GeometryLinks) -> Measured,
-    read: fn(&GeometryEnv<'_>, &Plan, Stdlib, &[Value]) -> Option<Value>,
-}
-
-impl GeometryLinks {
-    /// A host's reads: `frame`, where layout put a view as last laid out,
-    /// `measure`, the view's box as if its `height` were `auto`, and
-    /// `point`, the front-most view whose box holds a viewport point, and
-    /// `points`, every such view in paint order. `shown` receives `true` on
-    /// the first candidate of each structural read, so a host can snapshot
-    /// its presentation once for the read.
-    pub const fn new(
-        frame: fn(&Kernel, &Scrolled, ViewId) -> GeometryAnswer,
-        measure: fn(&mut Kernel, &Scrolled, ViewId) -> GeometryAnswer,
-        point: fn(&Kernel, &Scrolled, f64, f64) -> Option<ViewId>,
-        points: fn(&Kernel, &Scrolled, f64, f64) -> Vec<ViewId>,
-        shown: fn(&Kernel, &Scrolled, ViewId, bool) -> bool,
-    ) -> GeometryLinks {
-        GeometryLinks {
-            scroll_metrics: |kernel, scrolled, view| {
-                let key = kernel.node(view)?.key;
-                kernel.laid_out_frame(key)?;
-                scrolled
-                    .inline
-                    .as_ref()?
-                    .scroll_metrics(kernel, view, scrolled.offset(key))
-            },
-            range_frame: kernel_range_frame,
-            frame,
-            measure,
-            point,
-            points,
-            shown,
-            ahead: measure_ahead,
-            read,
-        }
-    }
-
-    /// A host's `rangeFrame` reader in place of [`InlineGeometry::range_frame`]
-    /// (the web's), given offsets already checked as `rangeFrame` checks them.
-    pub const fn with_range_frame(
-        mut self,
-        range_frame: fn(&Kernel, &Scrolled, ViewId, u32, u32) -> GeometryAnswer,
-    ) -> Self {
-        self.range_frame = range_frame;
-        self
-    }
-
-    /// A page that owns layout can read the textarea directly.
-    pub const fn with_scroll_metrics(
-        mut self,
-        read: fn(&Kernel, &Scrolled, ViewId) -> Option<[f64; 6]>,
-    ) -> Self {
-        self.scroll_metrics = read;
-        self
-    }
-
-    /// Every `measure` in an action's `code`, answered before it runs, by
-    /// its literal id.
-    pub fn ahead(
-        &self,
-        plan: &Plan,
-        code: &[u8],
-        kernel: &mut Kernel,
-        scrolled: &Scrolled,
-    ) -> Measured {
-        (self.ahead)(plan, code, kernel, scrolled, self)
-    }
-}
-
-/// The kernel's answers: a native host's kernel is its layout, and its
-/// presenters' scroll offsets are noted in [`Scrolled`].
-pub static KERNEL: GeometryLinks = GeometryLinks::new(
-    kernel_frame,
-    kernel_measure,
-    kernel_point,
-    kernel_points,
-    kernel_shown,
-);
 
 fn kernel_frame(kernel: &Kernel, scrolled: &Scrolled, view: ViewId) -> GeometryAnswer {
     if let Some(frame) = kernel
@@ -1059,12 +963,9 @@ fn data_selector(selector: &str) -> Option<(&str, &str)> {
     let rest = selector.strip_prefix("[data-")?;
     let (word, value) = rest.split_once("~=\"")?;
     let value = value.strip_suffix("\"]")?;
-    let valid = !word.is_empty()
-        && word.split('-').all(|part| {
-            let mut chars = part.chars();
-            chars.next().is_some_and(|c| c.is_ascii_lowercase())
-                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        });
+    let mut chars = word.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     (valid && !value.is_empty() && !value.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r')))
         .then_some((word, value))
 }
@@ -1347,6 +1248,8 @@ impl Point<'_> {
             || ((props.str(PropId::NavigationKey).is_some()
                 || props.str(PropId::AccessibilityRole) == Some("tabpanel"))
                 && crate::head::inactive(self.kernel, arena.local_id(slot)))
+            // A box a native bar keeps the room of shows the bar, which the host hit-tests (LLP 1083.000 D4)
+            || matches!(arena.cover(slot), Some(exact_kernel::HostCover::Room(_)))
         {
             return;
         }

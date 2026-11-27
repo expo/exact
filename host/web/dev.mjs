@@ -3,6 +3,7 @@
 // LAN clients can read plans, errors and generations (LLP 1023 D8); the agent
 // carrier and installer stay loopback-only. Games serve HTTP during the first build.
 import { buildingServer } from '../../game/dev.mjs';
+import { bundleHostModule } from '../web-js/glue.mjs';
 import { acceptModuleReply, failedPhase, phased, phasedAsync } from './dev-phase.mjs';
 import { cacheBuildInputs, readDevBuilds as readBuilds, nativeWatchPaths, watchDirectoryInputs, watchModuleSources } from './dev-watch.mjs';
 import { directoryInputNames } from '../../scripts/cargo-dep-info.mjs';
@@ -25,6 +26,7 @@ import { acceptsHTML, webRequestURL } from '../../scripts/origin.mjs';
 import { guardFlags } from '../../scripts/help.mjs';
 import { webPortRange } from '../../scripts/agent-launch.mjs';
 import { localInstaller } from './local-install.mjs';
+import { attachDevControls, createLaunchGate, parseDevLaunchFlags } from './dev-keys.mjs';
 import { claimDevLoop, runBuildTree, startupBuilds, stopBuildTree } from './dev-startup.mjs';
 import { loopWebDist } from '../../scripts/web-build.mjs';
 import { designPath, frameOnlyByTool, formaServer } from '../../scripts/forma-server.mjs';
@@ -34,6 +36,7 @@ import { relayChannel, serveCommands, serveReport, streamFrame } from '../../scr
 import { captureAssets, assetCards, alsoOnIPv6Loopback, freePort, listenDelay, applyShaderTreeChange, sendStaticBody, watchLauncher, applyStaticChange, applyStaticTreeChange, builtAppMatches, developmentOpenPage, readDevGenerationAsync, readStaticFileAsync, readWebRequest, readModuleFile, reflectShaderFiles, saveTrace, retainDevGeneration, shaderInterfaceDigests, syncStaticTree, watchStaticTrees, webContentType, webEnvelope, devGenerationDigest, MODULE_FILES, moduleCards } from './serve.mjs';
 import { fileURLToPath } from 'node:url';
 const argv = guardFlags('web', process.argv.slice(2)); // --help, or a flag it does not take, before anything starts
+const devFlags = parseDevLaunchFlags(argv);
 const arg = (name, fallback) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : fallback; };
 // The dev wasm links every capability (LLP 1047 D7): a new plan that adds
 // one restarts in place, never waiting on a wasm rebuild.
@@ -77,7 +80,7 @@ const source = resolve(app.dir, 'app.contract');
 // A game (LLP 1071 §8: its runtime is on wasm), and `--wasm` (the loop a
 // native client opening the dev URL reads), run the resident wasm loop below.
 if (!argv.includes('--wasm') && servedAs == null && app.manifest.game === undefined) {
-  await (await import('../web-js/dev.mjs')).devJs({ app, dist, port, host, origins, gate, lan, allowHosts, remoteAsked, pairTtlMs: (await import('../../scripts/forma-pairing.mjs')).pairTtlOf(argv), residentPort: named != null && !webPortRange() ? port + 1 : 0 });
+  await (await import('../web-js/dev.mjs')).devJs({ app, dist, port, host, origins, gate, lan, allowHosts, remoteAsked, pairTtlMs: (await import('../../scripts/forma-pairing.mjs')).pairTtlOf(argv), residentPort: named != null && !webPortRange() ? port + 1 : 0, devFlags });
 }
 // Behind the JS loop (`--serve-as`) an app's resident loop is its producers
 // alone: nothing loads its page, so its builds are the web crate's bake
@@ -389,7 +392,8 @@ async function scrubRestore(frame) {
 // A revision owns its plan and complete asset namespace. Its process epoch
 // makes a restarted server's seq=1 newer than the previous server's seq=N.
 const epoch = randomBytes(16).toString('hex');
-const installer = localInstaller({ app: () => app, origins, port: servedAs ?? port, gate, listener: { host, port } });
+const launchGate = createLaunchGate();
+const installer = localInstaller({ app: () => app, origins, port: servedAs ?? port, gate, listener: { host, port }, launchGate });
 // The design tool uses the map for a build's plan digest, falling back to the current
 // generation. The parent JS loop owns Forma under --serve-as (LLP 1122 T2).
 const plannedMaps = new Map(), mapsBySha = new Map();
@@ -934,12 +938,13 @@ const killCompiler = () => {
   unasked();
   if (moduleStage) { rmSync(moduleStage, { recursive: true, force: true }); moduleStage = null; }
 };
+let controls = null;
 const stop = () => shutdown ??= (async () => {
   stopping = true; clearTimeout(timer);
   const exits = [dev, rustChild, gpuBuildChild, hostBuildChild].map(stopBuildTree);
   tuning?.close(); killCompiler();
   // The design server lets go of its lock before this exits.
-  exits.push(forma?.close(), doors?.close());
+  exits.push(forma?.close(), doors?.close(), controls?.stop());
   const install = installer.child;
   if (install && install.exitCode === null && install.signalCode === null) { exits.push(new Promise(ok => install.once('exit', ok))); install.kill('SIGTERM'); }
   await Promise.all(exits); process.exit(process.exitCode ?? 0);
@@ -1213,15 +1218,7 @@ if (app.manifest.game) {
     reported:timing=>console.log(`table: validated and published in ${timing.milliseconds.toFixed(1)} ms; subprocesses ${timing.processes}`),
     publish:(name, bytes)=>{ if (!current) return false; seq++; captureGeneration(true, new Map([[name,bytes]])); push({...announcement(), surfaceAssets:[name]}); }});
 }
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', input => {
-  for (const command of input.trim().split(/\s+/)) {
-    if (command === 'f') push({fresh:true});
-    if (command === 't') manualTypescript?.();
-    if (command === 'r') { if (portableRust && !changed.size && !lastFailed.size) produceRust(); else rebuild(); }
-  }
-});
-console.log(`rebuild: Rust ${rebuildOn.rust}, TypeScript ${rebuildOn.typescript}; r + Enter builds Rust, t + Enter builds TypeScript, f + Enter starts a fresh page`);
+console.log(`rebuild: Rust ${rebuildOn.rust}, TypeScript ${rebuildOn.typescript}`);
 function rebuild() { buildPending = true; drainBuilds(); }
 function rebuildNow(files) {
   building = true; early?.phase('host', 'build');
@@ -1415,7 +1412,7 @@ const serve = async (req, res) => {
     let gone = false, opened = null;
     const end = () => { if (gone) return; gone = true; opened?.close(); clients.delete(res); };
     req.on('close', end); res.on('close', end);
-    opened = forma?.channel.open(write) ?? (servedAs != null ? await relayChannel(`http://127.0.0.1:${servedAs}`, write, 250, () => res.end()) : null);
+    opened = forma?.channel.open(write, { sequence: () => current?.seq }) ?? (servedAs != null ? await relayChannel(`http://127.0.0.1:${servedAs}`, write, 250, () => res.end()) : null);
     if (gone) { opened?.close(); return; }
     res.write(`data: ${hello(opened?.nonce)}\n\n`);
     for (const [stem, version] of gpuSides) res.write(`data: ${JSON.stringify({gpu:version, ...(stem === 'gpu' ? {} : {module:stem.slice(4)})})}\n\n`);
@@ -1463,7 +1460,7 @@ const serve = async (req, res) => {
     return;
   }
   const file = url.pathname === '/' ? '/index.html' : url.pathname;
-  if (file === '/dev.js') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(readFileSync(resolve(root, 'host/web/dev.js'))); return; }
+  if (file === '/dev.js') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(await bundleHostModule(root, 'dev.js')); return; }
   // The module artifact as it is now, not as the last build copied it: a reload picks up an edit (LLP 1067 D5).
   if (file.startsWith('/modules/') && app.modules.web) { const body = readModuleFile(app.modules.web, file); res.writeHead(body ? 200 : 404, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(body); return; }
   try {
@@ -1495,4 +1492,5 @@ const banner = () => {
 };
 if (early) banner(); else await new Promise(ok => server.listen(port, host, () => { banner(); ok(); }));
 doors = servedAs == null && forma ? await openRemoteCanvas(forma, remoteAsked, `http://127.0.0.1:${port}`).catch(async (e) => { console.error(`cannot listen: ${e.message}`); server.close(); server.closeAllConnections?.(); process.exitCode = 1; await stop(); }) : null;
-watchLauncher(stop); listening = true; for (const line of readyLines.splice(0)) console.log(line); // once it answers and its doors are open
+watchLauncher(stop); listening = true; for (const line of readyLines.splice(0)) console.log(line);
+if (servedAs == null) controls = attachDevControls({ app, root, url: `http://127.0.0.1:${port}/`, wasm: true, flags: devFlags, launchGate, onReload: () => { if (portableRust && !changed.size && !lastFailed.size) produceRust(); else rebuild(); }, onTypescript: () => manualTypescript?.(), onFresh: () => push({ fresh: true }), onStop: stop });

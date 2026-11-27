@@ -17,7 +17,7 @@ const simulatorOS = runtime => (/(?:^|\.)iOS-(\d+)-(\d+)(?:-(\d+))?$/.exec(runti
 
 /** `app()` is the app being served now; `origins` and `port` are the
  * addresses the server printed, `listener` the address it is bound to. */
-export function localInstaller({ app, origins, port, gate, listener }) {
+export function localInstaller({ app, origins, port, gate, listener, launchGate = null }) {
   const token = randomBytes(32).toString('hex');
   let child = null;
   let targets = [], targetsAt = 0, targetError = null;
@@ -52,34 +52,41 @@ export function localInstaller({ app, origins, port, gate, listener }) {
   }
   const appendLog = chunk => { state.log = (state.log + String(chunk)).replace(/\r/g, '').slice(-16000); };
   function start(targetId) {
-    if (child) { const error = new Error('A local iOS build is already running.'); error.status = 409; throw error; }
-    refreshTargets(true);
-    if (targetError) { const error = new Error(targetError); error.status = 503; throw error; }
-    const target = targets.find(candidate => candidate.id === targetId);
-    if (!target) { const error = new Error('That Simulator or device is no longer available. Refresh the target list.'); error.status = 400; throw error; }
-    const served = app(), appURL = new URL(localInstallURL(target.kind, origins, port));
-    state = { state: 'building', message: `Building ${served.displayName} for ${target.name}. This can take a few minutes…`, log: '', target: publicTarget(target), startedAt: new Date().toISOString() };
-    const destination = target.kind === 'simulator' ? ['--ios', served.crate('apple'), '--sim', target.value] : ['--device', served.crate('apple'), '--phone', target.value];
-    const build = child = spawn(process.execPath, [resolve(root, 'host/apple/build.mjs'), ...destination, '--run', '--url', appURL.href], {
-      cwd: root, env: { ...process.env, EXACT_APP_DIR: served.dir, EXACT_UPDATE_TRUST: 'development' }, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    build.stdout.on('data', appendLog);
-    build.stderr.on('data', appendLog);
-    build.on('error', error => {
-      if (child !== build) return;
-      child = null;
-      state = { ...state, state: 'failed', message: `The local build could not start: ${error.message}`, completedAt: new Date().toISOString() };
-    });
-    build.on('exit', (code, signal) => {
-      if (child !== build) return;
-      child = null;
-      const failed = code !== 0;
-      const detail = state.log.trim().split('\n').filter(Boolean).at(-1);
-      state = { ...state, state: failed ? 'failed' : 'installed',
-        message: failed ? `The local build failed${detail ? `: ${detail}` : ` (${signal ?? `exit ${code}`})`}` : `${served.displayName} was installed and opened on ${target.name}.`,
-        completedAt: new Date().toISOString() };
-    });
-    return status();
+    if (child || (launchGate && !launchGate.tryAcquire('ios-browser'))) { const error = new Error('A local iOS build is already running.'); error.status = 409; throw error; }
+    try {
+      refreshTargets(true);
+      if (targetError) { const error = new Error(targetError); error.status = 503; throw error; }
+      const target = targets.find(candidate => candidate.id === targetId);
+      if (!target) { const error = new Error('That Simulator or device is no longer available. Refresh the target list.'); error.status = 400; throw error; }
+      const served = app(), appURL = new URL(localInstallURL(target.kind, origins, port));
+      state = { state: 'building', message: `Building ${served.displayName} for ${target.name}. This can take a few minutes…`, log: '', target: publicTarget(target), startedAt: new Date().toISOString() };
+      const destination = target.kind === 'simulator' ? ['--ios', served.crate('apple'), '--sim', target.value] : ['--device', served.crate('apple'), '--phone', target.value];
+      const build = child = spawn(process.execPath, [resolve(root, 'host/apple/build.mjs'), ...destination, '--run', '--url', appURL.href], {
+        cwd: root, env: { ...process.env, EXACT_APP_DIR: served.dir, EXACT_UPDATE_TRUST: 'development' }, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      build.stdout.on('data', appendLog);
+      build.stderr.on('data', appendLog);
+      build.on('error', error => {
+        if (child !== build) return;
+        child = null;
+        launchGate?.release('ios-browser');
+        state = { ...state, state: 'failed', message: `The local build could not start: ${error.message}`, completedAt: new Date().toISOString() };
+      });
+      build.on('exit', (code, signal) => {
+        if (child !== build) return;
+        child = null;
+        launchGate?.release('ios-browser');
+        const failed = code !== 0;
+        const detail = state.log.trim().split('\n').filter(Boolean).at(-1);
+        state = { ...state, state: failed ? 'failed' : 'installed',
+          message: failed ? `The local build failed${detail ? `: ${detail}` : ` (${signal ?? `exit ${code}`})`}` : `${served.displayName} was installed and opened on ${target.name}.`,
+          completedAt: new Date().toISOString() };
+      });
+      return status();
+    } catch (error) {
+      if (!child) launchGate?.release('ios-browser');
+      throw error;
+    }
   }
   return {
     /** The running build, for a server's shutdown to stop and wait on. */

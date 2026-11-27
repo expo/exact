@@ -1437,17 +1437,17 @@ fn press_transforms_compose_and_bound_transitions_write_press_timing() {
     assert!(output.js.contains(",\"--exact-press-timing\",\"\",()=>"));
 }
 
-/// LLP 1094.000 D2: a bound drag's files and `url` reach the page by the
-/// names `drag.js` hooks to admit them, so a DOM name of their own would
-/// pass them unadmitted.
+/// LLP 1094.000 D2, D14: a bound drag's files and names and its `url` reach
+/// the page by the names `drag.js` hooks to admit them, so a DOM name of
+/// their own would pass them unadmitted.
 #[test]
 fn a_drags_bound_data_is_written_by_the_names_drag_js_admits() {
     let plan = contract::compile(
-        "component App\n  state files = [\"assets/a.jpg\"]\n  state link = \"https://example.com/a\"\n  view\n    column draggable=true dataTransfer=DataTransfer(files=files, url=link)\n      text \"a\"\n",
+        "component App\n  state files = [\"assets/a.jpg\"]\n  state names = [\"A\"]\n  state link = \"https://example.com/a\"\n  view\n    column draggable=true dataTransfer=DataTransfer(files=files, names=names, url=link)\n      text \"a\"\n",
     )
     .unwrap();
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
-    for name in ["data-datatransferfiles", "data-datatransferurl"] {
+    for name in ["data-datatransferentries", "data-datatransferurl"] {
         assert!(js.contains(&format!("\"{name}\"")), "{name}:\n{js}");
     }
     // And `draggable` as HTML's own attribute, which the browser drags by.
@@ -1457,15 +1457,15 @@ fn a_drags_bound_data_is_written_by_the_names_drag_js_admits() {
 
 /// A drag's `url` and `files` the compiler folds to constants are bound
 /// too, never written into the markup, so `drag.js` admits them as the
-/// runner does (LLP 1094.000 D1, D2).
+/// runner does (LLP 1094.000 D1, D2, D14).
 #[test]
 fn a_drags_constant_data_is_bound_for_drag_js_to_admit() {
     let plan = contract::compile(
-        "component App\n  view\n    column draggable=true dataTransfer=DataTransfer(files=[\"app:/data/a.pdf\"], url=`https://${\"example.com\"}/a b`)\n      text \"a\"\n",
+        "component App\n  view\n    column draggable=true dataTransfer=DataTransfer(files=[\"app:/data/a.pdf\"], names=[\"A\"], url=`https://${\"example.com\"}/a b`)\n      text \"a\"\n",
     )
     .unwrap();
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
-    for name in ["data-datatransferfiles", "data-datatransferurl"] {
+    for name in ["data-datatransferentries", "data-datatransferurl"] {
         assert!(js.contains(&format!(",\"{name}\",")), "{name} bound:\n{js}");
         assert!(
             !js.contains(&format!("\"{name}\":")),

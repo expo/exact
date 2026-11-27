@@ -2,4 +2,17 @@
 <resources>
     <!-- Night mode's launch window (LLP 1115.001 D3.6): the device's dark theme and its surface, never white. -->
     <style name="ExactLaunch" parent="@android:style/Theme.DeviceDefault.NoActionBar" />
+    <!-- Night mode's translucent host activity (LLP 1133.030 D9). -->
+    <style name="ExactTranslucent" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

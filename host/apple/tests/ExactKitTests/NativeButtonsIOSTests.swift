@@ -419,6 +419,78 @@ final class NativeButtonsIOSTests: XCTestCase {
         XCTAssertEqual(pressed, [2, 1], "disabled: no press")
     }
 
+    /// A touch's press bubbles from where it lifted: inside its ancestor's box, though the button's centre is outside it,
+    /// the ancestor's press. A key's or an assistive press has no point and goes by the centre (LLP 1069.011 D4).
+    func testATouchBubblesFromWhereItLifted() throws {
+        let p = presenter(box(1, handlers: ["press"], w: 100) + native(2, handlers: [], x: 80)
+                          + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]],
+                          faces: [2: face("Half")])
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        let node = try XCTUnwrap(p.views[2])
+        node.activateNative(at: node.convert(CGPoint(x: 10, y: 12), to: nil))
+        XCTAssertEqual(pressed, [1], "lifted at 90, inside its ancestor")
+        node.activateNative()
+        XCTAssertEqual(pressed, [1], "with no point, at its centre, 140: outside it")
+    }
+
+    /// A handlerless button moving with its layout bubbles a hardware key's press from the centre it shows: inside its
+    /// ancestor's box there, though its laid-out centre is outside it. The button takes the key either way, so the
+    /// ancestor's own key path never presses past that test (LLP 1069.011 D4).
+    func testAKeyOnAMovingButtonBubblesFromTheCentreItShows() throws {
+        let p = presenter(box(1, handlers: ["press"], w: 100) + native(2, handlers: [], x: 80)
+                          + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]],
+                          faces: [2: face("Half")])
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        let node = try XCTUnwrap(p.views[2])
+        XCTAssertTrue(node.activateKey(" "), "the button takes its key")
+        XCTAssertEqual(pressed, [], "at rest its centre, 140, is outside its ancestor")
+        // Moving in from the left: its centre shows at 90
+        node.layoutOffset = CGPoint(x: -50, y: 0)
+        node.applyTransform()
+        XCTAssertTrue(node.activateKey(" "))
+        XCTAssertEqual(pressed, [1], "its centre shows at 90, inside its ancestor")
+    }
+
+    /// UIKit's touch-up hands the activation the point a real touch lifted at: pressed outside the ancestor's box and
+    /// lifted inside it, within the button both times, the ancestor's press; pressed inside and lifted outside, none
+    /// (LLP 1069.011 D4). A button with its own press takes a lift a little past its edge, which UIKit's touch-up allows.
+    func testARealTouchBubblesFromWhereItLifted() throws {
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "the button's touch-up must carry the point a real touch lifted at")
+        }
+        // Below the status bar and inside a landscape window's height, in the app's own scene, where the touch runner
+        // reaches
+        let p = presenter(box(1, handlers: ["press"], w: 100) + native(2, handlers: [], x: 80)
+                          + native(3, x: 0) + [["op": "frame", "id": 3, "x": 0.0, "y": 260.0, "w": 120.0, "h": 34.0]]
+                          + [["op": "frame", "id": 1, "x": 0.0, "y": 200.0, "w": 100.0, "h": 40.0],
+                             ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1, 3]]],
+                          faces: [2: face("Half"), 3: face("Own")])
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        window = UIWindow(windowScene: scene)
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        let node = try XCTUnwrap(p.views[2]), touch = try TouchRunner(self)
+        defer { touch.connection.cancel() }
+        func drag(_ node: NodeView, from: CGFloat, to: CGFloat) throws {
+            var request = try TouchRunner.aim(node.convert(CGPoint(x: from, y: 17), to: window), in: window)
+            let end = try TouchRunner.aim(node.convert(CGPoint(x: to, y: 17), to: window), in: window)
+            request.merge(["op": "drag", "to": end["point"]!, "screenTo": end["screen"]!, "press": 0.05, "hold": 0.05, "velocity": 40]) { _, new in new }
+            XCTAssertEqual(try touch.ask(request)["done"] as? Bool, true)
+        }
+        try drag(node, from: 30, to: 10)
+        waitFor("pressed at 110 and lifted at 90, inside its ancestor", cap: 5) { pressed == [1] }
+        try drag(node, from: 10, to: 30)
+        waitForMainQueue()
+        XCTAssertEqual(pressed, [1], "pressed at 90 and lifted at 110, outside its ancestor")
+        try drag(try XCTUnwrap(p.views[3]), from: 60, to: 126)
+        waitFor("its own press, lifted 6 points past its edge", cap: 5) { pressed == [1, 3] }
+    }
+
     func testARIAUnavailabilityKeepsNativeButtonEnabledAndPressable() throws {
         let p = presenter(box(1) + native(2, ["accessibilityDisabled": "true", "testId": "update"])
                           + box(3, ["accessibilityRole": "button", "tabIndex": "0", "accessibilityDisabled": "true"], handlers: ["press"])
@@ -1178,6 +1250,21 @@ final class NativeButtonsIOSTests: XCTestCase {
             pressed.append(id)
         }
         try button(p, 2).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(pressed, [1])
+        XCTAssertTrue(p.menus.isOpen(pop))
+    }
+
+    /// A key on a handlerless native invoker whose target its ancestor's press makes presses the ancestor and opens
+    /// the target, as the invoker's own key path does.
+    func testAKeyOnANativeInvokerOpensTheTargetItsAncestorsPressMakes() throws {
+        let p = presenter(box(1, handlers: ["press"]) + native(2, ["popovertarget": "late"], handlers: [])
+            + box(4, ["id": "choices", "popover": "manual"]) + [
+                ["op": "children", "id": 1, "ids": [2, 4]], ["op": "roots", "ids": [1]]], faces: [2: face("Open")])
+        defer { p.menus.reset() }
+        let pop = try XCTUnwrap(p.views[4])
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0); pop.props["id"] = "late" }
+        XCTAssertTrue(try XCTUnwrap(p.views[2]).activateKey("Enter"))
         XCTAssertEqual(pressed, [1])
         XCTAssertTrue(p.menus.isOpen(pop))
     }

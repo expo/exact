@@ -672,9 +672,12 @@ fn build_reports_all_reachable_ambient_apis_before_bake() {
     );
     fixture.write(
         "app.ts",
-        "import './helper.ts';\nexport const answer = () => Date.now();\n",
+        "import './helper.ts';\nexport const answer = () => setInterval(() => {}, 10);\n",
     );
-    fixture.write("helper.ts", "export const value = Math.random();\n");
+    fixture.write(
+        "helper.ts",
+        "export const value = requestAnimationFrame(() => {});\n",
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_contract"))
         .args(["build", "app.contract", "--json"])
         .current_dir(&fixture.0)
@@ -685,8 +688,22 @@ fn build_reports_all_reachable_ambient_apis_before_bake() {
     assert_eq!(found.len(), 2, "{found:?}");
     assert!(found.iter().all(|d| d["id"] == "analyze-ambient-api"));
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Date.now()"), "{text}");
-    assert!(text.contains("Math.random()"), "{text}");
+    assert!(text.contains("setInterval()"), "{text}");
+    assert!(text.contains("requestAnimationFrame()"), "{text}");
+
+    // Virtualized clock and randomness are allowed at build time (LLP 1195.000 Stage 1).
+    fixture.write(
+        "app.ts",
+        "import './helper.ts';\nexport const answer = () => Date.now();\n",
+    );
+    fixture.write("helper.ts", "export const value = Math.random();\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_contract"))
+        .args(["build", "app.contract", "--json"])
+        .current_dir(&fixture.0)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"[]\n");
 }
 
 /// An import of a file git ignores (Expose's `./local`, which its hosts'

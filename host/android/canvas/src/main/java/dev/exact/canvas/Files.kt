@@ -51,7 +51,8 @@ class Files : ContentProvider() {
         return read(context, parts) ?: throw FileNotFoundException()
     }
 
-    /** The name and size a receiver shows ([OpenableColumns]): the size the file has as it opens now. */
+    /** The name and size a receiver shows ([OpenableColumns]): the name the URI was made with ([uri]), else the
+     * source's own, and the size the file has as it opens now. */
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, order: String?): Cursor {
         val context = context ?: throw FileNotFoundException()
         val parts = parts(uri)
@@ -59,7 +60,8 @@ class Files : ContentProvider() {
         val size = opened?.use { it.statSize } ?: throw FileNotFoundException()
         val columns = projection?.filter { it == OpenableColumns.DISPLAY_NAME || it == OpenableColumns.SIZE }?.toTypedArray()
             ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
-        return MatrixCursor(columns, 1).apply { addRow(columns.map { if (it == OpenableColumns.SIZE) size else parts.last() }) }
+        val name = uri.getQueryParameter(NAME)?.takeIf { it.isNotEmpty() } ?: parts.last()
+        return MatrixCursor(columns, 1).apply { addRow(columns.map { if (it == OpenableColumns.SIZE) size else name }) }
     }
 
     override fun getType(uri: Uri): String = type(uri.lastPathSegment ?: "")
@@ -75,6 +77,8 @@ class Files : ContentProvider() {
         private const val APP = "app"
         private const val SHIPPED = "shipped"
         private const val CAPTURE = "capture"
+        /** The query parameter that holds the name a destination is offered (LLP 1094.000 D14). */
+        private const val NAME = "name"
 
         /**
          * The source [parts] name, open for reading: an `app:/` file through the app's own confined read, a shipped one
@@ -130,11 +134,16 @@ class Files : ContentProvider() {
         private val MODES = setOf("r", "w", "wt", "wa", "rw", "rwt")
 
         /** The content URI for [src], an `app:/data|cache|tmp/…` path or a shipped `assets/…` name, or null where it
-         * names no regular file the app has now. */
-        fun uri(context: Context, src: String): Uri? {
+         * names no regular file the app has now. A [name] other than the source's own rides along as a query
+         * parameter, which [query] answers as the file's display name, while the path still opens the source and types
+         * it (LLP 1094.000 D14). */
+        fun uri(context: Context, src: String, name: String? = null): Uri? {
             val parts = if (src.startsWith("app:/")) listOf(APP) + src.removePrefix("app:/").split('/') else listOf(SHIPPED) + src.split('/')
             read(context, parts)?.close() ?: return null
-            return Uri.Builder().scheme("content").authority(authority(context)).apply { parts.forEach(::appendPath) }.build()
+            return Uri.Builder().scheme("content").authority(authority(context)).apply {
+                parts.forEach(::appendPath)
+                if (name != null && name.isNotEmpty() && name != parts.last()) appendQueryParameter(NAME, name)
+            }.build()
         }
 
         private fun authority(context: Context) = "${context.packageName}.exact.files"

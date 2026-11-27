@@ -321,7 +321,7 @@ final class SegmentPress: NSObject {
         let i = control.selectedSegmentIndex
         settled = i
         guard tabs.indices.contains(i) else { return }
-        _ = host?.presenter.hatchAct(tabs[i], 0, NavigationMarks.shared.personNow())
+        host?.presenter.pressFromBar(tabs[i], origin: NavigationMarks.shared.personNow())
     }
 }
 
@@ -339,12 +339,12 @@ final class BarPress: NSObject {
         // (`MenuHost.invoke`).
         if !node.handlers.contains("press"), let invocation = host.presenter.invocation(of: node) {
             if invocation.opensPopover, !host.presenter.menus.pullsDown(invocation.target) {
-                _ = host.presenter.menus.openFromBar(node)
+                if !node.disabled, !node.inert { _ = host.presenter.menus.openFromBar(node) }
                 return
             }
             // A dialog it shows modally or closes, as its command says (`MenuHost.invoke`'s bar item).
             if invocation.action == .showModal || invocation.action == .close {
-                if !node.disabled { host.presenter.press(id) }
+                if !node.disabled, !node.inert { host.presenter.press(id) }
                 return
             }
         }
@@ -353,7 +353,7 @@ final class BarPress: NSObject {
             if !node.disabled, !node.inert { host.presenter.press(id) }
             return
         }
-        _ = host.presenter.hatchAct(id, 0, NavigationMarks.shared.personNow())
+        host.presenter.pressFromBar(id, origin: NavigationMarks.shared.personNow())
     }
 }
 
@@ -594,6 +594,7 @@ extension NavigationHost {
             // (no header, a hidden one, one that is not a bar's), or no bar
             // where the route says so or has nothing to go back to.
             c.pushed = index + front > 0 || detail
+            c.followAllocation()
             let transparent = RouteGeometry.transparentBar(c.node)
             let (shape, bar) = barShape(of: c, in: nav)
             let shows = bar != .hidden
@@ -821,7 +822,12 @@ extension NavigationHost {
         item.leftItemsSupplementBackButton = true
         #endif
         c.barPresses = []
-        let leading = shape.map { shown(barItems($0.leading, c), in: c) }, trailing = shape.map { shown(barItems(Array($0.trailing.reversed()), c), in: c) }
+        #if os(iOS)
+        let filters = c.filterBarItems
+        #else
+        let filters: [UIBarButtonItem] = []
+        #endif
+        let leading = shape.map { shown(barItems($0.leading, c), in: c) }, trailing = shape.map { shown(barItems(Array($0.trailing.reversed()), c), in: c) + filters }
         let ids = Set(((shape?.leading ?? []) + (shape?.trailing ?? [])).map(\.id))
         c.barItemsMade = c.barItemsMade.filter { ids.contains($0.key) }
         c.barSpaces = c.barSpaces.filter { ids.contains($0.key) }
@@ -1129,7 +1135,6 @@ extension NavigationHost {
             // The bottom edge's scroller stays UIKit's to inset (`reachBottom`).
             if old !== c.edgeScroll || sv !== old.scrollView { sv.contentInsetAdjustmentBehavior = .never }
             old.scrollOrigin = 0
-            old.scrollCollapsed = 0
             sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: top - old.scrollTopInset(sv)), in: sv, clamped: !sv.isTracking && !sv.isDragging && !sv.isDecelerating)
         }
         // UIKit keeps a pushed route's large title inside the scroller the bar

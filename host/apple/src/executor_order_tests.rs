@@ -276,7 +276,7 @@ fn a_burst_past_the_limit_and_the_holding_cap_settles_in_issue_order() {
         (0..N).map(|n| format!("m{n}")).collect::<Vec<_>>(),
         "{parsed:?}"
     );
-    let limit = "refused: native executor admission limit reached";
+    let limit = "refused: 17 ordered request slots requested (16 in use, maximum 16). An effect needs a free ordered slot";
     assert_eq!(parsed[16], format!("m16 {limit}"));
     assert_eq!(
         parsed[17], "m17",
@@ -285,7 +285,7 @@ fn a_burst_past_the_limit_and_the_holding_cap_settles_in_issue_order() {
     assert_eq!(
         parsed[N - 1],
         format!(
-            "m{} refused: earlier ordered admission refusal must settle first",
+            "m{} refused: 129 ordered requests waiting behind earlier work requested (128 in use, maximum 128)",
             N - 1
         )
     );

@@ -1,8 +1,9 @@
 // @ref LLP 1115.000 D4.8 — how the sheets of a stack stand to each other in a wide window, as UIKit's form sheets do
 // on an iPad (iPadOS 27; the measurements are the schema's `_metrics`): which sheets are one size, the step back of
 // a sheet under one its size, the lengths neutral.css makes the step from, and what a sheet of another size dims
-// again. routes.js `sheetFrame` and `sheetLeaves` call it, for a plan that can present a sheet.
-import { viewChildren, viewParent } from "./lists.js";
+// again. routes.js `sheetFrame` and `sheetLeaves` call it, for a plan that can present a sheet. A sheet that leaves
+// slides down here (`slideAway`), and a sheet arriving in its stack ends the slides still leaving it (`slidesEnd`).
+import { unwrapListItem, viewChildren, viewParent } from "./lists.js";
 
 const mark = (route, name, value) => {
   if ((route.getAttribute(name) ?? null) !== value) {
@@ -320,7 +321,7 @@ export function stackSheets(routes, shownIn, inUse, selected) {
     readStacks(parent);
   }
 }
-/** A route that left the document takes its lengths with it: routes.js `sheetLeaves`, once its slide has removed it,
+/** A route that left the document takes its lengths with it: `slideAway`, once its slide has removed it,
  * after which no projection may come. One removed in an update goes at that update's read. */
 export function sheetGone(route) {
   sheetLength(route, "", "");
@@ -328,3 +329,53 @@ export function sheetGone(route) {
 /** A projection that finds no route to frame in a root reaches no stack: what the stacks hold for routes and roots
  * that are gone goes here. */
 export const sheetsLeft = sweep;
+
+const leavingSheets = new Set();
+export function slideAway(el) {
+  if (typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || !["modal", "popover"].includes(el.getAttribute("navigationPresentation")) || el.hasAttribute("data-exact-route-popover") || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return false;
+  }
+  if (el.parentElement?.hasAttribute("data-exact-list-item")) {
+    unwrapListItem(el.parentElement);
+  }
+  if (el.contains(document.activeElement)) {
+    document.activeElement.blur();
+  }
+  // It leaves from where it stands, though the stack under it changes (neutral.css lowers a sheet over another).
+  const top = getComputedStyle(el).top;
+  el.setAttribute("navigationKey", "");
+  el.setAttribute("data-exiting", "");
+  el.setAttribute("aria-hidden", "true");
+  el.inert = true;
+  const now = getComputedStyle(el), from = now.translate === "none" ? "0 0" : now.translate;
+  Object.assign(el.style, {
+    transition: "none",
+    pointerEvents: "none"
+  });
+  el.style.setProperty("top", top, "important");
+  // Only `translate`, so the compositor runs it; the scrim fades on its own box as the projection turns it off.
+  const slide = el.animate([{
+    translate: from
+  }, {
+    translate: "0 100vh"
+  }], {
+    duration: 400,
+    easing: "cubic-bezier(.32, .72, 0, 1)"
+  }), done = () => {
+    leavingSheets.delete(slide);
+    el.remove();
+    sheetGone(el);
+  };
+  leavingSheets.add(slide);
+  slide.finished.then(done, done);
+  return true;
+}
+/** A sheet arriving among `parent`'s routes ends the slides still leaving it: each is removed at its end. */
+export function slidesEnd(parent) {
+  for (const slide of leavingSheets) {
+    if (viewParent(slide.effect.target) === parent) {
+      slide.finish();
+      slide.effect.target.remove();
+    }
+  }
+}

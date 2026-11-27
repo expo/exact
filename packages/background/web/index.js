@@ -27,8 +27,17 @@ export function implementation({ changed, wakes, log }) {
   /** tag → { registered, attempts, notBefore, firing, again } */
   const tags = new Map();
   try { for (const [tag, r] of JSON.parse(store?.getItem(KEY) ?? '[]')) tags.set(tag, { ...r, firing: false, again: false }); } catch { /* none kept */ }
-  const keep = () => {
-    try { store?.setItem(KEY, JSON.stringify([...tags].map(([tag, { registered, attempts, notBefore }]) => [tag, { registered, attempts, notBefore }]))); } catch { /* storage blocked: tags live as long as the page */ }
+  // The stored list is the origin's, shared by every open tab, so each write changes only `tag` in what is
+  // stored now rather than writing this tab's tags over another's.
+  const keep = tag => {
+    try {
+      let stored;
+      try { stored = new Map(JSON.parse(store?.getItem(KEY) ?? '[]')); } catch { stored = new Map(); }
+      const r = tags.get(tag);
+      if (r) stored.set(tag, { registered: r.registered, attempts: r.attempts, notBefore: r.notBefore });
+      else stored.delete(tag);
+      store?.setItem(KEY, JSON.stringify([...stored]));
+    } catch { /* storage blocked: tags live as long as the page */ }
   };
   // The browser's word where it has the permission. Nothing asks for it, so a `prompt` (Chromium's in a profile
   // with no setting) is not withheld: the page fires its tags all the same.
@@ -58,7 +67,7 @@ export function implementation({ changed, wakes, log }) {
       }
     }
     if (!tags.has(tag)) log?.(`background.sync ${tag}: retired (${outcome})`);
-    keep();
+    keep(tag);
     changed('background.syncTags');
     schedule();
   };
@@ -86,7 +95,7 @@ export function implementation({ changed, wakes, log }) {
       const r = tags.get(tag);
       if (r?.firing) r.again = true;
       else if (!r) tags.set(tag, { registered: Date.now(), attempts: 0, notBefore: null, firing: false, again: false });
-      keep();
+      keep(tag);
       changed('background.syncTags');
       if (!r?.firing) schedule();
       return null;

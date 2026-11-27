@@ -29,6 +29,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { guardFlags } from './help.mjs';
 import * as exactBuild from './exact-build.mjs';
+import './paths.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const CLI = process.env.EXACT_APPDROP_CLI ?? 'appdrop@0.8';

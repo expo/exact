@@ -622,7 +622,7 @@ fn text_indent_insets_the_first_line_only() {
 fn a_markdown_list_items_lines_start_at_its_indent() {
     let mut e = engine(DEJAVU, "DejaVu Sans");
     let source = "Top\n\n- one two three four five six seven eight\n  - nested\n\n9. nine\n10. ten";
-    let s = spec(source, WhiteSpace::PreWrap).markdown();
+    let s = spec(source, WhiteSpace::PreWrap).markdown(exact_kernel::LineHeight::Normal);
     let p = e.paragraph(&s, Some(200.0));
     // Each visual line: its first glyph's run, where it starts, and where
     // the marker (a hung run) ends.
@@ -691,6 +691,52 @@ fn a_markdown_list_items_lines_start_at_its_indent() {
 }
 
 #[test]
+fn a_wrapped_markdown_heading_resolves_leading_at_its_own_size() {
+    use exact_kernel::text::{Markup, Paragraph};
+    use exact_kernel::{LineHeight, TextRun, TextStyle};
+
+    let mut engine = engine(DEJAVU, "DejaVu Sans");
+    for (line_height, expected) in [
+        (LineHeight::Number(1.5), 38.4),
+        (LineHeight::Length(24.0), 24.0),
+    ] {
+        let rows = StyleProps::default().with_rows(|rows| {
+            rows.font_size = 16.0;
+            rows.line_height = line_height;
+        });
+        let runs = [TextRun {
+            text: "# Heading words that wrap".into(),
+            style: TextStyle::from_style(&rows),
+            inline: None,
+            edges: Default::default(),
+        }];
+        let mut paragraph = Paragraph::from_style(&rows);
+        paragraph.markup = Markup::Markdown;
+        let spec = Spec::from_request(&TextMeasureRequest {
+            atoms: Default::default(),
+            runs: &runs,
+            paragraph,
+            width: AxisOffer::Definite(120.0),
+            height: AxisOffer::MaxContent,
+            exclusions: &[],
+        });
+        assert_eq!(spec.runs[0].size, 25.6);
+        if matches!(line_height, LineHeight::Length(_)) {
+            assert_eq!(spec.runs[0].line_height, Some(expected));
+            continue;
+        }
+        let paragraph = engine.paragraph(&spec, Some(120.0));
+        let lines: Vec<_> = paragraph.layout_runs().map(|line| line.line_y).collect();
+        assert!(lines.len() > 1);
+        let advance = lines[1] - lines[0];
+        assert!(
+            (advance - expected).abs() < 0.001,
+            "{line_height:?}: {advance}"
+        );
+    }
+}
+
+#[test]
 fn a_common_character_after_a_cjk_bracket_is_shaped_in_the_brackets_run() {
     // Chrome itemizes a Common character by its Script_Extensions: `「`
     // (Han, Kana, …) after Latin starts a run that `“` joins, so `“` is not
@@ -710,4 +756,48 @@ fn a_common_character_after_a_cjk_bracket_is_shaped_in_the_brackets_run() {
         "Latin keeps its kerning: {kerned} {alone}"
     );
     assert_eq!(quote(&mut e, "x \u{300c}\u{201c}A"), alone);
+}
+
+#[test]
+fn platform_advances_reach_truncation_and_editing_geometry() {
+    let mut engine = engine(INTER, "Inter");
+    engine
+        .catalog
+        .borrow_mut()
+        .layout
+        .set_advance_measure(Some(Arc::new(|run| {
+            Some(parley::RunAdvances {
+                glyphs: run
+                    .positions
+                    .iter()
+                    .map(|p| parley::GlyphAdvance {
+                        advance: 19.,
+                        x_offset: p.x_offset as f32 * run.size / run.units_per_em,
+                    })
+                    .collect(),
+                reattach: Vec::new(),
+                space: None,
+                hyphen: None,
+            })
+        })));
+    let value = "AAAAA";
+    let mut s = spec(value, WhiteSpace::Nowrap);
+    let paragraph = engine.paragraph(&s, None);
+    let geometry = field::Geometry::new(&paragraph, value, false, 0., 0., None);
+    let cursor = field::Cursor {
+        offset: 2,
+        upstream: false,
+    };
+    assert_eq!(geometry.caret(cursor).0, 38.);
+    assert_eq!(geometry.hit(39., 1.).offset, 2);
+    assert_eq!(geometry.highlight(1, 3, None)[0].2, 38.);
+    assert_eq!(geometry.underlines(1, 3, 1.)[0].2, 38.);
+    let shown = paragraph.ellipsized(58.).unwrap();
+    let (_, mark) = cut_line(&shown, 0);
+    assert_eq!((mark.x, mark.w), (38., 19.));
+    s = spec("AA AA AA", WhiteSpace::Normal);
+    s.line_clamp = 1;
+    let shown = engine.paragraph(&s, Some(58.));
+    let (_, mark) = cut_line(&shown, 0);
+    assert_eq!((mark.x, mark.w), (38., 19.));
 }

@@ -274,7 +274,7 @@ test('stdio drives check backend receipts before desktop spawns or phone install
     await assert.rejects(openStdio({ host: 'ios', device: true, app: dir }), /baked backend.*4412.*4400/);
     process.env.EXACT_BACKEND_ORIGIN = other;
     for (const options of [{}, { packaged: true }, { receipt: resolve(phone, 'receipt.json') }]) {
-      assert.doesNotThrow(() => refuseBinaryBackend(bin, app, options));
+      assert.equal(refuseBinaryBackend(bin, app, options), other);
     }
     write(relative(dir, dll), 'a different backend module');
     assert.throws(() => refuseBinaryBackend(bin, app, { packaged: true }), /windows build is stale: .*backend.dll.*run .*windows/);

@@ -87,3 +87,30 @@ fn a_plan_with_no_navigation_root_leaves_every_behaviour_out() {
         ALL
     );
 }
+
+/// LLP 1123 D7: a popover route keeps its presentation on the page, literal and bound, with its
+/// anchor and arrows, so the web host can present it as a popover of its own
+#[test]
+fn a_popover_route_keeps_its_presentation() {
+    let plan = contract::compile(
+        "routes nav\n  home \"/\"\n    pick \"/pick\"\ncomponent App\n  state shown = \"popover\"\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\"\n      button \"Pick\" id=\"pick\"\n      for e in stack(nav) key=e.id\n        if e.name == \"home\"\n          column navigationKey=`${e.id}`\n            text \"Home\"\n        if e.name == \"pick\"\n          column navigationKey=`${e.id}` navigationPresentation=\"popover\" navigationPopoverAnchor=\"pick\" navigationPopoverArrows=\"up left\"\n            text \"Pick\"\n          column navigationKey=\"bound\" navigationPresentation=shown navigationPopoverAnchor=\"pick\"\n            text \"Bound\"\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(
+        js.contains("\"navigationPresentation\":\"popover\""),
+        "{js}"
+    );
+    assert!(
+        js.contains("\"data-navigationpopoveranchor\":\"pick\""),
+        "{js}"
+    );
+    assert!(
+        js.contains("\"data-navigationpopoverarrows\":\"up left\""),
+        "{js}"
+    );
+    assert!(
+        js.contains("P(v1,\"navigationPresentation\",()=>s_1())"),
+        "a bound presentation is written as it is: {js}"
+    );
+}

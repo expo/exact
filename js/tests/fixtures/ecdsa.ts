@@ -55,7 +55,7 @@ async function refusals(): Promise<string> {
     await rejection(() => subtle.importKey("pkcs8", new Uint8Array(8), P256, true, ["sign"])),
     await rejection(() => subtle.sign(ES256, fixed.publicKey, bytes("x"))),
     await rejection(() => subtle.sign({ name: "ECDSA", hash: "SHA-384" }, fixed.privateKey, bytes("x"))),
-    await rejection(() => subtle.verify(ES256, fixed.publicKey, new Uint8Array(64), bytes("x"))),
+    await rejection(() => subtle.verify({ name: "ECDSA", hash: "SHA-384" }, fixed.publicKey, new Uint8Array(64), bytes("x"))),
   ].join("/");
 }
 

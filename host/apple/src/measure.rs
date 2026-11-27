@@ -399,6 +399,7 @@ fn c_run_of(text: &str, run: &exact_kernel::TextRun<'_>) -> CRun {
 }
 
 pub(crate) fn c_run(text: &str, style: exact_kernel::TextStyle, inline: Option<InlineBox>) -> CRun {
+    let line_height = style.used_line_height();
     let b = inline.unwrap_or(InlineBox {
         width: 0.0,
         height: 0.0,
@@ -419,8 +420,8 @@ pub(crate) fn c_run(text: &str, style: exact_kernel::TextStyle, inline: Option<I
         font_weight: style.font_weight,
         font_family: style.font_family,
         italic: u8::from(style.font_style != exact_kernel::FontStyle::Normal),
-        has_line_height: u8::from(style.line_height.is_some()),
-        line_height: style.line_height.unwrap_or(0.0),
+        has_line_height: u8::from(line_height.is_some()),
+        line_height: line_height.unwrap_or(0.0),
         letter_spacing: style.letter_spacing,
         font_variant_numeric: style.font_variant_numeric,
         font_variant_ligatures: style.font_variant_ligatures,

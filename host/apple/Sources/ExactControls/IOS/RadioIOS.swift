@@ -83,6 +83,11 @@ extension ControlHost {
 
     func showRadio(_ id: UInt32, _ on: Bool) { (controls[id] as? ExactRadio)?.isOn = on }
 
-    @objc func radioTapped(_ sender: UIControl) { checkRadio(UInt32(sender.tag)) }
+    @objc func radioTapped(_ sender: UIControl) {
+        #if os(iOS)
+        if presenter.textSelection.hasActiveSelection { presenter.textSelection.clear() }
+        #endif
+        checkRadio(UInt32(sender.tag))
+    }
 }
 #endif

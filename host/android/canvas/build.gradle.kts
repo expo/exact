@@ -14,6 +14,10 @@ providers.gradleProperty("canvasBuildDir").orNull?.let { layout.buildDirectory =
 val translationLibraries = listOf("com.google.mlkit:translate:17.0.3", "com.google.mlkit:language-id:17.0.6")
 val testTranslation = !providers.gradleProperty("mavenLock").isPresent ||
     providers.gradleProperty("maven").orNull.orEmpty().split(',').containsAll(translationLibraries)
+// Sign-in's Google option library, likewise.
+val signInLibraries = listOf("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+val testSignIn = !providers.gradleProperty("mavenLock").isPresent ||
+    providers.gradleProperty("maven").orNull.orEmpty().split(',').containsAll(signInLibraries)
 android {
     namespace = "dev.exact.canvas"
     compileSdk { version = release(37) { minorApiLevel = 2 } }
@@ -48,16 +52,22 @@ android {
             "../../../packages/media-capture/android", "../../../packages/media-capture/test",
             "../../../packages/motion/android", "../../../packages/motion/test",
             "../../../packages/local-auth/android", "../../../packages/local-auth/test",
+            "../../../packages/local-network/android", "../../../packages/local-network/test",
             "../../../packages/passkeys/android", "../../../packages/passkeys/test",
+            "../../../packages/nfc/android", "../../../packages/nfc/test",
             "../../../packages/notifications/android", "../../../packages/notifications/test",
             "../../../packages/payments/android", "../../../packages/payments/test",
             "../../../packages/photos/android", "../../../packages/photos/test",
             "../../../packages/push/android", "../../../packages/push/test/android",
             "../../../packages/recording/android", "../../../packages/recording/test",
             "../../../packages/speech-recognition/android", "../../../packages/speech-recognition/test",
+            "../../../packages/speech-synthesis/android", "../../../packages/speech-synthesis/test",
         ))
         if (testTranslation) getByName("test").kotlin.directories.addAll(listOf(
             "../../../packages/translation/android", "../../../packages/translation/test",
+        ))
+        if (testSignIn) getByName("test").kotlin.directories.addAll(listOf(
+            "../../../packages/sign-in/android", "../../../packages/sign-in/test/android",
         ))
     }
     // Robolectric keeps a sandbox for each SDK level and shadow set the tests name, more than
@@ -87,6 +97,7 @@ dependencies {
     testImplementation("com.google.mlkit:face-detection:16.1.7")
     testImplementation("com.google.mlkit:text-recognition:16.0.1")
     if (testTranslation) translationLibraries.forEach { testImplementation(it) }
+    if (testSignIn) signInLibraries.forEach { testImplementation(it) }
     testImplementation("com.google.mlkit:barcode-scanning:17.3.0")
     testImplementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
     testImplementation("junit:junit:4.13.2")

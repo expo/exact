@@ -62,6 +62,31 @@ final class FieldCompositionMacTests: XCTestCase {
         editor.setMarkedText("", selectedRange: NSRange(location: 0, length: 0), replacementRange: none)
     }
 
+    func testFilteredRangeKeepsItsBackwardDirection() throws {
+        for kind in ["input", "textarea"] {
+            let (node, _, _) = try fixture(kind, props: ["value": "ab47cd"], echo: { $0.filter(\.isNumber) })
+            let presenter = try XCTUnwrap(node.presenter)
+            presenter.fieldSelections.restore(node, FieldSelection(start: 1, end: 5, direction: "backward"))
+            presenter.typed(node.id, "ab47cd", input: true)
+            XCTAssertEqual(presenter.fieldSelections.current(node), FieldSelection(start: 1, end: 2, direction: "backward"), kind)
+        }
+    }
+
+    func testFilterCarriesTheSelectionThroughTheAcceptedDigits() throws {
+        for kind in ["input", "textarea"] {
+            let (_, editor, _) = try fixture(kind, props: ["value": "40"], echo: { $0.filter(\.isNumber) })
+            for (a, b, edit, value, at) in [(2, 2, "a", "40", 2), (1, 1, "a", "40", 1),
+                                             (1, 1, "7x", "470", 2), (1, 2, "a", "40", 1)] {
+                editor.setSelectedRange(NSRange(location: a, length: b - a))
+                editor.insertText(edit, replacementRange: none)
+                XCTAssertEqual(editor.string, value, kind)
+                XCTAssertEqual(editor.selectedRange(), NSRange(location: at, length: 0), kind)
+            }
+            editor.undoManager?.undo()
+            XCTAssertEqual(editor.string, "40", kind)
+        }
+    }
+
     /// にほん, then 日本: each change of the marked text is an `input` with it
     /// in the value, in a field, a search field and a text area alike, and
     /// the app's echo of what it heard leaves the composition and its

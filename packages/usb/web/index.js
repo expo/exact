@@ -55,7 +55,7 @@ export function implementation({ changed }) {
     if (error) return error;
     try { return (await run(c)) ?? null; } catch (e) { return failure(e); }
   };
-  // Claims, releases and closes on one device run one at a time, each checking ownership when its turn comes, so a
+  // Opens, claims, releases and closes on one device run one at a time, each checking ownership when its turn comes, so a
   // competing claim or a close cannot pass between a check and the browser call it guards.
   const turns = new Map();
   const inTurn = (d, run) => {
@@ -95,12 +95,15 @@ export function implementation({ changed }) {
     async open(args) {
       const d = devices.get(args?.device);
       if (!d) return { error: 'NotFoundError' };
-      try { if (!d.opened) await d.open(); } catch (e) { return failure(e); }
-      leases.set(d, (leases.get(d) ?? 0) + 1);
-      const handle = `usb-${++nextConnection}`;
-      connections.set(handle, { device: d, open: true, unplugged: false, claimed: new Set() });
-      announce();
-      return { connection: handle, device: record(d) };
+      // In the device's turn, so an open waits for a pending close and two opens at once open the device once.
+      return inTurn(d, async () => {
+        try { if (!d.opened) await d.open(); } catch (e) { return failure(e); }
+        leases.set(d, (leases.get(d) ?? 0) + 1);
+        const handle = `usb-${++nextConnection}`;
+        connections.set(handle, { device: d, open: true, unplugged: false, claimed: new Set() });
+        announce();
+        return { connection: handle, device: record(d) };
+      });
     },
     usbConnection(args) {
       const c = connections.get(args?.connection);

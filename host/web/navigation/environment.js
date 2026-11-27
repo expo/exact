@@ -42,14 +42,22 @@ export function resolveShortcuts(chords, nav = globalThis.navigator) {
     return shortcutParts(resolved) ? [resolved] : [];
   }).join(" ") || null;
 }
-/** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
+/** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom while something takes the screen below it. The layout viewport is the root's client box (`innerHeight` grows with a page wider than the device), and a pinch zoom shrinks the visual viewport by its scale with nothing below it, so only what the scaled visual viewport leaves of the layout viewport's height counts as keys, at most that. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
 export function keyboardInset(platform = globalThis) {
   const rect = platform.navigator?.virtualKeyboard?.boundingRect;
   if (rect?.height > 0) {
     return r2(rect.height);
   }
-  const vv = platform.visualViewport;
-  return vv ? r2(Math.max(0, platform.innerHeight - vv.height - vv.offsetTop)) : 0;
+  const vv = platform.visualViewport, height = platform.document?.documentElement?.clientHeight ?? platform.innerHeight;
+  if (!vv || !height) return 0;
+  const keys = (height - vv.height * vv.scale) / vv.scale;
+  return keys > 0 ? r2(Math.min(keys, Math.max(0, height - vv.height - vv.offsetTop))) : 0;
+}
+/** The page's keyboard policy (D7): the `interactive-widget` its viewport meta names, which the host writes from its first root and the browser obeys (`resizes-visual`, `resizes-content` or `overlays-content`), and `overlays-content` while the VirtualKeyboard API overlays the keys; `resizes-visual` unsaid, as browsers take it. */
+export function keyboardPolicy(platform = globalThis) {
+  if (platform.navigator?.virtualKeyboard?.overlaysContent) return "overlays-content";
+  const meta = platform.document?.querySelector?.('meta[name="viewport"]')?.content ?? "";
+  return /(?:^|,)\s*interactive-widget\s*=\s*([\w-]+)/.exec(meta)?.[1] ?? "resizes-visual";
 }
 /** `changed` when the keyboard moves without a resize: the VirtualKeyboard API's `geometrychange`. */
 export function onKeyboard(changed, platform = globalThis) {
@@ -444,7 +452,7 @@ export function pageReporter(agent, platform = globalThis) {
           throw new Error(`prefer: display-scale: ${value}: the page's is ${displayScale()}, which the browser sets (its own emulation, or the device)`);
         }
       } else {
-        throw Object.assign(new Error(`prefer: ${name}: ${value} is not a page fact this host sets`), name === "keyboard-navigation" || name === "bold-text" ? {} : { malformed: true });
+        throw Object.assign(new Error(`prefer: ${name}: ${value} is not a page fact this host sets`), ["keyboard-navigation", "bold-text", "ask-siri"].includes(name) ? {} : { malformed: true });
       }
     }
     Object.assign(facts, next);

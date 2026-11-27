@@ -444,17 +444,17 @@ fn open_panel(
     u: &mut Update<'_>,
     n: &NodeInst,
     frames: &[Frame],
-) -> Result<Vec<Child>, InstanceError> {
+) -> Result<Children, InstanceError> {
     let plan = u.env.plan;
     let arm = plan.node(n.node).arm;
     let (region, contents) = match u.sites.children(Some(n.node), arm) {
         &[(_, Site::Region(r))] if plan.region(r).kind == RegionKind::When => {
             match plan.region(r).arms.iter().next() {
                 Some(contents) => (r, contents),
-                None => return realize(u, Some(n.node), arm, frames),
+                None => return Children::realize(u, n.node, arm, frames),
             }
         }
-        _ => return realize(u, Some(n.node), arm, frames),
+        _ => return Children::realize(u, n.node, arm, frames),
     };
     let id = n
         .bound_prop(plan, u.sites, PropId::Id)
@@ -494,7 +494,7 @@ fn open_panel(
         super::region::init_requests(u, contents, &slots);
     }
     let roots = realize(u, None, Some(contents), &with_frame(frames, frame.scope()))?;
-    Ok(vec![Child::Region(RegionInst {
+    Ok(Children::one(Child::Region(RegionInst {
         region,
         subject: None,
         active: Active::Arm {
@@ -502,7 +502,7 @@ fn open_panel(
             frame,
             roots,
         },
-    })])
+    })))
 }
 
 impl Tree {
@@ -576,7 +576,7 @@ fn open_in(
                     n.create_list(u, frames).and_then(|()| match n.list() {
                         Some(_) => Ok(()),
                         None => open_panel(u, n, frames).map(|made| {
-                            n.children = made.into();
+                            n.children = made;
                             n.emit_children(u);
                         }),
                     })

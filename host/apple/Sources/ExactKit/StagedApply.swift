@@ -50,7 +50,15 @@ final class StagePlan {
     func prepareReveal() {
         guard rest == nil else { return }
         var reveal = batch
+        #if os(macOS)
+        reveal.ops = batch.ops.indices.compactMap { i in
+            if prepared[i] && earlyChildren[i] == nil { return nil }
+            if i < retiredOps.count && retiredOps[i] { return nil }
+            return batch.ops[i]
+        }
+        #else
         reveal.ops = batch.ops.indices.compactMap { prepared[$0] && earlyChildren[$0] == nil ? nil : batch.ops[$0] }
+        #endif
         rest = reveal
     }
     func reveal() -> Batch {
@@ -63,8 +71,18 @@ final class StagePlan {
     }
     /// Each new subtree's top, with the live node it joins.
     let tops: [UInt32: UInt32]
+    /// The child order the batch gives each live parent of a prepared top, so
+    /// empty tops mount in their reveal slot during preparation without forcing
+    /// `sortSubviews` at the reveal.
+    let parentChildren: [UInt32: [UInt32]]
+    /// The nodes the batch creates.
+    let created: Set<UInt32>
     /// The nodes the batch destroys.
     let destroyed: Set<UInt32>
+    /// Destroyed nodes also targeted or referenced by another op in this batch
+    /// (for example `exit`, `style`, `animations`, or `children`), which must stay
+    /// on the ordinary destroy path.
+    let touchedDestroyed: Set<UInt32>
     /// The next op preparation looks at.
     var cursor = 0
     /// The `children` ops of boxes with more than `attachLimit` below
@@ -109,9 +127,29 @@ final class StagePlan {
     final class Publication { var committed = false }
     let publication = Publication()
     var tips: [NodeView] = [], cursorRects: [NodeView] = []
+    /// Plain destroyed descendants under a plain retiring top, pulled out of
+    /// `reveal.ops` during preparation so the reveal retires them in one pass
+    /// without running every per-op batch scan over them.
+    struct RetiredCandidate {
+        let id: UInt32
+        let view: ObjectIdentifier
+        let superview: ObjectIdentifier
+    }
+    var retiredPlain: [RetiredCandidate] = []
+    var retiredPlainSet: Set<UInt32> = []
+    var retiredOps: [Bool] = []
+    /// Outermost destroyed plain tops (by id and view identity) whose descendants are in `retiredPlain`.
+    var retiredTops: [UInt32: ObjectIdentifier] = [:]
+    var retireCursor = 0
+    var retireScanDone = false
+    var retireTopValid: [UInt32: (id: UInt32, view: ObjectIdentifier)?] = [:]
     #endif
     var frames: StageFrames?
+    #if os(macOS)
+    var preparedAll: Bool { cursor == batch.ops.count && attachments.isEmpty && accessibilityCursor == madeOrder.count && retireScanDone }
+    #else
     var preparedAll: Bool { cursor == batch.ops.count && attachments.isEmpty && accessibilityCursor == madeOrder.count }
+    #endif
 
     /// Nil when the batch makes too little to stage. `joins` says whether a
     /// live node can take a prepared subtree; `holds` whether a live node is
@@ -123,10 +161,13 @@ final class StagePlan {
         for op in ops {
             if op.op == .create { kinds[op.id] = op.kind } else if op.op == .destroy { destroyed.insert(op.id) }
         }
-        var parent: [UInt32: UInt32] = [:], refused = Set<UInt32>()
+        var parent: [UInt32: UInt32] = [:], refused = Set<UInt32>(), touchedDestroyed = Set<UInt32>()
         let structural = Self.restructured(ops, holds: holds)
         var written: [UInt32: Set<String>] = [:], styles: [UInt32: NodeStyle] = [:]
         for op in ops {
+            if op.op != .destroy {
+                Self.collectDestroyedReferences(in: op, destroyed: destroyed, into: &touchedDestroyed)
+            }
             if op.op != .children, op.op != .roots, let id = op.nodeID { written[id, default: []].formUnion(Self.writes(op)) }
             if op.op == .style, kinds[op.id] == nil { styles[op.id] = op.style }
             let made = kinds[op.id] != nil
@@ -136,6 +177,17 @@ final class StagePlan {
                 for child in op.ids where kinds[child] != nil { parent[child] = op.id }
             case .props, .style, .paragraph, .frame, .flow, .content, .rank: break
             default: if made { refused.insert(op.id) }
+            }
+        }
+        if !destroyed.isEmpty {
+            if let reads = batch.controlReads {
+                for id in reads.keys where destroyed.contains(id) { touchedDestroyed.insert(id) }
+            }
+            if let inspectors = batch.routeInspectors {
+                for item in inspectors {
+                    if destroyed.contains(item.route) { touchedDestroyed.insert(item.route) }
+                    if destroyed.contains(item.view) { touchedDestroyed.insert(item.view) }
+                }
             }
         }
         var topOf: [UInt32: UInt32?] = [:]
@@ -167,6 +219,9 @@ final class StagePlan {
         guard count >= Self.minimumOps else { return nil }
         var tops: [UInt32: UInt32] = [:], depth: [UInt32: Int] = [:], below: [UInt32: Int] = [:]
         for (id, found) in topOf where found == id { tops[id] = parent[id] }
+        let topParents = Set(tops.values)
+        var parentChildren: [UInt32: [UInt32]] = [:]
+        for op in ops where op.op == .children && topParents.contains(op.id) { parentChildren[op.id] = op.ids }
         for (id, found) in topOf {
             guard let found, tops[found] != nil else { continue }
             var at = id, d = 0
@@ -183,7 +238,10 @@ final class StagePlan {
         self.earlyChildren = earlyChildren
         self.prepared = prepared
         self.tops = tops
+        self.parentChildren = parentChildren
+        self.created = Set(kinds.keys)
         self.destroyed = destroyed
+        self.touchedDestroyed = touchedDestroyed
     }
 }
 
@@ -206,6 +264,61 @@ extension StagePlan {
         }
         return out
     }
+    /// Collect every destroyed node ID referenced by a non-destroy op, across
+    /// typed fields and adapter payloads (`flight.from`, drag targets/clips, etc.).
+    private static func collectDestroyedReferences(in op: BatchOp, destroyed: Set<UInt32>, into out: inout Set<UInt32>) {
+        guard !destroyed.isEmpty else { return }
+        func mark(_ id: UInt32?) { if let id, destroyed.contains(id) { out.insert(id) } }
+        func markAll(_ ids: [UInt32]?) {
+            guard let ids else { return }
+            for id in ids where destroyed.contains(id) { out.insert(id) }
+        }
+        func markBatchValue(_ value: BatchValue) {
+            switch value {
+            case .number(let n):
+                if n >= 0, let id = UInt32(exactly: n), destroyed.contains(id) { out.insert(id) }
+            case .array(let a):
+                for item in a { markBatchValue(item) }
+            case .object(let o):
+                for item in o.values { markBatchValue(item) }
+            default: break
+            }
+        }
+        func markAny(_ value: Any) {
+            if let num = value as? NSNumber {
+                if CFGetTypeID(num) == CFBooleanGetTypeID() { return }
+                let d = num.doubleValue
+                if d >= 0, let id = UInt32(exactly: d), destroyed.contains(id) { out.insert(id) }
+            } else if let dict = value as? [String: Any] {
+                for item in dict.values { markAny(item) }
+            } else if let arr = value as? [Any] {
+                for item in arr { markAny(item) }
+            }
+        }
+        mark(op.nodeID)
+        markAll(op.ids)
+        markAll(op.withdrawnIDs)
+        mark(op.layoutParent)
+        markAll(op.layoutKeep)
+        if let boxes = op.layoutBoxes {
+            for box in boxes { mark(box.id); mark(box.before); mark(box.end) }
+        }
+        if let children = op.layoutChildren {
+            for child in children { mark(child.id) }
+        }
+        if let collections = op.collections {
+            for c in collections {
+                mark(c.view); mark(c.parent)
+                for row in c.rows { mark(row.view); mark(row.root) }
+                for fixed in c.fixed { mark(fixed.view); markAll(fixed.roots) }
+            }
+        }
+        if let tables = op.sectionTables {
+            for value in tables { markBatchValue(value) }
+        }
+        if !op.payload.isEmpty { markAny(op.payload) }
+    }
+
     /// What `op` writes on its node, as `disjoint` compares it.
     static func writes(_ op: BatchOp) -> Set<String> {
         switch op.op {
@@ -230,6 +343,7 @@ extension StagePlan {
     func disjoint(_ other: Batch) -> Bool {
         if other.rootTabs != nil, batch.rootTabs != nil { return false }
         if other.routeInspectors != nil, batch.routeInspectors != nil { return false }
+        if other.splitChanged { return false }
         if let theirs = other.controlReads, theirs.contains(where: { structural.contains($0.key) || reads[$0.key]?.isDisjoint(with: $0.value.parts) == false }) { return false }
         for op in other.ops {
             switch op.op {
@@ -257,6 +371,8 @@ extension StagePlan {
     /// a newer sample shows at once.
     func withheld(_ other: Batch, committed: (UInt32) -> NodeStyle?) -> Batch {
         var shown = other
+        shown.split = nil
+        shown.splitChanged = false
         for i in shown.ops.indices where shown.ops[i].op == .style {
             guard let mine = styles[shown.ops[i].id] else { continue }
             let before = committed(shown.ops[i].id) ?? [:]
@@ -380,6 +496,7 @@ extension ExactSession {
             return scheduled ? .full : nil
         }
         if case .advance = published { return .unlessEmpty }
+        if case .covers = published { return .unlessEmpty }
         #if os(macOS)
         if !hasEarlierBatch(than: batch.sequence), batch.hasStoreEffects || batch.layoutProvisional || batch.replacesTree {
             if case .reply = published { return .appKitEvent }
@@ -657,6 +774,7 @@ struct BatchFootprint {
         for (id, read) in batch.controlReads ?? [:] { written[id, default: []].formUnion(read.parts) }
         if batch.routeInspectors != nil { written[.max, default: []].insert("routeInspectors") }
         if batch.rootTabs != nil { written[.max, default: []].insert("rootTabs") }
+        if batch.splitChanged { written[.max, default: []].insert("split") }
         for op in batch.ops {
             if op.op == .style { styled.insert(op.id); if sampling { paints.insert(op.id) } }
             if Self.structuralOps.contains(op.op) { movable = false; continue }

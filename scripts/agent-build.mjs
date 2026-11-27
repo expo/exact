@@ -239,7 +239,13 @@ export function planSource(path, app, graph = graphOf(app)) {
   const at = resolve(ROOT, path), rel = slashRelative(app.dir, at);
   if (!rel || rel.startsWith('..') || isAbsolute(rel) || NATIVE_TREE.test(rel) || rel === DECLARATIONS) return false;
   for (let dir = dirname(at); dir !== app.dir && within(app.dir, dir); dir = dirname(dir)) if (existsSync(resolve(dir, 'Cargo.toml'))) return false;
-  if (/\.contract$/.test(rel)) return true;
+  if (/\.contract$/.test(rel)) {
+    // Widget and Live Activity contracts bake into PlugIns/ExactWidgets.appex/plans/*.plan,
+    // which a plan-only override cannot refresh (LLP 1156.008.000 D6.8).
+    const entrySources = [...(app.manifest?.widgets ?? []), ...(app.manifest?.activities ?? [])]
+      .map(e => e?.source).filter(Boolean).map(s => slashRelative(app.dir, resolve(app.dir, s)));
+    return !entrySources.includes(rel);
+  }
   if (!/\.(tsx?|json)$/.test(rel) || CONFIG_JSON.test(rel)) return false;
   return graph ? graph.has(at) : /\.tsx?$/.test(rel);
 }

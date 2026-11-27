@@ -86,6 +86,7 @@ impl Request {
             module: None,
             http: HttpScheduling::Independent { max_response_bytes },
             continuation: None,
+            local: false,
             storage: None,
             surface: None,
             grants: None,

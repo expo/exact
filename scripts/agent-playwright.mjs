@@ -587,9 +587,11 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
         await frame();
         const settled = await readPicture();
         if (settled.error) throw new Error(settled.error);
+        const held = film ? 0 : Math.max(typeof tags.moving === 'number' ? tags.moving : 0, typeof settled.moving === 'number' ? settled.moving : 0);
         await page.screenshot({ path, type: 'png' });
         const viewport = page.viewportSize();
-        return { screenshot: path, w: viewport.width, h: viewport.height, ...(pending ? { imagesPending: pending } : {}) };
+        const note = held > 0 ? `held ${held} finite animation${held === 1 ? '' : 's'} at end for this still screenshot (LLP 1116.003 D8); use \`screenshot <png> over <ms> every <ms>\` to capture mid-flight motion` : undefined;
+        return { screenshot: path, w: viewport.width, h: viewport.height, ...(pending ? { imagesPending: pending } : {}), ...(note ? { note } : {}) };
       },
       close,
     };

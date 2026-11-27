@@ -59,3 +59,67 @@ export function engagement(changed) {
       : dragging || pinching || root.hasAttribute("data-exact-reorder-keys") ? "gesture" : null;
   };
 }
+
+/** Notify the dev channel after a rendering update containing the commit. */
+export function whenRendered(done) {
+  let observer, frame;
+  const emptyViewport = matchMedia('(width: 0px), (height: 0px)');
+  const eligible = () => document.visibilityState === 'visible' && innerWidth > 0 && innerHeight > 0;
+  function reset() {
+    observer?.disconnect();
+    observer = null;
+    cancelAnimationFrame(frame);
+    frame = null;
+  }
+  function finish() {
+    if (!eligible()) { reset(); return; }
+    cancel();
+    done();
+  }
+  function update() {
+    reset();
+    if (!eligible()) return;
+    const root = document.documentElement;
+    let documentRoot = true, resampled = false;
+    // The initial observation is sampled during a rendering update and delivered in a later
+    // task, even in a scaled frame where the browser withholds animation callbacks. rootBounds
+    // measures this document's viewport at the update. The element's intersection is irrelevant.
+    const sampled = ([entry], source) => {
+      if (source !== observer) return;
+      if (!eligible()) { reset(); return; }
+      if (documentRoot && entry.rootBounds?.width && entry.rootBounds.height) { finish(); return; }
+      // Without document bounds, take a fresh update while the viewport stays nonempty.
+      // An implicit root belongs to the embedder. Use its notification only for timing.
+      if ((!documentRoot || !root.getClientRects().length) && !emptyViewport.matches) {
+        if (resampled) { finish(); return; }
+        resampled = true;
+        source.disconnect();
+        source.observe(root);
+        return;
+      }
+      reset();
+      // The viewport grew between sampling and delivery. Take a fresh rendering turn.
+      frame = requestAnimationFrame(() => {
+        if (eligible()) frame = requestAnimationFrame(finish);
+      });
+    };
+    try { observer = new IntersectionObserver(sampled, { root: document }); }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      documentRoot = false;
+      observer = new IntersectionObserver(sampled);
+    }
+    observer.observe(root);
+  }
+  function cancel() {
+    reset();
+    removeEventListener('resize', update);
+    emptyViewport.removeEventListener?.('change', update);
+    document.removeEventListener('visibilitychange', update);
+  }
+  addEventListener('resize', update);
+  emptyViewport.addEventListener?.('change', update);
+  document.addEventListener('visibilitychange', update);
+  update();
+  return cancel;
+}

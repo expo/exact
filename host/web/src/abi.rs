@@ -57,6 +57,7 @@ pub struct Bridge<D: DataSource> {
 }
 
 mod clock;
+mod geometry;
 mod midi;
 mod mode;
 mod presence;
@@ -1314,12 +1315,6 @@ macro_rules! host {
             EXACT_BRIDGE.with(|b| b.borrow_mut().set_display_scale(scale))
         }
 
-        /// The browser's document insets and segment rectangles in the input buffer.
-        #[no_mangle]
-        pub extern "C" fn exact_set_viewport_geometry(len: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().viewport_geometry(len as usize))
-        }
-
         /// Whether this canvas name is read by a performance resource.
         #[no_mangle]
         pub extern "C" fn exact_canvas_performance_requested(len: u32) -> u32 {
@@ -1344,6 +1339,7 @@ macro_rules! host {
         }
 
         $crate::mode_exports!();
+        $crate::geometry_exports!();
         $crate::midi_exports!();
 
         /// The locale and time zone: `locale NUL timeZone` in the input buffer.

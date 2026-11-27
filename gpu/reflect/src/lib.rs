@@ -467,6 +467,17 @@ impl Shader<'_> {
             let _ = writeln!(out, "        /// `@{stage} fn {}`.", ep.name);
             let _ = writeln!(out, "        pub const {konst}: &str = {:?};", ep.name);
             if matches!(ep.stage, ShaderStage::Compute) {
+                // naga records an `override`-sized dimension as 1 and keeps the
+                // expression aside; its value is the pipeline's, never a const.
+                if ep
+                    .workgroup_size_overrides
+                    .is_some_and(|o| o.iter().any(Option::is_some))
+                {
+                    return Err(format!(
+                        "`{}`: an `override` in `@workgroup_size` is not supported (the size is a pipeline constant, not a Rust one)",
+                        ep.name
+                    ));
+                }
                 names.claim(
                     &format!("{konst}_WORKGROUP_SIZE"),
                     &format!("the workgroup size of `{}`", ep.name),

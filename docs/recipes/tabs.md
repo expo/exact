@@ -2,17 +2,14 @@
 
 `bun exact.mjs pattern tabs` uses iOS's bar. [Tabs and stacks](../contract-for-agents.md#tabs-and-stacks)
 
-On iPhone, UIKit draws toolbar buttons under the native tab bar. Hide the pushed route’s tabs.
+On iPhone, hide the tab bar on pushed routes so UIKit does not draw toolbar buttons under it:
 
 ```text
 row role="tablist"
   display=(top(nav).name == "day" ? "none" : "flex")
 ```
 
-Tabs stay hidden through later pushes and return on pop to History. All hosts apply the display. Only iPhone needs it.
-
-An app-drawn bar overlays full-height routes. Pad each by the bar height plus its safe inset.
-Label the badge for VoiceOver.
+An app-drawn bar overlays full-height routes: pad routes by bar height plus safe inset, and label badges for VoiceOver. On an unfolded iPhone Duo, the tab bar moves to the trailing edge; add `-exact-safe-area="left right"` on full-bleed routes.
 
 ```contract
 routes nav

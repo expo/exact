@@ -102,6 +102,7 @@ export function lines(child) {
   let buf = '';
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', d => { buf += d; const all = buf.split('\n'); buf = all.pop(); seen.push(...all); });
+  const ended = new Promise(ok => child.stdout.once('end', () => { if (buf) { seen.push(buf); buf = ''; } ok(); }));
   // Its stderr's tail too, said when a wait fails (a child that exits, or waits on a lock, says why there).
   let err = '';
   child.stderr?.setEncoding?.('utf8');
@@ -111,7 +112,7 @@ export function lines(child) {
     while (!seen.some(pass)) { if (Date.now() > end || child.exitCode !== null) throw new Error(`not seen${child.exitCode !== null ? ` (it exited ${child.exitCode})` : ` in ${ms} ms`}: ${seen.join('\n')}${err ? `\n--- its stderr's tail:\n${err}` : ''}`); await Bun.sleep(50); }
     return seen.find(pass);
   };
-  return { seen, until };
+  return { seen, until, ended };
 }
 
 /** Ends `child` and what it started (SIGTERM, then SIGKILL after 15 s). */
@@ -125,9 +126,11 @@ export async function drive(url, storage, ops, { keepStorage = false } = {}) {
   let said = '';
   child.stderr.on('data', d => { said = (said + d).slice(-4000); });
   const out = lines(child);
-  const code = await new Promise(ok => child.once('close', ok));
+  const [code] = await Promise.all([new Promise(ok => child.once('close', ok)), out.ended]);
   if (code !== 0) throw new Error(`the drive failed: ${said}\n${out.seen.slice(-3).join('\n').slice(0, 3000)}`);
-  return out.seen.filter(l => l.startsWith('{')).map(l => JSON.parse(l));
+  return out.seen.filter(l => l.startsWith('{')).map(l => {
+    try { return JSON.parse(l); } catch (e) { throw new SyntaxError(`${e.message} (line len=${l.length}, tail=${JSON.stringify(l.slice(-80))})`); }
+  });
 }
 
 /** The tool on `app` through `forma tool --via` to a proxy in front of

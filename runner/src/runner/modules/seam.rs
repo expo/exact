@@ -361,7 +361,7 @@ impl<D: DataSource> Modules<D> for LinkedModules {
         r.raise_module_event_linked(extension, name, args, origin)
     }
 
-    fn refuse_tool(&self, r: &mut Runner<D>, ticket: u64, reason: &'static str, ordered: bool) {
+    fn refuse_tool(&self, r: &mut Runner<D>, ticket: u64, reason: String, ordered: bool) {
         r.refuse_tool_linked(ticket, reason, ordered)
     }
 
@@ -458,7 +458,7 @@ impl<D: DataSource> Modules<D> for LinkedModules {
         r.tool_cause_linked()
     }
 
-    fn tool_refusal(&self, r: &mut Runner<D>, allow_ordered: bool) -> Option<(u64, &'static str)> {
+    fn tool_refusal(&self, r: &mut Runner<D>, allow_ordered: bool) -> Option<(u64, String)> {
         r.tool_refusal_linked(allow_ordered)
     }
 
@@ -517,6 +517,10 @@ impl<D: DataSource> Modules<D> for LinkedModules {
 
     fn holds_token(&self, r: &Runner<D>, token: Option<u64>) -> bool {
         r.extensions.holds_token(token)
+    }
+
+    fn holds_data_request(&self, r: &Runner<D>, ticket: u64) -> bool {
+        r.extensions.holds_data_request(ticket)
     }
 
     fn readers_saved(&self, r: &Runner<D>) -> Readers {

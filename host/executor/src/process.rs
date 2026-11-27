@@ -108,15 +108,17 @@ impl Processes {
 }
 
 /// Take room for one-shot `ticket`, whose reply may hold `ceiling` bytes.
-pub(crate) fn admit_one_shot(
-    shared: &Shared,
-    ticket: u64,
-    ceiling: usize,
-) -> Result<(), &'static str> {
+pub(crate) fn admit_one_shot(shared: &Shared, ticket: u64, ceiling: usize) -> Result<(), String> {
     let mut running = shared.processes.one_shots.lock().unwrap();
     let held: usize = running.values().sum();
-    if running.len() >= ONE_SHOTS || (!running.is_empty() && held + ceiling > ONE_SHOT_BYTES) {
-        return Err("native executor process limit reached");
+    super::admission::budget("one-shot child processes", running.len(), 1, ONE_SHOTS)?;
+    if !running.is_empty() && held + ceiling > ONE_SHOT_BYTES {
+        return Err(super::admission::budget_message(
+            "one-shot child process bytes",
+            held,
+            ceiling,
+            ONE_SHOT_BYTES,
+        ));
     }
     running.insert(ticket, ceiling);
     Ok(())
@@ -895,7 +897,7 @@ pub(crate) fn deliver(shared: &Shared, ticket: u64, message: Message, wait: bool
             outcome: Outcome::Message(message),
             bytes: 0,
             message: true,
-            stream: true,
+            stream: Some(crate::StreamKind::Child),
             light: false,
             again: false,
             reply: false,

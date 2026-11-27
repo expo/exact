@@ -38,6 +38,8 @@ impl<D: DataSource + 'static> Placed<D> {
         let (jobs, rx) = channel::<Job>();
         let grants = self.grants.clone();
         let storage_changed = self.storage_changed.clone();
+        let ambient_clock = self.ambient_clock.clone();
+        let ambient_entropy = self.ambient_entropy.clone();
         let aborted = self.aborted.clone();
         let abort_wake = self.abort_wake.clone();
         let identity = self.identity.clone();
@@ -46,6 +48,18 @@ impl<D: DataSource + 'static> Placed<D> {
             .name("exact-owner".into())
             .spawn(move || {
                 let mut source = obtain();
+                let sync_taint = |src: &Result<D, DataError>, name: &str| {
+                    if let Ok(s) = src {
+                        let (c, e) = s.ambient_taint(name);
+                        if c {
+                            ambient_clock.store(true, Ordering::Release);
+                        }
+                        if e {
+                            ambient_entropy.store(true, Ordering::Release);
+                        }
+                    }
+                };
+                sync_taint(&source, "");
                 for job in rx {
                     if retired.load(Ordering::Acquire) {
                         break;
@@ -55,115 +69,130 @@ impl<D: DataSource + 'static> Placed<D> {
                         instance,
                         wake: abort_wake.clone(),
                     };
-                    let (instance, target, name, args, outcome, snapshot, clock, reply) = match job
-                    {
-                        Job::SendReplacers(names, rules) => {
-                            if let Ok(source) = &mut source {
-                                let _ = rules.set(SendReplacers::read(source, names));
+                    let (instance, target, name, args, outcome, snapshot, clock, epoch, reply) =
+                        match job {
+                            Job::SendReplacers(names, rules) => {
+                                if let Ok(source) = &mut source {
+                                    let _ = rules.set(SendReplacers::read(source, names));
+                                }
+                                continue;
                             }
-                            continue;
-                        }
-                        Job::Keep {
-                            calls,
-                            snapshot,
-                            refused,
-                        } => {
-                            if let Ok(source) = &mut source {
-                                let decoded: Vec<_> = calls
-                                    .iter()
-                                    .filter_map(|((target, name, args), fetch)| {
-                                        Some((
-                                            *target,
-                                            name.as_str(),
-                                            decode_args(args).ok()?,
-                                            *fetch,
-                                        ))
-                                    })
-                                    .collect();
-                                let view: Vec<_> = decoded
-                                    .iter()
-                                    .map(|(target, name, args, fetch)| InFlight {
-                                        target: *target,
-                                        source: name,
-                                        args,
-                                        fetch: *fetch,
-                                        continuation: None,
-                                    })
-                                    .collect();
-                                source.keep_sent(&Store::new(&grants, snapshot), &view, refused);
+                            Job::Keep {
+                                calls,
+                                snapshot,
+                                refused,
+                            } => {
+                                if let Ok(source) = &mut source {
+                                    let decoded: Vec<_> = calls
+                                        .iter()
+                                        .filter_map(|((target, name, args), fetch)| {
+                                            Some((
+                                                *target,
+                                                name.as_str(),
+                                                decode_args(args).ok()?,
+                                                *fetch,
+                                            ))
+                                        })
+                                        .collect();
+                                    let view: Vec<_> = decoded
+                                        .iter()
+                                        .map(|(target, name, args, fetch)| InFlight {
+                                            target: *target,
+                                            source: name,
+                                            args,
+                                            fetch: *fetch,
+                                            continuation: None,
+                                        })
+                                        .collect();
+                                    source.keep_sent(
+                                        &Store::new(&grants, snapshot),
+                                        &view,
+                                        refused,
+                                    );
+                                }
+                                continue;
                             }
-                            continue;
-                        }
-                        Job::KeptReply {
-                            token,
-                            outcome,
-                            snapshot,
-                            clock,
-                            reply,
-                        } => {
-                            let mut local = Store::new(&grants, snapshot);
-                            local.set_clock_ms(clock);
-                            let result = match &mut source {
-                                Ok(source) => source
-                                    .module_landed(&mut local, token, outcome)
-                                    .map(|()| Answer::Now(Value::Unit)),
-                                Err(error) => Err(error.clone()),
-                            };
-                            if source.as_mut().is_ok_and(|s| s.take_storage_changed()) {
-                                storage_changed.store(true, std::sync::atomic::Ordering::Release);
+                            Job::KeptReply {
+                                token,
+                                outcome,
+                                snapshot,
+                                clock,
+                                epoch,
+                                reply,
+                            } => {
+                                let mut local = Store::new(&grants, snapshot);
+                                local.set_clock_ms(clock);
+                                local.set_epoch_at_zero(epoch);
+                                let result = match &mut source {
+                                    Ok(source) => source
+                                        .module_landed(&mut local, token, outcome)
+                                        .map(|()| Answer::Now(Value::Unit)),
+                                    Err(error) => Err(error.clone()),
+                                };
+                                sync_taint(&source, "");
+                                if source.as_mut().is_ok_and(|s| s.take_storage_changed()) {
+                                    storage_changed
+                                        .store(true, std::sync::atomic::Ordering::Release);
+                                }
+                                let logs =
+                                    source.as_mut().map(|s| s.take_logs()).unwrap_or_default();
+                                if let Ok(source) = source.as_mut() {
+                                    publish_aborts(source.take_aborted(), &aborted, &abort_wake);
+                                }
+                                reply.send(envelope::encode(result, &mut local, logs));
+                                continue;
                             }
-                            let logs = source.as_mut().map(|s| s.take_logs()).unwrap_or_default();
-                            if let Ok(source) = source.as_mut() {
-                                publish_aborts(source.take_aborted(), &aborted, &abort_wake);
+                            Job::Forgotten(slot) => {
+                                let retirement = slot.lock().unwrap().take();
+                                if let (Ok(source), Some((in_flight, snapshot))) =
+                                    (&mut source, retirement)
+                                {
+                                    forget(source, &Store::new(&grants, snapshot), &in_flight);
+                                    // A let-go call's continuations run here, and
+                                    // may abort another call's fetch.
+                                    publish_aborts(source.take_aborted(), &aborted, &abort_wake);
+                                }
+                                continue;
                             }
-                            reply.send(envelope::encode(result, &mut local, logs));
-                            continue;
-                        }
-                        Job::Forgotten(slot) => {
-                            let retirement = slot.lock().unwrap().take();
-                            if let (Ok(source), Some((in_flight, snapshot))) =
-                                (&mut source, retirement)
-                            {
-                                forget(source, &Store::new(&grants, snapshot), &in_flight);
-                                // A let-go call's continuations run here, and
-                                // may abort another call's fetch.
-                                publish_aborts(source.take_aborted(), &aborted, &abort_wake);
-                            }
-                            continue;
-                        }
-                        Job::Answer {
-                            instance,
-                            target,
-                            source,
-                            args,
-                            snapshot,
-                            clock,
-                            reply,
-                        } => (instance, target, source, args, None, snapshot, clock, reply),
-                        Job::Resume {
-                            instance,
-                            fetch,
-                            continuation,
-                            target,
-                            source,
-                            args,
-                            outcome,
-                            snapshot,
-                            clock,
-                            reply,
-                        } => (
-                            instance,
-                            target,
-                            source,
-                            args,
-                            Some((fetch, continuation, outcome)),
-                            snapshot,
-                            clock,
-                            reply,
-                        ),
-                    };
+                            Job::Answer {
+                                instance,
+                                target,
+                                source,
+                                args,
+                                snapshot,
+                                clock,
+                                epoch,
+                                reply,
+                            } => (
+                                instance, target, source, args, None, snapshot, clock, epoch, reply,
+                            ),
+                            Job::Resume {
+                                instance,
+                                fetch,
+                                continuation,
+                                target,
+                                source,
+                                args,
+                                outcome,
+                                snapshot,
+                                clock,
+                                epoch,
+                                reply,
+                            } => (
+                                instance,
+                                target,
+                                source,
+                                args,
+                                Some((fetch, continuation, outcome)),
+                                snapshot,
+                                clock,
+                                epoch,
+                                reply,
+                            ),
+                        };
                     let mut local = Store::new(&grants, snapshot);
                     local.set_clock_ms(clock);
+                    local.set_epoch_at_zero(epoch);
                     let result = match &mut source {
                         Err(e) => Err(e.clone()),
                         Ok(source) => match instance.as_ref().and_then(|i| i.failure()) {
@@ -173,6 +202,7 @@ impl<D: DataSource + 'static> Placed<D> {
                             }),
                         },
                     };
+                    sync_taint(&source, &name);
                     if source.as_mut().is_ok_and(|s| s.take_storage_changed()) {
                         storage_changed.store(true, std::sync::atomic::Ordering::Release);
                     }

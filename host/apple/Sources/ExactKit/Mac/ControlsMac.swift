@@ -103,6 +103,16 @@ package final class ControlHost: NSObject {
         return made
     }
 
+    /// Refresh the colour separately from the value. An appearance change can arrive while AppKit tracks a control.
+    package func applyColors(_ control: NSControl, _ owner: NodeView) {
+        let accent = owner.cgColor("accent_color").flatMap(NSColor.init(cgColor:))
+        if let button = control as? NativeButtonMac {
+            configureNative(button, owner, accent: accent)
+        } else {
+            family.applyAccent(accent, to: control)
+        }
+    }
+
     package func sync() {
         let owners = ControlKinds.indexed.flatMap { presenter.carrying($0) }.filter { $0.kind == "control" }
         let live = Set(owners.map(\.id))
@@ -131,12 +141,9 @@ package final class ControlHost: NSObject {
             // `outline: none` (LLP 1104 D6): AppKit draws the control no ring.
             let ring: NSFocusRingType = owner.outlineNone ? .none : .default
             if control.focusRingType != ring { control.focusRingType = ring; control.noteFocusRingMaskChanged() }
-            if let b = control as? NativeButtonMac {
-                configureNative(b, owner, accent: owner.channels("accent_color").map { TextEngine.color($0) })
-            } else {
-                family.configure(control, owner, checked: owner.props["checked"].map { $0 == "true" })
-            }
+            applyColors(control, owner)
             if !(control is NativeButtonMac) {
+                family.configure(control, owner, checked: owner.props["checked"].map { $0 == "true" })
                 control.isEnabled = !owner.disabled
                 control.setAccessibilityLabel(owner.authoredLabel)
                 control.setAccessibilityIdentifier(owner.props["testId"])
@@ -172,6 +179,12 @@ package final class ControlHost: NSObject {
             DispatchQueue.main.async { [weak self] in self?.presenter.session?.reportMeasured() }
         }
         family.syncProgress()
+    }
+
+    func appearanceChanged(_ owner: NodeView) {
+        if let control = controls[owner.id] ?? presenter.segments.control(of: owner.id) {
+            applyColors(control, owner)
+        }
     }
 
     /// Sizes measured and not yet reported.

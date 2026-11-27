@@ -195,8 +195,8 @@ pub(crate) fn unreachable(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<L
             if !f.targets.contains(&target) {
                 f.targets.push(target);
             }
-            // A control and its state that the host leaves alike (a range
-            // and a disabled range) are one part, and so are the hosts that
+            // A control and its state that the host leaves alike (a switch
+            // and a disabled switch) are one part, and so are the hosts that
             // leave the same controls alike.
             let host = host_name(&target.name);
             let named = plural(&control);

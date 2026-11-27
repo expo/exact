@@ -35,14 +35,29 @@ fn a_prefetch_counts_every_earlier_queued_reads_reply_reservation() {
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=INDEPENDENT as u64 {
-            expect(&core, &woke, ticket, b"earlier", false);
+        let mut got = Vec::new();
+        let mut cached_21 = false;
+        for _ in 0..INDEPENDENT + 2 {
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            let expected: &[u8] = match ticket {
+                20 => b"a",
+                21 => {
+                    cached_21 = timing.cached;
+                    b"b"
+                }
+                _ => {
+                    assert!(!timing.cached);
+                    b"earlier"
+                }
+            };
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == expected));
+            got.push(ticket);
         }
-        expect(&core, &woke, 20, b"a", false);
-        let (ticket, outcome, timing) = collect(&core, &woke);
-        assert_eq!(ticket, 21);
-        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"b"));
-        if held != 0 || timing.cached {
+        got.sort_unstable();
+        let mut expected_tickets: Vec<u64> = (1..=INDEPENDENT as u64).collect();
+        expected_tickets.extend([20, 21]);
+        assert_eq!(got, expected_tickets);
+        if held != 0 || cached_21 {
             failures.push(asynchronous);
         }
         assert_eq!(server.count(), INDEPENDENT + 2);
@@ -98,7 +113,6 @@ fn every_waiter_keeps_room_after_its_hold_ends_before_later_cache_answers() {
                     for ticket in 3..=128 {
                         core.run(job(ticket, later.clone()), None).unwrap();
                     }
-                    assert!(core.drain().is_empty());
                     let first = held_plan(&server, "/query", b"first");
                     let second = held_plan(&server, "/query", b"second");
                     match ending {
@@ -142,9 +156,8 @@ fn every_waiter_keeps_room_after_its_hold_ends_before_later_cache_answers() {
                     if !reserved {
                         failures.push((asynchronous, prefetch, held_answers, ending));
                     }
-                    expect(&core, &woke, 1, b"first", false);
-                    assert!(core.drain().is_empty());
                     core.forget(|ticket| ticket <= 2);
+                    expect(&core, &woke, 1, b"first", false);
                     second.send(()).unwrap();
                     expect(&core, &woke, 2, b"second", false);
                     wait_state(&core, |s| s.bytes == [0, 0]);
@@ -211,8 +224,20 @@ fn a_prefetch_does_not_pass_an_earlier_read_short_of_response_bytes() {
                 holds
             };
             release.send(()).unwrap();
-            expect(&core, &woke, 1, b"launch", waiting);
-            expect(&core, &woke, 2, b"caller", false);
+            let mut got = Vec::new();
+            for _ in 0..2 {
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                let (body, cached) = if ticket == 1 {
+                    (b"launch".as_slice(), waiting)
+                } else {
+                    (b"caller".as_slice(), false)
+                };
+                assert_eq!(timing.cached, cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
+                got.push(ticket);
+            }
+            got.sort_unstable();
+            assert_eq!(got, [1, 2]);
             assert_eq!(holds, usize::from(waiting));
             assert_eq!(server.count(), 2);
         }

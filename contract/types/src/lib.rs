@@ -334,32 +334,6 @@ impl Shapes {
         Ok(ty)
     }
 
-    fn resolve_unbounded(&self, t: &TypeExpr) -> Result<Ty, TypeError> {
-        Ok(match t {
-            TypeExpr::Enum(values, _) => Ty::Enum(values.clone()),
-            TypeExpr::Named(n, span) => match n.as_str() {
-                "number" => Ty::Number,
-                "string" => Ty::String,
-                "bool" => Ty::Bool,
-                "unit" => Ty::Unit,
-                other => {
-                    if self.map.contains_key(other) {
-                        Ty::Record(other.to_string())
-                    } else if other == "action" {
-                        // Bare `action` is an action prop of inferred arity
-                        // (LLP 1006 §2). Near-prefix names are ordinary
-                        // unknown types, never action typos accepted silently.
-                        Ty::Action(Vec::new())
-                    } else {
-                        return Err(self.unknown_type(other, *span));
-                    }
-                }
-            },
-            TypeExpr::Option(inner, _) => Ty::Option(Box::new(self.resolve_unbounded(inner)?)),
-            TypeExpr::List(inner, _) => Ty::List(Box::new(self.resolve_unbounded(inner)?)),
-        })
-    }
-
     /// A field's position and borrowed type in a shape.
     pub fn field(&self, shape: &str, name: &str) -> Option<(usize, &Ty)> {
         self.map
@@ -772,7 +746,7 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
         Expr::NamedArg(_, _, span) => {
             return err(
                 "type-named-argument",
-                "named arguments go to a component use, a shape's call (`Row(title=…)`), `empty(…)`, `t(…)`, a canvas `surface=` binding and `share`, `scrollIntoView`, `saveFile` and the file pickers' `startIn=`; another call's arguments are positional",
+                "named arguments go to a component use, a shape's call (`Row(title=…)`), `empty(…)`, `t(…)`, a canvas `surface=` binding and `share`, `scrollIntoView`, `saveFile` and the file pickers' `startIn=` and `apple.message=`; another call's arguments are positional",
                 *span,
             )
         }
@@ -804,6 +778,9 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
                 other => {
                     // `xs.length`, `xs.map`: the web's properties and methods.
                     let fix = match field.as_str() {
+                        "error" | "data" if matches!(other, Ty::Option(_)) => {
+                            ": an `option` has no `error` or `data` field; for a mutation use `failure(m)` / `failed(m)`, and unwrap an `option` with `match x { case some(v) => ... case none => ... }`".to_owned()
+                        }
                         "length" | "map" | "filter" | "join" | "includes" | "startsWith"
                         | "endsWith" | "concat" | "slice" | "indexOf" | "split" | "count"
                         | "size" => {
@@ -1474,6 +1451,27 @@ fn check_root(
     uses::check_uses(&root.view, &scope, types, file, sink);
     let invalid = check_injects(root, &scope, types, file, sink, refused_bindings);
     (independent, invalid)
+}
+
+#[cfg(test)]
+mod d11_diagnostic_tests {
+    #[test]
+    fn option_error_and_data_fields_name_failure_and_match() {
+        for field in ["error", "data"] {
+            let src = format!(
+                "component App\n  state m: option<string> = none\n  view\n    text m.{field}\n"
+            );
+            let file = contract_syntax::parse(&src).unwrap();
+            let err = crate::check(&file, |_| false)
+                .err()
+                .expect("expected type error");
+            assert_eq!(err.id, "type-not-a-record", "{err:?}");
+            assert!(
+                err.message.contains("failure(m)") && err.message.contains("case some(v)"),
+                "{err:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

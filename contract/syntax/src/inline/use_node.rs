@@ -280,10 +280,9 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
     }
     // Its device facts read the root's one resource for them.
     for r in c.resources.iter().filter(|r| super::reads_device(r)) {
-        child_subst.insert(
-            r.name.clone(),
-            Expr::Ident(super::hoisted(&c.name, &r.name), *span),
-        );
+        let hoisted = super::hoisted(&c.name, &r.name);
+        child_subst.insert(r.name.clone(), Expr::Ident(hoisted.clone(), *span));
+        names.insert(r.name.clone(), hoisted);
     }
     let value_names = value_names(c);
     // Closure-convert child props/injects into hidden action

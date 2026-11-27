@@ -108,7 +108,7 @@ package final class Presenter {
     package func carrying(_ key: String) -> [NodeView] { chrome.ids(key).sorted().compactMap { views[$0] } }
     package func takeChangedNames() -> Set<String> { chrome.takeChangedNames() }
     var scrollers: Set<UInt32> = []
-    var pendingScrolls: Set<UInt32> = []
+    var pendingScrolls: Set<UInt32> = []; package var scrollAskCount: UInt64 = 0 // every ask of a scroller to move (`NodeView.lastScrollAsk`)
     /// The batch's suppression triggers for scroll anchoring (`ScrollAnchoring.swift`).
     var anchorChanges = ScrollAnchoring.Changes()
     var materialNodes: Set<UInt32> = []
@@ -134,8 +134,7 @@ package final class Presenter {
     package lazy var stickies: any StickyHosting = StickyLink.make?(self) ?? NoStickies()
     let tableGrid = TableGrid()
     lazy var pool = NodePool(self)
-    /// Heavy leaves held mid-fling (LLP 1068 §5.1).
-    /// The heavy leaves' hold, when a product that makes heavy leaves is linked.
+    /// Heavy leaves held mid-fling (LLP 1068 §5.1). The heavy leaves' hold, when a product that makes heavy leaves is linked.
     package lazy var leaves: HeavyLeafHolding? = LeavesLink.make?(self)
     /// The list whose row is creating node `id` now, for the hold.
     package func listCreating(_ id: UInt32) -> NodeView? { pool.list(creating: id) }
@@ -174,6 +173,7 @@ package final class Presenter {
     package lazy var fieldSelections = FieldSelections(self)
     /// Nodes marked `hatch="word"` (LLP 1075.003.000).
     package internal(set) lazy var elements: any ElementHatching = NativeModuleLink.makeElements?(self) ?? NoElementHatches()
+    let deferredPresses = DeferredPresses()
     lazy package var navigation: any NavigationHosting = NavigationLink.make?(self) ?? NoNavigation(self)
     /// Each navigation root's tabs, as the last batch to say them gave them (`takeRootTabs`).
     package var rootTabs: [UInt32: RootTabs] = [:]
@@ -230,6 +230,7 @@ package final class Presenter {
     var revealOwed = false
     /// The first root, as of the last batch.
     private(set) weak var documentRoot: NodeView?
+    private var aspectFitWord: String? // the first root's `-exact-safe-area-aspect-fit` as last read (LLP 1123 D16)
     /// The safe-area insets the kernel was given (LLP 1008 §9): the
     /// screen's under `viewport-fit=cover`, zero when the viewport is the
     /// safe area itself. Reported to the agent as `env`.
@@ -245,13 +246,11 @@ package final class Presenter {
     /// Whether `UIHingeInteraction` has reported once (a hinge or none):
     /// before that, a 27.1 device's fold is unknown (LLP 1078 D7).
     var hingeReported = false
-    /// The keyboard's overlap with the viewport before avoidance,
-    /// derived by `ExactView.fit`.
+    /// The keyboard's overlap with the viewport before avoidance, derived by `ExactView.fit`.
     package var keyboardInset: CGFloat = 0
     /// The keyboard's own contribution to the viewport's shared insets.
     private let keyboardViewportInset = KeyboardInset()
-    /// What scrollers took below their content to show a field above pinned
-    /// content, while the keyboard is up (`PinnedRoom`).
+    /// What scrollers took below their content to show a field above pinned content, while the keyboard is up (`PinnedRoom`).
     let pinnedRoom = PinnedRoom()
     /// A native prompt outside the session's mounts, associated by its creator.
     package weak var keyboardPrompt: UITextField?
@@ -385,9 +384,8 @@ package final class Presenter {
         releaseOrientationLock()
         focusEvents.reset(); TipLink.installed?.withdraw(owner: self)
         // Every hatched node ends first, its view and platform object there.
-        elements.reset()
-        flightHost.reset()
-        canvasKey = nil
+        elements.reset(); deferredPresses.reset()
+        flightHost.reset(); canvasKey = nil
         session?.transformInputHold?.cancel()
         reorders.abandon()
         session?.rasters?.reset()
@@ -421,8 +419,8 @@ package final class Presenter {
         root.subviews.forEach { $0.removeFromSuperview() }
         chrome = ChromeIndex()
         AriaCarriers.forget(presenter: self)
-        views.removeAll()
-        inlineOwners.removeAll()
+        views.removeAll(); inlineOwners.removeAll()
+        stickies.reset(); tableGrid.reset(); svg?.reset(); boxAnimations.reset(); canvas2d.reset()
         scrollers.removeAll(); pendingScrolls.removeAll(); materialNodes.removeAll(); contextNodes.removeAll()
         hoveredInline = nil
         scrollPump.reset()
@@ -743,7 +741,7 @@ package final class Presenter {
     func typed(_ id: UInt32, _ value: String, input: Bool) {
         send(id) { [self] in
             edited = id
-            if input { onInput?(id, value) }
+            if input { fieldSelections.input(id, value) }
         }
     }
     package func commitEdit(_ id: UInt32, _ value: String, change: Bool) {
@@ -787,7 +785,7 @@ package final class Presenter {
     var regionMeasures = PositionArea.MeasureCache()
     /// Paragraphs whose text or style the batch invalidated (`paintChangedText`).
     var changedText: Set<UInt32> = []
-    private func send(_ id: UInt32, _ f: @escaping () -> Void) {
+    func send(_ id: UInt32, _ f: @escaping () -> Void) {
         guard textHost(id) != nil else { return }
         if applying { waiting.append((id, f)) } else { navigation.finishBootOwner(); f() }
     }
@@ -875,7 +873,7 @@ package final class Presenter {
     /// and makes its correction without the presenter's whole finalization
     /// pass, unless work waits on a batch (a focus, a callback, a scroll).
     private func applySnapshots(_ batch: Batch) -> Bool {
-        guard !applying, !pageGeometryOwed, batch.error == nil, !batch.controls, batch.rootTabs == nil, !batch.ops.isEmpty, batch.ops.allSatisfy({ $0.op == .collections }),
+        guard !applying, !pageGeometryOwed, batch.error == nil, !batch.controls, batch.rootTabs == nil, !batch.splitChanged, !batch.ops.isEmpty, batch.ops.allSatisfy({ $0.op == .collections }),
               waiting.isEmpty, pendingScrolls.isEmpty, pendingFocus == nil else { return false }
         collections.beginBatch(batch)
         collections.endBatch()
@@ -1227,6 +1225,8 @@ package final class Presenter {
         }
         let fit = first?.props["viewportFit"]
         if fit != viewportFit { viewportFit = fit; onViewportFit?() }
+        // A new aspect fit lays the session's view out again, which claims the window's guide at it (`AspectFitIOS`)
+        if first?.style["safe_area_aspect_fit"]?.string != aspectFitWord { aspectFitWord = first?.style["safe_area_aspect_fit"]?.string; session?.view?.setNeedsLayout() }
         session?.canvases.cancelMovedControls()
         PaintOrder.flush()
         let changed = touchedAndAbove(touchedIDs + geometryApplied)
@@ -1256,7 +1256,7 @@ package final class Presenter {
         focusGuides.sync()
         #endif
         attachRegionPopovers()
-        ApplyProfile.time("pass.menus") { menus.sync() }
+        ApplyProfile.time("pass.menus") { menus.sync(); menus.updateKeptMenu() }
         #if os(iOS)
         ApplyProfile.time("pass.dragOut") { dragOut?.sync() }
         ApplyProfile.time("pass.dragIn") { dragIn?.sync() }
@@ -1429,7 +1429,7 @@ package final class Presenter {
     private(set) var title: String?
     var onTitle: ((String?) -> Void)?
     #if os(iOS)
-    lazy var textSelection: any TextSelecting = TextSelectionLink.make?(self) ?? NoTextSelection() // `user-select: text` (LLP 1115.000 D11.6)
+    package lazy var textSelection: any TextSelecting = TextSelectionLink.make?(self) ?? NoTextSelection() // `user-select: text` (LLP 1115.000 D11.6)
     /// The status bar's resolved style (LLP 1105), the controllers' `preferredStatusBarUpdateAnimation`, and who is told of a change.
     package var statusBar = StatusBarChoice(), statusBarUpdateAnimation = UIStatusBarAnimation.none
     var onStatusBar: ((StatusBarChoice) -> Void)?
@@ -1448,7 +1448,7 @@ package final class Presenter {
         // The root's colour, resolved and compared only when what it is made
         // of changes: every batch asked UIKit for a colour it then compared.
         let first = root.subviews.first as? NodeView
-        let key = CanvasKey(root: first.map(ObjectIdentifier.init), channels: first?.channels("background_color"))
+        let key = CanvasKey(root: first.map(ObjectIdentifier.init), channels: first?.textChannels("background_color"))
         guard key != canvasKey else { return }
         canvasKey = key
         // A root without a background shows the platform's (LLP 1115 D2).

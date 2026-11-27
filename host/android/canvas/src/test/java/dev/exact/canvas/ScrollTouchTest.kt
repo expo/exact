@@ -158,7 +158,7 @@ class ScrollTouchTest {
             (field("feedIds").get(view) as IntArray)[0] = 21
             (field("feedTops").get(view) as FloatArray)[0] = 1220f
             val scrolling = field("scrolling").get(view) as Scrolling
-            scrolling.told(intArrayOf(1f.toBits(), 7, 14, 0, 0, 0, 0, 0, 0, 800f.toBits()))
+            scrolling.told(intArrayOf(1f.toBits(), 7, 14, 0, 0, 0, 0, 0, 0, 800f.toBits(), 0))
             natives.lazy = true
             natives.ensure(1, 2, 100, 100, """{"module":"test"}""", 21)
             natives.near(emptySet(), emptySet(), setOf(21))
@@ -182,7 +182,7 @@ class ScrollTouchTest {
         val scrolling = field("scrolling").get(view) as Scrolling
         val queue = java.util.concurrent.ConcurrentLinkedQueue<Owner.Pub>()
         Owner::class.java.getDeclaredField("queue").apply { isAccessible = true }.set(view.owner, queue)
-        val statement = intArrayOf(1f.toBits(), 7, 6, 0, 0, 400f.toBits(), 0, 400f.toBits(), 0, 500f.toBits())
+        val statement = intArrayOf(1f.toBits(), 7, 6, 0, 0, 400f.toBits(), 0, 400f.toBits(), 0, 500f.toBits(), 0)
         fun publish(seq: Int) {
             queue.add(Owner.Pub((seq + 1).toLong(), null, true, seq, 0, statement, null, null, null))
             assertTrue(view.publish())
@@ -317,7 +317,7 @@ class ScrollTouchTest {
         val scrolling = view.scrolling()
         fun told(now: Float, drawn: Float) {
             scrolling.told(intArrayOf(
-                scale.toBits(), 1, 6, 0, 0, now.toBits(), 0, drawn.toBits(), 0, logicalMax.toBits(),
+                scale.toBits(), 1, 6, 0, 0, now.toBits(), 0, drawn.toBits(), 0, logicalMax.toBits(), 0,
             ))
         }
         told(start, recorded)
@@ -581,7 +581,7 @@ class ScrollTouchTest {
     }
     private fun refreshable(refreshing: Boolean = false) = scroller(1, 0f).also { it[1] = 2 or 16 or (if (refreshing) 32 else 0) }
     private fun statement(refreshing: Boolean) =
-        view.scrolling().told(intArrayOf(1f.toBits(), 1, 2 or 16 or (if (refreshing) 32 else 0), 0, 0, 0, 0, 0, 0, 500f.toBits()))
+        view.scrolling().told(intArrayOf(1f.toBits(), 1, 2 or 16 or (if (refreshing) 32 else 0), 0, 0, 0, 0, 0, 0, 500f.toBits(), 0))
 
     @Test fun aPullPastTheThresholdSendsRefreshAndTurnsUntilRefreshingEnds() {
         down(300f); answer(reply(refreshable()))
@@ -647,6 +647,7 @@ class ScrollTouchTest {
         down(400f); move(380f); move(340f); move(300f); up(300f)
         // The next touch comes down before exact2 has answered for the first.
         down(400f)
+        assertEquals("only the first down has asked for its geometry", 1, thread.answers.size)
         answer(reply(scroller(1, 0f)))
         assertEquals(100f - slop, thread.moved[1]!!, 0.01f)
         assertEquals("its fling stopped where the next touch came down",
@@ -696,7 +697,7 @@ class ScrollTouchTest {
         val r = pull()!!
         assertTrue(r.turning)
         // The app takes the list away while it refreshes: the statement no longer has it.
-        view.scrolling().told(intArrayOf(1f.toBits(), 2, 2, 0, 0, 0, 0, 0, 0, 500f.toBits()))
+        view.scrolling().told(intArrayOf(1f.toBits(), 2, 2, 0, 0, 0, 0, 0, 0, 500f.toBits(), 0))
         assertNull(pull())
         assertFalse("its animator does not run on, holding the view", r.turning)
     }
@@ -754,6 +755,19 @@ class ScrollTouchTest {
         late(intArrayOf(1, 1200f.toBits(), 0, 1f.toBits()))
         assertEquals(before, Host.told)
         assertTrue(view.scrolling().dragging())
+    }
+
+    @Test fun rtlHorizontalScrollDragsIntoNegativeOffsetsAndClampsAtMin() {
+        view.scrolling().told(intArrayOf(1f.toBits(), 1, 1, 0, 0, 0, 0, 0, 0, 0, (-400f).toBits()))
+        touch(MotionEvent.ACTION_DOWN, 200f to 200f)
+        answer(reply(intArrayOf(1, 1, 0, 0, 0, 0, 0, 0, 0, 400f.toBits(), 800f.toBits())))
+        // Dragging rightward in an RTL scroller moves into negative scroll offsets (minX = -400).
+        touch(MotionEvent.ACTION_MOVE, 350f to 200f)
+        assertEquals(-(150f - slop), thread.moved.getValue(1), 0.01f)
+        // Further rightward travel clamps cleanly at minX = -400.
+        touch(MotionEvent.ACTION_MOVE, 900f to 200f)
+        assertEquals(-400f, thread.moved.getValue(1), 0.01f)
+        touch(MotionEvent.ACTION_UP, 900f to 200f)
     }
 
     private fun ExactView.scrolling(): Scrolling =

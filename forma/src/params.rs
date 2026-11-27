@@ -206,6 +206,18 @@ pub(crate) fn defaults(mut design: Design) -> Design {
     design
 }
 
+/// Package declarations the app has not overridden.
+pub(crate) fn inherited<'a>(own: &[Token], package: &'a [Token]) -> Vec<&'a Token> {
+    if package.is_empty() {
+        return Vec::new();
+    }
+    let names: HashSet<_> = own.iter().map(|t| t.name.value.as_str()).collect();
+    package
+        .iter()
+        .filter(|t| !names.contains(t.name.value.as_str()))
+        .collect()
+}
+
 /// `design` with each param a token of its kind (an icon param among the
 /// icons) on line [`LINE`] + its index, and the first line of its `params`
 /// block that names it in place of its default and `when` lines (at that
@@ -218,24 +230,14 @@ pub(crate) fn defaults(mut design: Design) -> Design {
 /// design out this way.
 pub fn laid(design: &Design, params: &Params) -> Design {
     let mut out = design.clone();
-    let own: HashSet<&str> = design
-        .tokens
-        .iter()
-        .map(|t| t.name.value.as_str())
-        .collect();
     out.tokens.extend(
-        params
-            .joined
-            .iter()
-            .filter(|j| !own.contains(j.name.value.as_str()))
+        inherited(&design.tokens, &params.joined)
+            .into_iter()
             .cloned(),
     );
-    let own: HashSet<&str> = design.icons.iter().map(|t| t.name.value.as_str()).collect();
     out.icons.extend(
-        params
-            .joined_icons
-            .iter()
-            .filter(|j| !own.contains(j.name.value.as_str()))
+        inherited(&design.icons, &params.joined_icons)
+            .into_iter()
             .cloned(),
     );
     // Each param's first `params` line, by its token, found in one pass.

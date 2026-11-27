@@ -13,12 +13,15 @@ shape PaneViewport
   prefersReducedMotion: bool
   segments: Segment[]
 
-// A fold, for panes laid out in CSS: across it the narrower segment's width, and down the viewport where it starts and ends.
-// A browser drops `env(viewport-segment-*)` as the device opens, a frame before it reports the posture; until the posture's
-// own commit the panes keep the segments of the last one, which a layout transition then starts from
+// A fold, for boxes laid out in CSS: across it the narrower segment's width, the first segment's width and the band
+// between the two, and down the viewport where it starts and ends. A browser drops `env(viewport-segment-*)` as the
+// device opens, a frame before it reports the posture; until the posture's own commit the boxes keep the segments of the
+// last one, which a layout transition then starts from
 fn foldWidth(v: PaneViewport): string = match v.segments.at(0) { case some(a) => match v.segments.at(1) { case some(b) => `min(env(viewport-segment-width 0 0, ${a.width}px), env(viewport-segment-width 1 0, ${b.width}px))`, case none => "100%" }, case none => "100%" }
 fn foldTop(v: PaneViewport): string = match v.segments.at(0) { case some(a) => `env(viewport-segment-height 0 0, ${a.height}px)`, case none => "100%" }
 fn foldBottom(v: PaneViewport): string = match v.segments.at(1) { case some(b) => `env(viewport-segment-top 0 1, ${b.y}px)`, case none => "0px" }
+fn foldFirst(v: PaneViewport): string = match v.segments.at(0) { case some(a) => `env(viewport-segment-width 0 0, ${a.width}px)`, case none => "100%" }
+fn foldBand(v: PaneViewport): string = match v.segments.at(0) { case some(a) => match v.segments.at(1) { case some(b) => `calc(env(viewport-segment-left 1 0, ${b.x}px) - env(viewport-segment-right 0 0, ${a.x + a.width}px))`, case none => "0px" }, case none => "0px" }
 
 // How UIKit's arrangement moves its panes as a Duo folds and opens (iOS 27.1): a spring of 0.3 s with no bounce
 fn foldSpring(v: PaneViewport): string = v.prefersReducedMotion ? "none" : "-exact-spring(439, 41.9, 1)"
@@ -60,7 +63,7 @@ component ArrangementScreen
         ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=flowed, native=native, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
       // Segment edges are viewport-relative. Keep the chrome inside the first pane whenever the panes anchor, so it adds no
       // offset above them.
-      column id=`${prefix}-container` hatch="arranged-panes" data-pane-layout=active testId=`${prefix}-container` flex=1 min-height=0 position=(flowed ? "static" : "relative") display="flex" flex-direction=(anchored ? "column" : direction) justify-content=(flowed and across ? "space-between" : "flex-start") gap=(folded ? 0 : 12)
+      column id=`${prefix}-container` arrangement=(native ? mode : "none") testId=`${prefix}-container` flex=1 min-height=0 position=(flowed ? "static" : "relative") display="flex" flex-direction=(anchored ? "column" : direction) justify-content=(flowed and across ? "space-between" : "flex-start") gap=(folded ? 0 : 12)
         Pane(name="Workspace", prefix=`${prefix}-workspace`, anchored=anchored, flowed=flowed, leading=true, across=across, down=down, sidesOff=sidesOff, native=native, segment=foldWidth(viewport), lowerTop=foldBottom(viewport), spring=spring)
           if anchored
             ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=false, native=false, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))

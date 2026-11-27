@@ -36,8 +36,9 @@ public final class LocalAuthModule: ExactPackage, ExactAuthenticator {
     private let log: (String) -> Void
     private let now: () -> Double
     private let context: ExactPackageContext
-    /// Contexts whose sheet is up, invalidated if the session ends first.
-    private var evaluating: [ObjectIdentifier: LAContext] = [:]
+    /// Contexts whose sheet is up, with the send's request id (nil for `evaluate`),
+    /// invalidated if the send is let go or the session ends first.
+    private var evaluating: [ObjectIdentifier: (context: LAContext, request: Int?)] = [:]
     /// The status last answered, to announce a change on return (D12).
     private var said: [String: Any]?
     /// An evaluation that could use Face ID has completed (D12).
@@ -55,12 +56,11 @@ public final class LocalAuthModule: ExactPackage, ExactAuthenticator {
     }
 
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
-        DispatchQueue.main.async { [self] in
-            switch name {
-            case "localAuthStatus": reply(status())
-            case "authenticate": authenticate(args, origin: context.origin, reply)
-            default: reply(["error": "NotSupportedError"])
-            }
+        let origin = context.origin, request = context.request
+        switch name {
+        case "localAuthStatus": reply(status())
+        case "authenticate": authenticate(args, origin: origin, request: request, reply)
+        default: reply(["error": "NotSupportedError"])
         }
     }
 
@@ -75,9 +75,18 @@ public final class LocalAuthModule: ExactPackage, ExactAuthenticator {
         if !NSDictionary(dictionary: status()).isEqual(to: said) { changed("local-auth.localAuthStatus") }
     }
 
+    public func cancel(_ request: Int) {
+        let matched = evaluating.filter { $0.value.request == request }
+        for (id, entry) in matched {
+            evaluating[id] = nil
+            entry.context.invalidate()
+        }
+    }
+
     public func destroy(_ done: @escaping () -> Void) {
-        evaluating.values.forEach { $0.invalidate() }
+        let active = evaluating.values.map(\.context)
         evaluating = [:]
+        active.forEach { $0.invalidate() }
         done()
     }
 
@@ -204,13 +213,13 @@ public final class LocalAuthModule: ExactPackage, ExactAuthenticator {
         }
     }
 
-    private func authenticate(_ args: [String: Any], origin: String, _ reply: @escaping ([String: Any]) -> Void) {
+    private func authenticate(_ args: [String: Any], origin: String, request: Int?, _ reply: @escaping ([String: Any]) -> Void) {
         // Presence is not delegable (D12); the runner refuses first, and this holds without it.
         guard origin == "app" else { return reply(["error": "PERMISSION_DENIED", "message": "person-required"]) }
         let apple = args["apple"] as? [String: Any] ?? [:]
         let chosen = policy(apple["policy"] as? String, biometricOnly: args["biometricOnly"] as? Bool ?? false)
         let c = made(apple, origin: origin)
-        evaluating[ObjectIdentifier(c)] = c
+        evaluating[ObjectIdentifier(c)] = (c, request)
         c.evaluatePolicy(chosen, localizedReason: args["reason"] as? String ?? "") { ok, error in
             DispatchQueue.main.async { [self] in
                 ended(c)
@@ -224,7 +233,7 @@ public final class LocalAuthModule: ExactPackage, ExactAuthenticator {
                          reply: @escaping (AnyObject?, [String: Any]?) -> Void) {
         guard origin == "app" else { return reply(nil, ["error": "PERMISSION_DENIED", "message": "person-required"]) }
         let c = made([:], origin: origin)
-        evaluating[ObjectIdentifier(c)] = c
+        evaluating[ObjectIdentifier(c)] = (c, nil)
         let biometric = policy.hasPrefix("biometry-")
         c.evaluatePolicy(biometric ? .deviceOwnerAuthenticationWithBiometrics : .deviceOwnerAuthentication, localizedReason: reason) { ok, error in
             DispatchQueue.main.async { [self] in

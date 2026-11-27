@@ -11,7 +11,8 @@ as surfaces on current main do. It is unmeasured in that form.
   96 × 32 box, and a canvas cannot paint outside its box). The flash is a second copy of the price faded by
   `transition="opacity 400ms ease"` when the next tick switches it off (`../GAPS.md` §3).
 - `data/` — the DataSource: the 5,000 coins (`data/coins.json`, copied by `../prepare.sh`), `config()`, `tick()`;
-  each row carries its series as a list. Prices are formatted here.
+  each row carries its series as a list. Prices are formatted here. `task launch mount` / `after(100, ask)` sends
+  `config()` once; `task producer when live` / `every(100, tick)` is armed only in live mode.
 - `gpu/` — the LLP 1009 module, loaded after the first pixel: `Spark` draws the trimmed polyline, dot and ring in one
   full-canvas fragment pass (distance-based AA; each pixel tests only the 2–3 segments near its x), with the
   pipeline shared by all instances. The draw-in starts at the instance's first frame; the pulse is timed by

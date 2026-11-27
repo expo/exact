@@ -210,9 +210,9 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
 }, 30000);
 
 // Exercise the shared input helpers with the browser's real shadow trees, inert ancestry and scroll boxes.
-async function withBackPage(engine, run) {
+async function withBackPage(engine, run, body = stack('detail', symbol()), viewport = { width: 400, height: 600 }) {
   const html = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'))
-    .replace('<div id="exact-root"></div>', () => `<div id="exact-root"><div id="wrapper">${stack('detail', symbol())}</div></div>`)
+    .replace('<div id="exact-root"></div>', () => `<div id="exact-root"><div id="wrapper">${body}</div></div>`)
     .replace('<script type="module" src="./glue.js"></script>', () => `<script type="module">
       import { navigation, inertAncestor } from '/navigation.js';
       import { reveal, viewBox } from '/agent-input.js';
@@ -229,14 +229,41 @@ async function withBackPage(engine, run) {
   let suite;
   try {
     suite = await suiteBrowser(engine);
-    const page = await suite.newPage({ viewport: { width: 400, height: 600 } });
+    const page = await suite.newPage({ viewport });
     await page.goto(server.url.href);
     await page.waitForFunction(() => window.ready);
     await run(page);
   } finally { await suite?.close(); server.stop(true); }
 }
 
+// A split's first detail has no Back (LLP 1116.004 D1), so its control's chord goes to a shown button with the same
+// chord; on a phone the detail is pushed and the chord presses its Back once.
+const splitBack = `<main navigationKey="2" navigationBack="back" style="width:100%;height:100vh;position:relative">
+  <div navigationKey="1" navigationSplit="split" style="position:absolute;inset:0"><header><h1>People</h1></header>
+    <div data-exact-list role="list"><button id="row" data-exact-on="press" data-exact-router-press="true">Ada</button></div></div>
+  <div navigationKey="2" id="detail" style="position:absolute;inset:0"><header style="display:flex;align-items:center">${symbol('aria-keyshortcuts="Alt+B"')}${heading('Ada')}</header>
+    <button id="command" aria-keyshortcuts="Alt+B">Command</button></div>
+</main>`;
+
 for (const engine of ['chromium', 'firefox', 'webkit']) {
+  engineTest[engine](`${engine}: a split's first detail leaves its Back control's chord to a shown command`, () => withBackPage(engine, async page => {
+    await page.evaluate(async () => {
+      const { createInputHandlers } = await import('/input-glue.js');
+      const root = document.getElementById('exact-root'), detail = document.getElementById('detail');
+      window.pressed = [];
+      detail.querySelector('#back').onclick = () => pressed.push('back');
+      detail.querySelector('#command').onclick = () => pressed.push('command');
+      createInputHandlers({ root, views: new Map(), retiredViews: new WeakSet(), ready: () => true, inertAncestor, dispatch() {} });
+    });
+    const state = () => page.evaluate(() => [document.querySelector('#detail #back').getAttribute('data-exact-bar-back'), window.pressed.splice(0)]);
+    expect(await state()).toEqual(['suppressed', []]);
+    await page.keyboard.press('Alt+b');
+    expect(await state()).toEqual(['suppressed', ['command']]);
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.evaluate(() => project());
+    await page.keyboard.press('Alt+b');
+    expect(await state()).toEqual(['', ['back']]);
+  }, splitBack, { width: 1280, height: 800 }), 30000);
   engineTest[engine](`${engine}: Back under inert ancestry leaves scrolling unchanged`, () => withBackPage(engine, async page => {
     const results = await page.evaluate(() => {
       const wrapper = document.getElementById('wrapper'), control = document.querySelector('#detail #back');

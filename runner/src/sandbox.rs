@@ -160,6 +160,8 @@ mod tests {
             ("net.fetch https://api.example", CLIENT_ONLY),
             ("net.websocket wss://*.example.com", CLIENT_ONLY),
             ("net.fetch local-network", CLIENT_ONLY),
+            ("net.fetch loopback", CLIENT_ONLY),
+            ("net.websocket loopback", CLIENT_ONLY),
             ("auth.session https://login.example", CLIENT_ONLY),
             ("auth.callback myapp://done", CLIENT_ONLY),
             (

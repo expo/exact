@@ -45,7 +45,7 @@ pub(super) struct ModuleWork {
     pub(super) reply_reader: Option<(usize, bool)>,
     /// Kept tickets the host refused at admission, settled as failures, and
     /// whether each was ordered.
-    refused: Vec<(u64, &'static str, bool)>,
+    refused: Vec<(u64, String, bool)>,
 }
 
 impl ModuleWork {
@@ -94,16 +94,13 @@ impl<D: DataSource> Runner<D> {
 
     /// The host refused a kept ticket at admission: it settles as a failure,
     /// in its turn among the other refusals.
-    pub(super) fn refuse_module_work(&mut self, ticket: u64, reason: &'static str, ordered: bool) {
+    pub(super) fn refuse_module_work(&mut self, ticket: u64, reason: String, ordered: bool) {
         self.module_work.refused.push((ticket, reason, ordered));
     }
 
     /// A refusal of a kept ticket that may settle now (an ordered one only
     /// when ordered work may), if one is waiting.
-    pub(super) fn module_work_refusal(
-        &mut self,
-        allow_ordered: bool,
-    ) -> Option<(u64, &'static str)> {
+    pub(super) fn module_work_refusal(&mut self, allow_ordered: bool) -> Option<(u64, String)> {
         let refused = &mut self.module_work.refused;
         let at = refused
             .iter()

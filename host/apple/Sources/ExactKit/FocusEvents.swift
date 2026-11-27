@@ -163,6 +163,15 @@ final class FocusEvents {
         emit(named(old), entering: false, related: nil)
     }
 
+    func removed(all ids: Set<UInt32>) {
+        guard presenter?.resetting != true, let old = current else { return }
+        if let pending, pending.path.contains(where: ids.contains) { return }
+        guard old.path.contains(where: ids.contains) else { return }
+        current = nil
+        pending = nil
+        emit(named(old), entering: false, related: nil)
+    }
+
     private func flush() {
         guard let old = pending else { return }
         pending = nil

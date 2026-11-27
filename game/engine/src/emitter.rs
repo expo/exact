@@ -466,6 +466,7 @@ pub struct Particle {
 /// the failing field in the journal.
 /// No renderer or wall clock is involved.
 pub fn step(w: &World) {
+    w.sim_writes(format_args!("stepped emitters"));
     let _span = w.span("emitter::step");
     if w.in_tick && w.emitted.replace(true) {
         return;
@@ -475,7 +476,9 @@ pub fn step(w: &World) {
         .retain(|entity, _| w.has::<Emitter>(*entity));
     let hz = w.hz() as f64;
     let mut alive = 0u32;
-    for (entity, e) in w.query::<&mut Emitter>().iter() {
+    let emitters = w.components::<Emitter>();
+    for entity in emitters.entities() {
+        let e = emitters.get(entity).unwrap();
         if !e.validate_for(w, entity) {
             continue;
         }
@@ -486,6 +489,9 @@ pub fn step(w: &World) {
         {
             continue;
         }
+        drop(e);
+        let mut row = w.require_mut::<Emitter>(entity);
+        let e = &mut *row;
         e.state.age += 1;
         let age = e.state.age;
         e.state.births.retain(|b| {
@@ -506,10 +512,18 @@ pub fn step(w: &World) {
     }
     let mut left = PARTICLE_BUDGET.saturating_sub(alive);
     let errors = w.emitter_errors.borrow();
-    for (entity, e) in w.query::<&mut Emitter>().iter() {
+    for entity in emitters.entities() {
         if errors.contains_key(&entity) {
             continue;
         }
+        let e = emitters.get(entity).unwrap();
+        if !(e.running && e.rate > 0.) && e.state.burst == 0 && (e.state.fraction as u32) == 0 {
+            retire_origins(w, entity, &e.state.births);
+            continue;
+        }
+        drop(e);
+        let mut row = w.require_mut::<Emitter>(entity);
+        let e = &mut *row;
         let state = &mut e.state;
         if e.running {
             state.fraction += e.rate as f64 / hz;
@@ -528,13 +542,9 @@ pub fn step(w: &World) {
                 lifetime: e.lifetime,
             });
         }
-        // One lookup: retire dead batches' origins and record a new birth's.
-        if let Some(mut space) = w.get_mut::<WorldSpace>(entity) {
-            let births = &state.births;
-            space
-                .origins
-                .retain(|o| births.iter().any(|b| b.tick == o.tick));
-            if count > 0 {
+        retire_origins(w, entity, &state.births);
+        if count > 0 {
+            if let Some(mut space) = w.get_mut::<WorldSpace>(entity) {
                 // This tick's pose, including a parent moved this tick and an
                 // emitter spawned this tick (World::global is the last boundary's).
                 let pose = w
@@ -551,6 +561,21 @@ pub fn step(w: &World) {
         state.alive += count;
         state.dropped = state.dropped.saturating_add(u64::from(wanted - count));
         left -= count;
+    }
+}
+
+fn retire_origins(w: &World, entity: crate::Entity, births: &[Birth]) {
+    let Some(space) = w.get::<WorldSpace>(entity) else {
+        return;
+    };
+    let retired = |o: &Origin| !births.iter().any(|b| b.tick == o.tick);
+    if let Some(first) = space.origins.iter().position(retired) {
+        drop(space);
+        let mut space = w.require_mut::<WorldSpace>(entity);
+        space
+            .origins
+            .extract_if(first.., |o| retired(o))
+            .for_each(drop);
     }
 }
 

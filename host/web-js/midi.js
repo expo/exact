@@ -17,6 +17,9 @@ import { journal, clock, Sounds, Mutations, Resources, R, data, commit, time } f
 import { plain } from './format.js';
 import { grantWords } from './admission.js';
 import { watchOutput } from './output.js';
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 
 const HOLD = 50, QUEUED = 1024, RECORD = 1024, SHOWN = 64, SENT = 128;
 const say = line => journal.push(`t=${clock.now} ${line}`);
@@ -71,7 +74,7 @@ const stateOf = (s, t) => s.by != null ? 'retracted' : s.at - HOLD > t ? 'waitin
 // `Unheard`: the last port report before the grant was known, applied when it is.
 let Ports = { access: 'prompt', inputs: [], outputs: [] }, Granted = false, Uses = false, Unheard = null;
 let Queue = [], Out = [], Next = 0, Received = [], Heard = 0, Ops = [], Open = [], OpenClock = [], Clock = null, Ticks = 0, Played = null, ClockFloor = -Infinity;
-let Preferred = { access: 'granted', inputs: [], outputs: [] }, Readers = {}, ReadsSent = false, Glue = null, Output = null, Boot = true;
+let Preferred = { access: 'granted', inputs: [], outputs: [] }, Readers = {}, ReadsSent = false, Output = null, Boot = true;
 const Listening = () => Sounds.midi ?? []; // [element, handler] pairs from rt.js `onMIDI`, registered as the view is built
 const Answer = { name: 'midi', requests: 0, e: () => null, due: Infinity, next: Infinity, then: () => { Answer.due = nextSent(clock.now); for (const r of Resources) if (r.source === 'exactMIDI') R(r); } };
 
@@ -354,10 +357,9 @@ const reply = () => ({ midi: { state: Ports.access, inputs: Ports.inputs.map(p =
 
 // The output: none under the agent; else the web host's glue, fetched after the first frame (a plan that uses MIDI).
 function load() {
-  if (Glue || clock.agent || !Uses || typeof requestAnimationFrame !== 'function') return;
-  Glue = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import('./midi-glue.js'))
-    .then(() => { Output = globalThis.exact.installMidi({ log: say, origin: () => clock.start, deliver }); flush(); })
-    .catch(err => say(`midi: unavailable: ${err.message}`));
+  if (loads.Glue || clock.agent || !Uses || typeof requestAnimationFrame !== 'function') return;
+  loadOnce(loads, "Glue", () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import('./midi-glue.js'))
+    .then(() => { Output = globalThis.exact.installMidi({ log: say, origin: () => clock.start, deliver }); flush(); }), err => say(`midi: unavailable: ${err.message}`));
 }
 function flush() {
   if (Sounds.settling) Ops = Ops.filter(op => op.op !== 'send' || !starts(op.data));

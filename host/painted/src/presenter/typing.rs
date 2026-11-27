@@ -7,7 +7,10 @@ impl<D: DataSource> Presenter<D> {
     /// Type into a focused field. `input` edits it now; `change` waits
     /// for Enter or blur, as for hardware typing (LLP 1069.001 D4).
     pub fn type_text(&mut self, id: ViewId, text: &str) -> Result<String, String> {
-        if !self.alert_allows(id) || self.host.route_visibility(id).1 {
+        if !self.alert_allows(id)
+            || self.host.route_visibility(id).1
+            || events::css_hidden(self.host.kernel(), id, self.alert_root())
+        {
             return Err(format!("view {id} is hidden or inert"));
         }
         let kernel = self.host.kernel();
@@ -82,7 +85,11 @@ impl<D: DataSource> Presenter<D> {
         // `TextControlElement::select`): one a focus handler sent the focus
         // away from takes it back, its handler hearing `focus` again, unless
         // that handler left it unable to take the focus.
-        if self.focus() != Some(id) && self.focusable(id) && !self.host.route_visibility(id).1 {
+        if self.focus() != Some(id)
+            && self.focusable(id)
+            && !self.host.route_visibility(id).1
+            && !events::css_hidden(self.host.kernel(), id, self.alert_root())
+        {
             if let Some(e) = self.set_focus(Some(id), now) {
                 return Err(e);
             }
@@ -293,7 +300,7 @@ impl<D: DataSource> Presenter<D> {
             }
             // The page's shortcuts hear the chord first, as the web's capture
             // listener does: a button declaring Control+V takes it.
-            let (error, prevented) = if self.shortcut("v", false, now) {
+            let (error, prevented) = if self.shortcut("v", "KeyV", false, now) {
                 (None, true)
             } else {
                 self.key_event(EventKind::Key, "v", "KeyV", false, now)
@@ -432,7 +439,7 @@ impl<D: DataSource> Presenter<D> {
             }
             if down {
                 let name = if key == "Space" { " " } else { key };
-                if self.shortcut(name, repeat, self.host.now()) {
+                if self.shortcut(name, code, repeat, self.host.now()) {
                     self.shortcut_keys.insert(code.to_string());
                     return Ok(format!(
                         "{{\"typed\":{id},\"delivery\":\"recognized\",\"shortcut\":true}}"
@@ -471,7 +478,7 @@ impl<D: DataSource> Presenter<D> {
                 "NumpadEnter" => "Enter",
                 name => name,
             };
-            if self.shortcut(name, repeat, self.host.now()) {
+            if self.shortcut(name, code, repeat, self.host.now()) {
                 return Ok(format!(
                     "{{\"typed\":{id},\"delivery\":\"recognized\",\"shortcut\":true}}"
                 ));
@@ -754,7 +761,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // The page's shortcuts first, focus or none (`shortcuts.rs`); a
         // repeat is the shortcut's, and presses nothing.
-        if self.shortcut(name, repeat, now_ms) {
+        if self.shortcut(name, code, repeat, now_ms) {
             return;
         }
         // Then a desktop's Back or Forward key (LLP 1115.000 D5.4, D5.5),
@@ -781,6 +788,12 @@ impl<D: DataSource> Presenter<D> {
         // the remote's alone (LLP 1115.001.003 D4).
         if self.remote() && self.bar_node(id) {
             self.remote_key(id, (name, code, repeat), now_ms);
+            return;
+        }
+        if events::css_hidden(self.host.kernel(), id, self.alert_root()) {
+            if name == "Tab" {
+                self.key_default(name, code, repeat, now_ms);
+            }
             return;
         }
         // Nor do a flight's controls take a key, as they take no press.
@@ -813,7 +826,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// Default keyboard behavior shared by the page and authored top-layer boxes.
     pub(super) fn key_default(&mut self, name: &str, code: &str, repeat: bool, now_ms: f64) {
-        if self.copy_reader_key(name) {
+        // Control+C and the field's editing chords take the US layout's key
+        // on one that types no Latin letter (`shortcuts.rs`).
+        let chord = self.chord_key(name, code);
+        if self.copy_reader_key(chord) {
             return;
         }
         // Tab's default action moves the focus, from a canvas or a field too,
@@ -861,10 +877,12 @@ impl<D: DataSource> Presenter<D> {
                 .runner()
                 .handlers_of(id)
                 .contains(&EventKind::Press);
-        // Read before the press, whose handler may remove it.
-        let href = node
-            .props
-            .link()
+        // Read before the press, whose handler may remove it. A link with its
+        // own `press` runs that handler instead of following `href`, matching
+        // the web and Apple hosts.
+        let href = (!pressable)
+            .then(|| node.props.link())
+            .flatten()
             .filter(|_| name == "Enter")
             .map(str::to_string);
         if (role == Some("button") || native || pressable && !link) && matches!(name, " " | "Enter")
@@ -896,7 +914,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // The field's own keys: the caret and selection, editing the text it
         // shows (typed text kept against its bound value; LLP 1069.001 D4).
-        self.field_key(id, name, now_ms);
+        self.field_key(id, chord, now_ms);
     }
 
     /// Commit a field typed into since it took the focus: HTML's `change`,
@@ -945,7 +963,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// What a field shows and commits: its typed text while its bound
-    /// value is the one it had then (`keep_typed`), else that value.
+    /// value is the one it had then and its action has not reconciled it.
     pub(crate) fn field_text(&self, id: ViewId) -> String {
         self.field_text_ref(id).into_owned()
     }
@@ -960,21 +978,16 @@ impl<D: DataSource> Presenter<D> {
             .unwrap_or_else(|| exact_kernel::control::bound_field_value(node.props))
     }
 
-    /// After an edit's dispatch: a field whose `value` the edit's action did
-    /// not write keeps the typed text, as the web's element keeps its own
-    /// value and the web build writes `value` only when the bound value
-    /// changes (LLP 1069.001 D4: an unbound field holds its own text).
-    pub(crate) fn keep_typed(&mut self, id: ViewId, typed: String, before: String) {
-        // No handler need hear an edit for it to show.
+    /// The draft was installed before dispatch so the handler and its commands
+    /// could read it. A commit may already have replaced it.
+    pub(crate) fn finish_field_edit(&mut self, id: ViewId) {
         self.dirty = true;
-        // A commit since the edit began (the watch set before its dispatch) that changed the
-        // value replaces the typed text, whatever it reads now.
-        let written = self.forget_replaced_choices().contains(&id);
-        let bound = self.bound_text(id);
-        if !written && self.host.kernel().node(id).is_some() && bound == before && bound != typed {
-            self.host.values.watch(id, Some(bound.clone()));
-            self.chosen.insert(id, (typed, bound));
-        } else {
+        self.forget_replaced_choices();
+        if self
+            .chosen
+            .get(&id)
+            .is_some_and(|(typed, bound)| typed == bound)
+        {
             self.host.values.watch(id, None);
             self.chosen.remove(&id);
         }

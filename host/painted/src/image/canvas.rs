@@ -70,7 +70,11 @@ fn demand(
             generation,
             pixels: decode.pixels,
             variant: exact_raster::variant::SRGB8,
-            crop: decode.crop,
+            crop: if header.is_svg() {
+                svg_picture::scale_crop(1.0)
+            } else {
+                decode.crop
+            },
         },
         metadata: header.metadata,
         cost: decode.cost,

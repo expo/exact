@@ -154,6 +154,12 @@ package final class NativeButtonIOS: UIButton {
     /// activation sends the action with no touch, and has none.
     private(set) var lifted: CGPoint?
     package override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        #if os(iOS)
+        if let presenter = owner?.presenter, presenter.textSelection.hasActiveSelection,
+           let t = touches.first, bounds.contains(t.location(in: self)) {
+            presenter.textSelection.clear()
+        }
+        #endif
         lifted = touches.first?.location(in: nil)
         defer { lifted = nil }
         super.touchesEnded(touches, with: event)
@@ -320,13 +326,18 @@ extension NodeView {
 
     /// D4: the control's primary action is what a custom button's touch-up
     /// does, once: the target is this node or, without a handler, the
-    /// nearest ancestor with one whose box holds the touch (refused at a
-    /// disabled one), resolved first; then the press's focus
+    /// nearest ancestor with one, if its box holds the point the touch lifted
+    /// at, or the button's centre for an assistive press, each where it
+    /// shows; a miss there, or a disabled one, presses nothing. It is
+    /// resolved first; then the press's focus
     /// (`focusForPress`), and `press` when there is a target, at `lifted`,
     /// the window point a touch lifted at (none from a key or VoiceOver).
     func activateNative(at lifted: CGPoint? = nil) {
         guard let presenter, !disabled, !inert else { return }
-        let target = activationTarget(at: convert(CGPoint(x: bounds.midX, y: bounds.midY), to: nil))
+        // A button with its own press takes the action UIKit sent for its touch-up, which tolerates a lift a little past
+        // its bounds, so it is tested at its centre; the lift point tests an ancestor
+        let centre = convert(CGPoint(x: bounds.midX, y: bounds.midY), to: nil)
+        let target = activationTarget(at: takesPress ? centre : lifted ?? centre)
         let bubbled = target.map { presenter.pressBox(of: $0, from: self) !== $0 } ?? false
         let path = target.map { PressPath(from: self, to: $0, presenter: presenter) }, heldTarget = target.map(HeldNode.init)
         let lifetimes = bubbled ? [] : presenter.pressLifetimes(from: self, to: target)

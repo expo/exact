@@ -7,22 +7,54 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 /// local-network`.
 pub const LOCAL_NETWORK: &str = "local-network";
 
+/// The target word of `net.fetch loopback` and `net.websocket loopback`
+/// (LLP 1016 D6).
+pub const LOOPBACK: &str = "loopback";
+
 /// The word a development build's bake writes after [`LOCAL_NETWORK`]: the
 /// line then admits loopback too, so a drive's fixture on this machine stands
 /// in for a device on the LAN. A production bake refuses it.
 pub const DEVELOPMENT: &str = "development";
 
 /// Whether `host`, as a URL serializes it (lowercase, an IPv6 address in
+/// brackets), is a loopback host (LLP 1016 D6): IPv4 `127.0.0.0/8`, IPv6
+/// `[::1]`, an IPv4-mapped IPv6 address carrying `127.0.0.0/8`, or the exact
+/// name `localhost` (ASCII case-insensitive, at most one trailing dot).
+///
+/// Shared by `net.fetch loopback` / `net.websocket loopback` and
+/// `local-network development`. `vendor/ibex`'s `ibex2::grant::is_loopback`
+/// and the web's `isLoopback` (`host/web/navigation/network.js`) mirror it;
+/// `host/web/tests/fixtures/grants.json` holds all three to the same answers.
+pub fn is_loopback(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return inner.parse::<Ipv6Addr>().is_ok_and(|address| {
+            address
+                .to_ipv4_mapped()
+                .map_or_else(|| address.is_loopback(), |v4| v4.is_loopback())
+        });
+    }
+    if let Ok(address) = host.parse::<Ipv4Addr>() {
+        return address.is_loopback();
+    }
+    let name = host.strip_suffix('.').unwrap_or(&host);
+    name == "localhost"
+}
+
+/// Whether `host`, as a URL serializes it (lowercase, an IPv6 address in
 /// brackets), is on the local network: an RFC 1918, link-local IPv4,
 /// unique-local IPv6 or link-local IPv6 literal, an IPv4-mapped IPv6 address
 /// judged by the IPv4 address it carries, or a name ending in `.local`
 /// (RFC 6762 §3), except the [`is_cloud_metadata`] addresses. With
-/// `loopback`, also 127.0.0.0/8, `[::1]` and `localhost`.
+/// `loopback`, also [`is_loopback`].
 ///
 /// `vendor/ibex`'s `ibex2::grant::is_local_network`, which native hosts admit
-/// by, and the web's `isLocalNetwork` (`host/web/navigation.js`) mirror it;
+/// by, and the web's `isLocalNetwork` (`host/web/navigation/network.js`) mirror it;
 /// `host/web/tests/fixtures/grants.json` holds all three to the same answers.
 pub fn is_local_network(host: &str, loopback: bool) -> bool {
+    if loopback && is_loopback(host) {
+        return true;
+    }
     let host = host.to_ascii_lowercase();
     if is_cloud_metadata(&host) {
         return false;
@@ -30,13 +62,13 @@ pub fn is_local_network(host: &str, loopback: bool) -> bool {
     if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
         return inner
             .parse::<Ipv6Addr>()
-            .is_ok_and(|address| local_v6(address, loopback));
+            .is_ok_and(|address| local_v6(address));
     }
     if let Ok(address) = host.parse::<Ipv4Addr>() {
-        return local_v4(address, loopback);
+        return local_v4(address);
     }
     let name = host.strip_suffix('.').unwrap_or(&host);
-    name.ends_with(".local") && name.len() > ".local".len() || loopback && name == "localhost"
+    name.ends_with(".local") && name.len() > ".local".len()
 }
 
 /// Whether `host`, as a URL serializes it, is a cloud instance metadata
@@ -80,21 +112,21 @@ pub fn is_service_type(kind: &str) -> bool {
         && !name.contains("--")
 }
 
-fn local_v4(address: Ipv4Addr, loopback: bool) -> bool {
-    address.is_private() || address.is_link_local() || loopback && address.is_loopback()
+fn local_v4(address: Ipv4Addr) -> bool {
+    address.is_private() || address.is_link_local()
 }
 
-fn local_v6(address: Ipv6Addr, loopback: bool) -> bool {
+fn local_v6(address: Ipv6Addr) -> bool {
     if let Some(v4) = address.to_ipv4_mapped() {
-        return local_v4(v4, loopback);
+        return local_v4(v4);
     }
     let first = address.segments()[0];
-    (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80 || loopback && address.is_loopback()
+    (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_local_network, is_service_type};
+    use super::{is_local_network, is_loopback, is_service_type};
 
     #[test]
     fn a_service_type_is_rfc_6335_s_name_and_a_transport() {
@@ -164,6 +196,46 @@ mod tests {
             "[::ffff:127.0.0.1]",
         ] {
             assert!(!is_local_network(host, false), "{host}");
+        }
+    }
+
+    #[test]
+    fn loopback_matches_only_loopback_literals_and_exact_localhost() {
+        for host in [
+            "127.0.0.1",
+            "127.0.0.0",
+            "127.9.8.7",
+            "127.255.255.255",
+            "[::1]",
+            "[0:0:0:0:0:0:0:1]",
+            "[::ffff:127.0.0.1]",
+            "[::ffff:7f00:1]",
+            "localhost",
+            "LOCALHOST",
+            "localhost.",
+            "LocalHost.",
+        ] {
+            assert!(is_loopback(host), "{host}");
+        }
+        for host in [
+            "foo.localhost",
+            "localhost.localhost",
+            "localhost..",
+            ".localhost",
+            "localhost.evil.com",
+            "localhost.local",
+            "0.0.0.0",
+            "[::]",
+            "[::7f00:1]",
+            "[::1%lo0]",
+            "127.0.0.1.",
+            "192.168.1.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "[fd00:ec2::254]",
+            "example.com",
+        ] {
+            assert!(!is_loopback(host), "{host}");
         }
     }
 

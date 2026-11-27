@@ -1,4 +1,4 @@
-import { navigation, clickFromInput, suppressPointerClick, focusStack, viewChildren, viewParent } from './navigation.js';
+import { navigation, clickFromInput, suppressPointerClick, focusStack, viewChildren, viewParent, modalLayers } from './navigation.js';
 import { receive, takes } from './drag-in.js';
 // Input-only glue: loaded after the baked first pixel, independently of data readiness.
 import "./prompt-glue.js"; // a prompt's Return
@@ -233,17 +233,18 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         && event.altKey === modifiers.has("Alt") && event.shiftKey === modifiers.has("Shift")
         && (event.key?.toLowerCase() === key.toLowerCase() || physical === key.toLowerCase());
     };
-    // Nothing behind the frontmost modal — a modal `dialog`, or the last
-    // shown `aria-modal` view (gallery F22) — and never Enter or Space while
-    // the focus is a control they activate (onboarding F27).
-    const modal = document.activeElement.closest("dialog:modal") ?? [...root.querySelectorAll('[aria-modal="true"]')].findLast(m => m.getClientRects().length && !inertAncestor(m));
+    // Nothing behind the frontmost modal — a modal `dialog` (and popovers opened
+    // above it), or the last visible `aria-modal` view (gallery F22) — and never
+    // Enter or Space while the focus is a control they activate (onboarding F27).
+    const layers = modalLayers();
+    const ariaModal = [...root.querySelectorAll('[aria-modal="true"]')].findLast(m => (!layers || layers.some(l => l.contains(m))) && m.getClientRects().length && !inertAncestor(m) && getComputedStyle(m).visibility === "visible");
     const focus = document.activeElement, activates = focus?.matches?.("button, a[href], summary, input[type=checkbox], input[type=radio], [data-exact-on~=press]");
     for (const el of root.querySelectorAll("button[aria-keyshortcuts]")) {
-      if (modal && !modal.contains(el)) continue;
+      if (ariaModal ? !ariaModal.contains(el) : layers && !layers.some(l => l.contains(el))) continue;
       if (activates && focus !== el && (event.key === "Enter" || event.key === " ") && !(event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)) continue;
       // A hidden Back control takes its shortcut through the visible bar button, in a header or in content.
       const target = backButton(el) ?? el;
-      if (!target.isConnected || !(target.getClientRects().length || target.hasAttribute("data-exact-bar-back")) || inertAncestor(el) || getComputedStyle(target).visibility !== "visible") continue;
+      if (!target.isConnected || !(target.getClientRects().length || target.getAttribute("data-exact-bar-back") === "") || inertAncestor(el) || getComputedStyle(target).visibility !== "visible") continue;
       if (!(el.getAttribute("aria-keyshortcuts") ?? "").split(/\s+/).some(matches)) continue;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -1145,16 +1146,19 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   const lands = el => !!el?.isConnected && !inertAncestor(el) && el.getClientRects().length > 0 && !el.matches(":disabled");
   const titleOf = route => viewChildren(route).find(c => c.localName === "header")?.querySelector("h1, h2, h3, h4, h5, h6, [role=heading]");
   // @ref LLP 1115.000 D4.5 — a modal route (a sheet) is a dialog to assistive technology: `role="dialog"` and
-  // `aria-modal`, named by its header's heading, and the focus moves into it and returns on close as it does for any
+  // `aria-modal` (none on a popover route the browser presents, which is nonmodal), named by its header's heading, and the focus moves into it and returns on close as it does for any
   // route (`arrive`). The host's marks (`data-exact-dialog`: "named" when the name is its own too) are not the app's:
   // a role or a label the author wrote is left as written, and the agent's tree leaves the marks out (agent.js).
   const dialog = route => {
-    const mark = route.getAttribute("data-exact-dialog"), modal = /^(modal|fullscreen)$/.test(route.getAttribute("navigationPresentation") ?? "") && (mark != null || !route.hasAttribute("role"));
+    const mark = route.getAttribute("data-exact-dialog"), modal = /^(modal|fullscreen|popover)$/.test(route.getAttribute("navigationPresentation") ?? "") && (mark != null || !route.hasAttribute("role"));
     if (!modal) { if (mark != null) for (const name of ["data-exact-dialog", "role", "aria-modal", ...(mark ? ["aria-labelledby"] : [])]) route.removeAttribute(name); return; }
     const title = titleOf(route), names = !!title && !route.hasAttribute("aria-label") && (!!mark || !route.hasAttribute("aria-labelledby"));
     if (names) { title.id ||= `exact-title-${route.getAttribute("navigationKey")}`; if (route.getAttribute("aria-labelledby") !== title.id) route.setAttribute("aria-labelledby", title.id); }
     else if (mark) route.removeAttribute("aria-labelledby");
-    if (mark !== (names ? "named" : "")) { route.setAttribute("data-exact-dialog", names ? "named" : ""); route.setAttribute("role", "dialog"); route.setAttribute("aria-modal", "true"); }
+    if (mark !== (names ? "named" : "")) { route.setAttribute("data-exact-dialog", names ? "named" : ""); route.setAttribute("role", "dialog"); }
+    // A popover route the browser presents is nonmodal (LLP 1123 D7, route-popovers.js): the page under it stays live
+    const nonmodal = route.hasAttribute("data-exact-route-popover");
+    if (route.hasAttribute("aria-modal") === nonmodal) nonmodal ? route.removeAttribute("aria-modal") : route.setAttribute("aria-modal", "true");
   };
   const arrive = () => {
     const navs = root.querySelectorAll("[navigationBack]");

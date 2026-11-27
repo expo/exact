@@ -69,7 +69,7 @@ const PAGE_OF_SCROLLERS: &str = r#"component App
 /// it is, where its rows were painted, and its farthest offset.
 fn told(words: &[i32], id: ViewId) -> (i32, i32, [f32; 6]) {
     let s = words
-        .chunks_exact(9)
+        .chunks_exact(10)
         .find(|s| s[0] == id as i32)
         .unwrap_or_else(|| panic!("scroller {id} is not in {words:?}"));
     (
@@ -92,6 +92,7 @@ fn the_scrollers_under_a_point_are_told_innermost_first() {
         vec![Scroller {
             id: page,
             axes: (false, true),
+            min: (0., 0.),
             max: (0., 1020.),
             offset: (0., 0.),
             from_right: false,
@@ -434,7 +435,7 @@ fn the_presenters_own_gestures_claim_their_axes() {
         boot(&source).scrollers_at(x, y).claims
     };
     // A swipe row takes a sideways drag; up and down is the scroller's.
-    let swipe = r#"box swiperight=hear touch-action="pan-y" width=400 height=100"#;
+    let swipe = r#"box swipe=hear swipe-follow="right" touch-action="pan-y" width=400 height=100"#;
     assert_eq!(claims(swipe, 200., 50.), (true, false));
     assert_eq!(claims(swipe, 200., 150.), (false, false), "below the row");
     // A `pan` hears what its `touch-action` keeps from scrolling.
@@ -886,4 +887,303 @@ fn the_reader_is_offered_a_frame_under_the_finger_as_a_module_view() {
     };
     assert_eq!(p.reader_module(20., 20., 1.)[0], id as i32);
     assert_eq!(p.reader_module(20., 150., 1.)[0], 0);
+}
+
+#[test]
+fn reader_taps_offer_a_hosted_allocation_only_where_the_addressed_point_hits_it() {
+    let mut p = boot("component App\n  view\n    column\n      box height=24\n      test-view testId=\"pad\" width=240 height=160\n      button \"Ordinary\" testId=\"button\"\n");
+    let pad = id(&p, "pad");
+    let button = id(&p, "button");
+    let tap = |p: &mut Presenter<()>, request| p.reader_agent_tap(&request, 2.);
+    for (args, at) in [
+        (serde_json::json!({"op":"tap", "id":pad}), [120., 104.]),
+        (
+            serde_json::json!({"op":"tap", "id":pad, "at":[30,20]}),
+            [30., 44.],
+        ),
+        (
+            serde_json::json!({"op":"tap", "id":pad, "phase":"down", "x":12,"y":40}),
+            [12., 40.],
+        ),
+    ] {
+        let handoff = tap(&mut p, args).unwrap().unwrap();
+        assert_eq!(handoff["at"], serde_json::json!(at));
+        assert_eq!(handoff["moduleContact"]["id"], pad);
+        assert!(handoff.get("tapped").is_none());
+    }
+    assert!(tap(
+        &mut p,
+        serde_json::json!({"op":"tap","id":pad,"at":[240,10]})
+    )
+    .unwrap()
+    .is_err());
+    assert!(tap(&mut p, serde_json::json!({"op":"tap","id":button})).is_none());
+}
+
+#[test]
+fn reader_under_distinguishes_ancestor_pan_and_touch_action_from_exclusive_gestures() {
+    // Ancestor horizontal drawer `pan` (`touch-action="pan-y"`) around a vertical `scroll`
+    // containing a hosted `test-view` scrubber: horizontal claim is yieldable (bit 0 + bit 7).
+    let mut drawer = boot(
+        r#"component App
+  state dx = 0
+  action drag(x: number, y: number)
+    dx = dx + x
+  view
+    column pan=drag touch-action="pan-y" width=400 height=400
+      scroll testId="feed" width=400 height=400
+        test-view testId="chart" width=400 height=160
+        box testId="outside" width=400 height=600
+"#,
+    );
+    let under = drawer.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (true, false));
+    assert_eq!(under.hard_claims, (false, false));
+    assert_eq!(drawer.reader_under(200., 80., 1.)[0], 0b1000_0001);
+
+    // `touch-action="pan-y"` directly on the hosted view or on a wrapper inside the scroll
+    // stays yieldable (not an exclusive Exact gesture), with or without an ancestor `pan`.
+    let mut wrapped = boot(
+        r#"component App
+  state dx = 0
+  action drag(x: number, y: number)
+    dx = dx + x
+  view
+    column pan=drag touch-action="pan-y" width=400 height=400
+      scroll width=400 height=400
+        column touch-action="pan-y" width=400 height=160
+          test-view touch-action="pan-y" width=400 height=160
+        box width=400 height=600
+"#,
+    );
+    let under = wrapped.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (true, false));
+    assert_eq!(under.hard_claims, (false, false));
+    assert_eq!(wrapped.reader_under(200., 80., 1.)[0], 0b1000_0001);
+
+    let mut css_only = boot(
+        r#"component App
+  view
+    scroll width=400 height=400
+      test-view touch-action="pan-y" width=400 height=160
+      box width=400 height=600
+"#,
+    );
+    assert_eq!(css_only.reader_under(200., 80., 1.)[0], 0b1000_0001);
+
+    // Direct `pan` attached to the hit node itself is exclusive (bits 7 and 8 clear).
+    let mut self_pan = boot(
+        r#"component App
+  state dx = 0
+  action drag(x: number, y: number)
+    dx = dx + x
+  view
+    box pan=drag touch-action="pan-y" width=400 height=160
+"#,
+    );
+    let under = self_pan.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (true, false));
+    assert_eq!(under.hard_claims, (true, false));
+    assert_eq!(self_pan.reader_under(200., 80., 1.)[0], 0b0000_0001);
+
+    // An exclusive horizontal `swipeleft` row keeps bit 7 clear even under an ancestor drawer `pan`.
+    let mut swipe = boot(
+        r#"component App
+  state dx = 0
+  action drag(x: number, y: number)
+    dx = dx + x
+  action archive
+    dx = 1
+  view
+    column pan=drag touch-action="pan-y" width=400 height=400
+      column swipe=archive swipe-follow="left" touch-action="pan-y" width=400 height=160
+        test-view width=400 height=160
+"#,
+    );
+    let under = swipe.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (true, false));
+    assert_eq!(under.hard_claims, (true, false));
+    assert_eq!(swipe.reader_under(200., 80., 1.)[0], 0b0000_0001);
+
+    // Vertical ancestor `pan` (`touch-action="pan-x"`) sets vertical yield bit 8 (0b1_0000_0010).
+    let mut vertical_pan = boot(
+        r#"component App
+  state dy = 0
+  action drag(x: number, y: number)
+    dy = dy + y
+  view
+    column pan=drag touch-action="pan-x" width=400 height=400
+      test-view width=400 height=160
+"#,
+    );
+    let under = vertical_pan.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (false, true));
+    assert_eq!(under.hard_claims, (false, false));
+    assert_eq!(vertical_pan.reader_under(200., 80., 1.)[0], 0b1_0000_0010);
+
+    // Mixed hard horizontal (`swipe`) and yieldable vertical (ancestor `pan` with `pan-x`):
+    // bit 7 stays clear while bit 8 is set (0b1_0000_0011).
+    let mut mixed = boot(
+        r#"component App
+  state dy = 0
+  action drag(x: number, y: number)
+    dy = dy + y
+  action archive
+    dy = 1
+  view
+    column pan=drag touch-action="pan-x" width=400 height=400
+      column swipe=archive swipe-follow="left" touch-action="pan-y" width=400 height=160
+        test-view width=400 height=160
+"#,
+    );
+    let under = mixed.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (true, true));
+    assert_eq!(under.hard_claims, (true, false));
+    assert_eq!(mixed.reader_under(200., 80., 1.)[0], 0b1_0000_0011);
+
+    // Exclusive vertical `heightDragFor` and exclusive 2D `transformDragFor` keep bits 7 and 8 clear.
+    let mut height_drag = boot(
+        r#"component App
+  action release(h: number, v: number)
+    let _ = h + v
+  view
+    column id="panel" width=400 height=200 box-sizing="border-box"
+      box heightDragFor="panel" heightrelease=release width=400 height=160
+        test-view width=400 height=160
+"#,
+    );
+    let under = height_drag.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (false, true));
+    assert_eq!(under.hard_claims, (false, true));
+    assert_eq!(height_drag.reader_under(200., 80., 1.)[0], 0b0000_0010);
+
+    let mut transform_drag = boot(
+        r#"component App
+  state n = 0
+  action geom(w: number, h: number, pw: number, ph: number)
+    n = n
+  action release(x: number, y: number, s: number, vx: number, vy: number, vs: number)
+    n = n
+  view
+    box width=400 height=200 overflow="hidden" box-sizing="border-box"
+      box id="photo" width="100%" height="100%" box-sizing="border-box" translate="0px 0px" scale=1
+        box transformDragFor="photo" transformgeometry=geom transformrelease=release touch-action="pan-x" width=400 height=160
+          test-view width=400 height=160
+"#,
+    );
+    let under = transform_drag.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (false, true));
+    assert_eq!(under.hard_claims, (false, true));
+    assert_eq!(transform_drag.reader_under(200., 80., 1.)[0], 0b0000_0010);
+}
+
+#[test]
+fn disabled_hosted_view_does_not_block_enabled_ancestor_pan_and_never_activates() {
+    let mut p = boot(
+        r#"component App
+  state dx = 0
+  state taps = 0
+  action drag(x: number, y: number)
+    dx = dx + x
+  action tap
+    taps = taps + 1
+  view
+    column pan=drag touch-action="pan-y" width=400 height=400
+      scroll width=400 height=380
+        box press=tap width=400 height=160
+          test-view testId="chart" disabled=true width=400 height=160
+        box width=400 height=600
+      text `${dx} ${taps}` testId="log" height=20
+"#,
+    );
+    // Ancestor horizontal pan claim is still reported for Android hit-testing.
+    let under = p.scrollers_at(200., 80.);
+    assert_eq!(under.claims, (true, false));
+    assert_eq!(under.hard_claims, (false, false));
+    assert_eq!(p.reader_under(200., 80., 1.)[0], 0b1000_0001);
+
+    // Tapping the disabled chart must not fire the enclosing press handler.
+    assert!(p.pointer_down(200., 80., 10.).unwrap());
+    p.pointer_up(200., 80., 20.).unwrap();
+    assert_eq!(log(&p), "0 0");
+
+    // Dragging horizontally across the disabled chart pans the enabled ancestor drawer.
+    assert!(p.pointer_down(200., 80., 30.).unwrap());
+    assert!(p.pointer_move(250., 80., 40.).unwrap());
+    p.pointer_up(250., 80., 50.).unwrap();
+    assert_eq!(log(&p), "50 0");
+
+    // A disabled drawer or an inert subtree around the chart stays dead.
+    let mut dead_drawer = boot(
+        r#"component App
+  state dx = 0
+  action drag(x: number, y: number)
+    dx = dx + x
+  view
+    column pan=drag disabled=true touch-action="pan-y" width=400 height=400
+      test-view disabled=true width=400 height=160
+      text `${dx}` testId="log" height=20
+"#,
+    );
+    assert_eq!(dead_drawer.scrollers_at(200., 80.).claims, (false, false));
+    assert!(!dead_drawer.pointer_down(200., 80., 10.).unwrap());
+
+    let mut inert_tree = boot(
+        r#"component App
+  state dx = 0
+  action drag(x: number, y: number)
+    dx = dx + x
+  view
+    column inert=true width=400 height=400
+      column pan=drag touch-action="pan-y" width=400 height=400
+        test-view disabled=true width=400 height=160
+      text `${dx}` testId="log" height=20
+"#,
+    );
+    assert_eq!(inert_tree.scrollers_at(200., 80.).claims, (false, false));
+    assert!(!inert_tree.pointer_down(200., 80., 10.).unwrap());
+}
+
+#[test]
+fn rtl_overflow_x_scrolls_into_negative_offsets_while_ltr_stays_clamped_at_zero() {
+    const RTL_AND_LTR: &str = r#"component App
+  view
+    column width=400 height=400
+      row testId="rtl" direction="rtl" overflow-x="auto" width=200 height=60
+        box width=150 height=60 flex-shrink=0
+        box width=150 height=60 flex-shrink=0
+        box width=150 height=60 flex-shrink=0
+      box testId="ltr" direction="ltr" overflow-x="auto" width=200 height=60
+        box position="absolute" left=-180 width=150 height=60
+"#;
+    let mut p = boot(RTL_AND_LTR);
+    let (rtl, ltr) = (id(&p, "rtl"), id(&p, "ltr"));
+    let under_rtl = p.scrollers_at(100., 30.);
+    let s_rtl = under_rtl
+        .chain
+        .iter()
+        .find(|s| s.id == rtl)
+        .expect("rtl is scrollable");
+    assert!(s_rtl.axes.0, "rtl horizontal overflow is scrollable");
+    assert!(
+        s_rtl.min.0 < -200.0,
+        "rtl min_x is negative: {:?}",
+        s_rtl.min
+    );
+    assert_eq!(s_rtl.max.0, 0.0);
+
+    // Reader statement carries min_x at slot 9 of the 10-word record and accepts negative scroll deltas.
+    p.reader_under(100., 30., 1.);
+    let words = p.reader_scrollers(&[], 1.).unwrap();
+    let rec = words.chunks_exact(10).find(|c| c[0] == rtl as i32).unwrap();
+    let wire_min_x = f32::from_bits(rec[9] as u32);
+    assert!(wire_min_x < -200.0, "wire min_x: {wire_min_x}");
+    assert_eq!(p.reader_scrolled(rtl, (-100., 0.), 0), Some((-100., 0.)));
+    assert_eq!(p.scroll_of(rtl), (-100., 0.));
+
+    // LTR off-canvas negative child must NOT become horizontally scrollable (CSS Overflow 3).
+    let limits = p.collection_scroll_limits();
+    let s_ltr = p.scroller(ltr, &limits).expect("ltr scroller");
+    assert_eq!(s_ltr.min.0, 0.0);
+    assert!(!s_ltr.axes.0);
 }

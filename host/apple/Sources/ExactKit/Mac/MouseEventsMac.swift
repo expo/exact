@@ -211,6 +211,16 @@ extension Presenter {
 
 extension NodeView {
     package override func mouseDown(with event: NSEvent) {
+        if let chain = holdPresenter?.mouseChain {
+            // A drag-only contact whose up never came ends before a new down goes its way
+            chain.endDragOnly()
+            // A first click AppKit gave this view for a drag reaches nothing else, through its up (LLP 1094.000 D5);
+            // one that no longer may drag arms nothing, unless the view now takes the click itself
+            if chain.takeFirstMouseDrag(event, at: self), !(Self.countsFirstMouse(event) || clicksThrough) {
+                chain.downDragOnly(self, event: event, arms: firstMouseDragsHere(event))
+                return
+            }
+        }
         let releases = TitleBarAreaMac.takesRelease(of: event, at: self)
         defer { if releases { TitleBarAreaMac.release(to: self) } }
         HeldState.input(at: self) // a press on a held node lets its hold go (HeldState.swift; the window's monitor, ExactViewMac)
@@ -276,6 +286,7 @@ extension NodeView {
         return false
     }
     package override func mouseDragged(with event: NSEvent) {
+        if let chain = holdPresenter?.mouseChain, chain.dragOnly != nil { _ = chain.drag(event); return }
         if contextClicked { return rightMouseDragged(with: event) }
         pointerDragged(event)
         let chain = holdPresenter?.mouseChain
@@ -299,6 +310,7 @@ extension NodeView {
         if canvasInput?.pointer(event, phase: "up") != true { super.rightMouseUp(with: event) }
     }
     package override func mouseUp(with event: NSEvent) {
+        if let chain = holdPresenter?.mouseChain, chain.dragOnly != nil { _ = chain.up(event); return }
         let chain = holdPresenter?.mouseChain, contact = chain?.bubbledPress
         defer { chain?.completed(contact, at: self) }
         if contextClicked { contextClicked = false; return rightMouseUp(with: event) }

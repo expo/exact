@@ -1,3 +1,5 @@
+import { loadOnce } from './load-once.js';
+
 // Native modules on the web (@ref LLP 1024 D2–D5, D7; LLP 1067 D5): the host
 // half of the app's module table. Loaded after first paint for an app with a
 // module artifact (`./modules/index.js`, the app's `modules/web/`), whose
@@ -28,7 +30,7 @@ const NAMES = ['press', 'change', 'hover', 'focus', 'blur', 'key', 'submit', 'lo
 // The app's module artifact, loaded once for the page: its views' table
 // here, and its `later(request)` for `native.later` (pageNative, below).
 const artifactUrl = () => new URL('./modules/index.js', document.baseURI).href;
-const artifact = () => globalThis.exact.nativeArtifact ??= new Promise((resolve, reject) => {
+const artifact = () => loadOnce(globalThis.exact, 'nativeArtifact', () => new Promise((resolve, reject) => {
   const attempt = globalThis.exact.nativeAttempt ?? 0;
   globalThis.exact.nativeAttempt = attempt + 1;
   const url = new URL(artifactUrl());
@@ -41,7 +43,7 @@ const artifact = () => globalThis.exact.nativeArtifact ??= new Promise((resolve,
   import(url.href).then(
     table => { clearTimeout(timer); resolve(table); },
     error => { clearTimeout(timer); reject(new Error(`the module artifact ${url} did not load: ${error?.message ?? error}`)); });
-}).catch(error => { globalThis.exact.nativeArtifact = null; throw error; });
+}));
 
 // The artifact itself, for the page module's hatches (LLP 1075.003.000).
 globalThis.exact.nativeModule = artifact;
@@ -51,12 +53,13 @@ globalThis.exact.nativeModule = artifact;
 // by the app's artifact, which such a tag does not load.
 globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
   let table = null, failure = null, nonce = 0, loaded = null;
+  const loads = {};
   const waiting = new Set();
   const defines = (globalThis.exact.nativeDefines ??= { count: 0 });
   const say = (line) => { log(`native ${line}`); };
   const url = artifactUrl();
   const define = (tag) => { if (!customElements.get(tag)) { customElements.define(tag, class extends HTMLElement {}); defines.count += 1; } };
-  const load = () => artifact().then((m) => {
+  const load = () => loadOnce(loads, 'table', () => artifact().then((m) => {
     if (m.abi !== ABI) throw Object.assign(new Error(`module ABI ${m.abi}, host ABI ${ABI}`), { state: 'unavailable' });
     if (!m.roster || typeof m.create !== 'function' || typeof m.setProps !== 'function' || typeof m.destroy !== 'function') {
       throw Object.assign(new Error(`${url} is not a module table (abi, roster, create, setProps, destroy)`), { state: 'unavailable' });
@@ -64,7 +67,7 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
     for (const tag of Object.keys(m.roster)) define(tag);
     table = m;
     say(`loaded ${url}: ${Object.keys(m.roster).join(', ')} (abi ${m.abi})`);
-  }).catch((error) => {
+  }), (error) => {
     failure = error;
     say(`unavailable: ${error.message}`);
   }).finally(() => { for (const el of waiting) attachNow(el); waiting.clear(); });

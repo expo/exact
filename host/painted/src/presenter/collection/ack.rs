@@ -64,6 +64,7 @@ impl<D: DataSource> Presenter<D> {
                 Origin::Anchor | Origin::Clamp => after,
             };
             self.reader.rebased(view, before, rebased);
+            self.rebase_wheel_snap(view, before, rebased);
             self.scroll_end_acknowledged(view, accepted, moved);
             if survives {
                 // What this acknowledgement applied is no longer the newer position's to apply.
@@ -79,6 +80,37 @@ impl<D: DataSource> Presenter<D> {
         }
         self.release_owed_scrolls();
         self.finish_collection_scroll_ends();
+        self.dirty |= self.snap_probe_needed();
+    }
+
+    pub(in crate::presenter) fn snap_model_target(&self, view: ViewId) -> Option<(f32, f32)> {
+        let pending = self.pending_model_scroll(view)?;
+        (pending.origin == Origin::App)
+            .then(|| (pending.left.unwrap_or(self.scroll_of(view).0), pending.top))
+    }
+
+    // Snap the app's destination before publishing it, retaining its input sequence and ACK.
+    pub(in crate::presenter) fn retarget_snap_model(
+        &mut self,
+        view: ViewId,
+        to: (f32, f32),
+    ) -> bool {
+        if self.snap_model_target(view).is_none() {
+            return false;
+        }
+        let pending = self
+            .collection
+            .cursors
+            .get_mut(&view)
+            .unwrap()
+            .model_scroll
+            .as_mut()
+            .unwrap();
+        let before = *pending;
+        pending.left = Some(to.0);
+        pending.top = to.1;
+        self.scroll_end_retargeted(view, Some(before));
+        true
     }
 
     /// The input offset moved by `by` under a pending position (an acknowledgement applied part

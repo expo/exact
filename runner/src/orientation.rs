@@ -229,8 +229,8 @@ fn tiers(kernel: &Kernel, id: ViewId) -> Vec<(ViewId, usize)> {
     let sheet = |id: ViewId| {
         kernel
             .node(id)
-            .and_then(|n| n.props.str(PropId::NavigationPresentation))
-            == Some("modal")
+            .and_then(|n| n.props.presentation())
+            .is_some_and(exact_kernel::props::Presentation::sheet_like)
     };
     let mut out = Vec::new();
     let mut at = Some(id);

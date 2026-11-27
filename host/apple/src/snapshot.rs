@@ -123,19 +123,17 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
                     } else {
                         exact_runner::RequestClass::Ordered
                     };
-                    executor
-                        .run(
-                            exact_runner::RequestOut {
-                                completion: None,
-                                class,
-                                ticket: 1,
-                                target: "widget refresh".into(),
-                                request,
-                                forced: false,
-                            },
-                            work,
-                        )
-                        .map_err(str::to_owned)?;
+                    executor.run(
+                        exact_runner::RequestOut {
+                            completion: None,
+                            class,
+                            ticket: 1,
+                            target: "widget refresh".into(),
+                            request,
+                            forced: false,
+                        },
+                        work,
+                    )?;
                     loop {
                         executor.begin_pump();
                         if let Some((_, outcome, _)) = executor.drain().into_iter().next() {

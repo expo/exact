@@ -8,6 +8,8 @@ use super::*;
 
 #[path = "access_tests/actions.rs"]
 mod actions;
+#[path = "access_tests/visibility.rs"]
+mod visibility;
 use crate::fields::{FieldFace, FieldMetrics};
 use crate::presenter::top::SurfacePainter;
 use exact_runner::{DataError, Value};

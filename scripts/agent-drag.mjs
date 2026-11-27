@@ -82,7 +82,10 @@ export async function duringOp(s, op) {
   if (word === 'tree') return args[1] === '--ax' ? s.tree(args[2], { ax: true }) : s.tree(args[1], args[2] === 'under' ? args[3] : undefined);
   if (word === 'layout') return s.layout(...layoutArgs(args.slice(1)));
   // Mid-gesture, as it stands: no settle (LLP 1116.003 D8 settles a screenshot otherwise).
-  if (word === 'screenshot') return s.screenshot(args[1] ?? 'screenshot.png', args[3] === 'save' ? args[2] : args[2] === 'window', args[3], true);
+  if (word === 'screenshot') {
+    if (args[2] === 'display' && args[3] !== 'save') return s.screenshot(args[1] ?? 'screenshot.png', true, 'display', true);
+    return s.screenshot(args[1] ?? 'screenshot.png', args[3] === 'save' ? args[2] : args[2] === 'window', args[3], true);
+  }
   return s.state(args[1], args[2] === 'under' ? args[3] : undefined, args[2] === 'pose', args[2] === 'busy', {
     ...(args.includes('from') ? { from: Number(args[args.indexOf('from') + 1]) } : {}),
     ...(args.includes('limit') ? { limit: Number(args[args.indexOf('limit') + 1]) } : {}),

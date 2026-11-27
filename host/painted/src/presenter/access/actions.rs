@@ -113,9 +113,17 @@ impl<D: DataSource> Presenter<D> {
         }) else {
             return false;
         };
-        let href = kernel
-            .node(view)
-            .and_then(|n| n.props.link().map(str::to_owned));
+        let href = (!self
+            .host
+            .runner()
+            .handlers_of(view)
+            .contains(&EventKind::Press))
+        .then(|| {
+            kernel
+                .node(view)
+                .and_then(|n| n.props.link().map(str::to_owned))
+        })
+        .flatten();
         let prior_focus = self.focus;
         if let Some(done) = self.surface_tap(view) {
             if done.is_err() {

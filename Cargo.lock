@@ -2092,6 +2092,7 @@ dependencies = [
  "ibex2-sqlite",
  "libc",
  "miniz_oxide 0.8.9",
+ "ring",
  "rusqlite",
  "serde_json",
  "sha2 0.10.9",
@@ -2182,6 +2183,7 @@ dependencies = [
  "exact-runner",
  "getrandom 0.3.4",
  "libc",
+ "rustix 1.1.4",
  "serde_json",
  "sha2 0.10.9",
  "smithay-client-toolkit",
@@ -2368,6 +2370,7 @@ dependencies = [
  "iana-time-zone",
  "ibex2",
  "icu_locale",
+ "jni",
  "jni-sys 0.3.1",
  "jpeg-encoder",
  "libc",
@@ -4207,7 +4210,9 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
+ "exact-kernel",
  "exact-painted",
+ "exact-plan",
  "hello-data",
 ]
 

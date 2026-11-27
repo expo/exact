@@ -3,7 +3,8 @@
 The heavy list (`../../heavy-list/SPEC.md`) on exact2 with LLP 1027.004's bounded answer, built from the checkout
 this directory is in. Bundle id `dev.exact.heavybench.bounded`. It is `../../heavy-list/exact-heavylist` with the
 list's resource changed; the rows, the Contract below the list and the DataSource's feed, reactions and live mode
-are the same.
+are the same: `task launch mount` / `after(250, ask)` sends `config()` once, and `task producer when live` /
+`every(250, tick)` and `task clock when live` / `every(1000, second)` are armed only in live mode.
 
 - `resource feed = feed(cursor)` answers at most 200 messages around a cursor (a message id; empty is the top).
   The virtualized list's `reachstart` / `reachend` move the cursor to the window's first or last row.

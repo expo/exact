@@ -176,4 +176,37 @@ class BackgroundTest {
         val row = call(reopened, "periodicSyncTags").getJSONArray("exact:answer").getJSONObject(0)
         assertEquals((epoch + 121 * minute).toDouble(), row.getDouble("lastRun"), 0.0)
     }
+
+    @Test fun aSyncRetryDueAfterDeviceSleepRunsInsteadOfBeingDropped() {
+        val module = failTwoHoursIntoLaunch()
+        Session.wakes.clear()
+        // During real device sleep, uptimeMillis() pauses (so Handler.postDelayed does not fire) and CLOCK_MONOTONIC
+        // pauses (Session.elapsed stays frozen), while live wall time advances past the 5m backoff before WorkManager wakes.
+        ReflectionHelpers.getField<Handler>(module, "main").removeCallbacksAndMessages(null)
+        SystemClock.setCurrentTimeMillis(epoch + 126 * minute)
+        var completed: Boolean? = null
+        module.ran("sync", "outbox") { completed = it }
+        main.idle()
+        assertEquals("a sync retry due after device sleep must run", 1, Session.wakes.size)
+        assertEquals("sync", Session.wakes.single().getString("event"))
+        assertEquals("outbox", Session.wakes.single().getJSONArray("args").getString(0))
+        assertNull(completed)
+        finish(module, "completed")
+        main.idle()
+        assertEquals(true, completed)
+        assertEquals(0, call(module, "syncTags").getJSONArray("exact:answer").length())
+    }
+
+    @Test fun anEarlyWorkManagerWakeReEnqueuesRemainingDelay() {
+        val module = failTwoHoursIntoLaunch()
+        Session.wakes.clear()
+        // Wall time advanced 2 minutes; 3 minutes remain before notBefore.
+        SystemClock.setCurrentTimeMillis(epoch + 122 * minute)
+        var completed: Boolean? = null
+        module.ran("sync", "outbox") { completed = it }
+        main.idle()
+        assertEquals(true, completed)
+        assertTrue(Session.wakes.isEmpty())
+        assertEquals("early wake must re-enqueue the remaining backoff", 3 * minute, scheduledDelay())
+    }
 }

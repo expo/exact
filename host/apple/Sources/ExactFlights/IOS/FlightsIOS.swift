@@ -37,6 +37,7 @@ final class Flight {
     let source: FlightSource
     var progress: CGFloat = 0
     weak var view: NodeView?
+    weak var parent: UIView?
     var slot: UIView?
     var container: UIView?
     /// A view that is not an image flies scaled inside this: the shown box,
@@ -44,6 +45,9 @@ final class Flight {
     var clip: UIView?
     var geometry: BatchOp?
     var saved: (interaction: Bool, hidden: Bool, alpha: CGFloat)?
+    /// Tree position snapshotted before lifting so nested flights order outer-to-inner (LLP 1156.008.001 A2).
+    var ancestorDepth: Int = 0
+    var preOrder: [Int] = []
     /// A route change's (LLP 1013.004 D3): its transition lifts it, and a text scales by its lines' width,
     /// not its box's, which can be the row's width at one end and its words' at the other.
     var crossing = false
@@ -76,6 +80,15 @@ final class BuiltInFlights: FlightHosting {
     func landInside(_ view: UIView) { presenter?.landFlights(inside: view) }
     func reset() { holds = [:]; presenter?.resetFlights() }
     func isFlying(_ view: NodeView) -> Bool { presenter?.isFlying(view) ?? false }
+    func hasFlyingAncestor(_ view: UIView) -> Bool {
+        guard !flights.isEmpty else { return false }
+        var current: UIView? = view
+        while let c = current {
+            if flights.values.contains(where: { $0.view === c || $0.clip === c || $0.container === c }) { return true }
+            current = c.superview
+        }
+        return false
+    }
     func regridSlots() { presenter?.regridSlots() }
     func slot(of view: NodeView) -> UIView? { flights[view.id].flatMap { $0.view === view ? $0.slot : nil } }
     func owns(_ view: UIView) -> Bool { flights.values.contains { $0.container === view || $0.slot === view } }
@@ -177,10 +190,54 @@ extension Presenter {
 
     func isFlying(_ view: NodeView) -> Bool { flights[view.id]?.view === view && view.flightLook != nil }
 
-    /// After the batch: lift new flights, show every flight at its progress.
+    private func flightTreeKey(_ view: UIView) -> (depth: Int, path: [Int]) {
+        var reversed: [Int] = []
+        var current: UIView = view
+        while let parent = current.superview {
+            reversed.append(parent.subviews.firstIndex(of: current) ?? 0)
+            if parent === root || parent is UIWindow { break }
+            current = parent
+        }
+        return (reversed.count, reversed.reversed())
+    }
+
+    private static func outerBeforeInner(_ a: Flight, _ b: Flight) -> Bool {
+        let ra = a.view?.paintRank ?? 0, rb = b.view?.paintRank ?? 0
+        if ra != rb { return ra < rb }
+        if a.ancestorDepth != b.ancestorDepth { return a.ancestorDepth < b.ancestorDepth }
+        if a.preOrder != b.preOrder { return a.preOrder.lexicographicallyPrecedes(b.preOrder) }
+        return a.id < b.id
+    }
+
+    private func orderFlightLayer(_ layer: UIView) {
+        for f in flights.values.filter({ $0.container === layer }).sorted(by: Self.outerBeforeInner) {
+            if let item = f.clip ?? f.view, item.superview === layer {
+                layer.bringSubviewToFront(item)
+            }
+        }
+        PaintOrder.changed(layer)
+    }
+
+    /// After the batch: snapshot ancestry, lift new flights outer-to-inner,
+    /// enforce outer-to-inner z-order in each FlightLayer, then show every flight.
     func flightsBatchApplied() {
-        for f in Array(flights.values) {
-            if f.view == nil, f.slot == nil, !f.crossing { liftFlight(f) }
+        let pending = flights.values.filter { $0.view == nil && $0.slot == nil && !$0.crossing }
+        for f in pending {
+            if let view = views[f.id] {
+                let key = flightTreeKey(view)
+                f.ancestorDepth = key.depth
+                f.preOrder = key.path
+            }
+        }
+        for f in pending.sorted(by: Self.outerBeforeInner) {
+            liftFlight(f)
+        }
+        var layers: [UIView] = []
+        for f in flights.values {
+            if let layer = f.container, !layers.contains(where: { $0 === layer }) { layers.append(layer) }
+        }
+        for layer in layers { orderFlightLayer(layer) }
+        for f in flights.values.sorted(by: Self.outerBeforeInner) {
             showFlight(f)
         }
     }
@@ -189,15 +246,20 @@ extension Presenter {
     func landFlight(_ f: Flight) {
         flights.removeValue(forKey: f.id)
         guard let view = f.view, let slot = f.slot, let parent = slot.superview else {
-            // Its place went (a roots change): the view is wherever that put
-            // it; it gets its own look, input and accessibility back. Still in
-            // its clip, it stands at the clip's top left, unscaled, at its
-            // own size.
+            // Its slot went (e.g. a roots change): never leave a landed view
+            // orphaned inside the pass-through FlightLayer (LLP 1156.008.001 A2).
             if let view = f.view {
-                if let clip = f.clip, view.superview === clip, let layer = clip.superview {
+                if view.superview === f.clip || view.superview === f.container {
                     view.transform = .identity
-                    view.frame = CGRect(origin: clip.frame.origin, size: view.bounds.size)
-                    layer.insertSubview(view, aboveSubview: clip)
+                    view.removeFromSuperview()
+                    if views[f.id] === view, let original = f.parent, original.window != nil {
+                        let r = f.geometry.map { CGRect(x: $0.x, y: $0.y, width: $0.w, height: $0.h) }
+                            ?? view.grid?.layout ?? CGRect(origin: .zero, size: view.bounds.size)
+                        original.addSubview(view)
+                        var op = BatchOp(op: .frame, nodeID: f.id)
+                        op.x = r.minX; op.y = r.minY; op.w = r.width; op.h = r.height
+                        applyGeometry(op)
+                    }
                 }
                 restore(view, f)
                 view.applyTransform()
@@ -318,6 +380,7 @@ extension Presenter {
         }()
         f.saved = (view.isUserInteractionEnabled, view.storedAccessibilityElementsHidden, view.alpha)
         f.view = view
+        f.parent = parent
         f.slot = slot
         f.container = layer
         view.stopPressEase()
@@ -345,11 +408,37 @@ extension Presenter {
         PaintOrder.changed(layer)
     }
 
+    /// Resolve `slot`'s resting destination rectangle in `layer`: when an
+    /// ancestor view is itself currently flying inside a moving/scaled
+    /// `FlightClip`, remap through that ancestor's resting `slot` instead
+    /// (LLP 1156.008.001 A2).
+    private func restingRect(of slot: UIView, in layer: UIView) -> CGRect {
+        var rect = slot.bounds
+        var current: UIView = slot
+        for _ in 0..<64 {
+            var host: UIView? = current.superview
+            var flyingAncestor: Flight?
+            while let h = host, h !== layer {
+                if let match = flights.values.first(where: { $0.view === h && $0.slot != nil }) {
+                    flyingAncestor = match
+                    break
+                }
+                host = h.superview
+            }
+            guard let match = flyingAncestor, let ancestorView = match.view, let ancestorSlot = match.slot else {
+                return current.convert(rect, to: layer)
+            }
+            rect = current.convert(rect, to: ancestorView)
+            current = ancestorSlot
+        }
+        return current.convert(rect, to: layer)
+    }
+
     func showFlight(_ f: Flight) {
         guard let view = f.view, let slot = f.slot, let layer = f.container else { return }
         let p = f.progress
         let from = layer.convert(f.source.rect, from: nil)
-        var to = slot.convert(slot.bounds, to: layer)
+        var to = restingRect(of: slot, in: layer)
         // A route change's lands where its route is drawn now, which UIKit is still sliding, so it reaches its
         // place with the page and never shows past the page's edge.
         if f.crossing, let s = slot.layer.presentation(), let l = layer.layer.presentation() { to = s.convert(s.bounds, to: l) }

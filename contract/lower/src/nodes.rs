@@ -119,19 +119,12 @@ impl Lowerer<'_> {
             Some((declared, rest)) => (declared.as_slice(), rest.as_slice()),
             None => (&[][..], attrs),
         };
-        // A class choice's side that sets no row leaves it as the node has
-        // it unwritten: its tag's fixed rows, then a link's colour.
-        let unwritten: Vec<(exact_kernel::StyleId, Expr)> = t
-            .fixed_styles
-            .iter()
-            .map(|(id, v)| (*id, Expr::Str(v.to_string(), *span)))
-            .chain(
-                self.link_colour(tag, parent_tag, attrs, children)
-                    .map(|e| (exact_kernel::StyleId::TextColor, e)),
-            )
-            .collect();
         let styles = |name: &str| self.styles.get(name).map(Vec::as_slice);
-        let (class_label, mut expanded) = crate::class::rows(attrs, &styles, &unwritten)?.unzip();
+        let (class_label, mut expanded, class_fallbacks) =
+            match crate::class::rows_with_fallbacks(attrs, &styles)? {
+                Some((label, rows, fallbacks)) => (Some(label), Some(rows), fallbacks),
+                None => (None, None, std::collections::BTreeSet::new()),
+            };
         for a in expanded.iter_mut().flatten() {
             values::fold_attr_template(a, &constant);
         }
@@ -331,7 +324,14 @@ impl Lowerer<'_> {
         controls::check_progress(tag, expanded, children)?;
         crate::live_time::check(tag, expanded, *span)?;
         let alert = self.check_menu_shapes(tag, expanded, children, *span)?;
-        let parted = self.alert_parts(tag, expanded, children, alert, *span, *instance);
+        let parted = self.alert_parts(
+            tag,
+            expanded,
+            children,
+            alert.always_alertdialog && alert.alert,
+            *span,
+            *instance,
+        );
         let children: &[Node] = parted.as_deref().unwrap_or(children);
         let closedby = menus::implied_closedby(tag, expanded, *span, alert);
         let expanded = closedby.as_deref().unwrap_or(expanded);
@@ -427,9 +427,14 @@ impl Lowerer<'_> {
             routes::bottom_toolbar::check_row(&self.nav_place, tag, expanded, *span)?;
         }
         self.check_route_parts(&self.nav_place, tag, expanded)?;
-        let nav_place = self
-            .nav_place
-            .enter(first, tag, expanded, children, *span)?;
+        let nav_place = self.nav_place.enter(
+            first,
+            tag,
+            expanded,
+            children,
+            *span,
+            t.node_type == NodeType::View,
+        )?;
         // @ref LLP 1038 D8 — only the first root selects navigation; an
         // iframe's `navigate` is its guest's (LLP 1020.002 D2). The history
         // swipe and the ways through history offered are the root's too
@@ -448,6 +453,7 @@ impl Lowerer<'_> {
                 );
             }
         }
+        crate::aspect_fit::check(first, expanded, *span)?;
         // @ref LLP 1121 D8 — the state parts, folded or recorded.
         let target = if native_button {
             Some(crate::states::StateTarget::NativeButton)
@@ -458,23 +464,6 @@ impl Lowerer<'_> {
         } else {
             None
         };
-        // What the node takes unwritten, a state's base where its author
-        // writes none: its tag's fixed rows (an `hr`'s separator colour),
-        // then a link's colour, which is pushed after them.
-        let mut implied: Vec<(&str, Expr)> = t
-            .fixed_styles
-            .iter()
-            .filter_map(|(id, v)| {
-                Some((
-                    crate::states::row_name(*id)?,
-                    Expr::Str(v.to_string(), *span),
-                ))
-            })
-            .collect();
-        implied.extend(
-            self.link_colour(tag, parent_tag, expanded, children)
-                .map(|e| ("color", e)),
-        );
         // A run inside a paragraph has no box of its own on every host: its
         // hover, focus and press are its paragraph's (theme2's 08:13 ruling;
         // D7's press rows paint no run on Apple or Linux either).
@@ -496,7 +485,11 @@ impl Lowerer<'_> {
                     a.span,
                 );
             }
-            if let Some(a) = expanded.iter().find(|a| a.name == "swipe") {
+            if let Some(a) = expanded
+                .iter()
+                .find(|a| a.name == "swipe")
+                .filter(|_| crate::handlers::swipe::flick(tag, expanded))
+            {
                 return err(
                     "lower-swipe-direction",
                     "`swipe` on a run inside a paragraph: the run is drawn in its paragraph's text, with no view of its own for the platform's swipe to be recognized on; put `swipe` on the paragraph or make the run a box (LLP 1057.001 §8)",
@@ -515,7 +508,8 @@ impl Lowerer<'_> {
                 a.span,
             );
         }
-        let states = self.fold_states(expanded, target, &implied, class_len, scope, locals)?;
+        let states =
+            self.fold_states(expanded, target, &class_fallbacks, class_len, scope, locals)?;
         let expanded = states.as_ref().map_or(expanded, |s| s.attrs.as_slice());
         let mut bindings: Vec<BindingsRow> = Vec::new();
         let mut handlers: Vec<(EventKind, exact_plan::ActionsId, Vec<Code>)> = Vec::new();
@@ -651,6 +645,7 @@ impl Lowerer<'_> {
             .sites
             .as_ref()
             .map(|_| vec![Origin::Tag; bindings.len()]);
+        let mut fallbacks = vec![false; bindings.len()];
         let font = self.font_use(expanded)?;
         // @ref LLP 1024 D1 — a module tag's own attribute named like
         // a row its box never uses is refused, not bound to nothing;
@@ -690,9 +685,16 @@ impl Lowerer<'_> {
                 continue;
             }
             if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a)
-                .or_else(|| crate::handlers::swipe::refusal(expanded, a))
+                .or_else(|| crate::handlers::swipe::refusal(tag, expanded, a))
             {
-                self.errors.push(e);
+                // Once for a component used more than once, whose uses share the written span
+                if !self.errors.iter().any(|x| x.id == e.id && x.span == e.span) {
+                    self.errors.push(e);
+                }
+                continue;
+            }
+            // Judged above or in the written views: the follow selector is the handler's name (`swipe::event`)
+            if crate::handlers::swipe::skipped(tag, a) {
                 continue;
             }
             if let Err(e) = self.attr(
@@ -708,6 +710,14 @@ impl Lowerer<'_> {
             ) {
                 self.errors.push(native::name_the_fix(n, e));
             }
+            let fallback = match &states {
+                Some(s) if index >= s.base_len && index < s.pressed => {
+                    s.fallbacks[index - s.base_len]
+                }
+                Some(s) if index >= s.pressed => false,
+                _ => a.written && class_fallbacks.contains(&(a.name.clone(), a.span)),
+            };
+            fallbacks.resize(bindings.len(), fallback);
             if let Some(origins) = &mut origins {
                 // A folded state part's (LLP 1121 D8): its class's where
                 // the class wrote every state row in it.
@@ -799,6 +809,15 @@ impl Lowerer<'_> {
                 };
                 origins.resize(bindings.len(), origin);
             }
+        }
+        // A following swipe's kind, which its selector names (LLP 1057.001 §8)
+        if let Some(kind) = EventKind::from_name(crate::handlers::swipe::event(tag, expanded))
+            .filter(|k| *k != EventKind::Swipe)
+        {
+            handlers
+                .iter_mut()
+                .filter(|h| h.0 == EventKind::Swipe)
+                .for_each(|h| h.0 = kind);
         }
         if let Some(a) = &custom {
             let control = contract_syntax::payload_control(tag, attrs);
@@ -941,33 +960,79 @@ impl Lowerer<'_> {
             }
         }
         self.data_row(tag, expanded, scope, locals, &mut bindings, &mut origins);
-        // Two bindings for one row — a style's and the node's own, a
-        // tag's fixed row and an attribute — the last one wins.
+        fallbacks.resize(bindings.len(), false);
+        // Two bindings for one row — a style's and the node's own, a tag's
+        // fixed row and an attribute — the last one wins, keeping the first
+        // occurrence's slot. A conditional class or state fold with an absent
+        // arm keeps the latest earlier implied binding underneath it so
+        // per-arm `written` provenance survives.
         if bindings.len() > 1 {
-            let mut seen: BTreeMap<(u8, u16), usize> = BTreeMap::new();
-            let mut unique = 0;
-            for index in 0..bindings.len() {
-                let b = &bindings[index];
-                let target = match seen.get(&(b.kind as u8, b.id)) {
-                    Some(&i) => i,
-                    None => {
-                        seen.insert((b.kind as u8, b.id), unique);
-                        unique += 1;
-                        unique - 1
+            let mut out: Vec<BindingsRow> = Vec::with_capacity(bindings.len());
+            let mut out_origins: Option<Vec<Origin>> =
+                origins.as_ref().map(|o| Vec::with_capacity(o.len()));
+            let mut alive: Vec<bool> = Vec::with_capacity(bindings.len());
+            let mut slots: BTreeMap<(u8, u16), (Option<usize>, Option<usize>)> = BTreeMap::new();
+            let mut orig_iter = origins.take().map(Vec::into_iter);
+            for (index, b) in bindings.into_iter().enumerate() {
+                let origin = orig_iter.as_mut().and_then(Iterator::next);
+                let entry = slots.entry((b.kind as u8, b.id)).or_default();
+                let target = if b.kind == BindingKind::Style && b.written && fallbacks[index] {
+                    match entry.1 {
+                        Some(slot) => Some(slot),
+                        None => {
+                            entry.1 = Some(out.len());
+                            None
+                        }
                     }
+                } else {
+                    let reuse = match (entry.0.take(), entry.1.take()) {
+                        (Some(a), Some(c)) => {
+                            alive[c] = false;
+                            Some(a)
+                        }
+                        (Some(a), None) | (None, Some(a)) => Some(a),
+                        (None, None) => None,
+                    };
+                    let slot = reuse.unwrap_or(out.len());
+                    if b.kind == BindingKind::Style && !b.written {
+                        entry.0 = Some(slot);
+                    } else {
+                        entry.1 = Some(slot);
+                    }
+                    reuse
                 };
-                // Targets are in the consumed prefix: unread rows stay intact.
-                if target != index {
-                    bindings.swap(target, index);
-                    if let Some(origins) = &mut origins {
-                        origins.swap(target, index);
+                match target {
+                    Some(slot) => {
+                        out[slot] = b;
+                        if let (Some(o), Some(orig)) = (&mut out_origins, origin) {
+                            o[slot] = orig;
+                        }
+                    }
+                    None => {
+                        out.push(b);
+                        alive.push(true);
+                        if let (Some(o), Some(orig)) = (&mut out_origins, origin) {
+                            o.push(orig);
+                        }
                     }
                 }
             }
-            bindings.truncate(unique);
-            if let Some(origins) = &mut origins {
-                origins.truncate(unique);
+            let mut at = 0;
+            out.retain(|_| {
+                let keep = alive[at];
+                at += 1;
+                keep
+            });
+            if let Some(o) = &mut out_origins {
+                let mut at = 0;
+                o.retain(|_| {
+                    let keep = alive[at];
+                    at += 1;
+                    keep
+                });
             }
+            bindings = out;
+            origins = out_origins;
         }
         let handler_refs: Vec<(EventKind, exact_plan::ActionsId, &[Code])> = handlers
             .iter()
@@ -1037,6 +1102,8 @@ impl Lowerer<'_> {
             let mut style = warnings::TextStyle {
                 native: native_font,
                 parent_horizontal_flex: self.parent_horizontal_flex,
+                split: (expanded.iter().rev().find(|a| a.name == "navigationSplit"))
+                    .and_then(|a| crate::routes::split_text(&a.value)),
                 font: expanded
                     .iter()
                     .rev()
@@ -1190,8 +1257,8 @@ impl Lowerer<'_> {
             native_button || t.node_type == NodeType::Pressable,
             expanded,
         );
-        let menu_row =
-            self.menu_parent.is_some() && menu_parent != Some(menu_rows::Parent::Section);
+        // A nested popover supplies its own rows; it is no row of its parent's.
+        let menu_row = self.menu_parent.is_some() && menu_parent.is_none();
         Ok(ElementStep {
             id,
             children,

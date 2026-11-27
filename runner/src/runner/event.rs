@@ -8,6 +8,8 @@ use std::rc::Rc;
 mod focus;
 pub(super) mod frame_navigation;
 mod keyboard;
+mod picture_in_picture;
+pub(super) use picture_in_picture::FloatingVideo;
 mod view_event;
 pub use keyboard::KeyboardEvent;
 pub(in crate::runner) use view_event::absent_is_none;
@@ -326,7 +328,7 @@ pub enum Event {
     Swiperight,
     /// Its mirror, a left swipe (Charlie, 2026-11-10).
     Swipeleft,
-    /// The platform's discrete swipe in the node's `swipe-direction` (LLP
+    /// The platform's discrete swipe in the node's `swipe-flick` direction (LLP
     /// 1057.001 §8).
     Swipe,
     /// A pull past the top of a scroll container asked for fresh content
@@ -353,6 +355,10 @@ pub enum Event {
     /// where it measures one (UIKit), `exact_motion::VelocityTracker`'s
     /// elsewhere; a cancelled contact releases at (0, 0) (LLP 1057 §10.6).
     PanRelease(f64, f64),
+    /// Cumulative touch scale and focal point in viewport coordinates.
+    Pinch(f64, f64, f64),
+    /// The final two-contact sample, with scale 1 on cancellation.
+    PinchRelease(f64, f64, f64),
     /// A standard media event. Numeric payloads are seconds.
     Media(EventKind, String),
     /// DOM's `copy`, `cut` or `paste` at the focused view (spreadsheet F4,
@@ -708,12 +714,22 @@ impl Event {
         (vx.is_finite() && vy.is_finite()).then_some(Self::PanRelease(vx, vy))
     }
 
-    fn invalid_payload(&self) -> Option<&'static str> {
+    pub(super) fn invalid_payload(&self) -> Option<&'static str> {
         match *self {
             Self::Media(kind @ (EventKind::Play | EventKind::Pause), ref how)
                 if !matches!(how.as_str(), "" | "remote") =>
             {
                 Some(kind.name())
+            }
+            Self::Pinch(scale, x, y)
+                if !(scale.is_finite() && scale > 0. && pixel(x) && pixel(y)) =>
+            {
+                Some("pinch")
+            }
+            Self::PinchRelease(scale, x, y)
+                if !(scale.is_finite() && scale > 0. && pixel(x) && pixel(y)) =>
+            {
+                Some("pinchrelease")
             }
             Self::Pan(x, y) if !pixel(x) || !pixel(y) => Some("pan"),
             Self::PanRelease(vx, vy) if !vx.is_finite() || !vy.is_finite() => Some("panrelease"),
@@ -772,39 +788,9 @@ impl Event {
         );
         valid_height_release(height, velocity).then_some(Self::HeightRelease { height, velocity })
     }
-
-    /// Decode the scroll event: `left,top,scrollWidth,scrollHeight,
-    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative,
-    /// then a zoomable container's zoom, above 0; a scroller that does not
-    /// zoom leaves it out.
-    pub fn scroll_payload(payload: &str) -> Option<Self> {
-        let (payload, zoom) = match payload.matches(',').count() {
-            6 => {
-                let (rest, zoom) = payload.rsplit_once(',')?;
-                (rest, exact_num::parse_f64(zoom).ok()?)
-            }
-            _ => (payload, 1.0),
-        };
-        let [left, top, width, height, client_width, client_height] = tuple::<6>(payload)?;
-        ([left, top].iter().all(|v| v.is_finite())
-            && [width, height, client_width, client_height]
-                .iter()
-                .all(|v| v.is_finite() && *v >= 0.0)
-            && zoom.is_finite()
-            && zoom > 0.0)
-            .then_some(Self::Scroll(ScrollEvent {
-                left,
-                top,
-                width,
-                height,
-                client_width,
-                client_height,
-                zoom,
-            }))
-    }
 }
 
-fn tuple<const N: usize>(payload: &str) -> Option<[f64; N]> {
+pub(super) fn tuple<const N: usize>(payload: &str) -> Option<[f64; N]> {
     let mut parts = payload.split(',');
     let mut values = [0.0; N];
     for value in &mut values {
@@ -1117,6 +1103,8 @@ impl<D: DataSource> Runner<D> {
             Event::Scroll(_) => "scroll",
             Event::Resize(_) => "resize",
             Event::Intersect { .. } => "intersect",
+            Event::Pinch(..) => "pinch",
+            Event::PinchRelease(..) => "pinchrelease",
             Event::Pan(_, _) => "pan",
             Event::PanRelease(_, _) => "panrelease",
             Event::Media(kind, _) | Event::Clipboard(kind, ..) => kind.name(),
@@ -1168,18 +1156,14 @@ impl<D: DataSource> Runner<D> {
             return Err(RunnerError::InvalidEvent { event });
         }
         let (node, frames) = self
-            .find(view)
-            .or_else(|| {
-                matches!(event, Event::Focusout { .. })
-                    .then(|| self.take_detached_focus(view))
-                    .flatten()
-            })
+            .event_target(view, &event)
             .ok_or(RunnerError::UnknownView(view))?;
         // Events without a listener do nothing: a picker's `cancel` (LLP
         // 1069.010 D3), a dialog's `close` (LLP 1021), a scroll's end or drag, a swipe.
         if matches!(
             event,
-            Event::Cancel
+            Event::Media(EventKind::Enterpictureinpicture, _)
+                | Event::Cancel
                 | Event::Close
                 | Event::Scrollend
                 | Event::Scrolldragstart
@@ -1187,6 +1171,7 @@ impl<D: DataSource> Runner<D> {
                 | Event::Historyswipe(_)
         ) {
             let kind = match event {
+                Event::Media(kind, _) => kind,
                 Event::Close => EventKind::Close,
                 Event::Scrollend => EventKind::Scrollend,
                 Event::Scrolldragstart => EventKind::Scrolldragstart,
@@ -1338,6 +1323,8 @@ impl<D: DataSource> Runner<D> {
             ),
             Event::Clipboard(kind, ..) => (*kind, None, kind.name()),
             Event::SelectionChange { .. } => (EventKind::Selectionchange, None, "selectionchange"),
+            Event::Pinch(..) => (EventKind::Pinch, None, "pinch"),
+            Event::PinchRelease(..) => (EventKind::Pinchrelease, None, "pinchrelease"),
             Event::Pan(_, _) => (EventKind::Pan, None, "pan"),
             Event::PanRelease(_, _) => (EventKind::Panrelease, None, "panrelease"),
             Event::HeightRelease { .. } => (EventKind::Heightrelease, None, "heightrelease"),
@@ -1418,6 +1405,8 @@ impl<D: DataSource> Runner<D> {
             }
             _ => event.record(),
         };
+        let composing =
+            matches!(&event, Event::Input(ControlValue::Edit(_, _, edit)) if edit.is_composing);
         match event {
             Event::ReorderDrop { item, before } => {
                 args.push(Value::str(&item));
@@ -1432,6 +1421,9 @@ impl<D: DataSource> Runner<D> {
             | Event::Pan(left, top)
             | Event::PanRelease(left, top) => {
                 args.extend([Value::Number(left), Value::Number(top)])
+            }
+            Event::Pinch(s, x, y) | Event::PinchRelease(s, x, y) => {
+                args.extend([s, x, y].map(Value::Number))
             }
             Event::HeightRelease { height, velocity } => {
                 args.extend([Value::Number(height), Value::Number(velocity)]);
@@ -1462,6 +1454,9 @@ impl<D: DataSource> Runner<D> {
             }
         }
         super::lines::ran(what, self.plan.str(self.plan.action(handler.action).name));
+        if kind == EventKind::Input && self.plan.action(handler.action).writes.len != 0 {
+            return self.run_input(view, node, &handler, args, &frames, composing);
+        }
         self.traced_action("handler", handler.action, args, &frames)
     }
 }

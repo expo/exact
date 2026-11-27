@@ -144,6 +144,15 @@ struct Known {
     at: (u32, u32),
 }
 
+impl Known {
+    fn renew(&mut self) {
+        *self = Self {
+            generation: self.generation.wrapping_add(1),
+            ..Default::default()
+        };
+    }
+}
+
 /// What the presenter keeps of the fields its shell hosts.
 #[derive(Default)]
 pub(super) struct State {
@@ -329,7 +338,7 @@ impl<D: DataSource> Presenter<D> {
             .map(|(at, within)| {
                 let b = &self.boxes[at];
                 let groups = self.brush.row_groups();
-                let group = groups.iter().find(|g| g.1 <= at && at < g.2);
+                let group = groups.iter().rfind(|g| g.1 <= at && at < g.2);
                 (b, within, group.map_or(0, |g| g.0))
             });
         let mut flags = 0;
@@ -435,7 +444,7 @@ impl<D: DataSource> Presenter<D> {
         let role = |name: &str| roles::role(name).map(|r| rgba(ColorValue::Role(r).resolve(dark)));
         // Material's field's text is `onSurface`, at 38 % disabled: an
         // inherited `color` does not tint it (LLP 1115.001 D9), the node's own does.
-        let own = node.style.mask.has(StyleId::TextColor);
+        let own = node.style.written.has(StyleId::TextColor);
         let native = node.style.appearance != exact_kernel::Appearance::None;
         let ink = match (own, native, disabled) {
             (true, _, _) | (false, false, _) => None,
@@ -770,10 +779,7 @@ impl<D: DataSource> Presenter<D> {
             let Some(known) = self.hosted.known.get_mut(id) else {
                 continue;
             };
-            *known = Known {
-                generation: known.generation + 1,
-                ..Default::default()
-            };
+            known.renew();
             self.hosted.composing.remove(id);
             self.fields.remove(id);
             self.chosen.remove(id);
@@ -781,6 +787,18 @@ impl<D: DataSource> Presenter<D> {
                 self.edited = None;
             }
         }
+    }
+
+    /// The host was replaced (`replace.rs`): the new tree starts its view
+    /// ids from the beginning, so every hosted field advances its generation
+    /// to renew any reused shell view and reject callbacks from the old tree.
+    /// `hosted.last` stays so a tree with no fields still emits an empty
+    /// statement to release them.
+    pub(super) fn hosted_replaced(&mut self) {
+        for known in self.hosted.known.values_mut() {
+            known.renew();
+        }
+        self.hosted.composing.clear();
     }
 
     /// The reader was made again: it is told every field anew, and its new

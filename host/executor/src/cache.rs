@@ -266,7 +266,9 @@ fn conditional(request: &Request) -> bool {
 }
 
 pub(super) fn barrier(request: &Request, class: RequestClass, work: bool) -> bool {
-    class != RequestClass::Read || !request.is_plain_http() || work
+    !matches!(class, RequestClass::Read | RequestClass::Local)
+        || (class == RequestClass::Read && !request.is_plain_http())
+        || work
 }
 
 pub(super) fn replacing(
@@ -334,8 +336,8 @@ fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {
         state
             .ordered
             .iter()
-            .take_while(|t| **t != ticket)
-            .any(|t| *t == pending.ticket())
+            .take_while(|entry| entry.ticket != ticket)
+            .any(|entry| entry.ticket == pending.ticket())
             && match pending {
                 reads::Pending::Running(r) => r.cache_replacing.as_ref() == Some(key),
                 reads::Pending::Queued(j) => {
@@ -469,7 +471,7 @@ pub(super) fn serve_ready(state: &mut State) {
             outcome,
             bytes,
             message: false,
-            stream: false,
+            stream: None,
             light: true,
             again: false,
             reply: false,

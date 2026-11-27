@@ -868,8 +868,13 @@ fn check_svg_attrs_with(
     let element = is_element(tag) || (matches!(tag, "svg" | "text") && in_svg);
     for a in attrs {
         // A module tag's own prop named like an SVG attribute (`fx`)
-        // is the module's (LLP 1024 D1).
-        if crate::native::leftover(tag, a) {
+        // is the module's (LLP 1024 D1), and a swipe's selector or retired
+        // name the swipe rules judge (LLP 1057.001 §8); `swipe` itself is
+        // refused below, as every handler but `press` is.
+        if crate::native::leftover(tag, a)
+            || matches!(a.name.as_str(), "swipe-flick" | "swipe-follow")
+            || crate::handlers::swipe::retired(&a.name).is_some()
+        {
             continue;
         }
         // A `clipPath` by reference clips SVG elements (LLP 1055.000 D10);
@@ -890,6 +895,21 @@ fn check_svg_attrs_with(
                     "`{}` applies to SVG elements (LLP 1055.000 D19); boxes do not blend yet",
                     a.name
                 ),
+                a.span,
+            );
+        }
+        // @ref LLP 1003.003 D1 — an SVG element's scene, the outer `svg`'s
+        // included, draws its authored clip, so a literal list that names
+        // `clip-path` there would move nothing natively.
+        if (element || tag == "svg")
+            && a.name == "transition"
+            && matches!(&a.value, Expr::Str(v, _) if exact_motion::Transitions::parse(v).is_ok_and(|t| {
+                t.0.iter().any(|d| d.property == exact_motion::TransitionProperty::Property(exact_motion::Property::ClipPath))
+            }))
+        {
+            return err(
+                "lower-attr-value",
+                format!("`transition` names `clip-path`, which moves a box's clip (LLP 1003.003), but `{tag}` is drawn in its SVG scene, whose clip changes at once. Give a surrounding box the `clip-path` and the `transition`"),
                 a.span,
             );
         }

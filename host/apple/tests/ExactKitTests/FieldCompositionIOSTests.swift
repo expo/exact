@@ -92,6 +92,38 @@ final class FieldCompositionIOSTests: XCTestCase {
         f.changed()
     }
 
+    func testFilteredRangeKeepsItsBackwardDirection() throws {
+        for kind in ["input", "textarea"] {
+            let f = try fixture(kind, value: "ab47cd", echo: { $0.filter(\.isNumber) })
+            defer { _ = f.keep }
+            let node = f.node
+            let presenter = try XCTUnwrap(node.presenter)
+            presenter.fieldSelections.restore(node, FieldSelection(start: 1, end: 5, direction: "backward"))
+            presenter.typed(node.id, "ab47cd", input: true)
+            XCTAssertEqual(presenter.fieldSelections.current(node), FieldSelection(start: 1, end: 2, direction: "backward"), kind)
+        }
+    }
+
+    func testFilterCarriesTheSelectionThroughTheAcceptedDigits() throws {
+        for kind in ["input", "textarea"] {
+            let f = try fixture(kind, value: "40", echo: { $0.filter(\.isNumber) })
+            defer { _ = f.keep }
+            for (a, b, edit, value, at) in [(2, 2, "a", "40", 2), (1, 1, "a", "40", 1),
+                                             (1, 1, "7x", "470", 2), (1, 2, "a", "40", 1)] {
+                let start = try XCTUnwrap(f.input.position(from: f.input.beginningOfDocument, offset: a))
+                let end = try XCTUnwrap(f.input.position(from: f.input.beginningOfDocument, offset: b))
+                f.input.selectedTextRange = f.input.textRange(from: start, to: end)
+                choose(f, edit)
+                XCTAssertEqual(text(f.node), value, kind)
+                let range = try XCTUnwrap(f.input.selectedTextRange)
+                XCTAssertEqual(f.input.offset(from: f.input.beginningOfDocument, to: range.start), at, kind)
+                XCTAssertTrue(range.isEmpty)
+            }
+            f.input.undoManager?.undo()
+            XCTAssertEqual(text(f.node), "40", kind)
+        }
+    }
+
     /// にほん, then 日本: each change of the marked text is an `input` with
     /// it in the value, and the app's echo of what it heard leaves the
     /// composition marked and is not held.

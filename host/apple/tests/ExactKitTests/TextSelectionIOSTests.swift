@@ -3,7 +3,9 @@ import CoreText
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import XCTest
+@testable import ExactControls
 @testable import ExactKit
+@testable import ExactMarkdown
 @testable import ExactTextSelection
 
 /// LLP 1115.000 D11.6: `user-select="text"` on UIKit. Text its author made
@@ -179,7 +181,7 @@ final class TextSelectionIOSTests: XCTestCase {
                 frame(1, 0, h: 200, w: 400), frame(4, 0, h: 130), frame(5, 0, h: 60),
                 frame(2, 30, x: 20), frame(3, 80, x: 20), frame(6, 150, x: 20)
             ])
-            let expected = nested ? "First paragraph\nSecond paragraph" : "First paragraph\nSecond paragraph\nOutside paragraph"
+            let expected = nested ? "First paragraph\n\nSecond paragraph" : "First paragraph\n\nSecond paragraph\n\nOutside paragraph"
             for id: UInt32 in [2, 3] {
                 let paragraph = try node(p, id)
                 p.selectionHost.clear()
@@ -232,9 +234,9 @@ final class TextSelectionIOSTests: XCTestCase {
         XCTAssertEqual(held.text(in: range), "brown")
         XCTAssertEqual(held.caretRect(for: range.start).midX, x0, accuracy: 0.01)
 
-        // The edit menu asks the node for Copy; Select All is not offered, as a text view's menu has none.
+        // The edit menu asks the node for Copy and Select All (while not all selected).
         XCTAssertTrue(prose.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil))
-        XCTAssertFalse(prose.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil))
+        XCTAssertTrue(prose.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil))
         XCTAssertFalse(prose.canPerformAction(#selector(UIResponderStandardEditActions.cut(_:)), withSender: nil))
         XCTAssertFalse(prose.canPerformAction(#selector(UIResponderStandardEditActions.paste(_:)), withSender: nil))
         // (A unit test's process waits forever on the system pasteboard's contents, so Copy
@@ -631,8 +633,8 @@ final class TextSelectionIOSTests: XCTestCase {
         ])
         let input = try XCTUnwrap(p.selectionHost.install(try node(p, 2)))
         let document = try XCTUnwrap(input.document)
-        XCTAssertEqual(document.text as String, "First\nSecond")
-        for range in [0..<6, 5..<9, 5..<6, 0..<5, 6..<9, 2..<9, 5..<5] {
+        XCTAssertEqual(document.text as String, "First\n\nSecond")
+        for range in [0..<7, 0..<6, 5..<10, 6..<10, 5..<7, 5..<6, 6..<7, 0..<5, 7..<10, 2..<10, 5..<5] {
             let selection = SelectableRange(NSRange(location: range.lowerBound, length: range.count))
             let rects = input.selectionRects(for: selection)
             if range.isEmpty {
@@ -643,7 +645,7 @@ final class TextSelectionIOSTests: XCTestCase {
             XCTAssertEqual(starts.count, 1, "\(range)")
             XCTAssertEqual(ends.count, 1, "\(range)")
             for (offset, endpoint, first) in [(range.lowerBound, starts.first, true), (range.upperBound, ends.first, false)] {
-                guard offset == 5 || offset == 6 else { continue }
+                guard offset == 5 || offset == 6 || offset == 7 else { continue }
                 let endpoint = try XCTUnwrap(endpoint, "\(range)")
                 let caret = input.caretRect(for: SelectablePosition(offset))
                 let x = first ? endpoint.rect.minX : endpoint.rect.maxX
@@ -667,11 +669,11 @@ final class TextSelectionIOSTests: XCTestCase {
         p.selectionHost.touched(first)
         let input = try XCTUnwrap(p.selectionHost.text(for: first))
         let range = try XCTUnwrap(input.textRange(from: input.beginningOfDocument, to: input.endOfDocument))
-        XCTAssertEqual(input.text(in: range), "First paragraph\nSecond paragraph")
+        XCTAssertEqual(input.text(in: range), "First paragraph\n\nSecond paragraph")
         var heard: [String] = []
         p.onSelectionChange = { id, text, start, end, _ in heard.append("\(id):\(text):\(start):\(end)") }
         input.selectedTextRange = range
-        XCTAssertEqual(input.selectedText, "First paragraph\nSecond paragraph")
+        XCTAssertEqual(input.selectedText, "First paragraph\n\nSecond paragraph")
         XCTAssertEqual(heard, ["2:First paragraph:0:15", "3:Second paragraph:0:16"])
         let rects = input.selectionRects(for: range)
         XCTAssertEqual(rects.count, 2)
@@ -683,7 +685,7 @@ final class TextSelectionIOSTests: XCTestCase {
         defer { UIPasteboard.remove(withName: pasteboard.name) }
         p.selectionHost.pasteboard = pasteboard
         first.copy(nil)
-        XCTAssertEqual(pasteboard.string, "First paragraph\nSecond paragraph")
+        XCTAssertEqual(pasteboard.string, "First paragraph\n\nSecond paragraph")
         p.apply(wireBatch([["op": "props", "id": 3, "set": ["text": "Changed"]]]))
         XCTAssertNil(p.selectionHost.selection)
     }
@@ -803,7 +805,7 @@ final class TextSelectionIOSTests: XCTestCase {
         XCTAssertTrue(hit === input.textInputView)
         XCTAssertTrue(second.hitTest(CGPoint(x: 30, y: 10), with: event) === hit)
         XCTAssertTrue(hit.interactions.contains { $0 === input.interaction })
-        XCTAssertLessThan(hit.layer.zPosition, first.layer.zPosition, "the highlight is below the paragraph's ink")
+        XCTAssertGreaterThan(hit.layer.zPosition, first.layer.zPosition, "the shared surface paints above child backgrounds")
         var presses: [UInt32] = []
         p.onPress = { presses.append($0) }
         let touch = Touch(hit)
@@ -823,6 +825,618 @@ final class TextSelectionIOSTests: XCTestCase {
             XCTAssertFalse(first.pressed)
             input.clear()
         }
+    }
+
+    func testMultiParagraphMarkdownAtomSelectionClampsToSourceBounds() throws {
+        ExactMarkdown.install()
+        let p = mounted([
+            box(1, style: ["user_select": "text"]),
+            ["op": "create", "id": 2, "kind": "text",
+             "props": ["text": "Hi [a](x:1)", "markup": "markdown", "testId": "md1",
+                       "atoms": #"[{"name":"citation","link":"x:"}]"#,
+                       "atomFaces": #"[{"source":"[a](x:1)","label":"Very Long Expanded Atom Label","icon":"","title":""}]"#],
+             "style": ["font_size": 17.0, "line_height": "22px"],
+             "handlers": ["selectionchange"]],
+            text(3, "Second paragraph"),
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 180, w: 400), frame(2, 30, x: 20), frame(3, 80, x: 20),
+        ])
+        let first = try node(p, 2)
+        let sourceLen = (first.paragraphText as NSString).length
+        let shapedLen = SelectableText.shaped(first).length
+        XCTAssertGreaterThan(shapedLen, sourceLen, "expanded atom shaped length exceeds source length")
+        var heard: [(UInt32, String, Int, Int)] = []
+        p.onSelectionChange = { id, text, start, end, _ in heard.append((id, text, start, end)) }
+
+        let input = p.selectionHost.install(first)
+        XCTAssertNotNil(input.document, "shared SelectionDocument spans both paragraphs")
+        // Select purely in the trailing expanded region past sourceLen, then across the whole paragraph.
+        let at = { (offset: Int) in input.position(from: input.beginningOfDocument, offset: offset)! }
+        input.selectedTextRange = input.textRange(from: at(sourceLen + 2), to: at(shapedLen))
+        input.selectedTextRange = input.textRange(from: at(0), to: at(shapedLen))
+        XCTAssertTrue(heard.allSatisfy { $0.2 >= 0 && $0.3 <= sourceLen && $0.2 <= $0.3 })
+        XCTAssertEqual(heard.last?.1, "Hi [a](x:1)")
+        XCTAssertEqual(heard.last?.2, 0)
+        XCTAssertEqual(heard.last?.3, sourceLen)
+
+        // selectWord on the expanded atom word past sourceLen must clamp or return nil without trapping.
+        input.clear()
+        let picked = p.selectionHost.selectWord(in: first, at: try point(in: first, of: "Label"))
+        if let picked {
+            XCTAssertLessThanOrEqual(NSMaxRange(picked.range), sourceLen)
+        }
+    }
+
+    func testSharedSurfacePaintsAboveOpaqueBlocksAndPassesTouchesThroughToChildren() throws {
+        let p = mounted([
+            box(1, style: ["user_select": "text"]),
+            text(2, "First paragraph of a comment."),
+            box(3, style: ["background_color": [246.0, 248.0, 250.0, 255.0]]),
+            text(4, "let answer = 42;", style: ["white_space": "pre"]),
+            box(5, handlers: ["press"]),
+            ["op": "children", "id": 3, "ids": [4]],
+            ["op": "children", "id": 1, "ids": [2, 3, 5]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 240, w: 400), frame(2, 10, x: 20),
+            frame(3, 50, h: 60, x: 20), frame(4, 16, h: 24, x: 16, w: 300),
+            frame(5, 130, h: 40, x: 20, w: 120),
+        ])
+        let owner = try node(p, 1), codeBox = try node(p, 3), codeText = try node(p, 4), button = try node(p, 5)
+        let event = TextTouchEvent()
+        let hit = try XCTUnwrap(codeText.hitTest(CGPoint(x: 20, y: 10), with: event))
+        let surface = try XCTUnwrap(p.selectionHost.surface(for: codeText))
+        XCTAssertTrue(hit === surface, "touches on a nested paragraph still route to the shared surface")
+        XCTAssertGreaterThan(surface.layer.zPosition, codeBox.layer.zPosition, "surface paints above opaque child boxes")
+        let surfaceIdx = try XCTUnwrap(owner.container.subviews.firstIndex { $0 === surface })
+        let codeIdx = try XCTUnwrap(owner.container.subviews.firstIndex { $0 === codeBox })
+        XCTAssertGreaterThan(surfaceIdx, codeIdx)
+        // Non-handle points fall through to child boxes and buttons.
+        XCTAssertTrue(owner.hitTest(CGPoint(x: 40, y: 150), with: event) === button)
+        XCTAssertTrue(owner.hitTest(CGPoint(x: 24, y: 54), with: event) === codeBox)
+        // A selection handle subview on the surface wins hits even over an opaque box.
+        let handle = UIView(frame: CGRect(x: 30, y: 60, width: 20, height: 20))
+        surface.addSubview(handle)
+        defer { handle.removeFromSuperview() }
+        XCTAssertTrue(owner.hitTest(CGPoint(x: 40, y: 70), with: event) === handle)
+    }
+
+    func testSelectAllAndEditMenuWorkForSingleParagraphAndSharedDocument() throws {
+        // Single paragraph
+        let single = page()
+        let prose = try node(single, 4)
+        XCTAssertFalse(prose.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil))
+        _ = try XCTUnwrap(single.selectionHost.selectWord(in: prose, at: try point(in: prose, of: "brown")))
+        XCTAssertTrue(prose.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil))
+        prose.selectAll(nil)
+        XCTAssertEqual(single.selectionHost.selection?.text, "The quick brown fox jumps over the lazy dog.")
+        XCTAssertFalse(prose.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil), "hidden once everything is selected")
+        session?.destroy(); session = nil; window?.isHidden = true; window = nil
+
+        // Shared SelectionDocument
+        let p = mounted([
+            box(1, style: ["user_select": "text"]),
+            text(2, "First paragraph", handlers: ["selectionchange"]),
+            text(3, "Second paragraph", handlers: ["selectionchange"]),
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 180, w: 400), frame(2, 30, x: 20), frame(3, 80, x: 20),
+        ])
+        let first = try node(p, 2)
+        var heard: [String] = []
+        p.onSelectionChange = { id, text, start, end, _ in heard.append("\(id):\(text):\(start):\(end)") }
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: first, at: try point(in: first, of: "First")))
+        let surface = try XCTUnwrap(p.selectionHost.surface(for: first))
+        XCTAssertTrue(surface.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil))
+        XCTAssertTrue(surface.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil))
+        XCTAssertFalse(surface.canPerformAction(#selector(UIResponderStandardEditActions.cut(_:)), withSender: nil))
+        XCTAssertFalse(surface.canPerformAction(#selector(UIResponderStandardEditActions.paste(_:)), withSender: nil))
+        surface.selectAll(nil)
+        XCTAssertEqual(p.selectionHost.text(for: first)?.selectedText, "First paragraph\n\nSecond paragraph")
+        XCTAssertFalse(surface.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil))
+        XCTAssertTrue(heard.contains("2:First paragraph:0:15"))
+        XCTAssertTrue(heard.contains("3:Second paragraph:0:16"))
+        let pasteboard = UIPasteboard.withUniqueName()
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        p.selectionHost.pasteboard = pasteboard
+        surface.copy(nil)
+        XCTAssertEqual(pasteboard.string, "First paragraph\n\nSecond paragraph")
+    }
+
+    func testTappingOutsideAndRemoveAllRangesClearSelectionWhileScrollAndHandlesKeepIt() throws {
+        let p = mounted([
+            box(1),
+            box(2, style: ["user_select": "text"]),
+            text(3, "First paragraph", handlers: ["selectionchange"]),
+            text(4, "Second paragraph", handlers: ["selectionchange"]),
+            box(5, handlers: ["press"]),
+            ["op": "children", "id": 2, "ids": [3, 4]],
+            ["op": "children", "id": 1, "ids": [2, 5]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 400, w: 400), frame(2, 0, h: 140, w: 400),
+            frame(3, 20, x: 20), frame(4, 70, x: 20), frame(5, 180, h: 40, x: 20, w: 120),
+        ])
+        let owner = try node(p, 2), first = try node(p, 3), outside = try node(p, 5)
+        var heard: [String] = []
+        p.onSelectionChange = { id, text, start, end, _ in heard.append("\(id):\(text):\(start):\(end)") }
+
+        // Handle subview on the shared surface is owned by the selection.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: first, at: try point(in: first, of: "First")))
+        let surface = try XCTUnwrap(p.selectionHost.surface(for: first))
+        let handle = UIView(frame: CGRect(x: 10, y: 10, width: 20, height: 20))
+        surface.addSubview(handle)
+        XCTAssertTrue(p.textSelection.owns(handle))
+        XCTAssertFalse(p.textSelection.owns(owner), "empty container padding is outside the paragraphs and handles")
+        XCTAssertFalse(p.textSelection.owns(outside))
+        handle.removeFromSuperview()
+
+        // Cancelled touch (scroll pan) keeps the selection.
+        let pan = Touch(outside)
+        outside.touchesBegan([pan], with: TextTouchEvent())
+        outside.touchesCancelled([pan], with: TextTouchEvent())
+        XCTAssertTrue(p.textSelection.hasActiveSelection)
+
+        // Tap on empty container ground clears the selection.
+        let ground = Touch(owner)
+        ground.point = CGPoint(x: 350, y: 120)
+        owner.touchesBegan([ground], with: TextTouchEvent())
+        owner.touchesEnded([ground], with: TextTouchEvent())
+        XCTAssertFalse(p.textSelection.hasActiveSelection)
+        XCTAssertEqual(heard.last, "3::0:0")
+
+        // Tap on empty viewport ScrollView clears the selection.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: first, at: try point(in: first, of: "First")))
+        let scrollTap = Touch(p.viewport)
+        scrollTap.point = CGPoint(x: 200, y: 500)
+        p.viewport.touchesEnded([scrollTap], with: TextTouchEvent())
+        XCTAssertFalse(p.textSelection.hasActiveSelection)
+
+        // Agent tap on outside button clears selection and still delivers the press.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: first, at: try point(in: first, of: "First")))
+        var presses: [UInt32] = []
+        p.onPress = { presses.append($0) }
+        let reply = Agent(session: try XCTUnwrap(session)).tap(["id": 5])
+        XCTAssertNil(reply["error"], "\(reply)")
+        XCTAssertFalse(p.textSelection.hasActiveSelection)
+        XCTAssertEqual(presses, [5])
+
+        // Contract removeAllRanges() command clears selection on iOS.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: first, at: try point(in: first, of: "First")))
+        XCTAssertTrue(p.textSelection.hasActiveSelection)
+        session?.apply(wireBatch([["op": "command", "name": "removeAllRanges", "args": [Any]()]]))
+        let deadline = Date().addingTimeInterval(1.0)
+        while p.textSelection.hasActiveSelection && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+        }
+        XCTAssertFalse(p.textSelection.hasActiveSelection)
+        XCTAssertEqual(heard.last, "3::0:0")
+    }
+
+    func testSelectAllExcludesNonselectableTextInSharedDocument() throws {
+        let p = mounted([
+            box(1, style: ["user_select": "text"]),
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Prefix TOKEN Suffix"],
+             "style": ["user_select": "none", "font_size": 17.0, "line_height": "22px"],
+             "handlers": ["selectionchange"]],
+            ["op": "paragraph", "id": 2, "runs": [
+                ["id": 21, "parent": 2, "paint": true, "props": ["text": "Prefix "]],
+                ["id": 22, "parent": 2, "paint": true, "props": ["text": "TOKEN"], "style": ["user_select": "all"]],
+                ["id": 23, "parent": 2, "paint": true, "props": ["text": " Suffix"]],
+            ]],
+            text(3, "Second paragraph", handlers: ["selectionchange"]),
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 180, w: 400), frame(2, 20, x: 20), frame(3, 70, x: 20),
+        ])
+        let first = try node(p, 2), second = try node(p, 3)
+        var heard: [String] = []
+        p.onSelectionChange = { id, text, start, end, _ in heard.append("\(id):\(text):\(start):\(end)") }
+        let input = p.selectionHost.install(second)
+        XCTAssertNotNil(input.document)
+        XCTAssertTrue(input.selectAllDocument())
+        XCTAssertEqual(input.selectedText, "TOKEN\n\nSecond paragraph", "nonselectable prefix and suffix stay out of Select All copy")
+        XCTAssertEqual(heard, ["2:TOKEN:7:12", "3:Second paragraph:0:16"])
+        let rects = input.selectionRects(for: try XCTUnwrap(input.selectedTextRange))
+        XCTAssertEqual(rects.count, 2)
+        // Selecting only inside the nonselectable prefix yields empty selection.
+        let prefixRange = try XCTUnwrap(input.textRange(from: input.beginningOfDocument,
+                                                        to: try XCTUnwrap(input.position(from: input.beginningOfDocument, offset: 4))))
+        input.selectedTextRange = prefixRange
+        XCTAssertEqual(input.selected.length, 0)
+        XCTAssertTrue(first.isParagraph)
+    }
+
+    func testSharedSurfaceClipsRectsToNestedScrollAndSizesToScrollOwner() throws {
+        // 1. Nested horizontal scroll container clips wide paragraph selection rects.
+        let p = mounted([
+            box(1, style: ["user_select": "text"]),
+            text(2, "Above code"),
+            box(3, style: ["overflow_x": "auto", "overflow_y": "hidden"]),
+            text(4, "let veryLongIdentifier = 1234567890 + 9876543210 + 1111111111;", style: ["white_space": "pre"]),
+            ["op": "children", "id": 3, "ids": [4]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 200, w: 400), frame(2, 10, x: 20, w: 360),
+            frame(3, 50, h: 40, x: 20, w: 120), frame(4, 0, h: 30, x: 0, w: 600),
+            ["op": "content", "id": 3, "w": 600.0, "h": 40.0],
+        ])
+        let above = try node(p, 2), scroller = try node(p, 3), code = try node(p, 4)
+        let input = p.selectionHost.install(above)
+        XCTAssertTrue(input.selectAllDocument())
+        let surface = try XCTUnwrap(input.document?.surface)
+        let clipInSurface = scroller.convert(scroller.bounds, to: surface)
+        let codeRects = input.selectionRects(for: try XCTUnwrap(input.selectedTextRange)).filter { $0.rect.minY >= clipInSurface.minY - 1 }
+        XCTAssertFalse(codeRects.isEmpty)
+        for rect in codeRects {
+            XCTAssertLessThanOrEqual(rect.rect.maxX, clipInSurface.maxX + 0.5, "selection must not paint past nested clip")
+        }
+        // Moving the second paragraph notifies geometry change on settle.
+        p.apply(wireBatch([frame(3, 90, h: 40, x: 20, w: 120)]))
+        XCTAssertTrue(input.document?.geometryChanged() == false, "settle already recorded the moved geometry")
+        XCTAssertTrue(code.isParagraph)
+        session?.destroy(); session = nil; window?.isHidden = true; window = nil
+
+        // 2. Scroll-container owner sizes SelectionSurface to its full contentSize, not only the viewport.
+        let scrolled = mounted([
+            box(1, style: ["user_select": "text", "overflow_y": "auto"]),
+            text(2, "Top paragraph"),
+            text(3, "Far below paragraph"),
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 200, w: 400), frame(2, 10, x: 20), frame(3, 900, x: 20),
+            ["op": "content", "id": 1, "w": 400.0, "h": 1200.0],
+        ])
+        let top = try node(scrolled, 2)
+        let scrolledInput = scrolled.selectionHost.install(top)
+        let scrolledSurface = try XCTUnwrap(scrolledInput.document?.surface)
+        XCTAssertGreaterThanOrEqual(scrolledSurface.frame.height, 1200, "surface covers full scroll content")
+    }
+
+    func testNestedScrollLocalRuleAndControlsAndCancelledTouches() throws {
+        ExactControls.install()
+        let p = mounted([
+            box(1),
+            box(2, style: ["user_select": "text"]),
+            text(3, "Outer paragraph"),
+            box(4, style: ["overflow_x": "auto"]),
+            text(5, "Inner code paragraph"),
+            ["op": "create", "id": 6, "kind": "control", "props": ["type": "checkbox"], "style": [String: Any]()],
+            box(7, handlers: ["press"]),
+            ["op": "create", "id": 8, "kind": "view", "props": ["disabled": "true"], "style": [String: Any]()],
+            ["op": "children", "id": 4, "ids": [5]],
+            ["op": "children", "id": 2, "ids": [3, 4]],
+            ["op": "children", "id": 1, "ids": [2, 6, 7, 8]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 360, w: 400), frame(2, 0, h: 160, w: 400),
+            frame(3, 10, x: 20), frame(4, 60, h: 40, x: 20, w: 200), frame(5, 0, h: 30, x: 0, w: 300),
+            ["op": "content", "id": 4, "w": 300.0, "h": 40.0],
+            frame(6, 180, h: 30, x: 20, w: 30), frame(7, 220, h: 40, x: 20, w: 100), frame(8, 270, h: 40, x: 20, w: 100),
+        ])
+        let outer = try node(p, 3), inner = try node(p, 5)
+        let enabledBox = try node(p, 7), disabledBox = try node(p, 8)
+
+        // Selecting outside a nested scroller, clearing, and then touching inside stays local to inner.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: outer, at: try point(in: outer, of: "Outer")))
+        XCTAssertNotNil(p.selectionHost.text(for: outer)?.document)
+        p.textSelection.clear()
+        XCTAssertFalse(p.textSelection.routesToSurface(inner), "after clearing, inner paragraph does not reuse outer document")
+        p.selectionHost.touched(inner)
+        XCTAssertNil(p.selectionHost.text(for: inner)?.document, "starting inside nested scroller stays local")
+
+        // Native checkbox control activation clears an active selection.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: outer, at: try point(in: outer, of: "Outer")))
+        XCTAssertTrue(p.textSelection.hasActiveSelection)
+        let checkbox = try XCTUnwrap(p.controls.controls[6] as? ExactCheckbox)
+        XCTAssertEqual(checkbox.actions(forTarget: p.controls, forControlEvent: .valueChanged), ["changed:"])
+        p.controls.changed(checkbox)
+        XCTAssertFalse(p.textSelection.hasActiveSelection, "tapping a sibling checkbox clears selection")
+
+        // Logically cancelled press contact on an enabled node does NOT clear selection.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: outer, at: try point(in: outer, of: "Outer")))
+        let cancelled = Touch(enabledBox)
+        enabledBox.touchesBegan([cancelled], with: TextTouchEvent())
+        enabledBox.cancelPressContact()
+        enabledBox.touchesEnded([cancelled], with: TextTouchEvent())
+        XCTAssertTrue(p.textSelection.hasActiveSelection, "cancelled press contact must not clear selection")
+
+        // Tapping a disabled node DOES clear selection.
+        let disabledTap = Touch(disabledBox)
+        disabledBox.touchesBegan([disabledTap], with: TextTouchEvent())
+        disabledBox.touchesEnded([disabledTap], with: TextTouchEvent())
+        XCTAssertFalse(p.textSelection.hasActiveSelection, "tapping a disabled node clears selection")
+
+        // Passive SelectionDismissObserver on documentHost clears on outside tap and ignores drags.
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: outer, at: try point(in: outer, of: "Outer")))
+        let observer = try XCTUnwrap(p.documentHost.gestureRecognizers?.compactMap { $0 as? SelectionDismissObserver }.first)
+        let checkboxTap = Touch(checkbox)
+        observer.touchesBegan([checkboxTap], with: TextTouchEvent())
+        observer.touchesEnded([checkboxTap], with: TextTouchEvent())
+        XCTAssertFalse(p.textSelection.hasActiveSelection, "root dismiss observer clears on native control tap")
+    }
+
+    func testCopiedTextStripsSyntheticSoftHyphensButKeepsAuthoredOnes() throws {
+        let p = mounted([
+            box(1, style: ["user_select": "text"]),
+            text(2, "absichtlich", style: ["overflow_wrap": "break-word"]),
+            text(3, "ab\u{00AD}sichtlich", style: ["overflow_wrap": "break-word"]),
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 160, w: 400), frame(2, 20, x: 20), frame(3, 70, x: 20),
+        ])
+        p.documentLanguage = "de"
+        let autoNode = try node(p, 2), manualNode = try node(p, 3)
+        autoNode.invalidateText(); manualNode.invalidateText()
+        XCTAssertFalse(autoNode.paragraphSpec().source.inserted.isEmpty, "auto emergency hyphenation inserts synthetic soft hyphens")
+        XCTAssertTrue(manualNode.paragraphSpec().source.inserted.isEmpty, "authored soft hyphen keeps its own break points")
+
+        let input = p.selectionHost.install(autoNode)
+        input.selectAllDocument()
+        XCTAssertEqual(input.selectedText, "absichtlich\n\nab\u{00AD}sichtlich")
+        XCTAssertFalse(autoNode.copiedText(SelectableText.shaped(autoNode) as String, from: 0).contains("\u{00AD}"))
+        XCTAssertEqual(manualNode.copiedText(SelectableText.shaped(manualNode) as String, from: 0), "ab\u{00AD}sichtlich")
+    }
+
+    func testDisjointAndNestedAllRunsAndClipUpdatesAndControlToggleValue() throws {
+        // 1. Nested user-select="all" runs copy once without duplicating inner text,
+        // and standalone Select All over two disjoint all runs highlights only the two runs.
+        let p = mounted([
+            box(1),
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "pre [A B C] mid [D]"],
+             "style": ["font_size": 17.0, "line_height": "22px", "user_select": "none"]],
+            ["op": "paragraph", "id": 2, "runs": [
+                ["id": 20, "parent": 2, "paint": true, "props": ["text": "pre "]],
+                ["id": 21, "parent": 2, "paint": true, "props": ["text": "[A "], "style": ["user_select": "all"]],
+                ["id": 22, "parent": 21, "paint": true, "props": ["text": "B"], "style": ["user_select": "all"]],
+                ["id": 23, "parent": 21, "paint": true, "props": ["text": " C]"], "style": ["user_select": "all"]],
+                ["id": 24, "parent": 2, "paint": true, "props": ["text": " mid "]],
+                ["id": 25, "parent": 2, "paint": true, "props": ["text": "[D]"], "style": ["user_select": "all"]],
+            ]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 120, w: 400), frame(2, 10, x: 10, w: 360),
+        ])
+        let para = try node(p, 2)
+        let standalone = p.selectionHost.install(para)
+        XCTAssertTrue(standalone.selectAllDocument())
+        XCTAssertEqual(standalone.selectedText, "[A B C][D]", "nested all run does not duplicate 'B' and gap is excluded")
+        let rects = standalone.selectionRects(for: try XCTUnwrap(standalone.selectedTextRange))
+        XCTAssertEqual(rects.count, 2, "standalone Select All highlights only the two disjoint all runs, not the gap")
+
+        // 2. Selecting inside a nested scroller then selecting an outer spanning document
+        // does not leave an idle standalone input shadowing the active spanning document,
+        // and SelectionDismissObserver ends every touch sequence in .failed.
+        let p2 = mounted([
+            box(1),
+            box(2, style: ["user_select": "text"]),
+            text(3, "Outer prose"),
+            ["op": "create", "id": 4, "kind": "scroll", "props": ["scrollsX": "true"], "style": ["overflow_x": "auto"]],
+            text(5, "Inner code"),
+            ["op": "create", "id": 6, "kind": "control", "props": ["type": "checkbox"], "style": [String: Any]()],
+            ["op": "children", "id": 4, "ids": [5]],
+            ["op": "children", "id": 2, "ids": [3, 4]],
+            ["op": "children", "id": 1, "ids": [2, 6]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 240, w: 400), frame(2, 0, h: 160, w: 400),
+            frame(3, 10, x: 20), frame(4, 60, h: 40, x: 20, w: 200), frame(5, 0, h: 30, x: 0, w: 300),
+            ["op": "content", "id": 4, "w": 300.0, "h": 40.0],
+            frame(6, 180, h: 30, x: 20, w: 30),
+        ])
+        let outer = try node(p2, 3), inner = try node(p2, 5)
+        _ = try XCTUnwrap(p2.selectionHost.selectWord(in: inner, at: try point(in: inner, of: "Inner")))
+        XCTAssertNil(p2.selectionHost.text(for: inner)?.document, "started inside nested scroller")
+        _ = try XCTUnwrap(p2.selectionHost.selectWord(in: outer, at: try point(in: outer, of: "Outer")))
+        XCTAssertNotNil(p2.selectionHost.text(for: inner)?.document, "active spanning document is not shadowed by idle standalone input")
+
+        let observer = try XCTUnwrap(p2.documentHost.gestureRecognizers?.compactMap { $0 as? SelectionDismissObserver }.first)
+        let ownedTouch = Touch(outer)
+        observer.touchesBegan([ownedTouch], with: TextTouchEvent())
+        observer.touchesEnded([ownedTouch], with: TextTouchEvent())
+        XCTAssertTrue(p2.textSelection.hasActiveSelection, "touch owned by selection is ignored and does not dismiss")
+        let checkbox = try XCTUnwrap(p2.controls.controls[6] as? ExactCheckbox)
+        let cancelTouch = Touch(checkbox)
+        observer.touchesBegan([cancelTouch], with: TextTouchEvent())
+        observer.touchesCancelled([cancelTouch], with: TextTouchEvent())
+        observer.touchesEnded([cancelTouch], with: TextTouchEvent())
+        XCTAssertTrue(p2.textSelection.hasActiveSelection, "cancelled touch clears tracking and does not dismiss")
+
+        // 3. ControlHost.changed captures the toggled value before clear() runs selectionchange.
+        var observedChecked: Bool?
+        p2.onChecked = { _, on in observedChecked = on }
+        p2.onSelectionChange = { _, _, _, _, _ in
+            // Simulate a batch reverting the checkbox during selectionchange.
+            checkbox.isOn = false
+        }
+        outer.handlers.insert("selectionchange")
+        checkbox.isOn = true
+        p2.controls.changed(checkbox)
+        XCTAssertEqual(observedChecked, true, "toggled value is captured before selectionchange runs")
+        XCTAssertFalse(p2.textSelection.hasActiveSelection)
+
+        // 4. Nonrectangular clip-path masks the shared surface, clips rects to the shape,
+        // and changing the clip path with fixed paragraph frame invalidates geometryChanged().
+        let p3 = mounted([
+            box(1, style: ["user_select": "text"]),
+            text(2, "First line"),
+            box(3, style: ["overflow_x": "hidden", "overflow_y": "hidden"]),
+            text(4, "Top"),
+            ["op": "children", "id": 3, "ids": [4]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 220, w: 300), frame(2, 10, x: 10, w: 280),
+            frame(3, 60, h: 100, x: 10, w: 100), frame(4, 0, h: 24, x: 0, w: 100),
+        ])
+        let clipBox = try node(p3, 3), second = try node(p3, 4)
+        let maskLayer = CAShapeLayer()
+        maskLayer.frame = clipBox.bounds
+        maskLayer.path = CGPath(ellipseIn: CGRect(x: 30, y: 30, width: 40, height: 40), transform: nil)
+        clipBox.layer.mask = maskLayer
+        let docInput = p3.selectionHost.install(try node(p3, 2))
+        let doc = try XCTUnwrap(docInput.document)
+        XCTAssertTrue(docInput.selectAllDocument())
+        XCTAssertNotNil(doc.surface.layer.mask, "nonrectangular clip masks the shared selection surface")
+        let topRects = doc.rects(doc.parts[1].range)
+        XCTAssertTrue(topRects.allSatisfy { $0.rect.width == 0 }, "text outside the circle at y=0..25 gets no highlight rects")
+        XCTAssertFalse(doc.geometryChanged(), "baseline fingerprint matches")
+        maskLayer.path = CGPath(ellipseIn: CGRect(x: 0, y: 0, width: 100, height: 100), transform: nil)
+        XCTAssertTrue(doc.geometryChanged(), "changing clip path with fixed paragraph frame invalidates geometry")
+        let fullRects = doc.rects(doc.parts[1].range)
+        XCTAssertTrue(fullRects.contains { $0.rect.width > 0 }, "expanding circle admits highlight rects")
+        _ = second
+    }
+
+    /// expo/exact#2001: a paragraph inside a nested horizontal scroll stays on its
+    /// own view for hit testing even while an enclosing shared document has an
+    /// active selection, so swiping the code block reaches the nested UIScrollView
+    /// instead of routing out to the enclosing SelectionSurface (both with and
+    /// without a prior touch inside the code block), drags move contentOffset.x
+    /// without popping a pushed route, highlighted code consumes taps without
+    /// firing press, `user-select="all"` keeps nested scroller touches local,
+    /// removing a scroll boundary reconciles idle standalone inputs, and clipped
+    /// overflow outside the scrollport does not steal handle targeting.
+    func testActiveSelectionDoesNotStealTouchesFromNestedHorizontalScroll() throws {
+        let ops: [[String: Any]] = [
+            box(1, style: ["user_select": "text"]),
+            text(2, "First paragraph of a comment."),
+            box(3, handlers: ["press"]),
+            box(4, style: ["overflow_x": "auto", "overflow_y": "hidden"]),
+            text(5, "let numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];", style: ["white_space": "pre", "user_select": "text"], handlers: ["press"]),
+            text(6, "Second paragraph."),
+            ["op": "children", "id": 4, "ids": [5]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 6]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 300, w: 360),
+            frame(2, 10, h: 24, x: 16, w: 328),
+            frame(3, 44, h: 44, x: 16, w: 328),
+            frame(4, 96, h: 40, x: 16, w: 200),
+            frame(5, 0, h: 30, x: 0, w: 600),
+            frame(6, 150, h: 24, x: 16, w: 328),
+            ["op": "content", "id": 4, "w": 600.0, "h": 40.0],
+        ]
+
+        // Case A: pushed route with no prior touch inside the code block.
+        let p = mounted(ops)
+        let rootVC = UIViewController()
+        let detailVC = UIViewController()
+        let nav = UINavigationController(rootViewController: rootVC)
+        nav.pushViewController(detailVC, animated: false)
+        window?.rootViewController = nav
+        detailVC.view.addSubview(p.viewport)
+        p.viewport.frame = detailVC.view.bounds
+        p.viewport.layoutIfNeeded()
+
+        let owner = try node(p, 1), p1 = try node(p, 2), scroller = try node(p, 4), code = try node(p, 5), p2 = try node(p, 6)
+        let scrollView = try XCTUnwrap(scroller.scrollView)
+        let event = TextTouchEvent()
+
+        _ = try XCTUnwrap(p.selectionHost.selectWord(in: p1, at: try point(in: p1, of: "paragraph")))
+        let surface = try XCTUnwrap(p.selectionHost.surface(for: p1))
+        XCTAssertTrue(p1.hitTest(CGPoint(x: 20, y: 10), with: event) === surface)
+        XCTAssertTrue(p2.hitTest(CGPoint(x: 20, y: 10), with: event) === surface)
+        let codeHitWithoutPrior = try XCTUnwrap(owner.hitTest(CGPoint(x: 40, y: 110), with: event))
+        XCTAssertTrue(codeHitWithoutPrior === code, "code inside nested scroll must not route hits out to enclosing SelectionSurface")
+        XCTAssertTrue(codeHitWithoutPrior.isDescendant(of: scrollView), "nested UIScrollView must remain an ancestor of the hit view")
+        XCTAssertNil(p.selectionHost.surface(for: code))
+        XCTAssertFalse(p.textSelection.routesToSurface(code))
+        XCTAssertFalse(p.textSelection.owns(code))
+        XCTAssertFalse(p.textSelection.hasSelection(in: code), "unhighlighted code reports no selection")
+
+        // Simulate horizontal drag left then right on the nested scroller while p1 is selected:
+        // contentOffset moves both directions, selection remains intact, and the pushed route stays mounted.
+        scroller.scrollViewWillBeginDragging(scrollView)
+        scrollView.contentOffset = CGPoint(x: 120, y: 0)
+        scroller.scrollViewDidScroll(scrollView)
+        XCTAssertEqual(scrollView.contentOffset.x, 120, accuracy: 0.5)
+        XCTAssertTrue(p.textSelection.hasActiveSelection, "horizontal scroll inside code keeps p1 selection active")
+        XCTAssertEqual(nav.viewControllers.count, 2, "swiping inside code must not pop the pushed route")
+
+        // Handle targeting at nonzero scroll offset must ignore clipped-out code past the scrollport edge.
+        let doc = try XCTUnwrap(p.selectionHost.text(for: p1)?.document)
+        let outsideScrollport = CGPoint(x: 280, y: 110) // inside code's unclipped width (600) but right of scroller (x=16..216)
+        XCTAssertNil(doc.paragraph(at: outsideScrollport), "clipped-out portion of scrolled code must not claim points past scrollport")
+        let draggedIndex = doc.index(at: outsideScrollport)
+        XCTAssertNotEqual(doc.part(at: draggedIndex)?.node, code, "clipped-out code must not steal handle targeting from visible paragraphs")
+
+        scroller.scrollViewWillBeginDragging(scrollView)
+        scrollView.contentOffset = CGPoint(x: 0, y: 0)
+        scroller.scrollViewDidScroll(scrollView)
+        XCTAssertEqual(scrollView.contentOffset.x, 0, accuracy: 0.5)
+        XCTAssertEqual(nav.viewControllers.count, 2, "swiping right back to offset 0 keeps the pushed route")
+
+        // Tapping unhighlighted code clears p1's selection AND delivers code's press handler.
+        var pressedIds: [UInt32] = []
+        p.onPress = { id in pressedIds.append(id) }
+        let unhighlightedTap = EndingTouch(code)
+        code.touchesBegan([unhighlightedTap], with: event)
+        unhighlightedTap.lifted = true
+        code.touchesEnded([unhighlightedTap], with: event)
+        XCTAssertFalse(p.textSelection.hasActiveSelection)
+        XCTAssertEqual(pressedIds, [5], "tapping unhighlighted code clears selection and delivers press")
+        XCTAssertFalse(code.pressed)
+
+        // Select All spans p1, code, and p2; tapping highlighted code clears selection WITHOUT firing press or leaking pressed state,
+        // even when SelectionDismissObserver delivers touchesEnded before NodeView.touchesEnded (UIKit's real delivery order).
+        pressedIds.removeAll()
+        XCTAssertTrue(p.textSelection.selectAll(p1))
+        XCTAssertTrue(p.textSelection.hasSelection(in: code))
+        XCTAssertTrue(p.selectionHost.text(for: p1)?.selectedText.contains("let numbers") == true)
+        let observer = try XCTUnwrap(p.documentHost.gestureRecognizers?.first { $0 is SelectionDismissObserver })
+        let highlightedTap = EndingTouch(code)
+        observer.touchesBegan([highlightedTap], with: event)
+        code.touchesBegan([highlightedTap], with: event)
+        highlightedTap.lifted = true
+        observer.touchesEnded([highlightedTap], with: event)
+        XCTAssertFalse(p.textSelection.hasActiveSelection, "dismiss observer clears selection on lift")
+        code.touchesEnded([highlightedTap], with: event)
+        XCTAssertTrue(pressedIds.isEmpty, "tapping highlighted code must clear selection without firing press")
+        XCTAssertFalse(code.pressed, "consuming tap on highlighted code must reset pressed state")
+
+        // Case B: fresh fixture — prior touch on code installs standalone input, then select p1, then touch code.
+        let pPrior = mounted(ops)
+        let ownerB = try node(pPrior, 1), p1B = try node(pPrior, 2), scrollerB = try node(pPrior, 4), codeB = try node(pPrior, 5)
+        let scrollViewB = try XCTUnwrap(scrollerB.scrollView)
+        _ = ownerB.hitTest(CGPoint(x: 40, y: 110), with: event)
+        let priorInput = try XCTUnwrap(pPrior.selectionHost.text(for: codeB), "prior touch must install local input on code")
+        XCTAssertNil(priorInput.document, "prior touch input on nested scroller must be standalone")
+        _ = try XCTUnwrap(pPrior.selectionHost.selectWord(in: p1B, at: try point(in: p1B, of: "paragraph")))
+        let codeHitWithPrior = try XCTUnwrap(ownerB.hitTest(CGPoint(x: 40, y: 110), with: event))
+        XCTAssertTrue(codeHitWithPrior === codeB, "active document selection must not steal touches after prior scroll")
+        XCTAssertTrue(codeHitWithPrior.isDescendant(of: scrollViewB))
+
+        // Removing the scroll boundary reconciles the idle standalone input back to the shared document.
+        pPrior.apply(wireBatch([
+            ["op": "style", "id": 4, "style": ["overflow_x": "visible", "overflow_y": "visible"]],
+        ]))
+        XCTAssertNil(scrollerB.scrollView, "removing overflow removes UIScrollView")
+        XCTAssertTrue(pPrior.textSelection.routesToSurface(codeB), "after removing scroll boundary, code routes to shared surface")
+        XCTAssertTrue(pPrior.textSelection.owns(codeB), "after removing scroll boundary, active document owns code")
+        let surfaceB = try XCTUnwrap(pPrior.selectionHost.surface(for: p1B))
+        XCTAssertTrue(ownerB.hitTest(CGPoint(x: 40, y: 110), with: event) === surfaceB)
+
+        // Adding a scroll boundary over the initiating paragraph stops `owns` from claiming it.
+        pPrior.apply(wireBatch([
+            ["op": "style", "id": 1, "style": ["user_select": "text"]],
+            ["op": "style", "id": 4, "style": ["overflow_x": "auto", "overflow_y": "hidden"]],
+        ]))
+        XCTAssertFalse(pPrior.textSelection.owns(codeB), "re-added scroll boundary drops ownership")
+
+        // Case C: enclosing `user-select="all"` preserves atomic range across nested scroller in BOTH directions while keeping scroller hit-testing local.
+        let pAll = mounted([
+            box(1, style: ["user_select": "all"]),
+            text(2, "Intro sentence."),
+            box(4, style: ["overflow_x": "auto", "overflow_y": "hidden"]),
+            text(5, "const payload = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];", style: ["white_space": "pre"]),
+            ["op": "children", "id": 4, "ids": [5]],
+            ["op": "children", "id": 1, "ids": [2, 4]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 200, w: 360),
+            frame(2, 10, h: 24, x: 16, w: 328),
+            frame(4, 50, h: 40, x: 16, w: 200),
+            frame(5, 0, h: 30, x: 0, w: 500),
+            ["op": "content", "id": 4, "w": 500.0, "h": 40.0],
+        ])
+        let ownerAll = try node(pAll, 1), p1All = try node(pAll, 2), scrollerAll = try node(pAll, 4), codeAll = try node(pAll, 5)
+        let scrollViewAll = try XCTUnwrap(scrollerAll.scrollView)
+        _ = try XCTUnwrap(pAll.selectionHost.selectWord(in: p1All, at: try point(in: p1All, of: "Intro")))
+        XCTAssertTrue(pAll.selectionHost.text(for: p1All)?.selectedText.contains("const payload") == true, "user-select=all still selects atomically across nested scroller")
+        XCTAssertTrue(pAll.textSelection.hasSelection(in: codeAll))
+        let hitAll = try XCTUnwrap(ownerAll.hitTest(CGPoint(x: 40, y: 65), with: event))
+        XCTAssertTrue(hitAll === codeAll, "user-select=all must not route nested scroller touches out to outer surface")
+        XCTAssertTrue(hitAll.isDescendant(of: scrollViewAll))
+        XCTAssertFalse(pAll.textSelection.routesToSurface(codeAll))
+        XCTAssertFalse(pAll.textSelection.owns(codeAll))
+        // Reverse direction: starting selection inside the nested scroller still promotes to the full user-select="all" element.
+        pAll.textSelection.clear()
+        _ = try XCTUnwrap(pAll.selectionHost.selectWord(in: codeAll, at: try point(in: codeAll, of: "payload")))
+        XCTAssertTrue(pAll.selectionHost.text(for: codeAll)?.selectedText.contains("Intro sentence.") == true, "selecting inside nested scroller under user-select=all selects enclosing element")
+        XCTAssertTrue(pAll.textSelection.hasSelection(in: p1All))
+        XCTAssertTrue(pAll.textSelection.hasSelection(in: codeAll))
+        XCTAssertTrue(ownerAll.hitTest(CGPoint(x: 40, y: 65), with: event) === codeAll, "nested scroller stays local after reverse-direction user-select=all")
     }
 
 }

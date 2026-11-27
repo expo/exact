@@ -2,6 +2,7 @@
   "kind": "interface",
   "name": "@exact/background",
   "version": "1.0.0",
+  "start": "load",
   "grants": [
     "device.background-sync",
     "device.periodic-background-sync"

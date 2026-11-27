@@ -464,9 +464,11 @@ extension NodeView {
     /// spells what came as typing. AppKit posts nothing for a view that is
     /// no accessibility element, so the text view is none while the write
     /// lands.
-    func writeValue(_ value: String, into f: NSTextView) {
+    func writeValue(_ value: String, into f: NSTextView, heldFilter: Bool? = nil) {
+        let filtered = heldFilter ?? (presenter?.fieldSelections.inputSource == id && fieldIsTextEntry)
         if f.string.utf16.elementsEqual(value.utf16) { pendingValue = nil; return }
-        if f.hasMarkedText() { pendingValue = value; return }
+        if f.hasMarkedText() { pendingFiltered = filtered; pendingValue = value; return }
+        let direction = filtered ? presenter?.fieldSelections.current(self).direction : nil
         pendingValue = nil
         writingValue = true
         defer { writingValue = false; toldText = nil }
@@ -483,7 +485,8 @@ extension NodeView {
         } else {
             f.string = value
         }
-        f.setSelectedRange(carrySelection(selection, through: edit))
+        f.setSelectedRange(carrySelection(selection, through: edit, filtered: filtered))
+        presenter?.fieldSelections.carried(self, direction: direction)
         if quiet { f.setAccessibilityElement(true) }
         (f as? TextArea)?.markup?.bookmark = f.selectedRange()
         restyleMarkup()

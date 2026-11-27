@@ -142,7 +142,7 @@ fn a_deadline_out_of_range_or_on_work_that_is_not_http_is_refused() {
     zero.timeout_ms = Some(0);
     assert_eq!(
         core.run(job(1, zero), None),
-        Err("a request timeout must be 1 to 3600000 ms")
+        Err("a request timeout must be 1 to 3600000 ms".into())
     );
     let (over, _, _) = setup();
     assert_eq!(
@@ -153,14 +153,14 @@ fn a_deadline_out_of_range_or_on_work_that_is_not_http_is_refused() {
             ),
             None
         ),
-        Err("a request timeout must be 1 to 3600000 ms")
+        Err("a request timeout must be 1 to 3600000 ms".into())
     );
     let (streams, _, _) = setup();
     let mut stream = Request::get("https://example.test/events").timeout(10);
     stream.stream = true;
     assert_eq!(
         streams.run(job(3, stream), None),
-        Err("a stream has no timeout")
+        Err("a stream has no timeout".into())
     );
     assert!(fixture.state.lock().unwrap().2.is_empty());
     assert_eq!(

@@ -70,6 +70,7 @@ export function implementation({ changed, agent, log, tracks, audioSession, now,
   /** The browser's track as this track's source: its events become the track's. */
   const adopt = (t, source) => {
     t.source = source;
+    source.enabled = t.enabled;
     t.settings = settingsOf(source);
     source.onmute = () => t.active && muteNow(t);
     source.onunmute = () => t.active && muteNow(t);

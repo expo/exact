@@ -36,6 +36,7 @@ extension NodeView {
         // put on (`BorderPaint.clip`), so it carries that outline too.
         let effectOutline = effect == nil || image == nil ? nil : BorderPaint.uncircular(in: bounds, radii: cornerSizes(in: bounds))
         let key = BoxMaskState.Key(image: image, clip: style["clip_path"], outline: outline, size: bounds.size, dark: drawsDark,
+                                   scale: traitCollection.displayScale, tint: gradientTintKey(for: image),
                                    clipBox: clipBox != nil, filter: hasBoxFilter, material: effect != nil, materialOutline: effectOutline)
         let state = BoxMaskState.of(self)
         if state.key == key, clipBox?.layer.mask === state.boxMask, hasBoxFilter || ownMask === state.layerMask,
@@ -45,7 +46,7 @@ extension NodeView {
         let shaped = ClipPath.mask(outline)
         if let box = clipBox?.layer { box.mask = shaped }
         state.boxMask = clipBox?.layer.mask
-        guard !hasBoxFilter else { return }
+        guard !hasBoxFilter else { return noteClipLayer(nil) }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         if let effect {
@@ -71,11 +72,12 @@ extension NodeView {
             state.effectMask = effect.mask
             layer.mask = clipMask(shaped: clipBox == nil ? shaped : nil)
             state.layerMask = ownMask
-            return
+            return noteClipLayer(clipBox == nil && shaped != nil ? nil : layer.mask)
         }
         state.effectMask = nil
         layer.mask = composedMask(shaped: clipBox == nil ? shaped : nil)
         state.layerMask = ownMask
+        noteClipLayer(image != nil || clipBox == nil && shaped != nil ? nil : layer.mask)
     }
 
     /// `mask-image` over `clip-path` over the shaped corners, as one mask

@@ -2,9 +2,14 @@
 //! `exact_painted::desktop`): hot keys by `RegisterHotKey`, attention by
 //! `FlashWindowEx`, and the login item as a development build's `Run` value.
 //!
-//! - **Hot keys** are registered with a null window, so `WM_HOTKEY` is
-//!   posted to the thread's queue, where the event loop's message hook
-//!   hears it ([RegisterHotKey](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey)).
+//! - **Hot keys** are registered to a message-only window, so `WM_HOTKEY`
+//!   reaches its procedure from the event loop and from any modal loop on
+//!   the thread: the file dialog's, the edit menu's, a window's move or size
+//!   loop ([RegisterHotKey](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey)).
+//!   A modal loop dispatches a message for no window to nothing, so a chord
+//!   registered with a null window was lost while one ran. If the window
+//!   cannot be made, hot keys go to the thread, and the event loop's message
+//!   hook still hears them.
 //!   One registration per chord serves every reader of it; a press raises
 //!   each reader's event as an activation (D11 item 3). `MOD_NOREPEAT`
 //!   keeps a held chord to one press unless a reader asked for repeat
@@ -185,9 +190,11 @@ mod imp {
         },
         UI::{
             Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT},
+            Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
-                FlashWindowEx, GetForegroundWindow, IsWindowVisible, FLASHWINFO, FLASHW_TIMERNOFG,
-                FLASHW_TRAY, MSG, WM_HOTKEY,
+                CreateWindowExW, DestroyWindow, FlashWindowEx, GetForegroundWindow,
+                IsWindowVisible, FLASHWINFO, FLASHW_TIMERNOFG, FLASHW_TRAY, HWND_MESSAGE, MSG,
+                WM_HOTKEY, WM_NCDESTROY,
             },
         },
     };
@@ -221,6 +228,9 @@ mod imp {
     pub(crate) struct Desktop {
         name: String,
         hwnd: Cell<isize>,
+        /// The message-only window hot keys are registered to, or 0 for the
+        /// thread when it could not be made.
+        listener: Cell<isize>,
         chords: RefCell<Vec<Chord>>,
         next: Cell<i32>,
         launch: Option<bool>,
@@ -233,6 +243,69 @@ mod imp {
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()
+    }
+
+    /// A message-only window whose procedure raises `desktop`'s hot keys, or
+    /// null when it cannot be made. Made on the event loop's thread, which
+    /// dispatches its messages.
+    fn listen(desktop: std::rc::Weak<Desktop>) -> HWND {
+        let class = wide("Static");
+        let window = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if window.is_null() {
+            return window;
+        }
+        let data = Box::into_raw(Box::new(desktop));
+        // The window holds the box until WM_NCDESTROY.
+        if unsafe { SetWindowSubclass(window, Some(hear), 0, data as usize) } == 0 {
+            unsafe {
+                drop(Box::from_raw(data));
+                DestroyWindow(window);
+            }
+            return std::ptr::null_mut();
+        }
+        window
+    }
+
+    unsafe extern "system" fn hear(
+        window: HWND,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+        subclass: usize,
+        data: usize,
+    ) -> isize {
+        unsafe {
+            let desktop = data as *mut std::rc::Weak<Desktop>;
+            match message {
+                WM_HOTKEY => {
+                    if let Some(desktop) = (*desktop).upgrade() {
+                        desktop.pressed(wparam as i32);
+                    }
+                    return 0;
+                }
+                WM_NCDESTROY => {
+                    RemoveWindowSubclass(window, Some(hear), subclass);
+                    drop(Box::from_raw(desktop));
+                }
+                _ => {}
+            }
+            DefSubclassProc(window, message, wparam, lparam)
+        }
     }
 
     fn snipping() -> Result<Option<u32>, u32> {
@@ -332,6 +405,7 @@ mod imp {
             let desktop = Rc::new(Desktop {
                 name: name.to_owned(),
                 hwnd: Cell::new(0),
+                listener: Cell::new(0),
                 chords: RefCell::new(Vec::new()),
                 next: Cell::new(1),
                 launch: super::login_launch(&args),
@@ -339,11 +413,21 @@ mod imp {
                 watchers: Arc::default(),
                 watching: Cell::new(false),
             });
+            desktop
+                .listener
+                .set(listen(Rc::downgrade(&desktop)) as isize);
             exact_painted::desktop::install(desktop.clone());
             desktop
         }
 
-        /// Hear thread hot keys from the loop's shared message hook.
+        /// The window hot keys are registered to: the listener, or null for
+        /// the thread.
+        fn listener(&self) -> HWND {
+            self.listener.get() as HWND
+        }
+
+        /// Hear thread hot keys from the loop's shared message hook, when
+        /// there is no listener.
         pub(crate) fn message(&self, message: *const std::ffi::c_void) {
             let message = unsafe { &*(message as *const MSG) };
             if message.message == WM_HOTKEY && message.hwnd.is_null() {
@@ -390,7 +474,7 @@ mod imp {
         fn register(&self, keys: &str, atom: i32, repeat: bool) -> Result<(), Refusal> {
             let (modifiers, key) = self.available_chord(keys)?;
             let modifiers = modifiers | if repeat { 0 } else { MOD_NOREPEAT };
-            let ok = unsafe { RegisterHotKey(std::ptr::null_mut(), atom, modifiers, key) };
+            let ok = unsafe { RegisterHotKey(self.listener(), atom, modifiers, key) };
             if ok != 0 {
                 return Ok(());
             }
@@ -426,7 +510,7 @@ mod imp {
             if repeat == chord.repeats {
                 return Ok(());
             }
-            unsafe { UnregisterHotKey(std::ptr::null_mut(), chord.atom) };
+            unsafe { UnregisterHotKey(self.listener(), chord.atom) };
             match self.register(&chord.keys, chord.atom, repeat) {
                 Ok(()) => {
                     chord.repeats = repeat;
@@ -527,7 +611,7 @@ mod imp {
                     .readers
                     .retain(|r| !(r.session == session && r.id == id));
                 if chord.readers.is_empty() {
-                    unsafe { UnregisterHotKey(std::ptr::null_mut(), chord.atom) };
+                    unsafe { UnregisterHotKey(self.listener(), chord.atom) };
                 } else {
                     // On a failure the chord keeps the registration it had,
                     // which still serves every reader left.
@@ -545,7 +629,7 @@ mod imp {
             // An atom of its own, given back at once.
             let atom = 0xBFFF;
             self.register(keys, atom, false)?;
-            unsafe { UnregisterHotKey(std::ptr::null_mut(), atom) };
+            unsafe { UnregisterHotKey(self.listener(), atom) };
             Ok(())
         }
 
@@ -646,6 +730,127 @@ mod imp {
 
         fn open_login_settings(&self) -> Result<(), String> {
             crate::url::open(self.hwnd.get(), "ms-settings:startupapps")
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::time::{Duration, Instant};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            MapVirtualKeyW, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+            MAPVK_VK_TO_VSC, VK_CONTROL, VK_F9, VK_MENU, VK_SHIFT,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, PeekMessageW, TranslateMessage, PM_REMOVE,
+        };
+
+        /// Dispatch this thread's messages until `done` or `limit`, as a modal
+        /// loop does (`IFileDialog::Show`, `TrackPopupMenuEx`, a window's move
+        /// or size loop): with no event loop's message hook, so a message for
+        /// no window goes nowhere. The `WM_HOTKEY`s it dispatched.
+        fn modal_loop(done: impl Fn() -> bool, limit: Duration) -> u32 {
+            let end = Instant::now() + limit;
+            let mut hot_keys = 0;
+            while !done() && Instant::now() < end {
+                let mut message: MSG = unsafe { std::mem::zeroed() };
+                while unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) }
+                    != 0
+                {
+                    hot_keys += u32::from(message.message == WM_HOTKEY);
+                    unsafe {
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            hot_keys
+        }
+
+        /// A desktop whose presses this counts.
+        fn counted() -> (Rc<Desktop>, Rc<Cell<u32>>) {
+            let desktop = Desktop::install("exact-hot-key-test");
+            let heard = Rc::new(Cell::new(0));
+            let count = heard.clone();
+            desktop.set_wake(move || count.set(count.get() + 1));
+            (desktop, heard)
+        }
+
+        fn key(vk: u16, up: bool) -> INPUT {
+            let mut input: INPUT = unsafe { std::mem::zeroed() };
+            input.r#type = INPUT_KEYBOARD;
+            input.Anonymous.ki = KEYBDINPUT {
+                wVk: vk,
+                wScan: unsafe { MapVirtualKeyW(vk.into(), MAPVK_VK_TO_VSC) } as u16,
+                dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                time: 0,
+                dwExtraInfo: 0,
+            };
+            input
+        }
+
+        /// A real press of a registered chord while the app's file dialog,
+        /// edit menu or move loop runs reaches the chord's reader.
+        #[test]
+        #[ignore = "requires the interactive Windows desktop"]
+        fn a_hot_key_pressed_during_a_modal_loop_reaches_its_reader() {
+            let (desktop, heard) = counted();
+            let keys = "Control+Alt+Shift+F9";
+            desktop
+                .register_hotkey("test", "chord", keys, false, "test", "press")
+                .expect("Control+Alt+Shift+F9 is free");
+            let chord = [VK_CONTROL, VK_MENU, VK_SHIFT, VK_F9];
+            let mut inputs: Vec<INPUT> = chord.iter().map(|&vk| key(vk, false)).collect();
+            inputs.extend(chord.iter().rev().map(|&vk| key(vk, true)));
+            let size = std::mem::size_of::<INPUT>() as i32;
+            let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size) };
+            assert_eq!(
+                sent as usize,
+                inputs.len(),
+                "{}",
+                std::io::Error::last_os_error()
+            );
+            let posted = modal_loop(|| heard.get() > 0, Duration::from_secs(2));
+            let atom = desktop.chords.borrow()[0].atom;
+            desktop.unregister_hotkey("test", "chord", keys);
+            assert_eq!(posted, 1, "Windows posted the press once");
+            assert_eq!(heard.get(), 1, "the press was lost in the modal loop");
+            // Registered to the listener, the atom is free once it leaves.
+            let (modifiers, key) = super::super::chord(keys).unwrap();
+            let listener = desktop.listener();
+            assert_ne!(unsafe { RegisterHotKey(listener, atom, modifiers, key) }, 0);
+            unsafe { UnregisterHotKey(listener, atom) };
+        }
+
+        /// A `WM_HOTKEY` posted to the listener, as Windows posts a chord
+        /// registered to it, reaches its reader through a modal loop's
+        /// dispatch. `RegisterHotKey` needs an interactive window station
+        /// (error 1459 over SSH), so the chord is recorded as
+        /// `register_hotkey` records it.
+        #[test]
+        fn a_hot_key_is_the_listeners_and_a_modal_loop_raises_it() {
+            use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
+            let (desktop, heard) = counted();
+            let listener = desktop.listener();
+            assert!(!listener.is_null());
+            let reader = Reader {
+                session: "test".into(),
+                id: "chord".into(),
+                repeat: false,
+                extension: "test",
+                event: "press",
+            };
+            desktop.chords.borrow_mut().push(Chord {
+                keys: "Control+Alt+Shift+F10".into(),
+                atom: 1,
+                readers: vec![reader],
+                repeats: false,
+            });
+            // As Windows posts a registered chord's press.
+            unsafe { PostMessageW(listener, WM_HOTKEY, 1, 0) };
+            modal_loop(|| heard.get() > 0, Duration::from_secs(1));
+            assert_eq!(heard.get(), 1);
         }
     }
 }

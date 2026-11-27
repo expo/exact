@@ -100,15 +100,36 @@ impl Engine {
     /// together (`carried == at`), and a second call at the same instant
     /// starts only what began since.
     pub fn present_frame(&mut self, carried: f64, at: f64) -> Result<Vec<u64>, EngineError> {
+        if self.record_present(carried, at)? {
+            self.start_pending(carried, Some(at))
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A picture prepared without holds has reached the display. Running
+    /// curves sample at its present; a hold born after its paint still waits.
+    pub fn present_frame_without_holds(
+        &mut self,
+        carried: f64,
+        at: f64,
+    ) -> Result<(), EngineError> {
+        if self.record_present(carried, at)? {
+            self.advance(self.now)?;
+        }
+        Ok(())
+    }
+
+    fn record_present(&mut self, carried: f64, at: f64) -> Result<bool, EngineError> {
         if !carried.is_finite() || !at.is_finite() {
             return Err(EngineError::NonFinite);
         }
         if carried < self.carried {
-            return Ok(Vec::new());
+            return Ok(false);
         }
         self.carried = carried;
         self.shown = self.shown.max(at);
-        self.start_pending(carried, Some(at))
+        Ok(true)
     }
 
     /// Release, at its own begin, every held curve and clock origin that
@@ -206,7 +227,7 @@ impl Engine {
             .filter_map(|play| play.pending);
         let latest = curves
             .chain(plays)
-            .chain(self.clock_held_since())
+            .chain(self.clock_held_begins())
             .filter_map(overdue)
             .reduce(f64::max);
         match latest {
@@ -252,10 +273,6 @@ impl Engine {
         let at = move |begin: f64| (begin <= cohort).then_some(at.map_or(begin, |t| t.max(begin)));
         let keys = std::mem::take(&mut self.pending);
         for key in keys {
-            if self.unshown.contains(&key.0) {
-                self.pending.insert(key);
-                continue;
-            }
             let Some(curve) = self
                 .slots
                 .get_mut(&key)
@@ -264,16 +281,21 @@ impl Engine {
             else {
                 continue;
             };
-            if let Some(begin) = curve.pending {
-                match at(begin) {
-                    Some(t) => {
-                        curve.start += t - begin;
-                        curve.pending = None;
-                        self.dirty.insert(key);
-                    }
-                    None => {
-                        self.pending.insert(key);
-                    }
+            let Some(begin) = curve.pending else {
+                continue;
+            };
+            if self.unshown.contains(&key.0) {
+                self.pending.insert(key);
+                continue;
+            }
+            match at(begin) {
+                Some(t) => {
+                    curve.start += t - begin;
+                    curve.pending = None;
+                    self.dirty.insert(key);
+                }
+                None => {
+                    self.pending.insert(key);
                 }
             }
         }

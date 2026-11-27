@@ -106,7 +106,7 @@ internal class ModuleSession private constructor(private val owner: Owner?) {
 
     fun call(body: String): String = try {
         val request = JSONObject(body)
-        if (request.has("extension")) "!NotSupportedError: no synchronous package form"
+        if (request.opt("extension") is String && request.opt("sync") is String) Extensions.sync(request)
         else "=" + moduleJson(module.call(request))
     } catch (e: NoModuleCall) { "!NotSupportedError: ${e.message}" }
     catch (e: Throwable) { "!" + (e.message ?: e.javaClass.simpleName) }
@@ -137,6 +137,10 @@ internal class ModuleSession private constructor(private val owner: Owner?) {
         val current: ModuleSession? get() = Exact.owner.let { if (it == null) readerModule else it.module }
         private val constructing = ThreadLocal<ExactModuleContext>()
         fun constructionContext(): ExactModuleContext = checkNotNull(constructing.get()) { "the session constructs exact.app.Module" }
+
+        /** A package's synchronous form for a session with no app module ([Extensions.sync]). */
+        @JvmStatic fun sync(body: String): String = try { Extensions.sync(JSONObject(body)) }
+        catch (e: Exception) { "!" + (e.message ?: e.javaClass.simpleName) }
 
         @JvmStatic fun open(context: Context): ModuleSession? = try {
             val type = Class.forName("exact.app.Module", false, context.classLoader).asSubclass(ExactModule::class.java)

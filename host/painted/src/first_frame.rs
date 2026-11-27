@@ -5,6 +5,12 @@
 //! not come, it releases the hold at its commit.
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PictureMotion {
+    StartsThrough(f64),
+    EmptyAt(f64),
+}
+
 impl<D: DataSource> Host<D> {
     /// The rule on for a live host whose display presents its pictures, off
     /// for a deterministic driver, which starts what waits at its takeover
@@ -31,12 +37,17 @@ impl<D: DataSource> Host<D> {
         }
     }
 
-    /// A picture is produced now: the engine time it carries, every hold
-    /// that began at or before it being in that picture.
-    pub(crate) fn picture_carried(&mut self) -> f64 {
-        let carried = self.engine.sample_time();
-        self.carried = Some(carried);
-        carried
+    /// An earlier receipt's ACK can create a hold at the exact time an
+    /// ahead picture sampled. An empty picture still owes that hold a paint.
+    pub(crate) fn picture_carried(&mut self, ahead: bool) -> PictureMotion {
+        let at = self.engine.sample_time();
+        if ahead {
+            self.carried = None;
+            PictureMotion::EmptyAt(at)
+        } else {
+            self.carried = Some(at);
+            PictureMotion::StartsThrough(at)
+        }
     }
 
     /// The next sampled visual change, in the host's milliseconds. A change
@@ -65,11 +76,22 @@ impl<D: DataSource> Host<D> {
     /// `carried`: what it carried starts there, and the page's first present
     /// sets `presented`. Returns whether anything changed to paint, and the
     /// fact's error.
-    pub(crate) fn picture_presented(&mut self, carried: f64, at_ms: f64) -> (bool, Option<String>) {
+    pub(crate) fn picture_presented(
+        &mut self,
+        carried: PictureMotion,
+        at_ms: f64,
+    ) -> (bool, Option<String>) {
         let mut paint = false;
         if self.engine.starts_on_frame() {
             let at = at_ms / 1000.0;
-            paint = match self.engine.present_frame(carried, at) {
+            let started = match carried {
+                PictureMotion::StartsThrough(sample) => self.engine.present_frame(sample, at),
+                PictureMotion::EmptyAt(sample) => self
+                    .engine
+                    .present_frame_without_holds(sample, at)
+                    .map(|()| Vec::new()),
+            };
+            paint = match started {
                 Ok(started) => self.motion_started(&started),
                 Err(e) => {
                     debug_assert!(false, "a present is finite: {e:?}");

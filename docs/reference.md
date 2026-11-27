@@ -1004,8 +1004,14 @@ the app first publishes it). The receipt admits both the entry plan and bytecode
 It can return immediately or await `fetch`
 and `storage.fs` reads from `app:/`. File writes, SQLite, document handles and
 native modules are unavailable in stage 1; `secret.keep` values are read from
-the shared Keychain only during refresh. The extension never persists store
+the shared Keychain only during refresh. Because SQLite is unavailable in a
+refresh, apps backed by SQLite should mirror widget-needed fields into a small
+JSON file under `app:/data/` with `storage.fs.atomicWriteFile` alongside
+mutations so the refresh reads it directly. The extension never persists store
 writes. The app reloads widget timelines after a successful write readable by a refresh, once the store has been quiet for half a second, so a burst of writes asks once.
+Successful refreshes return a WidgetKit timeline with reload policy
+`.after(max(now + 15 min, lastEntry + 1 s))`. Widget views take literal colors
+only (not runtime-computed color bindings).
 Refresh has a 900 ms deadline starting when it begins, including boot. Each JS
 turn gets the time remaining to that deadline, rather than the app's 100 ms
 per-call budget. This leaves 100 ms below LLP 1126 D8's one-second
@@ -1679,17 +1685,46 @@ The release signs GPU modules before baking their digests and preserves those
 signatures through packaging. iOS archives package primary and named GPU modules
 as signed frameworks; development builds keep their loose dylibs.
 Combining `--device --archive out.ipa --embed` produces both the IPA and the
-embed directory without a connected phone. The embed directory contains the
-static library, C header, assets, shaders, compatibility and capability metadata,
-receipt, and signed GPU frameworks (primary and named modules). Copy those
-frameworks intact into the embedding app's `Frameworks/`; their binaries must
-retain the baked digests.
+embed directory without a connected phone. On iOS, `--embed` emits a complete
+App Store-ready artifact directory (`LLP 1031.000`):
+
+- `lib<crate>.a` and `include/*.h` (`embed.link.mode = "static-archive"`), or
+  `Frameworks/ExactCore.framework` (`embed.link.mode = "shared-core"`, replacing
+  `lib<crate>.a` so the Rust runtime is linked once across the app and its widget
+  extension) when the app declares widgets or Live Activities.
+- `ExactEmbedComposition.swift`, a deterministic generated Swift file importing
+  only the SwiftPM products in `capabilities.json` with zero build-environment
+  variables; add it to the Xcode target and call `ExactEmbedComposition.install()`
+  before creating sessions (or use `ExactEmbedComposition.app`).
+- `Frameworks/<Name>.framework` for every iOS dynamic library the app's baked
+  composition reaches: signed GPU frameworks (copy intact to preserve baked
+  digests), required host arms (`ExactWeb`, `ExactVideo`, `ExactSound`, `ExactMIDI`,
+  `ExactSvg`, `ExactCanvasGpu`), native modules (`ExactModules`, package frameworks,
+  `ExactSwiftDependencies`, launch service frameworks), and `ExactWidgetReload` /
+  `ExactActivity` when widgets or activities are declared.
+- `PrivacyInfo.xcprivacy` declaring `ExactKit` and the Rust runtime's
+  required-reason APIs (each wrapped `.framework` also carries its own manifest).
+- `Resources/` carrying `host.ios.resources`, SwiftPM resource bundles, compiled
+  asset catalogs/icons when declared, and localized `InfoPlist.strings`.
+- `intents/` (`ExactIntents.swift` and any `LaunchParts/*.swift`) compiled by the
+  Xcode target so Xcode merges `Metadata.appintents` with host intents; link flags
+  are in `capabilities.json` `embed.intents.launchLink`.
+- `widgets/` (`Sources/`, `plans/`, `typescript/`, and widget fonts) compiled by a
+  consumer-owned WidgetKit extension target linking `ExactCore.framework` and
+  `ExactSnapshot`, with `embed.widgets.infoPlist` and `embed.widgets.entitlements`
+  (excluding `applinks:`).
+- `compat.json`, `receipt.json`, and `capabilities.json` (preserving top-level
+  `products`, `install`, `optimize`, `swiftFlags`, and `frameworks` alongside the
+  `embed` manifest). Static-only iOS apps compile no Swift during `--embed`.
 
 ### Optional Apple host products
 
 An external Swift host links `ExactKit` plus each capability product its plans
-use, then calls that product's public `install()` before creating sessions.
-The generated `--embed` composition lists the capabilities to link.
+use, then adds `ExactEmbedComposition.swift` (or calls each product's public
+`install()` in `capabilities.json` order) before creating sessions. Implement
+`ExactSessionDelegate`'s `exactSession(_:command:args:)` on the embedding host
+to handle `openURL` (for links and deep links) and `setScheme` (to apply the
+app's appearance choice to the embedding window or scene).
 
 | Product | Capability | Installation |
 | --- | --- | --- |
@@ -2205,6 +2240,33 @@ is `true` in a binary baked with production trust (for example, Apple's
 `--release`, `--distribution`, or `exact release`) and `false` in a development
 build.
 
+### Video picture in picture
+
+A URL-backed `video` uses the page commands `requestPictureInPicture(id)`
+and `exitPictureInPicture()`. Read `exactPage().pictureInPictureEnabled`
+to decide whether to show a custom button. The element reports a successful
+presentation with `enterpictureinpicture` and `leavepictureinpicture`.
+A failed request reports its reason through `pictureinpictureerror`.
+
+| Host | Command and verification |
+| --- | --- |
+| Web JS | Reads `document.pictureInPictureEnabled`. Headed Chromium ran the Contract button, the element events, repeat entry, exit and removal with a bundled MP4. Its own controls delivered one enter and one leave. A request from a task without user activation received `NotAllowedError`. |
+| Web wasm | Reads false and reports a request error. |
+| Android reader | An enabled APK reads the device’s picture-in-picture feature. On API 35 and 36 emulators the button pinned the player. Expansion, system close, command exit and removal each delivered one leave. Rotation kept the activity pinned. A request followed immediately by exit delivered one enter and one leave. A video removed while Android is entering picture in picture receives no events, and the activity returns to its normal mode. |
+| iOS | Reads false and reports that the command is unavailable on iOS. AVKit’s control reports enter, leave and failure. Delegate callbacks passed on iOS 27.2 and 26.5 simulators. The iOS events have not been run on a physical iPhone. |
+| macOS | The fixture received the named command refusal. The Mac’s ordinary video uses AVPlayerView. |
+| tvOS | The host declares the command unavailable. No tvOS drive was run. |
+| Painted Linux host, terminal | Both delivered the element error when driven headless on macOS. |
+| Windows | Uses the painted refusal. No Windows drive was run. |
+
+Android supplies its system controls for expanding and closing the pinned
+activity. The existing player and its media session continue. Exact adds no
+remote actions or automatic entry. A release APK declares PiP support when
+its plan includes a video and a request command. An unlocked development
+APK also declares support so a live edit can add the command. The flag
+allows the activity to enter PiP when asked. An app that never requests
+it stays in its ordinary window.
+
 ## Over-the-air updates
 
 The [recipe](recipes/over-the-air-updates.md) goes from a signing key to an
@@ -2241,7 +2303,9 @@ update: refused:` with the URL it could not reach.
 
 A stream is a channel and a compatibility id: the binaries that run the same
 updates. A release build for a platform with an update store bakes production
-trust and needs one of two variables, and refuses without either:
+trust by default, except that an Android APK needs `EXACT_UPDATE_TRUST=production`.
+A production-trust build with an update store refuses to build unless one of
+these variables is set.
 
 - `EXACT_UPDATE_GENESIS=1` starts a new stream. The binary embeds sequence
   zero.
@@ -2281,6 +2345,13 @@ as source: the `.exact/` its builds write, and generated files in the Exact
 checkout. So commit, pass `--dirty`, and read the list. An app's first build
 for a platform edits `app.json`: commit after it. `push` always publishes the
 working tree.
+
+When the non-base language tables together reach 4 KiB gzipped, the JS web root
+includes a content-named file for each of them. A static host serves
+the files listed in `routes.json`'s `files` with
+`Cache-Control: public, max-age=31536000, immutable`. Keep earlier files while
+pages from those builds can still request them. The shell selects the launch
+language in its head, including on static hosting.
 
 ### When a staged update applies
 
@@ -2722,21 +2793,73 @@ or `open({host, seed: 42, locale: "fr-CA", timeZone: "America/Toronto", epoch: "
 a test file writes them as launch lines (`epoch "2026-09-21T14:13:20Z"`, `time-zone "America/Toronto"`,
 [authored tests](contract-grammar.md#authored-tests)), which override the flags.
 
-On macOS, `scale` enlarges the pixels of an `iframe` after WebKit lays out its guest.
-Line breaks stay fixed, but enlarged text can look soft. Size the containing box to
-reserve space for the transformed frame.
+### Enlarge an iframe on macOS
+
+On macOS, `scale` enlarges an `iframe` after WebKit lays out the guest. Use it to
+keep line breaks during a transform. Size the parent to reserve the space. A
+composited layer grows soft. In a window with 2× backing scale, the inner edge of
+a fixed outline had two intermediate pixels at 2× enlargement and four at 4×.
 
 ```text
 box width=(320 * z) height=(200 * z) overflow="hidden"
   iframe "https://example.com/" width=320 height=200 scale=z transform-origin="0% 0%" border="none"
 ```
 
-For sharp text, `iframe "https://example.com/" width=320 height=200 zoom=z` enlarges
-the frame's own lengths and tells WebKit to render the page at that zoom. Line breaks
-can change even when the guest still reports a 320 × 200 CSS pixel viewport. On macOS,
-the time of the first displayed frame at the new size or zoom remains unknown to
-Exact. A WebKit snapshot completes when its image is ready, even in a hidden window.
+Use `iframe "https://example.com/" width=320 height=200 zoom=z` for sharp page zoom.
+The frame's own lengths grow by `z`. In a 320*z* × 200*z* point box on macOS 27.0.1,
+the layout viewport reported 320 CSS px at 1×, 2×, 2.74× and 4×. The outline had a
+one-device-pixel edge at every factor. WebKit lays text out again. A fluid paragraph
+took four lines at 1× and 2×, with a different last word on the first line at 2×.
+It took three lines at 2.74× and 4×. In the reporter's card the first line ended
+at “from” at 1× and “127.0.0.1.” at 2.74×. [Reproduction](https://github.com/expo/exact/issues/1276)
+
+Use `apple.magnification=z` for a sharp view of a fixed-width page, or to inspect
+detail in a WebKit-backed frame. It applies WebKit's pinch scale from the top left.
+PDFKit handles local PDFs separately. A sandboxed remote frame keeps its sandbox
+wrapper, and magnification applies to that wrapper. A directly loaded page
+stays top-level and lays out at the width of the box. At 1×, 2× and 4×, the
+layout viewport of a 320*z*-point box was 320, 640 and 1280 CSS px wide.
+The visual viewport stayed 320 CSS px wide. The fluid paragraph took four, two
+and one lines. The guest can read `visualViewport.scale`.
+
+To keep a page's 1× line breaks and draw its composited layers sharply, load an
+app-owned wrapper. The child below always lays out at 1440 × 900 CSS px.
+
+```text
+iframe "https://example.com/wrapper.html" width=(1440 * z) height=(900 * z) apple.magnification=z border="none"
+```
+
+```html
+<!doctype html>
+<style>
+  html, body { margin: 0; width: 1440px; height: 900px; overflow: hidden; scrollbar-width: none }
+  iframe { display: block; width: 1440px; height: 900px; border: 0 }
+</style>
+<iframe src="/page.html"></iframe>
+<script>addEventListener("scroll", () => scrollTo(0, 0))</script>
+```
+
+The wrapper sizes `html` and `body` to the child's 1440 × 900 box so the document covers
+the frame at `apple.magnification` below 1, hides its own legacy scrollbars and returns to
+the origin if focusing content scrolls it. The child can see `window !== window.top` and
+must allow framing. In a Mac window the child kept all four lines and their endings at 1×,
+2× and 4×. The fixed outline went from solid to white in one device pixel at 2×
+and 4×. The reporter measured a ceiling of 8192 device pixels
+across one composited layer. On a 2× display a 1440 CSS-pixel-wide layer reaches
+that ceiling near 2.84× enlargement. [Canvas measurements](https://github.com/expo/exact/issues/1763)
+
+The Mac reapplies the authored factor after each main-frame load (including navigation
+and reload), each resize and each change of value. If `apple.allowsMagnification=true`,
+the person's pinch lasts until one of those events. Removing the value restores 1.
+The accepted range is 0.001 through 256 inclusive. A bad literal fails to build.
+A bad binding logs the refusal and leaves the view's last accepted factor in force.
+iOS and other hosts ignore the word.
+
+On macOS the first displayed frame after a resize or zoom remains unknown to Exact.
+A WebKit snapshot completes when its image is ready, even in a hidden window.
 [Apple’s snapshot API](https://developer.apple.com/documentation/webkit/wksnapshotconfiguration/afterscreenupdates)
+
+### Drive and attach to a running app
 
 On the web (same-origin frames), macOS and iOS, `tap live at 40 80` presses
 40 points right and 80 down from the top left of the iframe named `live`.
@@ -2871,6 +2994,22 @@ driver refuses Android, Windows, Linux, tvOS, watchOS and a physical iPhone befo
 platform tool.
 
 ### Inspect work and native presentation
+
+On macOS, iOS and tvOS, `sample <x> <y> [<x> <y>…]` settles the page at
+the current clock and reads the backing pixel under each viewport point.
+It returns unpremultiplied, extended linear sRGB. A GPU canvas contributes
+its presented frame. An iframe or a snapshot-capable native view supplies
+its guest picture. Other Metal and OpenGL layers need a snapshot from
+their owner. Video contributes the displayed frame when the player makes
+it readable. Playing or protected video can withhold its frame, and a
+live camera preview exposes no displayed buffer. If a point needs missing
+pixels, the reply names the node and the reason. An opaque cover can still
+be sampled. On iOS 27 the layer renderer clips native extended-range
+gradients and omits layer shadows.
+
+On iOS and the JS web target, `check` and `verify` count the part of
+`-exact-hit-slop` that accepts a press. A clip cuts that region, and a front
+control takes the overlap. A `target` finding gives both the tap area and the drawn box.
 
 `perf <target> during "<operation>"`
 reports the work that operation caused in the named subtree. Development measurements
@@ -3012,7 +3151,9 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `DecompressionStream`, `CompressionStream` | WHATWG Compression's `"deflate"`, `"deflate-raw"` and `"gzip"`, worked by native code in the turn that writes each chunk: 8 MB of JSON inflates from 1.4 MB in about 25 ms of that turn's budget, and writing it in slices with `await scheduler.yield()` between spreads it over turns of their own. Its errors are the standard's `TypeError`s: corrupt data, data after the end, input that ends before its end at `close()`, a chunk that is not an `ArrayBuffer` or view. One stream may span many writes: Discord's `zlib-stream` (one zlib stream across a socket's messages, each ending in a sync flush) inflates message by message, each write's output queued once it settles; keep a `read()` pending, as a write waits for one |
 | `TextEncoder`, `TextDecoder` | `TextEncoder` emits UTF-8. Hermes 0.4's built-in WHATWG decoder keeps the browser-style encoding labels, including UTF-8 and UTF-16LE/BE, plus `fatal`, streaming and `ignoreBOM` behavior |
 | `URL`, `URLSearchParams`, `atob`, `btoa` | |
-| `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.subtle` | Inside an answer. Under the driver every host draws a repeatable stream from the launch seed (`agent --seed <n>`, 1 unless given), so every launch at one seed draws the same bytes, and `logs` says so at the first draw (the internal wasm web target draws it unsaid); a server that remembers a client by an id drawn here meets the same client again. A native drive of the real device (`EXACT_DEVICE=real`) draws the system's. `subtle` digests (SHA-256/384/512) and ECDSA P-256 keys (LLP 1069.005), and refuses the rest by name |
+| `Blob`, `File`, `FormData`, `Request`, `Event`, `EventTarget`, `CustomEvent` | Available on every executor (LLP 1195.000 D5 P0a, `typescriptRuntime` 19). `File.lastModified` reads the virtualized clock. `Blob`, `File`, and `FormData` (RFC 7578 multipart) are accepted as `fetch` and `Response` bodies, and `Response` provides `blob()` and `bytes()`. `Request` wraps URL, method, headers, body, redirect, cache, and signal for `fetch()` |
+| `process` | Minimal frozen shim `{ env: { NODE_ENV }, versions: {}, release: {} }` for isomorphic packages (LLP 1195.000 D1.3) |
+| `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.subtle` | `getRandomValues` and `randomUUID` run inside an answer. Under the driver every host draws a repeatable stream from the launch seed (`agent --seed <n>`, 1 unless given), so every launch at one seed draws the same bytes, and `logs` says so at the first draw; a native drive of the real device (`EXACT_DEVICE=real`) draws the system's. `subtle` supports SHA-256/384/512 `digest`, ECDSA P-256 (`generateKey`, `sign`, `verify`, `importKey`/`exportKey` JWK, kept keys), `HMAC` (SHA-256/384/512), `AES-GCM` (128/256, 12-byte IV, 128-bit tag), `PBKDF2`, `HKDF`, `RSASSA-PKCS1-v1_5` (`verify`, SPKI/JWK), and `Ed25519` (`raw`/`spki`/`pkcs8`/`jwk`) (LLP 1069.005, LLP 1195.000 D5 P0b, `typescriptRuntime` 19), and refuses the rest by name |
 | `AbortController`, `AbortSignal` | `AbortSignal.timeout(ms)` is an answer's timer (below) |
 | `setTimeout`, `clearTimeout` | Inside an answer, on the app's clock (below) |
 | `queueMicrotask`, `Promise` | |
@@ -3021,27 +3162,38 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Each line the app's code logs also goes to the system's log: on Apple the unified log, subsystem the app's bundle identifier, category `console` (`console.debug` at debug level, `console.error` at error, the rest at the default level); on Android logcat, tagged with the app's package name (`adb logcat -s com.example.app`), at the method's priority; and on Linux and Windows standard error, as `console: …`. Every build writes them, where anyone with the device can read them. Outside a drive the web writes it to the browser's console too |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
-under one domain (`https://*.example.com`), or a whole scheme, written as CSP
-writes a scheme source: `net.fetch https:` or `net.fetch http:` admits any host
-at any port of that scheme, for a server the person names at run time (a URL
-they type, a local server on a port chosen at launch). `net.websocket` takes an
-origin, a subdomain wildcard (`wss://*.example.com` or `ws://*.example.com`),
-or `wss:`/`ws:` the same way; its scheme is `wss` or `ws`, and a line with
-another (`net.websocket https://example.com`) fails the build. In either family's subdomain wildcard, `*` must
-be the whole leftmost label, the suffix must have at least two labels and
-must not be an IP address, and userinfo, paths, queries and fragments are
-refused (a trailing `/` is allowed). Only hosts strictly under the suffix
-match, at the grant's scheme and port (explicit or the scheme's default);
-the bare suffix and sibling domains do not. A scheme no line names is refused (`wss:`
-does not admit `ws:`). The platform's own refusals still apply: App Transport
+under one domain (`https://*.example.com`), `loopback`, `local-network`, or a
+whole scheme, written as CSP writes a scheme source: `net.fetch https:` or
+`net.fetch http:` admits any host at any port of that scheme, for a server the
+person names at run time. `net.fetch loopback` admits `http:` and `https:` to a
+loopback host (`127.0.0.0/8`, `[::1]`, an IPv4-mapped IPv6 address carrying
+`127.0.0.0/8`, or exact ASCII case-insensitive `localhost` with at most one
+trailing dot) at any port, with no trailing modifier, for a local helper process
+on an ephemeral port (LLP 1016 D6); it requires no `device.local-network` grant
+and sets no Apple Local Network or ATS keys. `net.websocket` takes an origin, a
+subdomain wildcard (`wss://*.example.com` or `ws://*.example.com`), `loopback`
+(`ws:` and `wss:` to the same loopback hosts at any port), `local-network`, or
+`wss:`/`ws:` the same way; its scheme is `wss` or `ws`, and a line with another
+(`net.websocket https://example.com`) fails the build. In either family's
+subdomain wildcard, `*` must be the whole leftmost label, the suffix must have
+at least two labels and must not be an IP address, and userinfo, paths, queries
+and fragments are refused (a trailing `/` is allowed). Only hosts strictly under
+the suffix match, at the grant's scheme and port (explicit or the scheme's
+default); the bare suffix and sibling domains do not. A scheme no line names is
+refused (`wss:` does not admit `ws:`), and `net.fetch loopback` does not admit
+WebSockets or vice versa. The platform's own refusals still apply: App Transport
 Security refuses `http:` beyond the local network unless the platform's
 `appTransportSecurity` in `app.json` (`host.macos`, `host.ios`) sets
 `allowsArbitraryLoads`, which turns it off for every connection the app makes
 and which App Store review asks the app to justify (LLP 1030); a browser
 refuses `ws:` from an `https:` page except to loopback. A render-server page's
-`connect-src` carries the scheme source as written. The render server itself
-doesn't hold a scheme-wide `net.fetch` line: a source that needs one keeps its
-placeholder in the rendered page, and the client fetches it after adoption.
+`connect-src` carries a scheme source as written and expands `loopback` to its
+CSP3-spellable subset (`127.0.0.1:*`, `localhost:*`, and `localhost.:*`) for
+that family's schemes (narrower than the grant, since CSP3 cannot express CIDR
+ranges or bracketed IPv6 literals). The render server itself holds only named
+`net.fetch` origins and subdomains (not `self`, scheme-wide, `local-network`, or
+`loopback` lines): a source that needs one keeps its placeholder in the rendered
+page, and the client fetches it after adoption.
 
 In the browser, a website's `fetch('/_data/page.json')` starts at the base URL's origin root and
 `fetch('data/page.json')` starts at the document base, including a `<base href>`.
@@ -3084,11 +3236,14 @@ sandbox page code: it can call browser `fetch` directly, subject to the
 rendered page's CSP where one is served.
 
 On native hosts, a resource's plain HTTP requests overlap, up to six at a
-time, and their replies are delivered in the order asked (LLP 1162 D1, D2).
-A TypeScript resource's answer hands over every request it has made, so
-`Promise.all` overlaps too. Reads wait for earlier sends, storage steps and
-native continuations; those wait for the reads before them. In the sequence,
-requests with `exactBodyFrom` or `exactBodyTo` still run one at a time.
+time, and settle as their replies arrive without waiting for earlier reads
+(LLP 1162 D1, D2, §8 Q2). Resource storage steps and local continuations
+(`scheduler.yield`, timers, re-asks) also run ahead of held HTTP reads while
+staying FIFO with one another. A TypeScript resource's answer hands over every
+request it has made, so `Promise.all` overlaps too. Reads and local work wait
+for earlier sends and mutations; sends wait for the reads and local work
+before them. In the sequence, requests with `exactBodyFrom` or `exactBodyTo`
+still run one at a time.
 
 Resource `GET`/`HEAD` reads retain the bound of 128 queued, running and
 unconsumed requests, with at most 64 MiB of waiting request buffers. A
@@ -3148,10 +3303,11 @@ only the 1 MiB it can hold, whatever its ceiling. A browser has no lanes and sch
 there only the ceiling applies. On every host a reply larger than
 `maxResponseBytes` fails as `refused`. The ceiling is 1 byte to 64 MiB (1 GiB
 with `exactBodyTo`), and anything else is a `TypeError`. A `GET` is
-not independent by default: ordinary resource reads already overlap, while
-an independent reply settles as it arrives. Leave writes, and any read whose
-parse depends on an earlier reply, in the queue. Storage steps and native
-continuations cannot opt out of it.
+not independent by default: ordinary resource reads already overlap and settle
+on arrival, while still respecting earlier sends and mutations. Use
+`exactIndependentHttp` when a read must bypass send barriers or use the
+independent lane's budget. Leave writes in the ordered sequence. Storage steps
+and native continuations cannot opt out of it.
 
 A Hermes data module has a 64 MiB heap limit by default. Terminal heap exhaustion
 fails its outstanding requests and tool invocations with
@@ -3269,28 +3425,34 @@ A poll loop (`for (;;) { await sleep(5000); … }`) belongs in a Contract
 `task`, not in an answer: an answer that always has a timer armed never
 settles, so every `clock settle` stops at its bound and says `settled: false`.
 
+Ambient clock and randomness in a data module (LLP 1195.000 D2): `Date.now()`,
+`new Date()`, `Date()`, `performance.now()`, omitted-argument
+`Intl.DateTimeFormat`, and `Math.random()` read the host's deterministic clock
+(`epochAtZero + clock_ms` for wall time; `clock_ms` for `performance.now()`)
+and an isolated `--seed` substream (`ts-random` / `ts-init`, separate from
+`crypto.randomUUID()`) under the driver or platform CSPRNG in production.
+Resources that read the ambient clock or draw ambient randomness are excluded
+from launch bake, excluded from SSR response caching (`keep = 0`), refused in
+`render=build`, and emit a once-per-resource `[ambient-clock]` journal warning
+pointing to `exactTime()` for reactive or SSR-safe time. Under Bun unit tests,
+pass `--preload ./scripts/test-clock-preload.mjs` (`EXACT_TEST_EPOCH`,
+`EXACT_TEST_SEED`, `EXACT_TEST_TIME_ZONE`).
+
 Not in a data module, by design (LLP 1027.000): `setInterval`,
-`requestAnimationFrame`, `performance.now()`, `Date.now()`, `new Date()`
-without a value and `Math.random()`: time and seeds are source arguments.
-Every executor refuses them by name, with the same message, on first use:
-Hermes, the web's module realm, and the web build, whose bundler gives the
-app's own modules guarded `Date`, `Math`, `Intl`, timers and `performance` in
-place of the page's (LLP 1027.000 D3), so an app that reads the clock fails in
-the web loop as it would on a device. The type check cannot see the difference, but every
-build refuses a direct use in a module `app.ts` reaches, by file and line
-(`logic.ts:2:28: Date.now() is unavailable in data sources; …`), so a test that
-runs the module under Bun, which has no such guard, cannot hide it.
-Literal bracket access such as `Date['now']()` and `globalThis['setInterval']()`
-gets the same diagnostic as dot access, including in the web build's summary.
-Aliases and dynamic property keys still reach the runtime guard. In a running
-session, a refused TypeScript answer fails its resource and keeps its last value
-or placeholder; the typed input or action still commits. `failure(x).code` is
-`error` for the module's own error, unless its nonempty `reason` supplies a domain code. A failed send ends unsent, retains its previous
-result and runs no `then`, including when queued. The journal names the failure.
-Module initialization, bake and replacement validation still refuse failures.
-Development JS builds name a derive
-whose value fails its type check and report failed resource/source dependencies
-that it read.
+`requestAnimationFrame`, and `requestIdleCallback` (use `setTimeout` inside an
+answer or a Contract `task`). Every build refuses direct and literal-bracket
+calls to those timers in `app.ts` by file and line, and every executor refuses
+them at runtime. `XMLHttpRequest`, `WebSocket`, and `EventSource` are absent
+(`typeof WebSocket === "undefined"`) on every executor; use `fetch()` with
+`exactStream`. In a running session, a refused TypeScript answer fails its
+resource and keeps its last value or placeholder; the typed input or action
+still commits. `failure(x).code` is `error` for the module's own error, unless
+its nonempty `reason` supplies a domain code. A failed send ends unsent,
+retains its previous result and runs no `then`, including when queued. The
+journal names the failure. Module initialization, bake and replacement
+validation still refuse failures. Development JS builds name a derive whose
+value fails its type check and report failed resource/source dependencies that
+it read.
 ES2024's resizable `ArrayBuffer`, shared memory and the RegExp `v` flag are not
 in Hermes, so they are not in the library.
 
@@ -3649,7 +3811,7 @@ globals (no boundary there, LLP 1027 D5), is not counted, so an answer awaiting
 it beside a held fetch may count as held. Hermes reaches no such globals.
 
 An answer that keeps coming (LLP 1016.000) is a `fetch` with `exactStream`,
-returned as the answer: `return fetch(url, { exactStream: (event) => value })`.
+returned as the answer: `return fetch(url, { exactStream: (event) => value })`. A native app can hold 16 network streams at once. Long polls, event feeds, WebSockets, listeners and running uploads each use one slot. Desktop apps have 16 additional slots for streaming children.
 The promise never settles; each message, and the end, is mapped and commits
 as the resource's answer. A mapper may return a promise (an `async` mapper):
 the message commits when it settles. The resource stays pending until its first
@@ -3820,7 +3982,7 @@ A **long poll** (LLP 1016.000 D8) is a stream with `exactLongPoll: {cursor,
 from}` beside `exactStream`, for an endpoint that holds each request until it
 has news: `fetch('https://sync.example/changes?since=0&wait=25', {
 exactStream: (e) => e.type === 'error' ? null : JSON.parse(e.data),
-exactLongPoll: { cursor: 'since', from: 'seq' } })`. The host asks with GET
+exactLongPoll: { cursor: 'since', from: 'seq' } })`. Each long poll holds one of the native app’s 16 network stream slots, including while it waits to ask again. Use one poll carrying changes for all open documents. Refresh a refused poll once a slot is free. The host asks with GET
 (`Accept: application/json` unless named), one request at a time. Each 2xx
 JSON reply is one `message`: `data` its text, `lastEventId` its cursor, the
 reply's field `from` (`seq`, or `meta.seq` one level down; a string, or a
@@ -4046,6 +4208,18 @@ recreation and expires after ten minutes, including device sleep, with 499. A la
 delivered while no activity is attached cancels with 499. A sign-in
 interrupted by process death must be started again.
 
+### Provider sign-in
+
+| Host | Apple | Google |
+| --- | --- | --- |
+| Web | Authorization popup | Authorization popup |
+| iOS and macOS | System sheet, alone or with a passkey, with a provisioned app | Unavailable |
+| Android | Unavailable | Standalone Credential Manager button and bottom sheet with Google Play services |
+
+Read `getIdentityCapabilities()` before showing a provider button. For
+the Android request options and sign-out behavior, see the
+[sign-in package](../packages/sign-in/README.md).
+
 ### Notifications
 
 `@exact/notifications` (LLP 1133.004) posts local notifications, hears their
@@ -4126,7 +4300,8 @@ grant beside this one: see [Push](#push).
   when the category name stays the same. `e.action` remains the authored name.
   Data code's
   post may name only a list the app's Contract writes (`TypeError`
-  otherwise). `placeholder=some("Note")` makes the action a text field;
+  otherwise). `placeholder=some("Note")` makes the action a text field.
+  On iOS and macOS, Exact passes the action’s `title` as its submit button title.
   `destructive` and `authenticationRequired` are the platform's flags (the
   device must be unlocked first). Choosing one is `notificationclick` with
   `action` its name and `reply` what the person typed; it never opens the
@@ -4206,6 +4381,37 @@ grant beside this one: see [Push](#push).
   `NotSupportedError`; launchers draw their own dot). The app's Kotlin may set
   more on each post through `NotificationsModule.builderHatch`.
 
+On Android, `android.group` is a non-empty string that bundles individual
+posts in the shade. A channel controls their settings. Apple's
+`apple.threadIdentifier` groups Apple posts independently. Give each child its
+own tag and use one more tag for the summary. For example, an app that declares
+the `field_trip` channel can pass its current count with each post.
+
+```text
+  action specimen(title: string, tag: string, count: number)
+    showNotification(title=title, tag=tag, android.channelId="field_trip", android.group="field-trip")
+    showNotification(title="Field trip", body=`${count} specimens`, tag="trip-summary", android.channelId="field_trip", android.group="field-trip", android.groupSummary=true)
+  action finishTrip
+    closeNotification(tag="trip-summary")
+```
+
+Run this action on Android. On Apple, post each child with its thread identifier.
+Call `specimen` with each new or updated child. After closing a child by tag,
+replace the summary with the remaining count or call `finishTrip` when the last
+child goes. Closing the summary early also dismisses its posted children on
+Android. The app chooses the summary's text and click action.
+
+On API 35 and 36 AndroidX defaults to `GROUP_ALERT_ALL`, so both a child and
+its summary can sound. On both Google APIs emulators, back-to-back posts sounded
+once and posts about 2.5 seconds apart sounded twice. Exact sets `GROUP_ALERT_CHILDREN` on each summary to
+avoid the second alert. App Kotlin can still choose an explicit alert policy
+on the builder for an audible post. A silent child keeps its group and uses
+`GROUP_ALERT_SUMMARY` to suppress its own alert. Without a group, Exact passes the fallback key
+`silent`. Reserve that key for silence. API 35 groups it normally, while the
+API 36 image clears that key and sets the silent flag. Closing a summary
+with this reserved key therefore leaves the other silent posts on API 36.
+The agent models the submitted group. A written `android.groupSummary` requires a group.
+
 | host | post | `showTrigger` | click | badge |
 | --- | --- | --- | --- | --- |
 | web | `new Notification` in the page | while the page is open: the web has no trigger that outlives the page | while the page is open | `navigator.setAppBadge` where the browser has it, else `NotSupportedError` |
@@ -4219,11 +4425,13 @@ there `available` is false and every call refuses `NotSupportedError`.
 
 Under the agent nothing reaches the system on any host. A post while
 `prompt` waits on a `permission` ticket (`tap @t allow`, or `--permission
-notifications=granted` at launch); `state.notifications` lists what the app
-posted (`{title, body, tag, silent, data, showTrigger, navigate, delivered,
-ref}`, a tag replacing its older one, `closeNotification` removing it, an
-entry for later `delivered: false` until `clock` passes it); `state.badge` is
-the badge (a number, `"flag"` or `null`). `tap @ref` on a delivered entry is
+notifications=granted` at launch). `state.notifications` lists each post's
+title, body, tag, silent, data, showTrigger, navigate, delivered and ref.
+On Android, `android.group` and `android.groupSummary` give the key and role
+handed to Android before the system ranks or regroups notifications. On Android,
+scheduling under an active tag replaces any pending alarm. The posted entry
+stays visible until delivery replaces it. Closing the tag removes both. A scheduled entry reads `delivered: false` until the clock reaches
+its time. `state.badge` is a number, `"flag"` or `null`. `tap @ref` on a delivered entry is
 its click; `tap @ref <action>` chooses one of its `actions`, `tap @ref
 '<action>=<text>'` with a typed reply, a background action running hidden
 as `state.wake` shows it (`origin` `action`); `--notification '<entry>'` relaunches the app with one, as the
@@ -4712,7 +4920,7 @@ Windows have no browser (`available` false); a typed address still works there.
 A desktop app's data code starts programs with Node's names (LLP 1133.007):
 `spawn(program, args, {exactStream, …})` is a resource's answer, a child that
 lives while the resource holds it, and `execFile`, `execPath`,
-`loginShellEnvironment()` and `appEnvironment()` are steps an answer awaits.
+`loginShellEnvironment()` and `appEnvironment()` are steps an answer awaits. Each streaming child takes one of 16 child slots. The app also has room for 16 one-shot processes and 16 network streams. Each streaming child reserves its response ceiling against the independent lane’s byte budget, as a network stream does. A spawn refused at this limit starts no child for `exactRestart` to restart. Once a slot is free, refresh the resource to try again.
 Each program is named by a grant line: `process.spawn path:ssh`,
 `process.spawn /usr/bin/tar`, `process.spawn home:/.t3/runtime/versions` or a
 `bundle:` helper; the call names it as its line does
@@ -4899,6 +5107,30 @@ A call keeps its category, mode and options when a sound or player ends, and
 leaves activation to the system until its last claim ends and the system
 deactivates it. Either playback value can continue in the background with
 `"audio"` in `host.ios.backgroundModes`.
+
+A `video` pauses on Home on iOS and Android by default.
+Set `audiovisualBackgroundPlaybackPolicy="continuesIfPossible"` to keep its
+sound playing while the app is in the background. The player must already
+be playing an audio track, with `muted=false` and volume above zero. On iOS it requires
+either playback session and the audio background mode. A player with
+`metadata=` requires `"playback"` for Now Playing. On Android it requires
+`"playback"`. The media notification uses the player's metadata, or the
+app name when the video has none. Returning to the app reattaches the picture.
+
+The other values, `"automatic"` and `"pauses"`, pause on Home. Bind the
+policy to a player's settings to change it while playing. In the background,
+turning continuation off or muting the player pauses it. Turning continuation
+on leaves a paused player paused. On the web, a page that wants to pause other
+videos when the tab is hidden handles visibility itself. Other hosts accept
+the attribute and ignore it.
+
+On iOS 27.2 and 26.5 simulators, the opted-in clip continued submitting
+audio buffers after Home at Now Playing rate 1. On Android API 35 and 36
+emulators, the media session stayed active and the picture returned at its
+advanced position with one load. On both hosts the default, muted and
+zero-volume players paused. A physical phone, the Lock Screen and Control
+Center UI, and real process suspension have not been tested.
+
 Before a GPU module makes a surface, the host sets a session that nothing
 holds to ambient, without activating it: a module's output that opens before
 its `exact:audio` request is handled mixes and obeys the switch until the
@@ -6039,6 +6271,15 @@ them; under the agent they remain held pickers. Open and Save offer the
 `file_handlers` types, as the table above says. File inputs copy the
 chosen files into `app:/tmp/picked/` and leave the originals in place.
 
+**A message in the Mac panel.** All three document pickers accept a string,
+for example `showDirectoryPicker("folder", apple.message=t("choose-project"))`.
+macOS shows it above the file list. The iOS document picker has no message
+line, and the option is inert outside macOS. Keep the familiar Open panel
+for ordinary opens and add a short explanation when the choice serves a
+different task, such as linking a project folder.
+[Apple’s file management guidelines](https://developer.apple.com/design/human-interface-guidelines/file-management)
+and [panel message](https://developer.apple.com/documentation/appkit/nssavepanel/message).
+
 **Where a picker opens** (LLP 1173 D2). The three pickers and `saveFile`
 take the File System Access API's `startIn=`: a well-known folder by name,
 or a `doc:` path the person chose earlier.
@@ -6135,7 +6376,9 @@ Read the new file and let the person choose.
 **Documents kept across launches** (LLP 1069.010.000 stage 2; macOS, the
 web, and Linux in a desktop session). An
 app granted `doc.keep` keeps exactly what the person chose — a file or folder
-from a picker, Finder, ⌘O, Open Recent, the command line or a drop; never a
+from a picker, Finder, ⌘O, Open Recent or the command line, and on macOS and
+the web a dropped file of a type the manifest declares (not the copy of a
+Mac promise, nor a browser's read-only copy; Linux keeps no drop); never a
 typed path, a followed link, or a route's folder — and its `doc:/<n>/<name>`
 reads again after a relaunch, in any of the app's windows, with no panel.
 The kept set is File ▸ Open Recent's: Clear Menu, or an entry falling off
@@ -6196,9 +6439,9 @@ On Linux the list is the desktop's recent files (`recently-used.xbel`),
 each entry marked with the app's id, and the person clears it there. The
 path is the handle: a kept document moved, or replaced at its path, is
 forgotten rather than followed. Only a desktop session keeps anything; a
-headless run, a drive and the DRM kiosk keep and list nothing. The Linux
-host has no file chooser of its own yet, so today nothing there is chosen
-to keep. iOS keeps nothing.
+headless run, a drive and the DRM kiosk keep and list nothing. What the
+person chooses in the desktop portal's file chooser is kept; a file dropped
+on a Linux window never is. iOS keeps nothing.
 
 On the web a kept document is the `FileSystemHandle` the browser gave,
 kept in the page's IndexedDB, at most 20 of them; clearing the site's data
@@ -6238,7 +6481,9 @@ not as path text in the field; a drag of plain text over a field is the
 field's unless the field declares `drop`, and on Windows, where a field takes
 no drag, it lands on the `drop` above. An app can show an overlay at
 `dragenter`; the `drop` action clears it when the drop lands, and
-`dragleave` otherwise ([grammar](contract-grammar.md#pointer)):
+`dragleave` otherwise ([grammar](contract-grammar.md#pointer)). A dropped
+file is lent, not given: an app copies an attachment it keeps into
+`app:/data` ([taking a drop](recipes/drag-in.md)):
 
 ```text
 action took(e: DragEvent)
@@ -6261,7 +6506,7 @@ column dragenter=entered dragleave=left drop=took
 | tvOS | none | empty: tvOS has no pasteboard |
 | Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
 | Android | yes: files, text and links from another app or this one, each file a copy of a `content:` item, no folders and no `file:` paths. Another app's files are copied under the read permission Android grants for the drop; without one, that drop brings its text and link alone. While a drop has no `url`, a text item whose whole last line is an `http://` or `https://` link gives that link as the `url`, and its lines before it, such as the title Chrome sends, as the `text`; a field keeps text, links and text files, as Android's text views do, unless it declares `drop`, and gives a file to the `drop` above it | empty (text only) |
-| Linux | yes, in the Wayland window, from another app, taken as a copy: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`); image data is not taken, so a browser's picture arrives as the link or file it offers beside the data, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop`; Wayland tells the window no keys, so the modifiers are those it holds | empty (text only) |
+| Linux | yes, in the Wayland window, from another app or this one, taken as a copy: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`); image data is not taken, so a browser's picture arrives as the link or file it offers beside the data, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop`; Wayland tells the window no keys, so the modifiers are those it holds; in a Flatpak sandbox the files come from the document portal's file transfer key, else only those the sandbox shares with the host | empty (text only) |
 | terminal | none | empty (text only) |
 
 The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,
@@ -6757,6 +7002,11 @@ The package's Swift sources also have the `EXACT_DEVELOPMENT` compilation
 condition in a development build. SwiftPM products build in release
 configuration and the APK is non-debuggable in both trusts. A package can
 use the fact to select a vendor SDK's test mode.
+
+On Android, `--release` alone keeps `context.development` true and includes the
+Android overrides from `development.packages`, even in an upload-signed APK.
+Use `--bundle` for a production App Bundle or set `EXACT_UPDATE_TRUST=production`
+with `--release` for a production-trust APK.
 See [A package's configuration](contract-for-agents.md#a-packages-configuration).
 
 Both web targets load a placed package view from its bound web implementation
@@ -6787,7 +7037,19 @@ bun scripts/exact.mjs hatch avatar <app>     # in an app `exact new` made: bun e
 bun scripts/exact.mjs hatch --app <app>      # the app scope; --window for the window's
 ```
 
-The verb writes a stub for each target the app builds (Swift in
+Native view factories have their own roster in `app.json`. Each `modules` item is
+a unique tag string or an object with `tag` and optional `hosts`. Omitting
+`hosts` means every host. A list names one or more of `ios`, `tvos`, `macos`,
+`web`, `linux`, `windows` and `android`. For example,
+`{"tag":"compose-card","hosts":["android"]}` needs a factory in the Android
+artifact. Place `compose-card` under `if page.platform == "android"`, with
+`page` bound to `exactPage()`. Every host's build checks the use. Apple, Android
+and web builds report missing factories for their host as release errors or
+development warnings. A web factory table that needs the DOM at import time runs
+in system WebKit on macOS or the browser installed by web setup on Linux and Windows.
+The painted Linux and Windows hosts report native views as unavailable.
+
+The hatch verb writes a stub for each target the app builds (Swift in
 `modules/apple/`, the page module in `modules/web/`, Rust in
 `modules/linux/`), adds the word to
 `app.json` `hatches` with those platforms, and tells you the node to mark:
@@ -6916,6 +7178,16 @@ logged once. `bun exact.mjs forma gen swift .` writes the names
 (`.exact/forma/forma.swift`, never committed), which a module's build
 compiles in. `apps/forma-host` is the sample.
 
+A GPU canvas reads the same design with `surface=board(color("surface.board"))`.
+Its explicit token arguments follow its own place, including a scheme or mode
+pinned on an ancestor. A change in the complete resolved inputs causes one
+bind and frame request, including after an ancestor pin changes on its own or
+a live design value edit. Apple system colours use the reported light or dark
+palette for the session's current contrast and app tint, with the kernel's
+fallback until a colour is reported. A changed palette rebinds affected
+surfaces. A native view's own contrast override, elevation and local tint are
+outside that palette.
+
 **Whose window.** `window.window` is nil unless the embedder set
 `session.hatchesOwnWindow`, and `app.application` unless it set
 `session.hatchesOwnProcess`. The standalone iOS app sets both; the standalone
@@ -7041,6 +7313,47 @@ An authored GPU module passes a static `&[exact_gpu::grants::Requirements]` as t
 second argument to `exact_gpu::module!`. See [the GPU module recipe](recipes/gpu-module.md)
 for a declaration and [package GPU surfaces](contract-for-agents.md#a-packages-gpu-surfaces)
 for packaging. Packages declare `exactGpu: "0.4"` and depend on `exact-gpu = "0.4"`.
+
+A GPU surface reads a `color("surface.board")` argument in `bind` with
+`exact_gpu::json::color(&inputs[0], "fill")?`. The result is four finite
+`f32` components: straight linear sRGB (D65) and alpha in [0, 1].
+RGB may extend below zero or above one. Keep the `ColorTarget` from
+`Surface::color_target`. Use `target.fragment(rgba)` for a shader constant
+written with replacement blending and `target.clear(rgba)` for a clear.
+Both convert to the attachment's primaries, transfer and alpha association.
+A change of attachment format, colour space or alpha mode rebinds colour
+inputs even when their RGBA is unchanged. A straight linear-sRGB working
+texture can use the input directly. For transparency leave `Surface::opaque()`
+false. On an opaque-only target the helper writes straight colour at full alpha.
+
+The opaque board matched its sibling in light, dark and after an ancestor pin
+changed on macOS Metal, Chrome WebGPU, the iOS 27.2 simulator, the painted
+Linux host running on macOS and Android API 35 and 36 emulators.
+
+These measurements use one half-alpha swatch, `color(display-p3 .6 .4 .3 / .5)`,
+over white. RGB values are from sRGB captures.
+
+| Host and target | GPU | Sibling |
+| --- | --- | --- |
+| macOS 27.2.1 Metal SDR | (208, 177, 163) | (208, 177, 163) |
+| macOS 27.0.1 agent window, 8-bit Metal row | (208, 178, 164) | (209, 178, 164) |
+| macOS 27.0.1 agent window, float-request row | (209, 177, 164) | (209, 178, 164) |
+| Chrome, half-float or 8-bit with sRGB display primaries | (208, 177, 163) | (208, 177, 163) |
+| Chrome, 8-bit Display P3 on an sRGB destination | (207, 177, 162) | (208, 177, 163) |
+| Android API 35 and 36, host GPU, premultiplied sRGB RGBA8 | (208, 177, 163) | (208, 177, 163) |
+| iOS 27.2 simulator display, 8-bit P3 shader | (208, 177, 162) | (208, 177, 163) |
+| iOS 27.2 simulator display, float-request row | (208, 177, 163) | (208, 177, 163) |
+| iOS 27.2 and 26.5 simulator displays, literal P3 clear | (208, 177, 162) | (208, 177, 163) |
+
+The painted Linux capture also matched its translucent sibling. The Android
+float request also received RGBA8. The measured one-step differences apply
+to this swatch. On iOS the same literal clear gave the same
+display pixels before and after colour inputs. The 27.2 display spatially
+dithered the float row’s opaque border. A plain UIKit app drawing the same
+solid clear into a half-float Metal layer reproduced that variation.
+The 27.2 agent window capture
+on the parent gave (183, 138, 118) for that clear. HDR displays, Windows
+presentation and physical mobile devices remain unverified.
 
 A surface opts into raw input with `Surface::wants_input`. On macOS the canvas
 also dispatches Contract pointer, wheel and context menu events. [GPU module recipe](recipes/gpu-module.md)
@@ -7564,6 +7877,17 @@ Native inline runs, moving presentation geometry, rotated roots and SVG clip ref
 percentage margins follow Chrome (LLP 1001). See LLP 1005's intersection
 visibility deviation; other native hosts remain unqualified.
 
+### Reporting a pinch
+
+| Host | Input delivered to `pinch` and `pinchrelease` |
+| --- | --- |
+| iOS and iPadOS | UIKit's simultaneous pinch recognizer. A drifting pair scrolls the list as it pinches. Lifting the pair leaves the list at its release offset; a surviving or later finger that moves again can still fling. An iPad trackpad pinch reaches this recognizer (unverified on hardware). |
+| Android, Web JS, Web wasm, macOS, painted Linux and Windows, terminal | Both bindings compile and stay silent. Android and touch-web recognizers are queued on `fable/pinch-report-1804`. |
+
+Use `wheel` with `ctrlKey` for trackpad magnification on macOS and the web.
+On other desktops the same handler can consume a Control-held wheel where
+the host delivers one. [Grid example](contract-for-agents.md#changing-a-grids-columns)
+
 ### Scroll drags and swipes
 
 `scrolldragstart` and `scrolldragend` on a scroller bracket the reader's drag
@@ -7580,12 +7904,14 @@ Windows send neither. A wheel, the keyboard and a programmatic scroll send
 neither
 ([events](contract-grammar.md#events)).
 
-`swipeleft` mirrors `swiperight`: the node follows the finger, and one action
-runs when it lifts 64 points or more that way. Both directions are the
-screen's, in a right-to-left layout too, and a node may have both
-([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
+An element takes one `swipe=action` and exactly one of `swipe-follow` or
+`swipe-flick` beside it. With `swipe-follow="right"` or `"left"`, a quoted
+literal, the node follows the finger, and one action runs when it lifts 64
+points or more that way; `tree` names the event `swiperight` or `swipeleft`.
+The direction is the screen's, in a right-to-left layout too, and a node
+follows one direction ([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
 
-`swipe=action` with `swipe-direction` (`left`, `right`, `up` or `down`) is the
+With `swipe-flick` (`left`, `right`, `up` or `down`), `swipe` is the
 platform's discrete swipe: nothing follows the finger, and the action runs once
 when UIKit's swipe recognizer recognizes a swipe that way on the node or a view
 inside it, a text field included. UIKit arbitrates it with the other gestures

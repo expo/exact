@@ -1129,6 +1129,61 @@ final class NodePoolIOSTests: XCTestCase {
         for s in [0.001, 0.02, 0.003, 0.004, 0.030, 0.002] { HeavyLeaves.record(kind, s) }
         XCTAssertEqual(HeavyLeaves.cost(kind), 0.004, "the median of the last five")
     }
+
+    func testARecycledStickyRowDropsItsStickyOffset() throws {
+        let p = fixture()
+        let list = try XCTUnwrap(p.views[1])
+        let row = try XCTUnwrap(p.views[10])
+        let scroll = try XCTUnwrap(list.scroll)
+        p.apply(wireBatch([[
+            "op": "sticky", "id": 10, "scroller": 1,
+            "natural": [0, 0, 300, 44], "limit": [0, 0, 300, 500], "port": [0, 0, 300, 300],
+            "insets": [0, NSNull(), NSNull(), NSNull()],
+        ]]))
+        scroll.contentOffset = CGPoint(x: 0, y: 60)
+        p.stickies.scrolled(1)
+        XCTAssertEqual(row.stickyOffset.y, 60, accuracy: 0.5)
+        XCTAssertFalse(row.transform.isIdentity)
+
+        p.apply(wireBatch([collections([(20, 20)])] + destroy([10, 11, 12]) + rowOps(20, y: 88, label: "Save 20")
+            + [["op": "children", "id": 1, "ids": [20]]]))
+        XCTAssertTrue(p.views[20] === row, "the parked row is reused")
+        XCTAssertEqual(row.stickyOffset, .zero)
+        XCTAssertEqual(row.transform, .identity)
+    }
+
+    func testARecycledRowDropsProseMarkerAndGroupedSeparatorLayers() throws {
+        let session = ExactApp.shared.makeSession(label: "pool-decorations")
+        defer { session.destroy() }
+        let p = session.presenter
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        var first = rowOps(10, y: 0, label: "Save 10")
+        first[0]["props"] = [
+            "testId": "row-10", "id": "row-10",
+            "listMarker": "•",
+            "groupedSeparator": #"{"rect":[16,43,284,1],"color":[200,200,200,255]}"#,
+        ]
+        p.apply(wireBatch([collections([(10, 10)]),
+            ["op": "create", "id": 1, "kind": "list", "style": ["overflow_y": "scroll"]]]
+            + first
+            + [["op": "children", "id": 1, "ids": [10]], ["op": "roots", "ids": [1]],
+               ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 300.0],
+               ["op": "content", "id": 1, "w": 300.0, "h": 2000.0]]))
+        let row = try XCTUnwrap(p.views[10])
+        XCTAssertNotNil(row.proseMarker)
+        XCTAssertTrue(row.proseMarker?.superlayer === row.layer)
+        XCTAssertTrue(row.layer.sublayers?.contains(where: { $0 is GroupedSeparatorLayer }) == true)
+
+        p.apply(wireBatch([collections([(20, 20)])] + destroy([10, 11, 12]) + rowOps(20, y: 44, label: "Save 20")
+            + [["op": "children", "id": 1, "ids": [20]]]))
+        XCTAssertTrue(p.views[20] === row, "the parked row is reused")
+        XCTAssertNil(row.proseMarker)
+        XCTAssertFalse(row.layer.sublayers?.contains(where: { $0 is CATextLayer }) == true)
+        XCTAssertFalse(row.layer.sublayers?.contains(where: { $0 is GroupedSeparatorLayer }) == true)
+    }
 }
 
 /// A module table in memory for the reuse and activation tests: three tags,

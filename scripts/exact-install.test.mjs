@@ -4,11 +4,11 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { place, remove } from './exact-install.mjs';
+import { place, remove, shimText } from './exact-install.mjs';
 
 const app = { name: 'notes', displayName: 'Notes', id: 'com.exact.notes', manifest: {} };
 let dir;
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => { if (dir) { rmSync(dir, { recursive: true, force: true }); dir = undefined; } });
 
 /** A bundle with `id` and one file, `marker`, holding `text`. */
 function bundle(path, id, text) {
@@ -85,4 +85,15 @@ test.skipIf(process.platform !== 'darwin')('an uninstall removes only its own bu
   expect(remove(app, target, shim)).toEqual([`removed ${target}`, `removed ${shim}`]);
   expect([existsSync(target), existsSync(shim)]).toEqual([false, false]);
   expect(remove(app, target, shim)).toEqual([`not installed: ${target}`, `not installed: ${shim}`]);
+});
+
+test('shimText keeps displayName and name inside comments and never emits extra shell commands', () => {
+  const malicious = { name: 'notes\necho NAME_INJECTED', displayName: 'Foo\necho SHIM_INJECTED_OK >&2; exit 0 #', id: 'com.exact.notes', manifest: {} };
+  const text = shimText(malicious, "/Applications/O'Brien.app");
+  const lines = text.trimEnd().split('\n');
+  expect(lines).toHaveLength(4);
+  expect(lines[0]).toBe('#!/bin/sh');
+  expect(lines[1].startsWith('# ')).toBe(true);
+  expect(lines[2].startsWith('# ')).toBe(true);
+  expect(lines[3]).toBe("exec /usr/bin/open -a '/Applications/O'\\''Brien.app' -- \"$@\"");
 });

@@ -877,6 +877,49 @@ final class InlineAtomEditorMacTests: XCTestCase {
         f.copyPlainText(nil)
         XCTAssertEqual(board.string(forType: .string), "A quote")
     }
+
+    func testPressAtomGuardsStaleRangesFocusMutationsAndDisabledOrInertFields() throws {
+        let (node, f, window) = editor()
+        defer { window.close() }
+        presenter.views[node.id] = node
+        let atomRange = NSRange(location: a, length: b - a)
+        let staleElement = try XCTUnwrap(f.atomElements.first)
+
+        // Disabled and inert fields neither focus, select, nor press atoms.
+        window.makeFirstResponder(nil)
+        f.setSelectedRange(NSRange(location: 0, length: 0))
+        node.props["disabled"] = "true"
+        node.applyTextArea()
+        XCTAssertFalse(f.pressAtom(atomRange))
+        XCTAssertFalse(staleElement.accessibilityPerformPress())
+        XCTAssertFalse(window.firstResponder === f)
+        XCTAssertEqual(f.selectedRange(), NSRange(location: 0, length: 0))
+
+        node.props["disabled"] = nil
+        node.props["inert"] = "true"
+        node.applyTextArea()
+        presenter.inputGates.refresh([node])
+        XCTAssertFalse(f.isSelectable, "inert clears isSelectable on macOS")
+        XCTAssertFalse(f.pressAtom(atomRange))
+        XCTAssertFalse(staleElement.accessibilityPerformPress())
+        XCTAssertFalse(window.firstResponder === f)
+
+        // Synchronous focus handler clearing the value must not throw NSRangeException.
+        node.props["inert"] = nil
+        node.handlers.insert("focus")
+        node.applyTextArea()
+        presenter.inputGates.refresh([node])
+        XCTAssertTrue(f.isSelectable)
+        presenter.onFocus = { [weak node] id in
+            guard id == 3, let node else { return }
+            node.props["value"] = ""
+            node.applyTextArea()
+        }
+        XCTAssertFalse(f.pressAtom(atomRange))
+
+        // Retained AtomElement whose range is now out of bounds returns false without throwing.
+        XCTAssertFalse(staleElement.accessibilityPerformPress())
+    }
 }
 #else
 import UIKit
@@ -1127,6 +1170,38 @@ final class InlineAtomEditorIOSTests: XCTestCase {
         XCTAssertEqual(f.selectedRange, NSRange(location: a, length: 0))
         f.insertText("x")
         XCTAssertEqual(f.text, "Ask xnow")
+    }
+
+    func testPressAtomGuardsStaleRangesFocusMutationsAndDisabledOrInertFields() throws {
+        let (p, node, f) = field()
+        let atomRange = NSRange(location: a, length: b - a)
+        let staleElement = try XCTUnwrap(node.accessibilityElements?.compactMap { $0 as? AtomElement }.first)
+
+        // Disabled and inert fields neither focus, select, nor press atoms.
+        _ = f.resignFirstResponder()
+        f.selectedRange = NSRange(location: 0, length: 0)
+        p.apply(wireBatch([["op": "props", "id": 2, "set": ["disabled": "true"]]]))
+        XCTAssertFalse(f.pressAtom(atomRange))
+        XCTAssertFalse(staleElement.accessibilityActivate())
+        XCTAssertFalse(f.isFirstResponder)
+        XCTAssertEqual(f.selectedRange, NSRange(location: 0, length: 0))
+
+        p.apply(wireBatch([["op": "props", "id": 2, "clear": ["disabled"], "set": ["inert": "true"]]]))
+        XCTAssertFalse(f.pressAtom(atomRange))
+        XCTAssertFalse(staleElement.accessibilityActivate())
+        XCTAssertFalse(f.isFirstResponder)
+
+        // Synchronous focus handler clearing the value must not throw NSRangeException.
+        p.apply(wireBatch([["op": "props", "id": 2, "clear": ["inert"]]]))
+        node.handlers.insert("focus")
+        p.onFocus = { [weak p] id in
+            guard id == 2, let p else { return }
+            p.apply(wireBatch([["op": "props", "id": 2, "set": ["value": ""]]]))
+        }
+        XCTAssertFalse(f.pressAtom(atomRange))
+
+        // Retained AtomElement whose range is now out of bounds returns false without throwing.
+        XCTAssertFalse(staleElement.accessibilityActivate())
     }
 }
 #endif

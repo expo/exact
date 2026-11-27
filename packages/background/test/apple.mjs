@@ -136,6 +136,51 @@ import Foundation
         wait { withdrawn }
         precondition(!held.contains("periodicsync digest"), "an unregistered periodic tag still holds a wake: \(held)")
         print("PASS an unregistered periodic tag leaves no wake request")
+
+        // Across device sleep, context.now() pauses while live wall time advances: a sync retry whose backoff
+        // expired during sleep must run on woke(_:), and ask() must not add cumulative sleep time to wake deadlines.
+        defaults.removeObject(forKey: "exact.background")
+        var wall = 1_800_000_000_000.0
+        var sessionClock = 10_000.0
+        var requestedAt: [String: Double] = [:]
+        let sleepWakes = ExactWakes { key, request in requestedAt[key] = request?["at"] as? Double }
+        var attempt1: ((String) -> Void)?
+        var syncRaised = 0, wakeDone: [Bool] = []
+        let sleepMod = BackgroundModule(context: ExactPackageContext(agent: false, session: "sleep", changed: { _ in }, log: { print($0) },
+                                                                     now: { sessionClock },
+                                                                     wake: { _, _, _, cb in syncRaised += 1; attempt1 = cb },
+                                                                     wakes: sleepWakes), wallClock: { wall })
+        var regSync = false
+        sleepMod.later("registerSync", ["tag": "outbox"], preferred: nil) { _ in regSync = true }
+        wait { regSync }
+        var regPer = false
+        sleepMod.later("registerPeriodicSync", ["tag": "digest", "minInterval": 900_000.0], preferred: nil) { _ in regPer = true }
+        wait { regPer }
+        let initialPeriodicWall = requestedAt["periodicsync digest"]! - sessionClock + wall
+        precondition(abs(initialPeriodicWall - (wall + 900_000.0)) < 1, "initial periodic deadline mismatch: \(initialPeriodicWall)")
+
+        // First sync attempt fails and re-registers, scheduling a 5-minute backoff (notBefore = wall + 300_000).
+        sleepMod.woke(ExactWake(kind: "processing", keys: ["sync"], deadline: nil, platform: nil,
+                                raise: { _, _, cb in syncRaised += 1; attempt1 = cb }, done: { wakeDone.append($0) }))
+        wait { attempt1 != nil }
+        var rereg = false
+        sleepMod.later("registerSync", ["tag": "outbox"], preferred: nil) { _ in rereg = true }
+        wait { rereg }
+        attempt1?("expired")
+        wait { wakeDone.count == 1 }
+
+        // Simulate 6 minutes of sleep: wall clock advances 360_000 ms while monotonic sessionClock stays frozen.
+        wall += 360_000.0
+        var attempt2: ((String) -> Void)?
+        sleepMod.woke(ExactWake(kind: "processing", keys: ["sync"], deadline: nil, platform: nil,
+                                raise: { _, _, cb in syncRaised += 1; attempt2 = cb }, done: { wakeDone.append($0) }))
+        wait { attempt2 != nil }
+        attempt2?("completed")
+        wait { wakeDone.count == 2 }
+        precondition(syncRaised == 2 && wakeDone == [false, true], "retry after sleep should complete")
+        let afterSleepPeriodicWall = requestedAt["periodicsync digest"]! - sessionClock + wall
+        precondition(abs(afterSleepPeriodicWall - initialPeriodicWall) < 1, "periodic wake drifted across sleep: \(afterSleepPeriodicWall) vs \(initialPeriodicWall)")
+        print("PASS sleep-paused monotonic clock does not defer sync retries or drift periodic wakes")
     }
 }
 `);

@@ -263,3 +263,53 @@ fn preedit_cursor_offsets_are_clamped_at_utf8_boundaries_and_underline_is_remove
     );
     assert_eq!(p.field_text(editor), "a日🦀z");
 }
+
+#[test]
+fn a_filtered_edit_preserves_the_caret_and_waits_for_composition() {
+    let source = r#"component Stock
+  state digits = "40"
+  action edit(v: string)
+    digits = v.split("").filter(c => "0123456789".includes(c)).join("")
+  view
+    input value=digits input=edit testId="editor"
+"#;
+    let (mut p, editor) = boot(source);
+    for (a, b, typed, shown, caret) in [
+        (2, 2, "a", "40", 2),
+        (1, 1, "a", "40", 1),
+        (1, 1, "7x", "470", 2),
+        (1, 2, "a", "40", 1),
+    ] {
+        let before = p.field_text(editor);
+        p.mark_field(
+            editor,
+            &before,
+            FieldSelection {
+                start: a,
+                end: b,
+                direction: SelectionDirection::Forward,
+            },
+            false,
+        );
+        p.paste_field(editor, typed, 0.);
+        assert_eq!(p.field_text(editor), shown);
+        assert_eq!(p.field_selection(editor).start, caret);
+        assert_eq!(p.field_selection(editor).end, caret);
+    }
+    p.history_action(editor, false, 1.);
+    assert_eq!(p.field_text(editor), "40");
+    for commit in [false, true] {
+        p.mark_field(editor, "40", FieldSelection::caret(1), false);
+        assert!(p.ime_begin(p.ime_target().unwrap()));
+        p.ime_preedit("a", None);
+        assert_eq!(p.field_text(editor), "4a0");
+        if commit {
+            p.ime_commit("a");
+        } else {
+            p.ime_preedit("", None);
+        }
+        p.ime_end();
+        assert_eq!(p.field_text(editor), "40");
+        assert_eq!(p.field_selection(editor), FieldSelection::caret(1));
+    }
+}

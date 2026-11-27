@@ -22,40 +22,6 @@ import java.io.File
 import kotlin.math.roundToInt
 
 /**
- * A `video` or `audio` element's player (LLP 1042.001 D3). An APK whose plan has one links Media3's
- * ([ExactActivity.video]); the reader itself names no player, so an APK without one carries none of its code. A
- * player is lent to a node's [MediaRecord]: the record outlives it and is where it starts.
- */
-interface VideoPlayer {
-    /** The view the reader hosts and records for the element's box; made once, kept with the player. */
-    val view: View
-    /** Whether a parked row's player may go to the spares: only an inline picture with no controller. */
-    val lendable: Boolean
-    /** Playing on its own account, not under Chrome's off-screen rule: it keeps its player out of view (D1). */
-    val engaged: Boolean
-    val backgroundPlayback: Boolean get() = false
-    /** The controller's view with `controls` (Media3's `PlayerView`), which reports itself to accessibility services
-     * at the node (D11); null without. */
-    val controller: View?
-    /** A loan begins: this player reports to [sink] until [release] or the next bind. */
-    fun bind(sink: MediaSink)
-    /** Every prop of the element as the painter names it, with `uri` (the resolved source) or `refused` (why it
-     * was refused) beside `src`, and the content box in device pixels. [from]: the record a loan starts from, given
-     * with the loan's first update. */
-    fun update(props: JSONObject, width: Int, height: Int, from: MediaRecord.Resume?)
-    /** Whether a row of the node is in view, for Chrome's rule for a muted autoplaying video (LLP 1042 §7 B). */
-    fun shown(inView: Boolean)
-    /** Its element is shown nowhere (a hidden `portal` mover, LLP 1013.002 D5): it leaves fullscreen. */
-    fun hidden() {}
-    /** What the record keeps of this loan. */
-    fun snapshot(): MediaRecord.Resume?
-    /** The activity stopped or the row was parked: pause as the stop does (D8) and give up the surface. */
-    fun stop()
-    /** The loan ends: no report follows. */
-    fun release()
-}
-
-/**
  * The platform elements of the stream (op 28: `video`, `iframe`, a native module's view). Each is a real Android view,
  * attached here at its device size so it runs as it would anywhere (a player's TextureView, a WebView, a MapLibre
  * map); this layout draws none of them. Each view's own drawing is recorded into its element's RenderNode, which the
@@ -67,6 +33,7 @@ class Natives internal constructor(
     private val root: () -> File,
     private val hosted: HostedModules,
     private val videos: ((Context) -> VideoPlayer)? = null,
+    private val frameMediaGrants: () -> Int = { try { Native.frameMediaGrants() } catch (_: UnsatisfiedLinkError) { 0 } },
 ) : FrameLayout(context) {
     constructor(context: Context, root: () -> File, modules: Map<String, NativeModule>, videos: ((Context) -> VideoPlayer)? = null)
         : this(context, root, HostedModules(modules), videos)
@@ -111,11 +78,9 @@ class Natives internal constructor(
         var disabled = false
         var sizing: NativeViewSizing? = null
         var eventBinding = 0
-        /** A media element's record ([MediaRecords]); whether a loan has started from it, and the loan's number, so a
-         * report from an ended loan is dropped (LLP 1042.001 D3). */
+        /** Playback state survives a new reader or a parked row (LLP 1042.001 D3). */
         var record: MediaRecord? = null
         var started = false
-        var loan = 0
         /** A video whose view still shows another source's last frame (a lent player's): drawn once its own first
          * frame is in the view, as a new TextureView draws nothing until then. */
         var stale = false
@@ -623,7 +588,7 @@ class Natives internal constructor(
             val carried = e?.takeIf { it.kind == 1 && it.generation == generation && it.slot == slot && it.session == session }?.browser?.automation
             e?.let { release(it) }
             val lazyMedia = kind == 0 && videos != null && lazyVideo &&
-                (!audio || w > 0 && h > 0 && !BackgroundAudio.contains(MediaAllocation(id, slot, generation, session)))
+                (!audio || w > 0 && h > 0) && !BackgroundAudio.contains(MediaAllocation(id, slot, generation, session))
             val created = if (lazy && row != 0 && (lazyMedia || kind == 1 || (kind == 2 && modules.containsKey(module)))) {
                 Element(id, kind, standIn, RenderNode("exact native"), audio).also {
                     it.parked = true
@@ -664,7 +629,10 @@ class Natives internal constructor(
         if (hidden) {
             // Its size and view stay as they were shown, so showing it again only places the same player. A module's
             // view is invisible meanwhile, out of touch and accessibility, as iOS hides it.
-            if (!e.hidden && !e.parked) players[e.view]?.hidden()
+            if (!e.hidden && !e.parked) {
+                (context as? ExactActivity)?.picture?.removed(e.record?.allocation)
+                players[e.view]?.hidden()
+            }
             if (kind == 2 && !e.parked) e.view.visibility = View.INVISIBLE
             e.hidden = true
             if (!e.parked && e.props != props) apply(e, props)
@@ -813,32 +781,40 @@ class Natives internal constructor(
     private val sources = HashMap<View, String>()
     private val audioLoans = HashMap<View, AudioLoan>()
     private val videoPool = ArrayList<View>()
-    private val mediaReplies = android.os.Handler(context.mainLooper)
     /** Said once: the plan has a `video` this APK links no player for (LLP 1042.001 D2). */
     private var noPlayerSaid = false
+
+    internal fun stopPicture(target: MediaAllocation) {
+        val element = elements[target.id] ?: return
+        if (element.record?.allocation == target) players[element.view]?.stop()
+    }
+
+    internal fun floatPicture(target: MediaAllocation, host: VideoPictureInPicture) {
+        val e = elements[target.id]
+        val player = e?.view?.let(players::get)
+        if (e == null || e.record?.allocation != target || e.parked || e.hidden || e.audio || player == null) {
+            target.tell("pictureinpictureerror", "no loaded URL-backed video at this id", "")
+            return
+        }
+        val hint = android.graphics.Rect(0, 0, e.w, e.h)
+        val transform = android.graphics.Matrix()
+        if (origins?.transform(e.node, transform) == true) {
+            val bounds = player.pictureBounds ?: android.graphics.RectF(hint)
+            if (!bounds.intersect(android.graphics.RectF(hint))) bounds.setEmpty()
+            transform.mapRect(bounds)
+            bounds.roundOut(hint)
+            val location = IntArray(2)
+            getLocationInWindow(location)
+            hint.offset(location[0], location[1])
+        } else hint.setEmpty()
+        host.start(target, player, hint)
+    }
 
     private fun play(e: Element, inView: Boolean) {
         e.inView = inView
         if (inView == e.playing) return
         e.playing = inView
         players[e.view]?.shown(inView)
-    }
-
-    /** A loan's reports, to exact2 while the element is current: each made while the loan is open and the element
-     * holds its view, and posted, so exact2 never runs on a Media3 listener's stack (LLP 1042.001 D3). A report made
-     * as the loan ends (the stop's `pause`) still goes. */
-    private fun sink(e: Element, view: View): MediaSink {
-        val loan = ++e.loan
-        fun open() = elements[e.id] === e && !e.parked && e.view === view && e.loan == loan
-        fun send(run: () -> Unit) { if (open()) mediaReplies.post { if (elements[e.id] === e) run() } }
-        return object : MediaSink {
-            override fun event(name: String, payload: String) =
-                send { Exact.media(e.id, e.slot, e.generation, e.session, name, payload, "") }
-            override fun state(json: String) =
-                send { Exact.media(e.id, e.slot, e.generation, e.session, "", "", json) }
-            override fun firstFrame() =
-                send { mediaFrame(e) }
-        }
     }
 
     private fun mediaFrame(e: Element) {
@@ -866,12 +842,13 @@ class Natives internal constructor(
         if (e.started) player.snapshot()?.let { e.record?.resume = it }
     }
 
-    /** Give the reader's active audio loan back without stopping the player. */
+    /** The playing element outlives this reader. */
     private fun handoff(e: Element): Boolean {
         val loan = audioLoans[e.view] ?: return false
         if (!loan.player.backgroundPlayback) return false
         audioLoans.remove(e.view)
         players.remove(e.view)
+        if (!e.audio) loan.player.backgroundSurface(null)
         BackgroundAudio.detach(loan, context.applicationContext)
         release(e, reuse = false, forget = false)
         return true
@@ -879,10 +856,9 @@ class Natives internal constructor(
 
     fun stopMedia(allowBackground: Boolean = true) {
         for (e in elements.values.toList()) if (e.kind == 0 && !e.parked) {
-            if (allowBackground && handoff(e)) continue
+            if (allowBackground && (players[e.view]?.inPicture == true || handoff(e))) continue
             val player = players.remove(e.view) ?: continue
             if (e.started) { player.stop(); player.snapshot()?.let { e.record?.resume = it } }
-            e.loan++
             audioLoans.remove(e.view)?.close()
             player.release()
             e.started = false
@@ -914,7 +890,7 @@ class Natives internal constructor(
         if (e.w > 0 && e.h > 0 || e.kind == 2) place(e)
         // Its page is loaded afresh from `src`: what was asked of it meanwhile moved nothing.
         if (e.kind == 1) JSONObject(e.wanted).let { json ->
-            for (op in FrameBrowser.unrun("${e.session}:${e.slot}:${e.generation}", json)) refuseCommand(e, op.optString(1), json, parked = true)
+            for (op in FrameBrowser.unrun("${e.session}:${e.slot}:${e.generation}", json)) if (op.optString(1) != "postMessage") refuseCommand(e, op.optString(1), json, parked = true)
         }
         apply(e, e.wanted)
         if (e.dirty) record(e)
@@ -945,14 +921,16 @@ class Natives internal constructor(
             (it.parent as? ViewGroup)?.removeView(it)
         }
         3 -> if (buffered && !refused) View(context) else TextureView(context).apply { isOpaque = false }
-        0 -> if (json.optBoolean("audio")) {
+        0 -> {
             val loan = BackgroundAudio.take(MediaAllocation(id, json))
-            if (loan == null) videoView(audio = true)
+            if (loan == null && !json.optBoolean("audio")) videoPool.removeLastOrNull() ?: videoView(audio = false)
+            else if (loan == null) videoView(audio = true)
             else loan.player.view.also { view ->
+                if (!json.optBoolean("audio")) loan.player.backgroundSurface(context)
                 players[view] = loan.player
                 audioLoans[view] = loan
             }
-        } else videoPool.removeLastOrNull() ?: videoView(audio = false)
+        }
         // A partitioned frame's profile is set before its view does anything (`WebViewCompat.setProfile`): never a lent one.
         1 -> if (json.partition() != null) webView(Partitions.profile(json), partitioned = true)
         else readyWeb().takeIf { it >= 0 }?.let { webPool.removeAt(it) }
@@ -985,6 +963,23 @@ class Natives internal constructor(
         override fun pooled(view: WebView) = view in webPool
         override fun rendererGone(view: WebView, crashed: Boolean) = this@Natives.rendererGone(view, crashed)
         override fun browser(view: WebView) = byView[view]?.browser
+        override fun messageTarget(view: WebView): FrameMessageTarget? {
+            val e = byView[view]?.takeIf { !it.parked && elements[it.id] === it && it.view === view } ?: return null
+            val binding = e.eventBinding
+            val src = JSONObject(e.wanted.ifEmpty { "{}" }).text("src")
+            return FrameMessageTarget(e.id, e.slot, e.generation, e.session, binding, src, e.partition != null, e.refusedFor != null) { text ->
+                android.os.Handler(context.mainLooper).post {
+                    if (elements[e.id] === e && e.eventBinding == binding && e.partition == null) {
+                        Exact.frameMessage(e.id, e.slot, e.generation, e.session, text)
+                    }
+                }
+            }
+        }
+        override fun mediaGrantTarget(view: WebView): FrameMediaGrantTarget? {
+            val e = byView[view]?.takeIf { !it.parked && elements[it.id] === it && it.view === view } ?: return null
+            val src = JSONObject(e.wanted.ifEmpty { "{}" }).text("src")
+            return FrameMediaGrantTarget(context, src, e.partition != null, e.refusedFor != null, frameMediaGrants())
+        }
         override fun loadOf(view: WebView): FrameLoadReport? {
             val e = byView[view] ?: return null
             val binding = e.eventBinding
@@ -1011,9 +1006,7 @@ class Natives internal constructor(
         val hasNavigationListener = WebViewFeature.isFeatureSupported(WebViewFeature.NAVIGATION_LISTENER)
         val client = FrameClient(this, hasNavigationListener, frames, partitioned)
         webViewClient = client
-        if (profile != null) webChromeClient = object : android.webkit.WebChromeClient() {
-            override fun onReceivedTitle(view: WebView, title: String?) { frames.browser(view)?.stateChanged() }
-        }
+        webChromeClient = FrameBridge.chromeClient(this, frames, partitioned)
         if (hasNavigationListener) {
             // Take the navigation identity before a new src can supersede a recovery request.
             WebViewCompat.addNavigationListener(this, { it.run() }, client)
@@ -1199,6 +1192,12 @@ class Natives internal constructor(
         return e.view.takeIf { !e.disabled && it.isEnabled }
     }
 
+    /** Drag axes declared by the module that owns [view], while it is mounted and enabled (LLP 1133.008 D8 item 6). */
+    internal fun dragAxes(view: View): Int {
+        val e = byView[view]?.takeIf { !it.parked && !it.disabled && view.isEnabled } ?: return 0
+        return e.module?.let(modules::get)?.dragAxes(view) ?: 0
+    }
+
     internal var retiring: ((View) -> Unit)? = null
 
     /** [e]'s page, or the `about:blank` of a frame [Partitions] refuses, loaded silently as Apple's is. */
@@ -1271,10 +1270,8 @@ class Natives internal constructor(
                 val previous = audioLoans[view]
                 val from = if (e.started || previous != null) null else record.resume
                 if (!e.started) {
-                    if (e.audio) {
-                        val loan = previous ?: AudioLoan(record, p).also { audioLoans[view] = it; p.bind(it) }
-                        loan.redraw = { mediaFrame(e) }
-                    } else p.bind(sink(e, view))
+                    val loan = previous ?: AudioLoan(record, p).also { audioLoans[view] = it; p.bind(it) }
+                    loan.redraw = { mediaFrame(e) }
                 }
                 // A lent view holds the last source's frame until this one's first.
                 if (sources.containsKey(view) && sources[view] != src) e.stale = true
@@ -1291,7 +1288,9 @@ class Natives internal constructor(
             1 -> {
                 if (old?.text("src") != json.text("src")) { e.browser?.cancelRecovery(); showFrame(e, json) }
                 for (op in FrameBrowser.unrun("${e.session}:${e.slot}:${e.generation}", json)) {
-                    e.browser?.command(op) ?: refuseCommand(e, op.optString(1), json)
+                    if (op.optString(1) == "postMessage") {
+                        if (e.partition == null) ((e.view as? WebView)?.webViewClient as? FrameClient)?.postMessage(op.optString(2))
+                    } else e.browser?.command(op) ?: refuseCommand(e, op.optString(1), json)
                 }
             }
             5 -> if (old != null && old.optInt("gen") != json.optInt("gen")) {
@@ -1376,7 +1375,7 @@ class Natives internal constructor(
 
     /** A row can leave the stream while its audio element is still mounted. */
     private fun releaseUnpainted(e: Element) {
-        if (!handoff(e)) release(e)
+        if (!e.audio || !handoff(e)) release(e)
     }
 
     private fun release(e: Element, reuse: Boolean = true, forget: Boolean = true) {
@@ -1404,10 +1403,10 @@ class Natives internal constructor(
         if (pooled(e)) held--
         val module = e.module?.let { modules[it] }
         if (e.kind == 0) {
+            (context as? ExactActivity)?.picture?.removed(e.record?.allocation)
             val player = players[e.view]
             // Out of view: the off-screen rule pauses it first, so the record says it resumes when seen (D1).
             if (player != null && e.started) { player.shown(false); player.stop(); keep(e) }
-            e.loan++
             audioLoans.remove(e.view)?.close()
             if (reuse && !e.audio && player != null && player.lendable && lazyVideo && videoPool.size < VIDEO_POOL) {
                 // Kept with its player, paused: the next video row's, prepared again only for another source.

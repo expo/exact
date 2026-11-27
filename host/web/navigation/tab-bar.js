@@ -1,6 +1,6 @@
 // The root's tab bar (LLP 1115.002 item 5): wide, a sidebar; along the window's bottom, a bar whose tabs keep inside
 // the safe area while the box that ends at its top has no bottom inset (LLP 1123 D9; the rules are neutral.css's).
-import { viewChildren, viewParent } from "./lists.js";
+import { live, liveChildren, viewParent } from "./lists.js";
 
 export const inFlow = style => style.display !== "none" && !/^(absolute|fixed)$/.test(style.position);
 const flow = style => /^(static|relative)$/.test(style.position), takesRoom = el => inFlow(getComputedStyle(el));
@@ -11,17 +11,18 @@ const placed = new WeakMap();
 // route, keeps its place in the document.
 export function placeTabBar(root, list, wide, moved = false) {
   const parent = viewParent(list);
-  const children = parent?.localName === "nav" && viewParent(parent) === root ? viewChildren(parent) : [];
+  const children = parent?.localName === "nav" && viewParent(parent) === root ? liveChildren(parent) : [];
   const footer = children.length === 2 ? children.find(el => el !== list && el.localName === "footer") : null;
   const wrapper = footer ? parent : null, orientation = list?.getAttribute("aria-orientation");
-  const siblings = viewChildren(root), placement = [wide, parent === root, orientation, ...[root, wrapper, list, footer, ...siblings].map(el => el && [
+  const siblings = liveChildren(root), placement = [wide, parent === root, orientation, ...[root, wrapper, list, footer, ...siblings].map(el => el && [
     el.className, el.style.display, el.style.flexDirection, el.style.position, el.style.appearance, el.style.order, el.style.paddingBottom
   ].join("|"))].join("/");
   const last = placed.get(root);
   if (!moved && last?.placement === placement && last.list === list && last.wrapper === wrapper && last.siblings.length === siblings.length && last.siblings.every((el, i) => el === siblings[i])) return;
 
-  // Read authored placement without our own CSS. An unrelated commit must not restyle the page.
-  for (const [el, mark] of [[root, "data-exact-sidebar"], [last?.list, "data-exact-sidebar-tabs"], [last?.list, "data-exact-tab-bar"], [last?.above, "data-exact-above-tab-bar"], [last?.wrapper, "data-exact-tab-navigation"]]) el?.removeAttribute(mark);
+  // Read authored placement without our own CSS. An unrelated commit must not restyle the page. A leaving view keeps
+  // its marks, and its layout, until it is removed.
+  for (const [el, mark] of [[root, "data-exact-sidebar"], [last?.list, "data-exact-sidebar-tabs"], [last?.list, "data-exact-tab-bar"], [last?.above, "data-exact-above-tab-bar"], [last?.wrapper, "data-exact-tab-navigation"]]) if (el && live(el)) el.removeAttribute(mark);
   const entry = { placement, list, wrapper, siblings, wide, watch: last?.watch, edges: last?.edges };
   placed.set(root, entry);
   if (list) follow(root, entry);

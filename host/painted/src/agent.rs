@@ -756,7 +756,8 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
             _ => {
                 let message = format!("prefer: {name}: {value} is not a page fact this host sets");
                 // A real page fact this host does not set stays a delivery refusal.
-                return if name == "keyboard-navigation" || name == "bold-text" {
+                return if ["keyboard-navigation", "bold-text", "ask-siri"].contains(&name.as_str())
+                {
                     error(&message)
                 } else {
                     malformed(&message)
@@ -974,7 +975,9 @@ fn tree<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
                 let text = p.field_text(id);
                 row["props"]["value"] = exact_runner::agent::shown_value(node.props, &text).into();
             }
-            if row["type"] == "WebView" || row["type"] == "Video" {
+            if p.video_in_picture(id) {
+                row["pictureInPicture"] = serde_json::json!({ "presentation": "system" });
+            } else if row["type"] == "WebView" || row["type"] == "Video" {
                 row["unavailable"] = true.into();
             }
             // @ref LLP 1024 D1 — declared, but this host loads no module.
@@ -991,14 +994,14 @@ fn tree<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
     tree.to_string()
 }
 
-/// The engine's settle time, milliseconds, when a transition is in flight.
-/// A reorder ghost's return counts too (LLP 1094 D8), and a pad's effect.
+/// The engine's settle time (ms) while transitions, reorder ghosts, pads, or wheel snaps run.
 fn settle<D: DataSource>(p: &Presenter<D>) -> Option<f64> {
     field_num(&p.host().agent("{\"op\":\"settle\"}"), "settle")
         .into_iter()
         .chain(crate::pads::due())
         .chain(p.group_settles_at())
         .chain(p.scroll_end_due())
+        .chain(p.wheel_snap_due())
         .chain(p.brush.settles_at())
         .chain(p.stage_settles_at())
         .reduce(f64::max)

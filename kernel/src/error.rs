@@ -53,6 +53,8 @@ pub enum DecodeError {
     BadShapeOutside,
     /// Invalid CSS `aspect-ratio` value.
     BadAspectRatio,
+    /// Not `none` or a positive ratio (`-exact-safe-area-aspect-fit`, LLP 1123 D16).
+    BadAspectFit,
     /// Invalid or unsupported CSS `background-image` value (LLP 1066).
     BadBackgroundImage,
     /// Invalid or unsupported CSS `box-shadow` (LLP 1077 D4).
@@ -568,6 +570,10 @@ pub enum StyleValueError {
     },
     /// Not CSS `aspect-ratio`: `auto`, a ratio, or both.
     BadAspectRatio {
+        style: StyleId,
+    },
+    /// Not `none` or a positive ratio (LLP 1123 D16).
+    BadAspectFit {
         style: StyleId,
     },
     /// Not `none` or one gradient this kernel draws (LLP 1066).

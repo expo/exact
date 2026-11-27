@@ -368,6 +368,53 @@ final class AlertMacTests: XCTestCase {
         XCTAssertNotNil(p.alerts.presented, "popover commands leave it open")
     }
 
+    /// A non-alert `<dialog popover>` open modally in `DialogHost` ignores popover
+    /// commands invoked from inside itself and never cycles the Tab walk.
+    func testModalDialogPopoverCommandsFromInsideItselfDoNotOpenOrCycle() throws {
+        _ = NSApplication.shared
+        let p = Presenter()
+        p.dialogs.painted = true
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "button", "props": ["commandfor": "d", "command": "show-modal"]],
+            ["op": "create", "id": 3, "kind": "view", "props": ["id": "d", "semanticTag": "dialog", "popover": "manual"],
+             "style": ["position_try_fallbacks": "flip-block"]],
+            ["op": "create", "id": 4, "kind": "view"],
+            ["op": "create", "id": 5, "kind": "button", "props": ["id": "b", "popovertarget": "d", "popovertargetaction": "show"]],
+            ["op": "children", "id": 3, "ids": [4, 5]],
+            ["op": "children", "id": 1, "ids": [2, 3]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 500, "h": 400],
+            ["op": "frame", "id": 2, "x": 10, "y": 10, "w": 80, "h": 30],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 240, "h": 160],
+            ["op": "frame", "id": 4, "x": 10, "y": 10, "w": 100, "h": 30],
+            ["op": "frame", "id": 5, "x": 10, "y": 50, "w": 100, "h": 30],
+        ]))
+        defer { p.dialogs.reset(); p.menus.reset() }
+        let dialog = try XCTUnwrap(p.views[3]), inside = try XCTUnwrap(p.views[5])
+        p.press(2)
+        XCTAssertTrue(p.dialogs.owns(dialog))
+        XCTAssertNil(p.alerts.presented)
+        XCTAssertFalse(dialog.isHidden)
+
+        p.press(5)
+        p.menus.action("showPopover", ["d", "b"])
+        p.menus.action("togglePopover", ["d", "b"])
+        p.menus.action("hidePopover", ["d"])
+        p.menus.show(dialog, from: inside)
+        XCTAssertTrue(p.dialogs.owns(dialog))
+        XCTAssertFalse(p.menus.isOpen(dialog))
+        XCTAssertTrue(p.menus.entries.isEmpty)
+
+        p.syncKeyViewLoop()
+        _ = p.dialogs.key(key("\t", 48, in: window))
+        p.menus.sync()
+        XCTAssertFalse(dialog.isHidden, "a modal <dialog popover> stays visible across menu sync")
+    }
+
     /// A row closes a dialog in the mode it shows in, as HTML's commands
     /// do: `close` a modal one, `hide-popover` a popover. An action that
     /// would not close it leaves no alert shape.

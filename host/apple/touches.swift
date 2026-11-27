@@ -119,8 +119,9 @@ final class ExactTouches: XCTestCase {
                 let destination: (points: [CGPoint], id: Int)?
                 do { destination = try Displays.fingers(req) }
                 catch { session.send(["error": String(describing: error)]); continue }
+                let size = (req["display"] as? [Double]).flatMap { $0.count == 2 ? CGSize(width: $0[0], height: $0[1]) : nil }
                 let double = req["double"] as? Bool == true
-                switch destination.map({ Synthesizer.tap($0.points, display: $0.id, double: double) }) ?? .missing {
+                switch destination.map({ Synthesizer.tap($0.points, display: $0.id, double: double, bounds: size) }) ?? .missing {
                 case .injected: break
                 // An unfinished touch may still land, so never replay it
                 case .unfinished: session.send(["error": "XCTest's event synthesizer did not finish the tap in 5 s; nothing more was injected"]); continue
@@ -175,8 +176,9 @@ final class ExactTouches: XCTestCase {
                       let over = req["over"] as? Double, over.isFinite, over > 0, over <= 2 else { session.send(["error": "pinch needs two fingers' finite screen and screenTo points and over in (0, 2] s"]); continue }
                 guard target.state == .runningForeground else { session.send(["error": "the app is \(Self.name(target.state)), not in the foreground"]); continue }
                 let start = Date().timeIntervalSince1970 * 1000
+                let size = (req["display"] as? [Double]).flatMap { $0.count == 2 ? CGSize(width: $0[0], height: $0[1]) : nil }
                 let point = { (p: [Double]) in CGPoint(x: p[0], y: p[1]) }
-                switch Synthesizer.pinch(from: from.map(point), to: to.map(point), press: 0.05, over: over, hold: 0.05, display: req["display"] as? Int) {
+                switch Synthesizer.pinch(from: from.map(point), to: to.map(point), press: 0.05, over: over, hold: 0.05, display: req["display"] as? Int, bounds: size) {
                 case .injected: session.send(["done": true, "injected": ["start": start, "end": Date().timeIntervalSince1970 * 1000, "via": "synthesizer"]])
                 case .unfinished: session.send(["error": "XCTest's event synthesizer did not finish the pinch in time; nothing more was injected"])
                 case .missing, .refused: session.send(["error": "XCTest could not inject the pinch on the requested display"])
@@ -258,20 +260,21 @@ final class ExactTouches: XCTestCase {
             }
             let started = Date().timeIntervalSince1970 * 1000
             let outcome: Synthesizer.Outcome
+            let size = CGSize(width: dimensions[0], height: dimensions[1])
             switch request["action"] as? String {
             case "tap":
                 guard let fingers = Displays.points(request["screen"]) else { throw refuse("SpringBoard tap needs one finite screen point, or two to five, in fixed portrait screen points") }
-                outcome = Synthesizer.tap(fingers, display: display)
+                outcome = Synthesizer.tap(fingers, display: display, bounds: size)
             case "hold":
                 guard let seconds = request["seconds"] as? Double, seconds.isFinite, seconds > 0, seconds <= 5 else { throw refuse("SpringBoard hold needs seconds in 0...5") }
                 let from = try fixed("screen")
-                outcome = Synthesizer.drag(from: from, to: from, press: seconds, velocity: 0, hold: 0, display: display, bounds: nil)
+                outcome = Synthesizer.drag(from: from, to: from, press: seconds, velocity: 0, hold: 0, display: display, bounds: size)
             case "swipe":
                 guard let velocity = (request["velocity"] ?? 1000.0) as? Double, velocity.isFinite, velocity > 0,
                       let hold = (request["hold"] ?? 0.0) as? Double, hold.isFinite, hold >= 0, hold <= 5 else {
                     throw refuse("SpringBoard swipe needs a positive velocity and hold in 0...5 seconds")
                 }
-                let from = try fixed("screen"), to = try fixed("screenTo"), size = CGSize(width: dimensions[0], height: dimensions[1])
+                let from = try fixed("screen"), to = try fixed("screenTo")
                 // Leave the synthesizer's five-second completion allowance within the driver's 15-second request limit
                 let duration = 0.1 + Double(hypot(to.x - from.x, to.y - from.y)) / velocity + hold
                 guard duration.isFinite, duration <= 9 else { throw refuse("SpringBoard swipe exceeds 9 seconds; increase velocity or reduce the distance or hold") }
@@ -340,11 +343,24 @@ enum Synthesizer {
 
     enum Outcome { case injected, refused, unfinished, missing }
 
+    /// Keep fixed portrait screen points strictly inside the display's hittable interior.
+    /// On rotated screens (`landscapeLeft`, `portraitUpsideDown`), window edge `x == 0` maps
+    /// to `fixed == max`, which BackBoard drops as out-of-bounds (#1942).
+    private static func clamp(_ point: CGPoint, to bounds: CGSize?) -> CGPoint {
+        guard let bounds, bounds.width > 0, bounds.height > 0 else { return point }
+        let w = min(bounds.width, bounds.height), h = max(bounds.width, bounds.height)
+        let inset: CGFloat = 0.5
+        return CGPoint(
+            x: min(max(point.x, inset), max(inset, w - inset)),
+            y: min(max(point.y, inset), max(inset, h - inset))
+        )
+    }
+
     /// A touch down at each point of `at`, in portrait screen points, all
     /// together, lifted together 50 ms later; `double`, the same again 150 ms
     /// after the first went down, as fingers' double tap.
-    static func tap(_ at: [CGPoint], display: Int?, double: Bool = false) -> Outcome {
-        touches(at.map { ($0, 0, [], 0.05) } + (double ? at.map { ($0, 0.15, [], 0.2) } : []), display: display, within: 5)
+    static func tap(_ at: [CGPoint], display: Int?, double: Bool = false, bounds: CGSize? = nil) -> Outcome {
+        touches(at.map { ($0, 0, [], 0.05) } + (double ? at.map { ($0, 0.15, [], 0.2) } : []), display: display, bounds: bounds, within: 5)
     }
 
     /// A touch down at `from` (portrait screen points, as `tap`), held `press`
@@ -395,7 +411,7 @@ enum Synthesizer {
             if hold > 0 && index < segments.count - 1 { moves.append((to, lift)) }
             start = to; offset = lift
         }
-        return touch(from, moves: moves, lift: offset, display: display, within: 5 + offset)
+        return touch(from, moves: moves, lift: offset, display: display, bounds: bounds, within: 5 + offset)
     }
 
     /// `text` as key presses to whatever has keyboard focus, 60 characters a second, as XCUIElement.typeText
@@ -429,15 +445,15 @@ enum Synthesizer {
     /// touch has played. Offsets go in whole milliseconds: at unrounded
     /// sixtieths of a second the synthesizer played none of a drag's hold and
     /// lifted 50 ms after its move (Xcode 27.1).
-    private static func touch(_ at: CGPoint, moves: [(to: CGPoint, offset: Double)], lift: Double, display: Int?, within: Double) -> Outcome {
-        touches([(at, 0, moves, lift)], display: display, within: within)
+    private static func touch(_ at: CGPoint, moves: [(to: CGPoint, offset: Double)], lift: Double, display: Int?, bounds: CGSize?, within: Double) -> Outcome {
+        touches([(at, 0, moves, lift)], display: display, bounds: bounds, within: within)
     }
 
     /// Two fingers down together at `from`, held `press` seconds, moved
     /// straight to `to` over `over` seconds in sixtieths, held `hold` seconds
     /// and lifted together: a pinch, which UIKit's own recognizers read
     /// (a zoomable scroll view's, LLP 1057.001.000 §6).
-    static func pinch(from: [CGPoint], to: [CGPoint], press: Double, over: Double, hold: Double, display: Int?) -> Outcome {
+    static func pinch(from: [CGPoint], to: [CGPoint], press: Double, over: Double, hold: Double, display: Int?, bounds: CGSize? = nil) -> Outcome {
         let steps = max(1, Int((over * 60).rounded()))
         let paths = zip(from, to).map { start, end in
             (start, 0.0, (1...steps).map { i in
@@ -445,11 +461,11 @@ enum Synthesizer {
                 return (to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t), offset: press + over * Double(t))
             } + (hold > 0 ? [(to: end, offset: press + over + hold)] : []), press + over + hold + 0.016)
         }
-        return touches(paths, display: display, within: 5 + press + over + hold)
+        return touches(paths, display: display, bounds: bounds, within: 5 + press + over + hold)
     }
 
     /// Several touches in one record, each down at its point at its offset.
-    private static func touches(_ fingers: [(at: CGPoint, down: Double, moves: [(to: CGPoint, offset: Double)], lift: Double)], display: Int?, within: Double) -> Outcome {
+    private static func touches(_ fingers: [(at: CGPoint, down: Double, moves: [(to: CGPoint, offset: Double)], lift: Double)], display: Int?, bounds: CGSize?, within: Double) -> Outcome {
         let pathClass: AnyClass? = NSClassFromString("XCPointerEventPath"), recordClass: AnyClass? = NSClassFromString("XCSynthesizedEventRecord")
         guard let alloc = imp(pathClass, "alloc", Alloc.self, classMethod: true), let recordAlloc = imp(recordClass, "alloc", Alloc.self, classMethod: true),
               let initPath = imp(pathClass, "initForTouchAtPoint:offset:", InitPath.self),
@@ -464,8 +480,8 @@ enum Synthesizer {
         guard let method = class_getInstanceMethod(object_getClass(device), syn) else { return .missing }
         let ms = { (seconds: Double) in (seconds * 1000).rounded() / 1000 }
         let paths = fingers.map { finger in
-            let path = initPath.1(alloc.1(pathClass!, alloc.0), initPath.0, finger.at, ms(finger.down))
-            if let moveTo { for move in finger.moves { moveTo.1(path, moveTo.0, move.to, ms(move.offset)) } }
+            let path = initPath.1(alloc.1(pathClass!, alloc.0), initPath.0, clamp(finger.at, to: bounds), ms(finger.down))
+            if let moveTo { for move in finger.moves { moveTo.1(path, moveTo.0, clamp(move.to, to: bounds), ms(move.offset)) } }
             up.1(path, up.0, ms(finger.lift))
             return path
         }

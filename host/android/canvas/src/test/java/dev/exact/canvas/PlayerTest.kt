@@ -112,6 +112,117 @@ class PlayerTest {
         }
     }
 
+    @Test fun aStationaryClipContainsTheMovingGroupAndItsRetainedRows() {
+        val group = RenderNode("rows").apply { setClipToBounds(false) }
+        val row = RenderNode("row").apply { setPosition(0, 0, 30, 10) }
+        fun record(color: Int) {
+            row.beginRecording().drawColor(color)
+            row.endRecording()
+        }
+        record(Color.BLUE)
+        val player = Player(emptyMap()).also {
+            it.width = 80; it.height = 80
+            it.group = { group }; it.row = { row }
+        }
+        val page = RenderNode("page").apply { setPosition(0, 0, 80, 160) }
+        val drawn = ArrayList<RenderNode>()
+        val outer = object : Canvas(Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)) {
+            override fun drawRenderNode(node: RenderNode) { drawn.add(node) }
+        }
+        fun clip(x: Int, y: Int, w: Int, h: Int) = intArrayOf(4, f(x), f(y), f(w), f(h)) + IntArray(8)
+        val rows = intArrayOf(20, 7, 17, 1, f(10), f(100), 21)
+        fun draw(clips: List<IntArray>, expected: List<Int>, transform: IntArray = identity) {
+            val ops = transform + clips.fold(intArrayOf()) { a, b -> a + b } + rows + IntArray(clips.size) { 6 }
+            player.replay(outer, IntBuffer.wrap(ops), 0, ops.size)
+            val port = drawn.removeAt(0)
+            assertNotSame(group, port)
+            assertTrue(port.clipToBounds)
+            assertEquals(expected, listOf(port.left, port.top, port.right, port.bottom))
+            page.beginRecording().drawRenderNode(port)
+            page.endRecording()
+        }
+        draw(listOf(clip(0, 0, 80, 80)), listOf(0, 0, 80, 80))
+        // An unclipped ancestor may paint beyond the nominal 80-pixel recording.
+        draw(listOf(clip(0, 40, 65, 80)), listOf(0, 40, 65, 120))
+        group.translationY = -10f
+        pixels(page) { assertEquals(Color.BLUE, it.getPixel(18, 92)) }
+        draw(listOf(clip(10, 10, 50, 40), clip(5, 20, 35, 45)), listOf(10, 20, 40, 50))
+        // Bring an already recorded row through the lower edge without replaying the page.
+        group.translationY = -55f
+        pixels(page) {
+            assertEquals(Color.BLUE, it.getPixel(18, 46))
+            assertEquals(Color.TRANSPARENT, it.getPixel(18, 50))
+        }
+        record(Color.RED)
+        pixels(page) { assertEquals(Color.RED, it.getPixel(18, 46)) }
+        val project = intArrayOf(48, f(1), 0, 0, 0, f(1), 0, 0, 0.001f.toBits(), f(1))
+        draw(listOf(clip(20, 40, 80, 80)), listOf(17, 38, 97, 108), project)
+    }
+
+    @Test fun aOnePixelPortKeepsItsColumnInAShiftedRecording() {
+        val shift = 1 shl 24
+        val group = RenderNode("group").apply { setClipToBounds(false); setPosition(0, 0, 8, 8); translationX = shift.toFloat() }
+        val player = Player(emptyMap()).also { it.width = 8; it.height = 8; it.group = { group } }
+        val page = RenderNode("page").apply { setPosition(0, 0, 8, 8) }
+        val moved = intArrayOf(1, f(1), 0, 0, f(1), f(shift), 0)
+        fun stripe(x: Int, color: Int) = intArrayOf(2, color, f(x), 0, f(1), f(8)) + IntArray(8)
+        val body = identity + stripe(0, Color.RED) + stripe(1, Color.BLUE)
+        player.replay(group.beginRecording(), IntBuffer.wrap(body), 0, body.size)
+        group.endRecording()
+        for (x in 0..1) {
+            val clip = intArrayOf(4, f(x), 0, f(1), f(8)) + IntArray(8)
+            val ops = moved + clip + intArrayOf(20, 7) + body + intArrayOf(21, 6)
+            player.replayAt(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size, shift.toFloat(), 0f, reuseGroups = true)
+            page.endRecording()
+            pixels(page) {
+                assertEquals(if (x == 0) Color.RED else Color.BLUE, it.getPixel(x, 3))
+                assertEquals(Color.TRANSPARENT, it.getPixel(1 - x, 3))
+            }
+        }
+    }
+
+    @Test fun aGroupInsideAFilterDrawsAtItsPagePosition() {
+        val graph = PaintedOrigins().apply { tracksFrames = true }
+        val group = RenderNode("group").apply { setClipToBounds(false) }
+        val row = RenderNode("row").apply { setPosition(0, 0, 40, 20) }
+        row.beginRecording().drawColor(Color.RED)
+        row.endRecording()
+        val player = Player(emptyMap()).apply {
+            width = 100; height = 100
+            origins = graph
+            this.group = { group }
+            this.row = { row }
+        }
+        // Identity color matrix filter at y=40..100 (shifts filter recording origin by y=40).
+        val idMatrix = FloatArray(20).apply { this[0] = 1f; this[6] = 1f; this[12] = 1f; this[18] = 1f }
+        val filter = intArrayOf(53, 26, f(0), f(40), f(100), f(60), 1, 1) + idMatrix.map { it.toRawBits() }.toIntArray()
+        val clip = intArrayOf(4, f(0), f(40), f(100), f(60)) + IntArray(8)
+        val ops = identity + filter + clip + intArrayOf(20, 1, 17, 9, f(10), f(70), 21, 6, 54)
+        val page = RenderNode("page").apply { setPosition(0, 0, 100, 100) }
+        player.replay(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size)
+        page.endRecording()
+        pixels(page) {
+            assertEquals(Color.RED, it.getPixel(20, 80))
+            assertEquals(Color.TRANSPARENT, it.getPixel(20, 45))
+        }
+        val m = android.graphics.Matrix()
+        val pt = floatArrayOf(0f, 0f)
+        assertTrue(graph.transform(row, m))
+        m.mapPoints(pt)
+        assertEquals(10f, pt[0], 0.5f)
+        assertEquals(70f, pt[1], 0.5f)
+    }
+
+    private fun bitmap(page: RenderNode): Bitmap =
+        HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap", RenderNode::class.java,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(null, page, page.width, page.height) as Bitmap
+
+    private fun pixels(page: RenderNode, check: (Bitmap) -> Unit) {
+        val hardware = bitmap(page)
+        val copy = hardware.copy(Bitmap.Config.ARGB_8888, false)
+        try { check(copy) } finally { copy.recycle(); hardware.recycle() }
+    }
+
     /** A shader and the shape it paints (op 43 before op 2) are one draw: a played gradient, a press's ripple, is
      * scaled as it is drawn, with no offscreen layer. */
     @Test fun aShadedShapeIsOneShape() {
@@ -196,6 +307,10 @@ class PlayerTest {
         val clip = RectF(0f, 0f, 200f, 100f)
         assertTrue(graph.transform(frame, matrix, clip))
         assertEquals(RectF(0f, 225f, 100f, 275f), clip)
+        val slots = Slots(player) { true }
+        slots.node(9)
+        slots.set(9, IntBuffer.wrap(identity), 0, identity.size, player)
+        assertTrue("an image arriving keeps the iframe in the page", graph.transform(frame, matrix))
     }
 
     /** A box's CSS filter (ops 53 and 54): its drawing goes into a node at the region's device bounds, which carries
@@ -228,9 +343,7 @@ class PlayerTest {
         canvas.drawColor(Color.WHITE)
         Player(emptyMap()).apply { width = 80; height = 80 }.replay(canvas, IntBuffer.wrap(ops), 0, ops.size)
         page.endRecording()
-        return HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
-            RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-            .invoke(null, page, 80, 80) as Bitmap
+        return bitmap(page)
     }
 
     /** The chain draws as the painter's: a blur spreads the box past its edge, a colour matrix scales its channels,
@@ -297,6 +410,51 @@ class PlayerTest {
         }
     }
 
+    @Test fun concurrentShaderReadsKeepTheirOwnLocalMatrices() {
+        fun linearShader(a: Float, d: Float, e: Float, fVal: Float): IntBuffer {
+            val words = intArrayOf(
+                43, 19, 0, 0,
+                0, 0, f(100), 0, 0, 0,
+                a.toRawBits(), 0, 0, d.toRawBits(), e.toRawBits(), fVal.toRawBits(),
+                2, 0f.toRawBits(), Color.RED, 1f.toRawBits(), Color.BLUE,
+            )
+            return IntBuffer.wrap(words)
+        }
+        val firstOp = linearShader(2f, 3f, 10f, 20f)
+        val secondOp = linearShader(4f, 5f, 30f, 40f)
+        val firstExpected = floatArrayOf(2f, 0f, 10f, 0f, 3f, 20f, 0f, 0f, 1f)
+        val secondExpected = floatArrayOf(4f, 0f, 30f, 0f, 5f, 40f, 0f, 0f, 1f)
+        val barrier = java.util.concurrent.CyclicBarrier(2)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable>()
+
+        fun worker(op: IntBuffer, expected: FloatArray): Thread = Thread {
+            try {
+                val scratchMatrix = android.graphics.Matrix()
+                val scratchValues = FloatArray(9)
+                val outMatrix = android.graphics.Matrix()
+                val outValues = FloatArray(9)
+                barrier.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                repeat(1000) { iter ->
+                    val shader = if (iter % 2 == 0) Shaders.read(op, 0, scratchMatrix, scratchValues) else Shaders.read(op, 0)
+                    assertNotNull(shader)
+                    assertTrue(shader!!.getLocalMatrix(outMatrix))
+                    outMatrix.getValues(outValues)
+                    assertArrayEquals("iteration $iter", expected, outValues, 0f)
+                }
+            } catch (t: Throwable) {
+                failure.compareAndSet(null, t)
+            }
+        }
+
+        val t1 = worker(firstOp, firstExpected)
+        val t2 = worker(secondOp, secondExpected)
+        t1.start(); t2.start()
+        t1.join(10_000); t2.join(10_000)
+        assertFalse(t1.isAlive)
+        assertFalse(t2.isAlive)
+        failure.get()?.let { throw it }
+    }
+
     @Test @Config(sdk = [30], shadows = [GlyphOutlines::class])
     fun overlappingLegacyRunsCompositeSeparately() {
         val font = android.graphics.fonts.Font.Builder(java.io.File("../../../apps/canvas-gallery/assets/ExposureSansOriginal03-Regular.ttf")).build()
@@ -305,5 +463,135 @@ class PlayerTest {
         val bitmap = Bitmap.createBitmap(24, 24, Bitmap.Config.ARGB_8888)
         Player(mapOf(1 to font)).apply { width = 24; height = 24 }.replay(Canvas(bitmap), IntBuffer.wrap(ops), 0, ops.size)
         assertEquals(192, Color.alpha(bitmap.getPixel(7, 7)))
+    }
+
+    @Test fun nestedScrollPortsClipIndependentlyAndRevealWhenOuterScrolls() {
+        val outer = RenderNode("outer").apply { setClipToBounds(false) }
+        val inner = RenderNode("inner").apply { setClipToBounds(false) }
+        val innerRow = RenderNode("innerRow").apply {
+            setPosition(0, 0, 60, 40)
+            beginRecording().drawColor(Color.GREEN)
+            endRecording()
+        }
+        val recorded = ArrayList<Int>()
+        val player = Player(emptyMap()).apply {
+            width = 100; height = 100
+            group = { id -> if (id == 1) outer else inner }
+            row = { innerRow }
+            onGroupRecorded = { recorded.add(it) }
+        }
+        fun clip(x: Int, y: Int, w: Int, h: Int) = intArrayOf(4, f(x), f(y), f(w), f(h)) + IntArray(8)
+        // Outer viewport is (0, 0, 100, 100). Inner port is (10, 40, 80, 100), extending to y=140
+        // past outer's bottom; its row sits at y=105 (initially below outer, inside inner's port).
+        val ops = identity + clip(0, 0, 100, 100) + intArrayOf(20, 1) +
+            identity + clip(10, 40, 80, 100) + intArrayOf(20, 2) +
+            intArrayOf(17, 9, f(15), f(105)) + intArrayOf(21, 6, 21, 6)
+        val page = RenderNode("page").apply { setPosition(0, 0, 100, 100) }
+        player.replay(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size)
+        page.endRecording()
+        assertEquals(listOf(1, 2), recorded)
+
+        // Initially y=105 is below outer's clip (y=100), so pixel (25, 80) is transparent.
+        pixels(page) { assertEquals(Color.TRANSPARENT, it.getPixel(25, 80)) }
+
+        // Scrolling outer up by 40 px brings inner's port (y=40..140 -> 0..100) and row (y=105 -> 65) into view.
+        // If inner's scrollPort had been clamped by outer's clip, y=65..99 would be blank.
+        outer.translationY = -40f
+        pixels(page) {
+            assertEquals(Color.GREEN, it.getPixel(25, 75))
+            assertEquals(Color.TRANSPARENT, it.getPixel(5, 75))
+        }
+
+        // Scrolling inner down moves the row past inner's bottom clip without damaging outer.
+        inner.translationY = -50f
+        pixels(page) {
+            assertEquals(Color.GREEN, it.getPixel(25, 25))
+            assertEquals(Color.TRANSPARENT, it.getPixel(25, 75))
+        }
+
+        // Backdrop reuse skips the nested 20/21 pair cleanly without re-recording either group.
+        recorded.clear()
+        val withBackdrop = ops + identity + blur(60)
+        player.replay(page.beginRecording(), IntBuffer.wrap(withBackdrop), 0, withBackdrop.size)
+        page.endRecording()
+        assertEquals(listOf(1, 2), recorded)
+    }
+
+    @Test fun nestedGroupsComposeOriginsForHostedViews() {
+        val graph = PaintedOrigins().apply { tracksFrames = true }
+        val outer = RenderNode("outer").apply { setClipToBounds(false) }
+        val inner = RenderNode("inner").apply { setClipToBounds(false) }
+        val hosted = RenderNode("hosted").apply { setPosition(0, 0, 40, 20) }
+        val player = Player(emptyMap()).apply {
+            width = 100; height = 100
+            origins = graph
+            group = { id -> if (id == 1) outer else inner }
+            native = { hosted }
+        }
+        fun clip(x: Int, y: Int, w: Int, h: Int) = intArrayOf(4, f(x), f(y), f(w), f(h)) + IntArray(8)
+        // Hosted view at y=110..130 inside inner port y=80..140 (beyond outer's 100px height).
+        val draw = intArrayOf(28, 1, 1, f(10), f(110), f(40), f(20)) + IntArray(9)
+        val ops = identity + clip(0, 0, 100, 100) + intArrayOf(20, 1) +
+            identity + clip(5, 80, 90, 60) + intArrayOf(20, 2) +
+            identity + draw + intArrayOf(21, 6, 21, 6)
+        val root = RenderNode("root").apply { setPosition(0, 0, 100, 100) }
+        player.replay(root.beginRecording(), IntBuffer.wrap(ops), 0, ops.size)
+        root.endRecording()
+        // Initially below outer viewport (100px): visible rect is empty.
+        val m = android.graphics.Matrix()
+        val vis = RectF(0f, 0f, 40f, 20f)
+        assertTrue(graph.transform(hosted, m, vis))
+        assertTrue(vis.isEmpty)
+        // Translating outer up by 40px brings inner's port to y=40..100 and hosted view to y=70..90.
+        graph.translate(outer, 0f, -40f)
+        graph.translate(inner, 0f, -10f)
+        vis.set(0f, 0f, 40f, 20f)
+        assertTrue(graph.transform(hosted, m, vis))
+        assertEquals(RectF(10f, 60f, 50f, 80f), vis)
+        val pt = floatArrayOf(0f, 0f)
+        m.mapPoints(pt)
+        assertEquals(10f, pt[0], 0.5f)
+        assertEquals(60f, pt[1], 0.5f)
+    }
+
+    @Test fun partialGroupRecordKeepsHostedViewBeyondNominalHeightAndRespectsClipPath() {
+        val graph = PaintedOrigins().apply { tracksFrames = true }
+        val groupNode = RenderNode("group").apply { setClipToBounds(false); setPosition(0, 0, 100, 100) }
+        val hosted = RenderNode("hosted").apply { setPosition(0, 0, 40, 20) }
+        val player = Player(emptyMap()).apply {
+            width = 100; height = 100
+            origins = graph
+            group = { groupNode }
+            native = { hosted }
+        }
+        fun clip(x: Int, y: Int, w: Int, h: Int) = intArrayOf(4, f(x), f(y), f(w), f(h)) + IntArray(8)
+        // A rectangular CLIP_PATH (op 5) covering x=15..85, y=100..150 (below the 100px nominal height).
+        val clipPath = intArrayOf(
+            5, 0, 5,
+            0, f(15), f(100),
+            1, f(85), f(100),
+            1, f(85), f(150),
+            1, f(15), f(150),
+            4,
+        )
+        val draw = intArrayOf(28, 1, 1, f(10), f(110), f(40), f(20)) + IntArray(9)
+        val ops = identity + clip(0, 0, 100, 100) + intArrayOf(20, 1) +
+            identity + clipPath + draw + intArrayOf(6, 21, 6)
+        val root = RenderNode("root").apply { setPosition(0, 0, 100, 100) }
+        val buf = IntBuffer.wrap(ops)
+        player.replay(root.beginRecording(), buf, 0, ops.size)
+        root.endRecording()
+
+        // Re-record only the group body via recordGroup (partial replay with empty openGroups).
+        val bodyStart = identity.size + 13 + 2
+        val bodyEnd = ops.size - 2
+        player.recordGroup(buf, intArrayOf(1, bodyStart, bodyEnd), groupNode)
+
+        // Translate the group up by 60px: hosted view moves to (10..50, 50..70) and CLIP_PATH clips its left at x=15.
+        graph.translate(groupNode, 0f, -60f)
+        val m = android.graphics.Matrix()
+        val vis = RectF(0f, 0f, 40f, 20f)
+        assertTrue(graph.transform(hosted, m, vis))
+        assertEquals(RectF(15f, 50f, 50f, 70f), vis)
     }
 }

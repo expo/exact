@@ -9,6 +9,7 @@
   "use strict";
   global.__exact_storage_calls = function (env) {
     var host = env.host,
+      rawThen = env.rawThen,
       journal = env.journal,
       errorText = env.errorText,
       background = env.background,
@@ -110,8 +111,9 @@
         Object.defineProperty(error, "name", { value: "NotSupportedError", writable: true, configurable: true });
       return error;
     }
-    // `accepted`, for a release (a lock's `unlock()`), runs once the operation is queued.
-    function storageCall(receiver, method, args, convert, accepted) {
+    // `accepted`, for a release (a lock's `unlock()`), runs once queued and may run after `call.lost`.
+    // `queued` runs once all admission checks pass without bypassing `call.lost`.
+    function storageCall(receiver, method, args, convert, accepted, queued) {
       if (env.overlaying()) return Promise.reject(inOverlay("storage." + method + "()"));
       var call = env.current();
       // An answer whose storage wait failed issues no more storage. A release in its `finally` still runs, as the
@@ -183,6 +185,7 @@
       call.storage++;
       storing.add(call);
       if (accepted) accepted();
+      if (queued) queued();
       // The web realm attributes the cell now, while this answer is current.
       // The adapter runs at issue, and a background round may be current then
       // (LLP 1097 D7). Hermes has no hook and runs the adapter at the call.
@@ -316,7 +319,7 @@
       });
     }
     function announcing(promise, topics) {
-      return promise.then(function (value) {
+      return rawThen(promise, function (value) {
         announce(topics);
         return value;
       });
@@ -328,7 +331,7 @@
       return { changes: result.changes, lastInsertRowid: result.lastInsertRowid };
     }
     function written(promise, topics) {
-      return promise.then(function (value) {
+      return rawThen(promise, function (value) {
         var results = Array.isArray(value) ? value : [value];
         if (
           results.some(function (result) {
@@ -436,7 +439,7 @@
         close: function () {
           openDatabases.delete(handle);
           // A failed close still rejects for the caller, so one left unhandled is still reported.
-          return storageCall(raw, "close", []).then(undefined, function (e) {
+          return rawThen(storageCall(raw, "close", []), undefined, function (e) {
             openDatabases.add(handle);
             throw e;
           });
@@ -447,7 +450,6 @@
     [
       "readFile",
       "writeFile",
-      "atomicWriteFile",
       "appendFile",
       "readdir",
       "mkdir",
@@ -468,7 +470,7 @@
         var topics = fileTopics(arguments[0]);
         if (method === "rename" || method === "copyFile")
           topics = (method === "rename" ? topics : []).concat(fileTopics(arguments[1]));
-        if (!/^(writeFile|atomicWriteFile|appendFile|mkdir|rm|rename|copyFile|chmod|symlink)$/.test(method)) {
+        if (!/^(writeFile|appendFile|mkdir|rm|rename|copyFile|chmod|symlink)$/.test(method)) {
           watchTopics(topics);
           return result;
         }
@@ -476,30 +478,48 @@
       };
     });
     // LLP 1069.010.000 D4: a kept file the app replaces with its own atomic write stays kept: the host reads what the
-    // write replaces, then carries the entry to the file written.
-    var atomic = files.atomicWriteFile;
+    // write replaces once storageCall admits the operation, then carries the entry to the file written.
     files.atomicWriteFile = function (path) {
       var t;
-      try {
-        t = typeof path === "string" && path.indexOf("doc:/") === 0 ? host(6, "kept", "replacing " + path) : undefined;
-      } catch (e) {
-        t = undefined;
-      }
       var done = function (how) {
-        if (t)
+        if (t) {
+          var token = t;
+          t = undefined;
           try {
-            host(6, "kept", how + t);
+            host(6, "kept", how + token);
           } catch (e) {}
+        }
       };
-      return atomic.apply(null, arguments).then(
+      var result = storageCall(
+        nativeStorage && nativeStorage.fs,
+        "atomicWriteFile",
+        arguments,
+        undefined,
+        undefined,
+        function () {
+          try {
+            t =
+              typeof path === "string" && path.indexOf("doc:/") === 0
+                ? host(6, "kept", "replacing " + path)
+                : undefined;
+          } catch (e) {
+            t = undefined;
+          }
+        }
+      );
+      return rawThen(
+        announcing(result, fileTopics(path)),
         function (v) {
           // A kept set that cannot be saved fails the write, though the file is written; writing again keeps it.
-          if (t)
+          if (t) {
+            var token = t;
+            t = undefined;
             try {
-              host(6, "kept", "replaced " + t);
+              host(6, "kept", "replaced " + token);
             } catch (e) {
               throw storageError(String((e && e.message) || e));
             }
+          }
           return v;
         },
         function (e) {
@@ -532,7 +552,7 @@
           typeof expect.size !== "number"
         )
           return Promise.reject(new TypeError(api + ": expect is a stat (modifiedMs and size) of a doc:/ path"));
-        return files.stat(path).then(function (now) {
+        return rawThen(files.stat(path), function (now) {
           if (now.modifiedMs !== expect.modifiedMs || now.size !== expect.size)
             throw storageError("document ECHANGED: " + path + " changed on disk since it was read", "ECHANGED");
           return write(path, data);
@@ -568,7 +588,7 @@
         if (!l.by || l.by === background || !l.by.replied) return;
         heldLocks.delete(l);
         try {
-          Promise.resolve(nativeStorage.fs.unlock(l.h)).then(undefined, function () {});
+          rawThen(Promise.resolve(nativeStorage.fs.unlock(l.h)), undefined, function () {});
         } catch (e) {}
       });
     }
@@ -583,9 +603,11 @@
     // LLP 1069.010.000 D5 (doc.keep): the host's kept list, which watch("doc:/") hears change, and the app's own
     // removal.
     files.recentDocuments = function () {
+      if (env.overlaying()) return Promise.reject(inOverlay("storage.recentDocuments()"));
       return web("recentDocuments", []) || kept("");
     };
     files.forgetDocument = function (path) {
+      if (env.overlaying()) return Promise.reject(inOverlay("storage.forgetDocument()"));
       return web("forgetDocument", [path]) || kept("forget " + path);
     };
     function web(method, args) {
@@ -712,12 +734,15 @@
       } catch (e) {
         return Promise.reject(e);
       }
-      return storageCall(nativeStorage && nativeStorage.fs, method, [from, to].concat(tail), function (value) {
-        return typeof value === "string" ? record(value.split("\t"), tail) : value;
-      }).then(function (written) {
-        announce(fileTopics(written && written.path));
-        return written;
-      });
+      return rawThen(
+        storageCall(nativeStorage && nativeStorage.fs, method, [from, to].concat(tail), function (value) {
+          return typeof value === "string" ? record(value.split("\t"), tail) : value;
+        }),
+        function (written) {
+          announce(fileTopics(written && written.path));
+          return written;
+        }
+      );
     }
     files.compressImage = function (from, to, options) {
       return imageCall("compressImage", from, to, options, function (parts, tail) {

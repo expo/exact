@@ -277,6 +277,19 @@ pub(super) fn binding_of(plan: &Plan, row: &NodesRow, style: StyleId) -> Option<
     })
 }
 
+/// The active binding of `style` on `row`, when any binding sets it.
+fn active_binding_of(
+    plan: &Plan,
+    row: &NodesRow,
+    themed: &Themed,
+    style: StyleId,
+) -> Option<usize> {
+    (0..row.bindings.len as usize).rev().find(|&i| {
+        let b = plan.binding(exact_plan::BindingsId(row.bindings.start + i as u32));
+        b.kind == BindingKind::Style && b.id == style as u16 && themed.sets(i)
+    })
+}
+
 /// Whether `row` is a mode boundary: it pins modes or sets a scheme (D7).
 pub(crate) fn boundary(plan: &Plan, row: &NodesRow) -> bool {
     binding_of(plan, row, StyleId::Mode).is_some()
@@ -397,20 +410,22 @@ impl super::NodeInst {
         let row = plan.node(self.node);
         // A row it sets passes its text on when that read a token, else
         // nothing; a row it does not set, its implied row's or the one around.
-        let inherited = std::array::from_fn(|k| match binding_of(plan, &row, INHERITED[k]) {
-            Some(b) if self.themed.sets(b) => self
-                .themed
-                .get(b)
-                .then(|| self.emitted(plan, u.sites, b))
-                .flatten(),
-            _ => match self
-                .rare
-                .as_ref()
-                .and_then(|r| r.implied.as_ref()?[k].clone())
-            {
-                Some(text) => Some(text),
-                None => u.theme.inherited[k].clone(),
-            },
+        let inherited = std::array::from_fn(|k| {
+            match active_binding_of(plan, &row, &self.themed, INHERITED[k]) {
+                Some(b) => self
+                    .themed
+                    .get(b)
+                    .then(|| self.emitted(plan, u.sites, b))
+                    .flatten(),
+                None => match self
+                    .rare
+                    .as_ref()
+                    .and_then(|r| r.implied.as_ref()?[k].clone())
+                {
+                    Some(text) => Some(text),
+                    None => u.theme.inherited[k].clone(),
+                },
+            }
         });
         let saved = u.theme.clone();
         // A pin that moved, or a colour its descendants inherit, which a
@@ -563,7 +578,7 @@ impl super::NodeInst {
         let (view, tuple) = (self.view, self.tuple);
         for (k, style) in INHERITED.into_iter().enumerate() {
             // Its own row stands: an implied one is set again when it goes.
-            if binding_of(plan, &row, style).is_some_and(|b| self.themed.sets(b)) {
+            if active_binding_of(plan, &row, &self.themed, style).is_some() {
                 if let Some(implied) = self.rare.as_mut().and_then(|r| r.implied.as_mut()) {
                     implied[k] = None;
                 }

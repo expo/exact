@@ -47,30 +47,27 @@
       "description": "Per-module settings a launch part reads at launch (the Info.plist key ExactModuleConfig): module name to its settings.",
       "additionalProperties": {"type": "object"}
     },
-    "modules": {
-      "type": "array",
-      "description": "The native-module roster (LLP 1024 D1): the custom-element tags the app's module artifact serves (modules/apple/*.swift beside libexact_modules.dylib on Apple, exact.app.Modules in modules/android on Android, modules/web/index.js on the web). A hyphenated tag in the Contract that this list lacks is bake-unknown-module.",
-      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$"}
-    },
+    "modules": {"type": "array",
+      "description": "Each native view tag appears once. A string or an object without hosts declares every host. Guard a host-limited view with its exactPage().platform test (LLP 1024 D1).",
+      "uniqueItems": true, "x-uniqueModuleTag": true,
+      "items": {"oneOf": [
+        {"$ref": "#/$defs/moduleTag"},
+        {"type": "object", "required": ["tag"], "additionalProperties": false, "properties": {
+          "tag": {"$ref": "#/$defs/moduleTag"},
+          "hosts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/hatchPlatform"}}
+        }} ]} },
     "data": {
       "type": "array",
       "description": "The app's data-* words (LLP 1075.003 Q2), without the `data-`: real attributes on the web, read by the app module's hatches on Apple through typed keys the build writes from this list (ExactDataKey). A data-* attribute in the Contract that this list lacks is bake-undeclared-data.",
-      "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"}
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}
     },
     "hatches": {
       "description": "The app's hatch words (LLP 1075.003.000 Q1): a node marked hatch=\"word\" hands its platform object (a UIView or NSView and its kind's UIKit or AppKit object, or a DOM element) to the app module's element hatch, which compares it with typed keys the build writes from this list (ExactHatchKey). A hatched node leaves the host's fast path. A hatch word in the Contract that this list lacks is bake-undeclared-hatch. Either a list of words, each handled on every platform the app builds, or an object giving each word the platforms whose module handles it, as {\"avatar\": [\"ios\", \"macos\", \"web\"]} (LLP 1075.003.000.001 §5): a platform the word does not name shows the node and never calls a hatch for it, and its typed keys leave the word out.",
       "oneOf": [
-        {
-          "type": "array",
-          "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"}
-        },
-        {
-          "type": "object",
-          "propertyNames": { "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$" },
-          "additionalProperties": {"type": "array", "items": {"enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"]}}
-        }
-      ]
-    },
+        {"type": "array", "items": {"$ref": "#/$defs/hatchWord"}},
+        {"type": "object", "propertyNames": {"$ref": "#/$defs/hatchWord"},
+          "additionalProperties": {"type": "array", "items": {"$ref": "#/$defs/hatchPlatform"}}}
+      ] },
     "implementations": {
       "description": "The implementation each module interface binds on a target (LLP 1133.001 D4), where the build cannot choose alone: {\"@exact/geolocation\": {\"web\": \"@fast/geolocation-web\"}}. Unnamed, a target binds the app's one direct dependency that implements the interface there, else the one the interface carries; two such dependencies are bake-implementation-ambiguous.",
       "type": "object",
@@ -177,7 +174,8 @@
     "name": {
       "description": "The app's full name, as the web manifest and an installed web app show it.",
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])"
     },
     "short_name": {"description": "The name where space is short: a home screen, a dock tile.", "type": "string"},
     "version": {
@@ -756,7 +754,7 @@
           "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$",
           "x-hint": "every dot-separated part starts with a letter, since the Linux app id and the default Android package require that (Apple alone allows a leading digit). Put a letter before a part that starts with a digit, as in com.example.x2048, and set host.android.id when Android needs a different package."
         },
-        "name": {"description": "The name a native host shows: the menu bar, the app switcher, Finder.", "type": "string", "minLength": 1},
+        "name": {"description": "The name a native host shows: the menu bar, the app switcher, Finder.", "type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])"},
         "origin": {"description": "The https origin a web build is served from, when it signs people in (OAuth callbacks are derived from it).", "type": "string", "pattern": "^https?://"},
         "command": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The name this app answers to on the command line: `exact install <app>` writes a shim by this name (LLP 1033 D2). Default: the app directory's name."}
       },
@@ -1279,7 +1277,7 @@
         "required": ["idSuffix", "name"],
         "properties": {
           "idSuffix": {"description": "Appended to app.id (and host.android.id), as `.dev`: one or more parts, each a dot, a letter, then letters, digits or `-`.", "type": "string", "pattern": "^(\\.[a-zA-Z][a-zA-Z0-9-]*)+$"},
-          "name": { "description": "The name people see for this variant, in place of app.name: the launcher, the home screen, the menu bar, the executable.", "type": "string", "minLength": 1 },
+          "name": { "description": "The name people see for this variant, in place of app.name: the launcher, the home screen, the menu bar, the executable.", "type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])" },
           "icons": { "description": "This variant's icons, in place of `icons`; under it, color_scheme_dark.icons and the app's host.ios.icon and host.macos.icon are not read. Absent: the app's.", "type": "array", "items": { "$ref": "#/$defs/icon" } },
           "host": {
             "description": "This variant's Icon Composer projects, the only members of `host` a variant has: each replaces the app's on its platform, and wins there over `icons` as the app's does (LLP 1163 D4). Absent: the app's, unless the variant has `icons`.",
@@ -1337,7 +1335,7 @@
             "additionalProperties": false,
             "required": ["finding", "node", "why"],
             "properties": {
-              "finding": { "type": "string", "enum": ["covered", "squeezed", "clipped", "overflow", "overlap", "contrast", "card", "target", "fixed-type", "fixed-symbol", "broken-words", "unnamed", "exposed-hidden", "outside-modal"] },
+              "finding": { "type": "string", "enum": ["covered", "edge", "hinge", "squeezed", "clipped", "overflow", "overlap", "contrast", "card", "target", "fixed-type", "fixed-symbol", "broken-words", "unnamed", "exposed-hidden", "outside-modal"] },
               "node": { "type": "string", "pattern": "^[^*]+\\*?$", "description": "A testId, or a non-empty prefix of one and a single trailing *: a bare * would accept the finding on every node." },
               "why": { "type": "string", "minLength": 1 }
             }
@@ -1368,6 +1366,9 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "moduleTag": {"type": "string", "pattern": "^(?!(?:annotation-xml|color-profile|font-face(?:-src|-uri|-format|-name)?|missing-glyph)$)[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$"},
+    "hatchWord": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "hatchPlatform": {"enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"]},
     "plistValue": {"description": "A property-list value: a string, number, boolean, array or dictionary.", "type": ["string", "number", "boolean", "array", "object"], "items": {"$ref": "#/$defs/plistValue"}, "additionalProperties": {"$ref": "#/$defs/plistValue"}},
     "darkLaunchImage": {"type": "object", "required": ["src"], "additionalProperties": false, "properties": {"src": {"type": "string", "description": "The dark PNG, relative to the app directory.", "pattern": "\\.png$"}}},
     "launchColour": {

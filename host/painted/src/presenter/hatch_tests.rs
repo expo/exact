@@ -1264,13 +1264,17 @@ fn a_readers_package_timer_runs_without_app_hatches() {
     first_pixel(&mut p);
     assert!(!p.hatches.connected());
     agent(&mut p, json!({"op": "clock", "to": 1000.0}));
-    let ticket = p.reader_hatch_act(0, 6, Some("5000"));
+    let now = p.host().now();
+    let ticket = p.reader_hatch_act(0, 6, Some("5000"), now);
     assert!(
         ticket >= 0,
         "ExtensionContext.after must register without app hatches"
     );
-    let cancelled = p.reader_hatch_act(0, 6, Some("100"));
-    assert_eq!(p.reader_hatch_act(0, 8, Some(&cancelled.to_string())), 1);
+    let cancelled = p.reader_hatch_act(0, 6, Some("100"), now);
+    assert_eq!(
+        p.reader_hatch_act(0, 8, Some(&cancelled.to_string()), now),
+        1
+    );
     crate::hatches::reader::take();
     assert_eq!(p.timer_due_ms(), Some(6000.0));
     agent(&mut p, json!({"op": "clock", "to": 5999.0}));
@@ -1279,6 +1283,70 @@ fn a_readers_package_timer_runs_without_app_hatches() {
     assert_eq!(crate::hatches::reader::take(), Some(vec![6, ticket as i32]));
     agent(&mut p, json!({"op": "clock", "to": 7000.0}));
     assert!(crate::hatches::reader::take().is_none());
+}
+
+#[test]
+fn reader_hatch_act_refreshes_session_clock_for_after_frames_and_diagnostics() {
+    let mut p = boot::<()>("component App\n  view\n    text \"Record\"\n", &[]);
+    p.set_hatches(Some(crate::hatches::install_with_reader::<()>(&[])));
+    agent(&mut p, json!({"op": "clock", "to": 1000.0}));
+    first_pixel(&mut p);
+    assert!(p.hatches.connected());
+    crate::hatches::reader::take();
+
+    // Advance session time without any intervening Session::call, then arm an
+    // after() timer: due time must measure from 10_000.0, not stale 1000.0.
+    agent(&mut p, json!({"op": "clock", "to": 10_000.0}));
+    let ticket = p.reader_hatch_act(0, 6, Some("5000"), 10_000.0);
+    assert!(ticket >= 0);
+    assert_eq!(p.timer_due_ms(), Some(15_000.0));
+    agent(&mut p, json!({"op": "clock", "to": 10_000.0}));
+    assert!(
+        crate::hatches::reader::take().is_none(),
+        "timer must not fire immediately at 0 ms"
+    );
+    agent(&mut p, json!({"op": "clock", "to": 14_999.0}));
+    assert!(crate::hatches::reader::take().is_none());
+    agent(&mut p, json!({"op": "clock", "to": 15_000.0}));
+    assert_eq!(crate::hatches::reader::take(), Some(vec![6, ticket as i32]));
+
+    // frames() started after an idle jump bases its frame clock at the live now.
+    agent(&mut p, json!({"op": "clock", "to": 20_000.0}));
+    let frames = p.reader_hatch_act(0, 5, None, 20_000.0);
+    assert!(frames >= 0);
+    assert_eq!(
+        p.hatch_instant(20_000.0),
+        None,
+        "frames() must not treat a frame as immediately due at its registration instant"
+    );
+    assert!(
+        p.hatch_instant(20_020.0)
+            .is_some_and(|due| due > 20_000.0 && due <= 20_020.0),
+        "frames() must schedule the next frame one period after now"
+    );
+    assert_eq!(
+        p.reader_hatch_act(0, 8, Some(&frames.to_string()), 20_000.0),
+        1
+    );
+
+    // diagnostics().log() rolls its 1-second rate-limit bucket across a 1000 ms advance.
+    for i in 0..25 {
+        assert_eq!(
+            p.reader_hatch_act(0, 9, Some(&format!("burst-{i}")), 30_000.0),
+            1
+        );
+    }
+    assert_eq!(p.reader_hatch_act(0, 9, Some("after-second"), 31_000.0), 1);
+    assert!(
+        said(&mut p, "module: … 5 more").len() == 1,
+        "{:?}",
+        journal(&mut p)
+    );
+    assert!(
+        said(&mut p, "module: after-second").len() == 1,
+        "{:?}",
+        journal(&mut p)
+    );
 }
 
 #[test]

@@ -139,7 +139,7 @@ impl<D: DataSource> Runner<D> {
                         format!("{path} is omitted, and here no page's host stands for it"),
                     ));
                 };
-                let granted = self.data.grants().lines().any(|l| {
+                let granted = self.module_grants().lines().any(|l| {
                     let mut words = l.split_whitespace();
                     words.next() == Some(line) && words.next() == Some(value.as_str())
                 });

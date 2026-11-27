@@ -9,7 +9,7 @@ impl TextMeasurer for Fields {
         let font = request.paragraph.strut;
         TextMetrics {
             width: 100.0,
-            height: font.line_height.unwrap_or(font.font_size * 1.25),
+            height: font.used_line_height().unwrap_or(font.font_size * 1.25),
             pending: false,
             first_baseline: Some(font.font_size),
         }

@@ -31,7 +31,7 @@ const HOLD = 50, BATCH = 50;
  * `now`, `frame` and `hidden`. */
 function installMidi({ log, origin, deliver, nav = globalThis.navigator, now = () => performance.now(), frame, hidden = () => globalThis.document?.hidden === true }) {
   const nextFrame = frame ?? (f => (hidden() || typeof requestAnimationFrame !== 'function' ? setTimeout(f, 16) : requestAnimationFrame(f)));
-  let access = null, state = 'prompt', asking = null, timer = null, late = 0, inbox = [], flushing = false, ticking = null;
+  let access = null, state = 'prompt', asking = null, toldUnavailable = false, timer = null, late = 0, inbox = [], flushing = false, ticking = null;
   /** Messages not yet handed, earliest first: `{id, output, data, at}`. */
   let held = [];
   /** The inputs the runner opened, by id, and those whose clock it follows. */
@@ -64,6 +64,7 @@ function installMidi({ log, origin, deliver, nav = globalThis.navigator, now = (
   }
   if (typeof nav?.requestMIDIAccess !== 'function') {
     state = 'unavailable';
+    toldUnavailable = true;
     deliver({ ports: { state: 'unavailable' } });
   } else {
     Promise.resolve(nav.permissions?.query({ name: 'midi' })).then(p => { if (p?.state === 'granted') ask(true); }, () => {});
@@ -115,6 +116,10 @@ function installMidi({ log, origin, deliver, nav = globalThis.navigator, now = (
    * the browser may still hold). */
   function end() {
     clearTimeout(timer); timer = null;
+    clearTimeout(ticking); ticking = null;
+    inbox.length = 0;
+    open.clear(); clockIn.clear(); listen();
+    toldUnavailable = false;
     for (const m of held.splice(0)) {
       const [s, n, v] = m.data, note = (s & 0xf0) === 0x80 || ((s & 0xf0) === 0x90 && v === 0), stop = s === 0xfc;
       const output = note || stop ? access?.outputs?.get?.(m.output) : null;
@@ -139,7 +144,15 @@ function installMidi({ log, origin, deliver, nav = globalThis.navigator, now = (
       }
     },
     open({ inputs, clock }) { open = new Set(inputs.map(String)); clockIn = new Set((clock ?? []).map(String)); listen(); },
-    request() { if (state !== 'unavailable') ask(false); },
+    request() {
+      if (state === 'unavailable') {
+        if (!toldUnavailable) { toldUnavailable = true; deliver({ ports: { state: 'unavailable' } }); }
+      } else if (access) {
+        report();
+      } else {
+        ask(false);
+      }
+    },
   };
   return {
     /** The runner's ops, in order; `boot`: a new runner, so what an earlier one left held is forgotten. */

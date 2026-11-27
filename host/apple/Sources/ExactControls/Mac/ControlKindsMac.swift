@@ -20,7 +20,34 @@ class AriaButtonCellMac: NSButtonCell {
     }
 }
 
-final class CheckboxMac: NSButton {
+protocol AccentControl: AnyObject {
+    func applyAccent(_ color: NSColor?)
+}
+
+final class ControlAccent {
+    private var authored: NSColor?
+    var nativeFill: NSColor?
+
+    // The control's public setter records hatch writes, even one equal to the authored colour.
+    // Exact writes through the superclass setter so clearing restores the last native fill.
+    func apply(_ color: NSColor?, current: NSColor?, write: (NSColor?) -> Void) {
+        guard color != authored else { return }
+        if authored == nil { nativeFill = current }
+        authored = color
+        let fill = color ?? nativeFill
+        if current != fill { write(fill) }
+    }
+}
+
+class AccentToggleMac: NSButton, AccentControl {
+    private let accent = ControlAccent()
+    override var contentTintColor: NSColor? { didSet { accent.nativeFill = contentTintColor } }
+    func applyAccent(_ color: NSColor?) {
+        accent.apply(color, current: contentTintColor) { super.contentTintColor = $0 }
+    }
+}
+
+final class CheckboxMac: AccentToggleMac {
     override class var cellClass: AnyClass? { get { AriaButtonCellMac.self } set {} }
     override func mouseDown(with event: NSEvent) { if !contextClicked(event) { super.mouseDown(with: event) } }
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
@@ -98,10 +125,14 @@ final class BuiltInControlKinds: ControlKinding {
         return made
     }
 
+    func applyAccent(_ accent: NSColor?, to control: NSControl) {
+        // NSSwitch exposes no custom on-state fill (LLP 1069.001 D6).
+        (control as? AccentControl)?.applyAccent(accent)
+    }
+
     func configure(_ control: NSControl, _ owner: NodeView, checked on: Bool?) {
-        let accent = owner.channels("accent_color").map { TextEngine.color($0) }
         guard control is NSSwitch || ["checkbox", "radio"].contains(host.kinds[owner.id]) else {
-            host.configureValue(control, owner, accent: accent)
+            host.configureValue(control, owner)
             return
         }
         // @ref LLP 1115.002 D6 — a grouped form's switch is the size its
@@ -113,8 +144,6 @@ final class BuiltInControlKinds: ControlKinding {
             if s.controlSize != size { s.controlSize = size; s.layoutSubtreeIfNeeded() }
         }
         if let on { host.setOn(control, on) }
-        // NSSwitch takes the system accent; AppKit gives it no tint.
-        (control as? NSButton)?.contentTintColor = accent
     }
 
     func naturalSize(_ control: NSControl, _ owner: NodeView) -> CGSize { host.naturalSize(control) }

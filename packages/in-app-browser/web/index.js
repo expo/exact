@@ -22,7 +22,8 @@ export function implementation({ agent, log }) {
       const page = webURL(url);
       if (!page) return { error: 'TypeError', message: 'openBrowser takes an absolute http or https URL; open any other with openURL' };
       if (agent) {
-        const action = call?.preferred?.tap ?? 'opened';
+        const tap = call?.preferred?.tap;
+        const action = !tap ? 'opened' : tap === 'cancel' ? 'dismissed' : tap;
         say(`${action} ${page.origin}`);
         return { action };
       }

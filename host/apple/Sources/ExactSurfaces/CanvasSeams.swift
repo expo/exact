@@ -228,6 +228,31 @@ extension CanvasesHost {
         return e
     }
 
+    /// A resting surface called `SurfaceWaker::wake` (LLP 1009 D12): mark any
+    /// enclosing `through` ancestor dirty and ask a visible live session for a
+    /// display frame. Under an agent frozen clock (`session.clock != nil`), leave
+    /// the wake latched for the next clock advance.
+    func surfaceWoken() {
+        var dirty = false
+        for e in entries.values where live(e.view.id) === e && e.presentable {
+            guard let m = e.module, m.dirty(e.id) != 0 else { continue }
+            let nested = e.view.canvasAbove.flatMap { entries[$0.id]?.through == true ? $0 : nil }
+            if let outer = nested {
+                outer.needsCapture = true
+                dirty = true
+            } else {
+                #if os(macOS)
+                dirty = true
+                #else
+                if e.view.canvasMetal.map({ shown(e, $0) }) != false { dirty = true }
+                #endif
+            }
+        }
+        if dirty, visible, let session, session.clock == nil {
+            session.frames.requestCanvas()
+        }
+    }
+
     func restoreWorld(_ m: GpuModule, _ e: Entry) {
         guard !e.restoreAttempted, let bytes = worldInput.bytes else { return }
         e.restoreAttempted = true
@@ -292,6 +317,41 @@ extension CanvasesHost {
     }
 
     func wantsInput(_ id: UInt32) -> Bool { live(id)?.wantsInput == true }
+
+    /// Settle a drive whose drawable is unavailable. A visible window must
+    /// still present the picture even if its offscreen render cleared dirty.
+    func settleOffscreen(_ e: Entry, box: SIMD3<Float>, now: Double) -> Bool {
+        guard live(e.view.id) === e, e.presentable, let m = e.module, let render = m.renderOffscreen,
+              e.offscreenPending || e.waiting || (e.offscreenBox ?? e.drawnBox) != box || m.dirty(e.id) != 0 || e.wants && now != e.presentedAt else { return false }
+        e.offscreenPending = true
+        let result = render(e.id, box.x, box.y, box.z, now)
+        if result == 3 { rendered(e, result); return false }
+        guard result != 1 else { return false }
+        e.wants = result == 2
+        e.waiting = false
+        e.offscreenPending = m.dirty(e.id) != 0
+        e.offscreenBox = box
+        e.presentedAt = now
+        return true
+    }
+
+    func sampledFrame(of view: NodeView) -> CGImage? {
+        guard let entry = live(view.id), entry.view === view, entry.presentable, !entry.offscreenPending, let module = entry.module, let sample = module.sampleFrame else { return nil }
+        var size = [UInt32](repeating: 0, count: 3)
+        let length = sample(entry.id, &size)
+        let (w, h) = (Int(size[0]), Int(size[1]))
+        let flags = size[2], deep = flags & 1 != 0
+        let stride = deep ? 8 : 4
+        guard w > 0, h > 0, w <= Int.max / stride / h, length == w * h * stride,
+              let count = UInt32(exactly: length), let pixels = module.output(count),
+              let provider = CGDataProvider(data: pixels as CFData),
+              let space = CGColorSpace(name: deep ? CGColorSpace.extendedSRGB : flags & 2 != 0 ? CGColorSpace.displayP3 : CGColorSpace.sRGB) else { return nil }
+        var info = CGBitmapInfo(rawValue: (flags & 4 != 0 ? CGImageAlphaInfo.noneSkipLast : .premultipliedLast).rawValue)
+        if deep { info.formUnion([.floatComponents, .byteOrder16Little]) }
+        return CGImage(width: w, height: h, bitsPerComponent: deep ? 16 : 8, bitsPerPixel: stride * 8,
+                       bytesPerRow: w * stride, space: space, bitmapInfo: info, provider: provider,
+                       decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+    }
 
     /// Creation waits for first pixel. An agent read must wait for that same work.
     func waitUntilReady() -> Bool {
@@ -666,7 +726,7 @@ extension CanvasesHost.Entry {
         wants = presentable && result == 1
     }
     func needsFrame(dirty: Bool, editing: Bool = false) -> Bool {
-        id != 0 && presentable && (wants || dirty || editing)
+        id != 0 && presentable && (offscreenBox != nil || wants || dirty || editing)
     }
     /// The canvas's box (points and scale) is not the one it last drew at:
     /// a canvas at rest draws again for a layout.

@@ -123,6 +123,12 @@ final class FrameHealthScreen {
 
     deinit { stop() }
 
+    func clear() {
+        health.clear()
+        (update, newest, cardTime, slept, main) = (nil, 0, 0, 0, MainThread())
+        woke = CACurrentMediaTime()
+    }
+
     /// Whether the app draws now: its newest frame is due on screen within a tenth of a second of now.
     var drawing: Bool { running && newest > 0 && CACurrentMediaTime() - newest < Self.idle }
 

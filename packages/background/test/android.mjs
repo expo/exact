@@ -61,6 +61,7 @@ try {
   const out = apkBuildDir(app), generated = resolve(out, 'extensions/exact/app/ExactExtensions.kt');
   const roster = existsSync(generated) ? readFileSync(generated, 'utf8') : '';
   check('android', 'the roster binds the implementation', roster.includes('exact.background.BackgroundModule'), roster || `no ${generated}`);
+  check('android', 'the roster starts background at load', /override val startAtLoad: List<String> = listOf\([^)]*"background"/.test(roster), roster || `no ${generated}`);
   const merged = readdirSync(out, { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));
   const xml = merged ? readFileSync(resolve(out, merged), 'utf8') : '';
   check('android', "the manifest carries WorkManager's job service and the network state permission", xml.includes('androidx.work.impl.background.systemjob.SystemJobService')

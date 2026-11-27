@@ -7,8 +7,11 @@ import AppKit
 
 package final class InputGates {
     private unowned let presenter: Presenter
-    /// Each node's gates as last applied: hidden, route-inert, `inert`, `aria-hidden`.
-    private var gates: [UInt32: [Bool]] = [:]
+    /// Each node's gates as last applied: hidden (1), route-inert (2), `inert` (4), `aria-hidden` (8).
+    private var gates: [UInt32: UInt8] = [:]
+    private static func gateMask(_ node: NodeView) -> UInt8 {
+        (node.isHidden ? 1 : 0) | (node.routeInert ? 2 : 0) | (node.props["inert"] == "true" ? 4 : 0) | (node.props["accessibilityElementsHidden"] == "true" ? 8 : 0)
+    }
     /// The ops that can change what hides or disables a node: a frame, a
     /// paint or a presentation value (every frame of an animation) cannot,
     /// and each write posts an accessibility notification.
@@ -16,6 +19,11 @@ package final class InputGates {
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     func reset() { gates.removeAll() }
+
+    func forget(all ids: Set<UInt32>) {
+        guard !gates.isEmpty else { return }
+        for id in ids { gates.removeValue(forKey: id) }
+    }
 
     /// The nodes a batch can have changed the gates of, and the subtrees
     /// whose ancestry it changed (`reparented`, and the roots it names).
@@ -43,7 +51,7 @@ package final class InputGates {
         // accessibility subtree is suppressed as HTML inert suppresses it.
         for id in touched {
             guard let node = presenter.views[id] else { continue }
-            let gate = [node.isHidden, node.routeInert, node.props["inert"] == "true", node.props["accessibilityElementsHidden"] == "true"]
+            let gate = Self.gateMask(node)
             if let old = gates[id], old != gate { subtrees.insert(id) }
             gates[id] = gate
         }
@@ -59,14 +67,14 @@ package final class InputGates {
         }
         for id in touched {
             guard let node = presenter.views[id] else { continue }
-            gates[id] = [node.isHidden, node.routeInert, node.props["inert"] == "true", node.props["accessibilityElementsHidden"] == "true"]
+            gates[id] = Self.gateMask(node)
         }
         refresh(touched.compactMap { presenter.views[$0] })
     }
 
     /// A prepared node's gates, read where it stands under live ancestors (LLP 1072 T13).
     func prepared(_ node: NodeView) {
-        gates[node.id] = [node.isHidden, node.routeInert, node.props["inert"] == "true", node.props["accessibilityElementsHidden"] == "true"]
+        gates[node.id] = Self.gateMask(node)
         refresh([node])
     }
 
@@ -95,7 +103,10 @@ package final class InputGates {
             let enabled = !node.disabled && !inert
             if let field = node.field, field.isEnabled != enabled { field.isEnabled = enabled }
             let editable = enabled && node.props["editable"] != "false"
-            if let area = node.textArea, area.isEditable != editable { area.isEditable = editable }
+            if let area = node.textArea {
+                if area.isEditable != editable { area.isEditable = editable }
+                if area.isSelectable != enabled { area.isSelectable = enabled }
+            }
             guard focused, unreachable || node.formDisabled, let window else { continue }
             if !unreachable {
                 presenter.tabStart = presenter.keyView(of: node)

@@ -56,13 +56,21 @@ pub(crate) fn css_text_in(
     bound_press: exact_kernel::StyleMask,
 ) -> (String, Vec<Skipped>) {
     let authored = |out: &mut String, id| {
-        use exact_kernel::style::relative::Unit;
-        let Some((unit, n)) = style
-            .relative
-            .get(id)
-            .filter(|(unit, _)| relative || matches!(unit, Unit::Em | Unit::Viewport(_)))
-        else {
+        use exact_kernel::style::relative::{LengthSpec, Unit};
+        let Some(spec) = style.relative.get_spec(id) else {
             return false;
+        };
+        let (unit, n) = match spec {
+            LengthSpec::Math(c) => {
+                c.css(out);
+                return true;
+            }
+            LengthSpec::Scaled(unit, n)
+                if relative || matches!(unit, Unit::Em | Unit::Viewport(_)) =>
+            {
+                (*unit, *n)
+            }
+            LengthSpec::Scaled(..) => return false,
         };
         match unit {
             Unit::Rem => {
@@ -151,7 +159,7 @@ pub(crate) fn css_text_in(
                 );
             }
             (StyleId::Transition, RowValue::Transitions(t)) => {
-                let (mut text, spring_skipped) = transition_css(t);
+                let (mut text, _) = transition_css(t);
                 // Transition the authored base below the press's animation stack.
                 for (compose, property, name, bases) in [
                     (
@@ -197,12 +205,6 @@ pub(crate) fn css_text_in(
                 }
                 if !text.is_empty() {
                     push_text!(&mut out, "transition:{};", text);
-                }
-                if spring_skipped {
-                    skipped.push(Skipped {
-                        row: id,
-                        reason: "spring transitions are lowered to keyframes by the host, not to CSS `transition`",
-                    });
                 }
             }
             // @ref LLP 1055 D5/D7 — the browser runs it; the rule it names
@@ -574,7 +576,9 @@ pub(crate) fn css_text_in(
                 // --exact-accent: what a spinner reads (LLP 1121 D9). The
                 // page's sheet takes a bound or live one from the element
                 // that writes --exact-accent itself (neutral.css).
-                if !auto {
+                if auto {
+                    out.push_str("--exact-accent-said:var(--exact-accent-design);");
+                } else {
                     out.push_str("--exact-accent-said:");
                     declared(&mut out, id, &value);
                     out.push(';');
@@ -631,6 +635,8 @@ pub(crate) fn css_text_in(
                 | StyleId::SafeAreaExtendBoundsLeft
                 | StyleId::ScrollInsetAdjustment
                 | StyleId::ScrollIndicatorAdjustment
+                | StyleId::SafeAreaTrack
+                | StyleId::SafeAreaAspectFit
                 | StyleId::ScrollEdgeEffectSoft
                 | StyleId::ScrollEdgeEffectHard
                 | StyleId::ScrollEdgeEffectHidden
@@ -1089,6 +1095,7 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
         RowValue::ClipPath(p) => out.push_str(&p.css()),
         RowValue::ShapeOutside(p) => out.push_str(&p.css()),
         RowValue::AspectRatio(r) => out.push_str(&r.css()),
+        RowValue::AspectFit(r) => out.push_str(&r.css()),
         RowValue::PositionTryFallbacks(r) => out.push_str(&r.css()),
         RowValue::DragTimeline(d) => out.push_str(&d.css()),
         RowValue::AnimationTimeline(t) => out.push_str(&t.css()),
@@ -1440,7 +1447,7 @@ mod writer_tests {
             names.join(" "),
             "opacity 1s ease 0s,all 0s ease 0s,stroke-dashoffset r color background-color fill stroke cx cy x y \
              rx ry border-color --exact-tint box-shadow font-weight font-stretch \
-             font-variation-settings d filter "
+             font-variation-settings d filter clip-path "
         );
     }
 }

@@ -221,7 +221,13 @@ final class LocalInsetsIOSTests: XCTestCase {
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         XCTAssertEqual(onScreen(sv).maxY, onScreen(tabs.view).maxY, accuracy: 0.5)
         XCTAssertEqual(sv.adjustedContentInset.bottom, c.view.safeAreaInsets.bottom, accuracy: 0.5)
-        XCTAssertGreaterThan(sv.adjustedContentInset.bottom, try XCTUnwrap(window).safeAreaInsets.bottom)
+        // The tab bar adds its height where UIKit sets it along the bottom; an iPhone Duo sets it in its vertical bar,
+        // which adds to the side instead
+        if c.traitCollection.placesVerticalBar {
+            XCTAssertEqual(sv.adjustedContentInset.bottom, try XCTUnwrap(window).safeAreaInsets.bottom, accuracy: 0.5)
+        } else {
+            XCTAssertGreaterThan(sv.adjustedContentInset.bottom, try XCTUnwrap(window).safeAreaInsets.bottom)
+        }
         let bar = try XCTUnwrap(c.navigationController?.navigationBar)
         sv.contentInsetAdjustmentBehavior = .automatic
         session.presenter.navigationHost.selectScrollEdges(of: c)
@@ -229,6 +235,9 @@ final class LocalInsetsIOSTests: XCTestCase {
         XCTAssertEqual(sv.adjustedContentInset.top, 0, accuracy: 0.5)
         let expanded = bar.bounds.height
         sv.setContentOffset(CGPoint(x: 0, y: 600), animated: false)
+        // An iPhone Duo's bar shows no large title to collapse: UIKit lays it out at its inline height (58 points on
+        // the cover display, measured before and after this scroll)
+        guard !c.traitCollection.placesVerticalBar else { return }
         waitFor("scrolling collapses the large title") { bar.bounds.height < expanded - 1 }
     }
 
@@ -475,6 +484,136 @@ final class LocalInsetsIOSTests: XCTestCase {
             return abs(self.onScreen(first).minY - self.onScreen(list).minY) < 0.5
         }
         XCTAssertEqual(sv.adjustedContentInset.top, 0, accuracy: 0.5, "no inset: the scroller overlaps no safe area")
+    }
+
+    /// A departing route holds its side cover, local insets, and content width steady through
+    /// an interactive pop (and resamples cleanly if the pop cancels), even as UIKit translates
+    /// its view past a side safe-area strip such as an open iPhone Duo's vertical bar (#1942).
+    func testADepartingRouteKeepsItsWidthAndLocalInsetsDuringAnInteractivePop() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "interactive pop transitions need a window scene")
+        }
+        let (session, _) = try fixture(scene)
+        let navigation = session.presenter.navigationHost
+        until("the root route shows") { self.node(session, "more") != nil && self.node(session, "route") != nil }
+        let rootNode = try XCTUnwrap(node(session, "route"))
+        let rootController = try XCTUnwrap(navigation.controllers[rootNode.id])
+        let rootRestingRight = rootController.surface.safeAreaInsets.right
+        let rootRestingCover = navigation.covers[rootNode.id]
+        let host = try XCTUnwrap(window?.rootViewController)
+        _ = Agent(session: session).tap(["id": Int(try XCTUnwrap(node(session, "more")).id)])
+        var nav: UINavigationController?
+        var pushSnapshots: [String] = []
+        until("the pushed detail route settles") {
+            guard let detail = self.node(session, "detail"),
+                  let c = navigation.controllers[detail.id],
+                  let stack = c.navigationController else { return false }
+            nav = stack
+            if stack.transitionCoordinator != nil {
+                pushSnapshots.append("rootSafeR=\(rootController.surface.safeAreaInsets.right) rootCover=\(String(describing: navigation.covers[rootNode.id])) detailSafeR=\(c.surface.safeAreaInsets.right) detailCover=\(String(describing: navigation.covers[detail.id]))")
+            }
+            return stack.viewControllers.count == 2 && stack.transitionCoordinator == nil
+                && navigation.localInsets.wanted[detail.id] != nil
+        }
+        let detail = try XCTUnwrap(node(session, "detail"))
+        let fill = try XCTUnwrap(node(session, "detail-fill"))
+        let rightProbe = try XCTUnwrap(node(session, "detail-right-probe"))
+        let c = try XCTUnwrap(navigation.controllers[detail.id])
+        let stack = try XCTUnwrap(nav)
+        // On a screen without a native vertical bar (non-Duo), simulate an 84 pt trailing strip.
+        // On an open iPhone Duo, UIKit's own vertical bar already supplies the trailing inset.
+        let simulatedStrip = c.surface.safeAreaInsets.right < 1
+        if simulatedStrip {
+            host.additionalSafeAreaInsets.right = 84
+            window?.layoutIfNeeded()
+            until("simulated trailing strip reaches detail") {
+                c.surface.safeAreaInsets.right > 1 && (navigation.localInsets.wanted[detail.id]?[1] ?? 0) > 1
+            }
+        }
+        let expectedRight = c.surface.safeAreaInsets.right
+        XCTAssertGreaterThan(expectedRight, 1, "detail has a trailing side strip")
+        until("detail content and right-inset probe settle") {
+            abs(rightProbe.bounds.width - expectedRight) < 0.5
+                && abs(fill.bounds.width - (c.surface.bounds.width - expectedRight - c.surface.safeAreaInsets.left)) < 1
+        }
+        let restingWidth = fill.bounds.width
+        let restingCover = navigation.covers[detail.id]
+        let restingLocal = try XCTUnwrap(navigation.localInsets.wanted[detail.id])
+
+        // Drive an interactive pop that slides `detail` rightward past the trailing strip
+        // (matching UIKit's interactive pop animation on an open iPhone Duo).
+        final class SlidePop: NSObject, UINavigationControllerDelegate, UIViewControllerAnimatedTransitioning {
+            let interaction = UIPercentDrivenInteractiveTransition()
+            func navigationController(_ nav: UINavigationController, animationControllerFor op: UINavigationController.Operation,
+                                      from: UIViewController, to: UIViewController) -> UIViewControllerAnimatedTransitioning? {
+                op == .pop ? self : nil
+            }
+            func navigationController(_ nav: UINavigationController, interactionControllerFor animator: UIViewControllerAnimatedTransitioning) -> UIViewControllerInteractiveTransitioning? {
+                interaction
+            }
+            func transitionDuration(using context: UIViewControllerContextTransitioning?) -> TimeInterval { 0.35 }
+            func animateTransition(using context: UIViewControllerContextTransitioning) {
+                guard let from = context.viewController(forKey: .from), let to = context.viewController(forKey: .to) else {
+                    return context.completeTransition(false)
+                }
+                let container = context.containerView
+                to.view.frame = context.finalFrame(for: to)
+                container.insertSubview(to.view, belowSubview: from.view)
+                let start = context.initialFrame(for: from)
+                UIView.animate(withDuration: transitionDuration(using: context), animations: {
+                    from.view.frame = start.offsetBy(dx: container.bounds.width, dy: 0)
+                }, completion: { _ in
+                    let finished = !context.transitionWasCancelled
+                    if !finished { from.view.frame = start }
+                    context.completeTransition(finished)
+                })
+            }
+        }
+
+        let pop = SlidePop()
+        navigation.setAppDelegate(stack, pop)
+        defer { navigation.setAppDelegate(stack, nil) }
+        stack.popViewController(animated: true)
+        until("interactive pop starts") { stack.transitionCoordinator != nil }
+        pop.interaction.update(0.4)
+        // Let UIKit lay out the translated view, fire viewSafeAreaInsetsDidChange(), and flush layout.
+        for _ in 0..<15 {
+            window?.layoutIfNeeded()
+            navigation.reportCovers()
+            session.presenter.settlePump()
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        // Mid-swipe: `detail` must keep its resting cover, local insets, and content width
+        // even though translating `from.view` rightward dropped its live safeAreaInsets.right to 0.
+        XCTAssertEqual(navigation.covers[detail.id], restingCover, "departing route keeps its settled cover mid-swipe")
+        XCTAssertEqual(navigation.localInsets.wanted[detail.id], restingLocal, "departing route keeps its local insets mid-swipe")
+        XCTAssertEqual(fill.bounds.width, restingWidth, accuracy: 0.5, "departing route does not widen mid-swipe")
+        XCTAssertEqual(rightProbe.bounds.width, expectedRight, accuracy: 0.5, "var(--exact-safe-area-inset-right) does not drop to 0 mid-swipe")
+        // Also verify returning root does not transiently adopt detail's trailing strip on real Duo.
+        if !simulatedStrip {
+            XCTAssertEqual(
+                navigation.covers[rootNode.id],
+                rootRestingCover,
+                "returning root keeps its resting cover mid-swipe (rootSafeR=\(rootController.surface.safeAreaInsets.right) restR=\(rootRestingRight) detailR=\(expectedRight) push=\(pushSnapshots.prefix(3)))"
+            )
+        }
+
+        // Cancel the swipe and verify covers resample cleanly once settled.
+        pop.interaction.cancel()
+        until("cancelled pop settles back on detail") { stack.transitionCoordinator == nil && stack.viewControllers.count == 2 }
+        XCTAssertEqual(fill.bounds.width, restingWidth, accuracy: 0.5, "cancelled pop preserves resting width")
+        XCTAssertEqual(rightProbe.bounds.width, expectedRight, accuracy: 0.5, "cancelled pop preserves resting right inset")
+
+        // Complete a second swipe and verify the stack settles cleanly on root.
+        stack.popViewController(animated: true)
+        until("second interactive pop starts") { stack.transitionCoordinator != nil }
+        pop.interaction.update(0.4)
+        window?.layoutIfNeeded()
+        navigation.reportCovers()
+        session.presenter.settlePump()
+        XCTAssertEqual(fill.bounds.width, restingWidth, accuracy: 0.5, "second swipe keeps width")
+        pop.interaction.finish()
+        until("finished pop lands on root") { stack.transitionCoordinator == nil && stack.viewControllers.count == 1 }
     }
 }
 #endif

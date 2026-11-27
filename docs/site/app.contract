@@ -56,8 +56,10 @@ routes nav
   learnContractForAgentsInspectionAndTesting "/learn/contract-for-agents/inspection-and-testing" render=build activate=idle
   learnContractForAgentsRepairCommonMistakes "/learn/contract-for-agents/repair-common-mistakes" render=build activate=idle
   learnContractForAgentsCompletionCriteria "/learn/contract-for-agents/completion-criteria" render=build activate=idle
+  learnContractForAgentsCssLayoutAndPainting "/learn/contract-for-agents/css-layout-and-painting" render=build activate=idle
   recipeAfterAWrite "/recipes/after-a-write" render=build activate=idle
   recipeAlternateAppIcons "/recipes/alternate-app-icons" render=build activate=idle
+  recipeAnnounce "/recipes/announce" render=build activate=idle
   recipeAppJson "/recipes/app-json" render=build activate=idle
   recipeBackgroundTransfers "/recipes/background-transfers" render=build activate=idle
   recipeBackgroundWork "/recipes/background-work" render=build activate=idle
@@ -71,6 +73,7 @@ routes nav
   recipeDeclaredSource "/recipes/declared-source" render=build activate=idle
   recipeDevice "/recipes/device" render=build activate=idle
   recipeDisplays "/recipes/displays" render=build activate=idle
+  recipeDragIn "/recipes/drag-in" render=build activate=idle
   recipeDragOut "/recipes/drag-out" render=build activate=idle
   recipeEasAndroid "/recipes/eas-android" render=build activate=idle
   recipeEasIos "/recipes/eas-ios" render=build activate=idle
@@ -80,6 +83,7 @@ routes nav
   recipeFetchLoadingError "/recipes/fetch-loading-error" render=build activate=idle
   recipeFilesAndGrants "/recipes/files-and-grants" render=build activate=idle
   recipeFirstLaunch "/recipes/first-launch" render=build activate=idle
+  recipeFloatingWindow "/recipes/floating-window" render=build activate=idle
   recipeFoldables "/recipes/foldables" render=build activate=idle
   recipeForma "/recipes/forma" render=build activate=idle
   recipeFunctions "/recipes/functions" render=build activate=idle
@@ -96,6 +100,7 @@ routes nav
   recipeLocalNetwork "/recipes/local-network" render=build activate=idle
   recipeLongLists "/recipes/long-lists" render=build activate=idle
   recipeLongText "/recipes/long-text" render=build activate=idle
+  recipeMacBinaryUpdates "/recipes/mac-binary-updates" render=build activate=idle
   recipeMiniPlayer "/recipes/mini-player" render=build activate=idle
   recipeMobileBuild "/recipes/mobile-build" render=build activate=idle
   recipeModelViewer "/recipes/model-viewer" render=build activate=idle
@@ -115,6 +120,7 @@ routes nav
   recipePhoneManifest "/recipes/phone-manifest" render=build activate=idle
   recipePortingAndRelease "/recipes/porting-and-release" render=build activate=idle
   recipePortsAndBrowsers "/recipes/ports-and-browsers" render=build activate=idle
+  recipeProgressiveTabs "/recipes/progressive-tabs" render=build activate=idle
   recipeProperties "/recipes/properties" render=build activate=idle
   recipePurchases "/recipes/purchases" render=build activate=idle
   recipePush "/recipes/push" render=build activate=idle
@@ -138,6 +144,7 @@ routes nav
   recipeSupabase "/recipes/supabase" render=build activate=idle
   recipeSuspendingFeed "/recipes/suspending-feed" render=build activate=idle
   recipeSymbols "/recipes/symbols" render=build activate=idle
+  recipeSystemControls "/recipes/system-controls" render=build activate=idle
   recipeTabs "/recipes/tabs" render=build activate=idle
   recipeTests "/recipes/tests" render=build activate=idle
   recipeTheme "/recipes/theme" render=build activate=idle
@@ -147,12 +154,14 @@ routes nav
   recipeTips "/recipes/tips" render=build activate=idle
   recipeTools "/recipes/tools" render=build activate=idle
   recipeUsbHidSerial "/recipes/usb-hid-serial" render=build activate=idle
+  recipeWaitForAFrameClick "/recipes/wait-for-a-frame-click" render=build activate=idle
   recipeWaveformAndTail "/recipes/waveform-and-tail" render=build activate=idle
   recipeWebLook "/recipes/web-look" render=build activate=idle
   recipeWebSessions "/recipes/web-sessions" render=build activate=idle
   recipeWebsite "/recipes/website" render=build activate=idle
   recipeWebsiteHosting "/recipes/website-hosting" render=build activate=idle
   recipeWhiteLabel "/recipes/white-label" render=build activate=idle
+  recipeWindowBounds "/recipes/window-bounds" render=build activate=idle
   components "/_components" render=build activate=idle
   contractGrammar "/reference/contract-grammar" render=build activate=idle
   referenceContractGrammarLexicalRules "/reference/contract-grammar/lexical-rules" render=build activate=idle
@@ -177,11 +186,12 @@ routes nav
   referenceDeveloperRunAnAppFromATerminalOnMacos "/reference/developer/run-an-app-from-a-terminal-on-macos" render=build activate=idle
   referenceDeveloperOverTheAirUpdates "/reference/developer/over-the-air-updates" render=build activate=idle
   referenceDeveloperInstallADevelopmentBuildBesideTheReleaseOneVariants "/reference/developer/install-a-development-build-beside-the-release-one-variants" render=build activate=idle
-  referenceDeveloperControlsControlCenterTheLockScreenTheActionButton "/reference/developer/controls-control-center-the-lock-screen-the-action-button" render=build activate=idle
+  referenceDeveloperControlsControlCenterTheLockScreenTheActionButtonQuickSettings "/reference/developer/controls-control-center-the-lock-screen-the-action-button-quick-settings" render=build activate=idle
   referenceDeveloperAppleBundleMetadata "/reference/developer/apple-bundle-metadata" render=build activate=idle
   referenceDeveloperApplePrivacyManifests "/reference/developer/apple-privacy-manifests" render=build activate=idle
   referenceDeveloperOpenTheSameDevelopmentUrlOnAppleHosts "/reference/developer/open-the-same-development-url-on-apple-hosts" render=build activate=idle
   referenceDeveloperGenerateTypescriptDataSourceTypes "/reference/developer/generate-typescript-data-source-types" render=build activate=idle
+  referenceDeveloperPackageConfiguration "/reference/developer/package-configuration" render=build activate=idle
   referenceDeveloperAccessHatches "/reference/developer/access-hatches" render=build activate=idle
   referenceDeveloperRustDataSources "/reference/developer/rust-data-sources" render=build activate=idle
   referenceDeveloperTheSixChecks "/reference/developer/the-six-checks" render=build activate=idle
@@ -437,11 +447,11 @@ component App
         column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0 overflow-x="clip"
           padding-top="clamp(0px, (960px - 100vw) * 1000, 57px)" padding-left=(sidebar ? "calc(258px - clamp(0px, (960px - 100vw) * 1000, 258px))" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease"
           if e.name == "notfound"
-            head title=page.title description=page.description image=site.shareImage status=404
+            head title=`${page.title} - ${site.siteName}` description=page.description image=site.shareImage status=404
             if destination != ""
               view intersect=redirect height=1 testId="redirect"
           else
-            head title=page.title description=page.description image=site.shareImage
+            head title=(page.path == "/" ? site.siteName : `${page.title} - ${site.siteName}`) description=page.description image=site.shareImage
           scroll id=`page-${e.id}` flex=1 min-width=0 -exact-layout-transition="220ms ease" background-color="var(--color-background-default)"
             margin="calc(4px - clamp(0px, (960px - 100vw) * 1000, 5px)) calc(16px - clamp(0px, (960px - 100vw) * 1000, 17px)) calc(16px - clamp(0px, (960px - 100vw) * 1000, 17px)) calc(8px - clamp(0px, (960px - 100vw) * 1000, 9px))" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-xl)"
             Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, copyLink=copyLink, linked=linked, copiedId=copiedId, copyBlock=copyBlock, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
@@ -489,59 +499,60 @@ component App
       dialog id="search" close=searchClosed closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
         top="calc(45vh + clamp(0px, (789px - 100vw) * 1000, 5vh))" height="calc(75vh + clamp(0px, (789px - 100vw) * 1000, 21vh))" width="calc(max(40vw, 680px) + clamp(0px, (789px - 100vw) * 1000, max(0px, 96vw - max(40vw, 680px))) - clamp(0px, (789px - 100vw) * 1000, max(0px, max(40vw, 680px) - 96vw)))" max-width="none" max-height="none" overflow="hidden"
         border="1px solid var(--color-border-default)" border-radius=40 background-color="var(--color-background-default)" color="var(--color-text-default)" font-family="var(--font-sans)"
-        column height="100%"
-          row padding="0 16px" border-bottom="1px solid var(--color-border-secondary)"
-            row position="relative" flex=1 align-items="center" margin="16px 0 12px"
-              input id="search-input" role="combobox" aria-expanded=(hits.length > 0) aria-controls="search-hits"
-                aria-activedescendant=(match hits.at(chosen) { case some(h) => `search-hit-${h.id}`, case none => "" }) type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
-                flex=1 min-width=0 min-height=46 box-sizing="border-box" padding="0 40px" font-size="var(--text-base)" border="1px solid var(--color-border-default)" border-radius=24 outline="none" background-color="transparent" color="var(--color-text-default)"
-              image "symbol:search" aria-hidden=true position="absolute" left=13 font-size="var(--text-base)" color="var(--color-icon-tertiary)"
-              button press=clearOrClose appearance="none" aria-label=(query != "" ? "Clear search" : "Close search") position="absolute" right=9 padding=4 border-radius="var(--radius-full)" testId="search-close"
-                image "symbol:close" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-tertiary)"
-          row height=2 flex-shrink=0
-            if searching
-              progress aria-label="Searching" flex=1 height=2 testId="search-loading"
-          scroll flex=1 min-height=0 padding="0 16px 12px" overscroll-behavior="contain"
-            if query.trim().length < 2
-              text "Type at least two letters to search every page." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-hint"
-            else if hits.length == 0 and not searching
-              text "No results found." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-empty"
-            else
-              column id="search-hits" role="listbox" aria-label="Search results" gap=2
-                for h, i in hits key=h.id
-                  link id=`search-hit-${h.id}` href=h.href role="option" aria-selected=(i == chosen) tabindex=-1 retainFocus=true display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
-                    if h.nested
-                      row align-items="center" gap=8
-                        text "#" aria-hidden=true font-size="var(--text-xs)" color="var(--color-text-quaternary)"
-                        text font-size="var(--text-xs)" color="var(--color-text-default)" min-width=0
-                          Marked(parts=h.title)
-                    else
-                      row align-items="flex-start" gap=12
-                        image "symbol:document" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)" margin-top=2
-                        column gap=2 flex=1 min-width=0
-                          text font-size="var(--text-sm)" font-weight=500 color="var(--color-text-default)"
+        if searchOpen
+          column height="100%"
+            row padding="0 16px" border-bottom="1px solid var(--color-border-secondary)"
+              row position="relative" flex=1 align-items="center" margin="16px 0 12px"
+                input id="search-input" role="combobox" aria-expanded=(hits.length > 0) aria-controls="search-hits"
+                  aria-activedescendant=(match hits.at(chosen) { case some(h) => `search-hit-${h.id}`, case none => "" }) type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
+                  flex=1 min-width=0 min-height=46 box-sizing="border-box" padding="0 40px" font-size="var(--text-base)" border="1px solid var(--color-border-default)" border-radius=24 outline="none" background-color="transparent" color="var(--color-text-default)"
+                image "symbol:search" aria-hidden=true position="absolute" left=13 font-size="var(--text-base)" color="var(--color-icon-tertiary)"
+                button press=clearOrClose appearance="none" aria-label=(query != "" ? "Clear search" : "Close search") position="absolute" right=9 padding=4 border-radius="var(--radius-full)" testId="search-close"
+                  image "symbol:close" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-tertiary)"
+            row height=2 flex-shrink=0
+              if searching
+                progress aria-label="Searching" flex=1 height=2 testId="search-loading"
+            scroll flex=1 min-height=0 padding="0 16px 12px" overscroll-behavior="contain"
+              if query.trim().length < 2
+                text "Type at least two letters to search every page." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-hint"
+              else if hits.length == 0 and not searching
+                text "No results found." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-empty"
+              else
+                column id="search-hits" role="listbox" aria-label="Search results" gap=2
+                  for h, i in hits key=h.id
+                    link id=`search-hit-${h.id}` href=h.href role="option" aria-selected=(i == chosen) tabindex=-1 retainFocus=true display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
+                      if h.nested
+                        row align-items="center" gap=8
+                          text "#" aria-hidden=true font-size="var(--text-xs)" color="var(--color-text-quaternary)"
+                          text font-size="var(--text-xs)" color="var(--color-text-default)" min-width=0
                             Marked(parts=h.title)
-                          if h.path != ""
-                            text h.path font-size="var(--text-xs)" color="var(--color-text-quaternary)"
-                          if h.snippet.length > 0
-                            text font-size="var(--text-xs)" color="var(--color-text-secondary)" line-clamp=1
-                              Marked(parts=h.snippet)
-          row align-items="center" gap=16 height=44 flex-shrink=0 padding="0 24px" border-top="1px solid var(--color-border-secondary)"
-            row align-items="center" gap=16 max-width="clamp(0px, (100vw - 768px) * 1000, 600px)" overflow-x="clip" min-width=0 margin-left=-1 white-space="nowrap" testId="search-keys"
-              row align-items="center" gap=6 padding-left=1
-                text "↵" class=Key
-                text "to select" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-              row align-items="center" gap=6
-                text "↑" class=Key
-                text "↓" class=Key
-                text "to navigate" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-              row align-items="center" gap=6
-                text "esc" class=Key
-                text "to close" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-            link href="https://www.algolia.com/developers/" aria-label="Search by Algolia" margin-left="auto" testId="search-attribution"
-              row align-items="center" gap=6
-                text "Search by" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-                image "symbol:icon.algolia" aria-hidden=true width=62 height=14 color="var(--color-text-secondary)"
+                      else
+                        row align-items="flex-start" gap=12
+                          image "symbol:document" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)" margin-top=2
+                          column gap=2 flex=1 min-width=0
+                            text font-size="var(--text-sm)" font-weight=500 color="var(--color-text-default)"
+                              Marked(parts=h.title)
+                            if h.path != ""
+                              text h.path font-size="var(--text-xs)" color="var(--color-text-quaternary)"
+                            if h.snippet.length > 0
+                              text font-size="var(--text-xs)" color="var(--color-text-secondary)" line-clamp=1
+                                Marked(parts=h.snippet)
+            row align-items="center" gap=16 height=44 flex-shrink=0 padding="0 24px" border-top="1px solid var(--color-border-secondary)"
+              row align-items="center" gap=16 max-width="clamp(0px, (100vw - 768px) * 1000, 600px)" overflow-x="clip" min-width=0 margin-left=-1 white-space="nowrap" testId="search-keys"
+                row align-items="center" gap=6 padding-left=1
+                  text "↵" class=Key
+                  text "to select" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+                row align-items="center" gap=6
+                  text "↑" class=Key
+                  text "↓" class=Key
+                  text "to navigate" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+                row align-items="center" gap=6
+                  text "esc" class=Key
+                  text "to close" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+              link href="https://www.algolia.com/developers/" aria-label="Search by Algolia" margin-left="auto" testId="search-attribution"
+                row align-items="center" gap=6
+                  text "Search by" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+                  image "symbol:icon.algolia" aria-hidden=true width=62 height=14 color="var(--color-text-secondary)"
 
 component Marked
   props

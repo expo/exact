@@ -1036,3 +1036,47 @@ fn reprinted_edits_placeholders_and_dark_axes() {
     assert!(import.ops.is_empty(), "{:?}", import.ops);
     assert_eq!(import.unmapped.len(), 1, "{:?}", import.unmapped);
 }
+
+#[test]
+fn bare_exact_role_overrides_round_trip_through_dtcg_export_and_reimport() {
+    let red: Value = serde_json::from_str(RED).unwrap();
+    let design = "forma t\n\ndials\n  accent: color = #1083fe\n\ntheme\n  secondary-label = #666666\n  background = accent\n";
+    let (text, mut doc) = exported(design);
+    for (_, ctx) in doc["modifiers"]["mode"]["contexts"]
+        .as_object_mut()
+        .unwrap()
+    {
+        assert_eq!(
+            ctx[0]["-exact-secondary-label"]["$extensions"]["exact"]["overrides"],
+            "secondary-label"
+        );
+        ctx[0]["-exact-secondary-label"]["$value"] = red.clone();
+        ctx[0]["-exact-background"]["$value"] =
+            serde_json::json!({"colorSpace": "srgb", "components": [0, 1, 0], "hex": "#00ff00"});
+    }
+    let import = reimport(&doc.to_string(), &[text], design, &vocab()).unwrap();
+    assert!(import.unmapped.is_empty(), "{:?}", import.unmapped);
+    assert!(
+        import.ops.iter().any(
+            |op| matches!(op, Op::SetToken { name, value, .. } if name == "secondary-label" && value == "#ff0000")
+        ),
+        "{:?}",
+        import.ops
+    );
+    assert!(
+        import.ops.iter().any(
+            |op| matches!(op, Op::SetDial { name, value } if name == "accent" && value == "#00ff00")
+        ),
+        "{:?}",
+        import.ops
+    );
+    let updated = exact_forma::apply_all(design, &import.ops, &vocab())
+        .unwrap()
+        .text;
+    let (_, after) = exported(&updated);
+    assert_eq!(
+        hex_in(&after, "light", &["-exact-secondary-label"]),
+        "#ff0000"
+    );
+    assert_eq!(hex_in(&after, "light", &["-exact-background"]), "#00ff00");
+}

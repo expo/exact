@@ -26,6 +26,7 @@ try {
   const { roster, manifest, lock, dex } = apkOf(fixture.app, fixture.out);
   check("the lock names Play services' location", /^com\.google\.android\.gms:play-services-location:21\.4\.0=/m.test(lock), lock.slice(0, 400) || 'no gradle.lockfile');
   check('the roster binds the module', roster.includes('"geofencing" to { c -> exact.geofencing.GeofencingModule(c) }'), roster);
+  check('the roster starts geofencing at load', /override val startAtLoad: List<String> = listOf\([^)]*"geofencing"/.test(roster), roster);
   const permission = (p) => new RegExp(`<uses-permission\\s+android:name="android\\.permission\\.${p}"`).test(manifest);
   const missing = ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'ACCESS_BACKGROUND_LOCATION', 'RECEIVE_BOOT_COMPLETED'].filter((p) => !permission(p));
   check('the grants derive fine, coarse and background location, and the boot broadcast', !missing.length, `missing ${missing.join(', ')}`);

@@ -17,6 +17,7 @@ use exact_runner::vm::instructions;
 use exact_web::host::template::{self, Parts};
 
 mod bound;
+mod owner_rows;
 pub use bound::bound_tokens;
 
 /// A canvas's literal bitmap size (LLP 1056 D6 r3) and getContext settings
@@ -191,7 +192,7 @@ pub fn static_tree(
                 // implied it: LLP 1115.000 D2), which the page's marks read (`data-exact-said`).
                 (BindingKind::Style, Some(v)) => {
                     bridge::set_binding_style(&mut patch, &row, &v, plan)
-                        .map_err(|e| format!("node {i}: {e:?}"))?;
+                        .map_err(|e| style_binding_error(i, e))?;
                     styled = true;
                 }
                 (BindingKind::Style, None) => {}
@@ -241,7 +242,7 @@ pub fn static_tree(
                     continue;
                 }
                 bridge::set_binding_style(&mut patch, &row, &v, plan)
-                    .map_err(|e| format!("node {i}: {e:?}"))?;
+                    .map_err(|e| style_binding_error(i, e))?;
             }
             looks.push((look.state, patch));
         }
@@ -265,6 +266,18 @@ pub fn static_tree(
         .apply(0, 1, &ops)
         .map_err(|e| format!("kernel refused the static tree: {e:?}"))?;
     Ok((kernel, tree))
+}
+
+fn style_binding_error(node: usize, err: bridge::BridgeError) -> String {
+    match err {
+        bridge::BridgeError::StyleKind {
+            style: StyleId::FontFamily,
+            value,
+        } => format!(
+            "node {node}: computed `font-family` cannot take a CSS family string ({value:?}): declare `style` classes with literal `font-family` stacks (or theme tokens) and switch `class` instead"
+        ),
+        other => format!("node {node}: {other:?}"),
+    }
 }
 
 /// Every node's parts, by node index (`None` for a head, which is no element).
@@ -1067,53 +1080,8 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         // @ref LLP 1123 §"What it replaces" — main's route clearance opt-out, not CSS, as
         // css.rs has it: the web host executes no route clearance for it to turn off.
         StyleId::SafeArea => vec![],
-        // @ref LLP 1123 D4, D8, D11 to D14 — not CSS, and not written yet, as on the web
-        // host: a page's ignored regions, insets, margins, reach and scroll insets
-        // wait for the web's owners (D17).
-        StyleId::ScrollContentInsetTop
-        | StyleId::ScrollContentInsetRight
-        | StyleId::ScrollContentInsetBottom
-        | StyleId::ScrollContentInsetLeft
-        | StyleId::ScrollVerticalIndicatorInsetsTop
-        | StyleId::ScrollVerticalIndicatorInsetsRight
-        | StyleId::ScrollVerticalIndicatorInsetsBottom
-        | StyleId::ScrollVerticalIndicatorInsetsLeft
-        | StyleId::ScrollHorizontalIndicatorInsetsTop
-        | StyleId::ScrollHorizontalIndicatorInsetsRight
-        | StyleId::ScrollHorizontalIndicatorInsetsBottom
-        | StyleId::ScrollHorizontalIndicatorInsetsLeft
-        | StyleId::SafeAreaExtendBoundsTop
-        | StyleId::SafeAreaExtendBoundsRight
-        | StyleId::SafeAreaExtendBoundsBottom
-        | StyleId::SafeAreaExtendBoundsLeft
-        | StyleId::ScrollInsetAdjustment
-        | StyleId::ScrollIndicatorAdjustment
-        | StyleId::ScrollEdgeEffectSoft
-        | StyleId::ScrollEdgeEffectHard
-        | StyleId::ScrollEdgeEffectHidden
-        | StyleId::SafeAreaReach
-        | StyleId::SafeAreaReachEdges
-        | StyleId::SafeAreaExtend
-        | StyleId::SafeAreaIgnore
-        | StyleId::SafeAreaIgnoreAlign
-        | StyleId::SafeAreaBar
-        | StyleId::LayoutMarginTop
-        | StyleId::LayoutMarginRight
-        | StyleId::LayoutMarginBottom
-        | StyleId::LayoutMarginLeft
-        | StyleId::LayoutMarginLeading
-        | StyleId::LayoutMarginTrailing
-        | StyleId::LayoutMarginsPreserved
-        | StyleId::LayoutMarginsFromSafeArea
-        | StyleId::LayoutMarginsMinimum
-        | StyleId::AdditionalSafeAreaTop
-        | StyleId::AdditionalSafeAreaRight
-        | StyleId::AdditionalSafeAreaBottom
-        | StyleId::AdditionalSafeAreaLeft
-        | StyleId::SafeAreaPaddingTop
-        | StyleId::SafeAreaPaddingRight
-        | StyleId::SafeAreaPaddingBottom
-        | StyleId::SafeAreaPaddingLeft => vec![],
+        // @ref LLP 1123 — not CSS, and not written yet, as on the web host (`owner_rows`)
+        id if owner_rows::unwritten(id) => vec![],
         // @ref LLP 1055 D13 — tree.js `css` gives the list's hold rule this value as an attribute.
         StyleId::AnimationTrigger => vec![with(
             "--exact-animation-trigger",
@@ -1125,6 +1093,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         StyleId::AccentColor => vec![
             with("accent-color", "v=>v"),
             with("--exact-accent", "v=>v==null||typeof v===\"string\"&&v.trim()===\"var(--exact-accent, AccentColor)\"?null:/^\\s*auto\\s*$/i.test(v)?\"AccentColor\":typeof v===\"string\"&&v.trim()===\"var(--exact-accent-text, AccentColorText)\"?\"AccentColorText\":v"),
+            with("--exact-accent-said", "v=>typeof v===\"string\"&&/^\\s*auto\\s*$/i.test(v)?\"var(--exact-accent-design)\":null"),
         ],
         StyleId::PositionTryFallbacks => vec![with(
             "position-try-fallbacks",
@@ -1480,7 +1449,7 @@ pub(super) fn transition_map(entries: &str, press: bool, shift: bool) -> String 
 
 /// The live offset and its CSS axes; `none` removes the composition selector.
 pub(crate) fn press_translation_writes() -> Vec<(String, String, Option<String>)> {
-    let valid = r#"v=>{const t=String(v??'').trim();return /^(?:[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?|none)(?:\s+[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?)?$/i.test(t)&&CSS.supports('translate',t)&&!/^none$/i.test(t)?t:null}"#;
+    let valid = r#"v=>{const t=String(v??'').trim();return /^(?:[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?(?:px|%)|[+-]?(?:0+(?:\.0+)?|\.0+)(?:e[+-]?\d+)?)(?:\s+(?:[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?(?:px|%)|[+-]?(?:0+(?:\.0+)?|\.0+)(?:e[+-]?\d+)?))?$/i.test(t)&&(typeof CSS==='undefined'||!CSS.supports||CSS.supports('translate',t))?t:null}"#;
     let mut writes = vec![(
         "--exact-press-translate".into(),
         String::new(),
@@ -1496,4 +1465,24 @@ pub(crate) fn press_translation_writes() -> Vec<(String, String, Option<String>)
         ));
     }
     writes
+}
+
+#[cfg(test)]
+mod font_family_error_tests {
+    use super::*;
+
+    #[test]
+    fn computed_font_family_string_error_suggests_style_classes() {
+        let msg = style_binding_error(
+            4,
+            bridge::BridgeError::StyleKind {
+                style: StyleId::FontFamily,
+                value: exact_plan::Value::str("Inter, sans-serif"),
+            },
+        );
+        assert!(
+            msg.contains("computed `font-family`") && msg.contains("`style` classes"),
+            "{msg}"
+        );
+    }
 }

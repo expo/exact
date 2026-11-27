@@ -1198,14 +1198,15 @@ fn text_rows_inherit_into_runs_and_a_change_touches_only_the_runs_that_follow_it
         k.node(3).unwrap().text_style(),
         TextStyle {
             font_size: 20.0,
-            line_height: Some(24.0),
+            line_height: exact_kernel::LineHeight::Length(24.0),
             ..initial
         }
     );
     assert_eq!(k.node(4).unwrap().text_style().font_weight, 700);
     assert_eq!(k.node(4).unwrap().text_style().font_size, 20.0);
-    assert_eq!(k.node(5).unwrap().text_style().font_size, 12.0);
-    assert_eq!(k.node(5).unwrap().text_style().line_height, Some(24.0));
+    let small = k.node(5).unwrap().text_style();
+    assert_eq!(small.font_size, 12.0);
+    assert_eq!(small.used_line_height(), Some(24.0));
     assert!(!k.node(3).unwrap().style.mask.has(StyleId::FontSize));
     assert_eq!(k.node(3).unwrap().source_of(StyleId::FontSize), Some(2));
     assert_eq!(k.node(5).unwrap().source_of(StyleId::FontSize), Some(5));
@@ -1253,7 +1254,7 @@ fn text_rows_inherit_into_runs_and_a_change_touches_only_the_runs_that_follow_it
         .unwrap();
     assert!(ids(&k, &receipt.touched).contains(&3));
     assert_eq!(k.node(3).unwrap().text_style().font_size, 14.0);
-    assert_eq!(k.node(3).unwrap().text_style().line_height, None);
+    assert_eq!(k.node(3).unwrap().text_style().used_line_height(), None);
     assert_eq!(k.node(3).unwrap().source_of(StyleId::FontSize), Some(6));
     // Clearing falls back to the initial value, and touches only followers.
     let mut mask = StyleMask::EMPTY;

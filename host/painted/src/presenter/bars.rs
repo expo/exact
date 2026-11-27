@@ -37,15 +37,18 @@ use super::top::shape;
 use super::top::SurfacePainter;
 use super::*;
 
-mod look;
+mod badge;
+pub(super) mod look;
 use crate::paint::ripple::Ripple;
+pub use look::{Badge, BadgePicture, Bottom, Button, Tab, Target, Top, What};
 use look::{BarColors, Inputs, Layout, Lit};
-pub use look::{Bottom, Button, Tab, Target, Top, What};
 
 /// The top app bar, as the shell names it.
 pub const TOP: i32 = 1;
 /// The navigation bar.
 pub const BOTTOM: i32 = 2;
+/// The active modal sheet's projected top app bar (LLP 1156.008.001 B5).
+pub const SHEET_TOP: i32 = 3;
 
 /// A bar as it shows: what it says, how it was measured, and its frame in
 /// the window (x, y, width, height; points).
@@ -80,6 +83,9 @@ pub(super) struct State {
     /// The kernel epoch the bars were last read at, whether the content
     /// had then scrolled, and what else they were measured for.
     read: Option<(u64, bool)>,
+    /// Decoded picture identities (`Arc::as_ptr`) for active top-bar badge
+    /// pictures, so an avatar finishing decode repaints the top bar in place.
+    pictures: Vec<(ViewId, usize)>,
     seed: Option<([u8; 3], f32)>,
     seen: Option<Seen>,
     authored: [BarColors; 2],
@@ -89,6 +95,8 @@ pub(super) struct State {
     scroller: Option<ViewId>,
     top: Option<Shown<Top>>,
     bottom: Option<Shown<Bottom>>,
+    /// The top open modal sheet's projected bar, in window coordinates.
+    sheet_top: Option<(ViewId, Shown<Top>)>,
     /// The target a finger holds: the bar, and its place among the targets.
     pressed: Option<(i32, usize)>,
     /// The ripple of the last target a finger held (LLP 1115.001 D9), and
@@ -109,7 +117,9 @@ impl State {
     /// A replacement invalidates node references held by the old bars.
     pub(super) fn replaced(&mut self) {
         self.read = None;
+        self.pictures.clear();
         self.scroller = None;
+        self.sheet_top = None;
         self.pressed = None;
         self.focused = None;
         self.ripple = None;
@@ -135,6 +145,16 @@ fn scrolls_down(node: &exact_kernel::NodeRef<'_>) -> bool {
         true => matches!(node.style.overflow_y, Overflow::Scroll | Overflow::Auto),
         false => node.node_type.scrolls_by_default(),
     }
+}
+
+/// Whether an element above `node` is `disabled`: a header, or a box in
+/// it, that holds the item disables it as it disables the item's press in
+/// the page.
+fn disabled_above(kernel: &exact_kernel::Kernel, node: &exact_kernel::NodeRef<'_>) -> bool {
+    std::iter::successors(node.parent.and_then(|id| kernel.node(id)), |n| {
+        n.parent.and_then(|id| kernel.node(id))
+    })
+    .any(|n| n.props.bool(PropId::Disabled) == Some(true))
 }
 
 impl<D: DataSource> Presenter<D> {
@@ -192,12 +212,21 @@ impl<D: DataSource> Presenter<D> {
     pub(super) fn fit_bars(&mut self) -> Option<String> {
         self.bars.painter.as_ref()?;
         let (window, safe, frame) = self.bar_window();
-        let above = (safe[0] + look::top_height() - frame[1]).max(0.0);
-        let nav = look::nav_height(self.bar_font_scale());
+        let scale = self.bar_font_scale();
+        let sheet_above = (
+            look::top_content_height(scale, false),
+            look::top_content_height(scale, true),
+        );
+        let above = (safe[0] + sheet_above.0 - frame[1]).max(0.0);
+        let above_subtitled = (safe[0] + sheet_above.1 - frame[1]).max(0.0);
+        let nav = look::nav_height(scale);
         let below = (frame[1] + frame[3] - (window.1 - safe[2] - nav)).max(0.0);
         // A sheet's foot reaches under the system's bar (`stage.rs`).
         let foot = (frame[1] + frame[3] - (window.1 - safe[2])).max(0.0);
-        match self.host.set_bar_room(Some((above, below, foot))) {
+        match self
+            .host
+            .set_bar_rooms(Some((above, below, foot)), above_subtitled, sheet_above)
+        {
             Ok(true) => self.after_commit(),
             Ok(false) => None,
             Err(e) => Some(e),
@@ -218,7 +247,7 @@ impl<D: DataSource> Presenter<D> {
             .stacks
             .iter()
             .find(|s| route.is_some_and(|r| s.contains(&r)))?;
-        let barred = |id: &ViewId| bars.routes.iter().any(|r| r.route == *id);
+        let barred = |id: &ViewId| bars.routes.iter().any(|r| !r.sheet && r.route == *id);
         (stack.iter().copied())
             .filter(|id| !self.host.route_visibility(*id).0)
             .find(barred)
@@ -226,7 +255,19 @@ impl<D: DataSource> Presenter<D> {
 
     fn bar_header(&self) -> Option<&crate::navigation::RouteBar> {
         let route = self.bar_route()?;
-        self.host.bars().routes.iter().find(|r| r.route == route)
+        self.host
+            .bars()
+            .routes
+            .iter()
+            .find(|r| !r.sheet && r.route == route)
+    }
+
+    fn sheet_route_header(&self, route: ViewId) -> Option<&crate::navigation::RouteBar> {
+        self.host
+            .bars()
+            .routes
+            .iter()
+            .find(|r| r.sheet && r.route == route)
     }
 
     fn bar_nodes(&self) -> [Option<ViewId>; 2] {
@@ -370,6 +411,7 @@ impl<D: DataSource> Presenter<D> {
     fn bar_button(&self, id: ViewId, dark: bool) -> Option<Button> {
         let kernel = self.host.kernel();
         let node = kernel.node(id)?;
+        let badge = Badge::read(kernel, id, |n| self.dark_at(n), &self.images.bitmaps);
         let row = shape::row(kernel, &node, false);
         // The colour its author wrote on it wins (LLP 1115: author >
         // platform); one it only inherits leaves Material's.
@@ -380,12 +422,170 @@ impl<D: DataSource> Presenter<D> {
             node: id,
             title: row.title,
             direction: row.direction,
-            symbol: row.symbol,
-            // An inert button is no enabled item, as an inert tab is none.
-            enabled: row.enabled && !self.host.authored_visibility(id).1,
+            symbol: if badge.is_some() { None } else { row.symbol },
+            badge,
+            // An inert button is no enabled item, as an inert tab is none,
+            // and nor is one under a disabled header or box: a press on it
+            // in the page reaches nothing (`press_enabled`).
+            enabled: row.enabled
+                && !self.host.authored_visibility(id).1
+                && !disabled_above(kernel, &node),
             destructive: row.destructive,
             tint,
         })
+    }
+
+    /// Keep lifted top-bar badge pictures loading while their header is outside
+    /// the page, and return their decoded bitmap identities so a load replaces
+    /// the fallback face in place.
+    fn sync_bar_badge_images(&mut self) -> Vec<(ViewId, usize)> {
+        let side = (badge::BADGE_SIZE * self.brush.scale.max(1.0))
+            .round()
+            .max(1.0) as u32;
+        let mut sizes = BTreeMap::new();
+        let sheet_header = self
+            .top_sheet()
+            .and_then(|(route, _)| self.sheet_route_header(route));
+        for r in self.bar_header().into_iter().chain(sheet_header) {
+            let kernel = self.host.kernel();
+            for id in r
+                .shape
+                .leading
+                .iter()
+                .chain(&r.shape.trailing)
+                .filter(|id| r.shape.items.contains(id))
+            {
+                if let Some(pic_id) = kernel.header_badge(*id).and_then(|b| b.picture) {
+                    if let Some(pic_node) = kernel.node(pic_id) {
+                        sizes.insert(pic_id, (side, crate::paint::object_fit_of(&pic_node)));
+                    }
+                }
+            }
+        }
+        if self.images.bar_sizes != sizes {
+            self.images.bar_sizes = sizes;
+            self.images.settled = None;
+            if let Some(error) = self.sync_images() {
+                self.host.log(error);
+            }
+        }
+        self.images
+            .bar_sizes
+            .keys()
+            .map(|id| {
+                let ptr = self
+                    .images
+                    .bitmaps
+                    .get(id)
+                    .map_or(0, |b| std::sync::Arc::as_ptr(b) as usize);
+                (*id, ptr)
+            })
+            .collect()
+    }
+
+    fn top_plan(&self, r: &crate::navigation::RouteBar) -> Top {
+        let kernel = self.host.kernel();
+        // A readout (`role="status"`, LLP 1075.003 §9.15) is no
+        // button, and Material's top app bar has no item for it.
+        let buttons = |ids: &[ViewId]| -> Vec<Button> {
+            (ids.iter())
+                .filter(|id| r.shape.items.contains(id))
+                .filter_map(|id| self.bar_button(*id, self.dark_at(*id)))
+                .collect()
+        };
+        let title = (r.shape.heading)
+            .and_then(|heading| kernel.bar_text(heading))
+            .unwrap_or_default();
+        let subtitle_node = r.subtitle.filter(|_| !title.is_empty());
+        let subtitle = subtitle_node
+            .and_then(|id| kernel.bar_text(id))
+            .unwrap_or_default();
+        let subtitle_node = subtitle_node.filter(|_| !subtitle.is_empty());
+        let subtitle_direction = subtitle_node
+            .and_then(|id| kernel.node(id))
+            .map_or(exact_kernel::Direction::Ltr, |node| {
+                node.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
+            });
+        Top {
+            route: r.route,
+            heading: r.shape.heading,
+            direction: kernel
+                .node(r.shape.header)
+                .unwrap()
+                .computed_row(exact_kernel::StyleId::Direction, |s| s.direction),
+            title,
+            title_direction: r
+                .shape
+                .heading
+                .and_then(|id| kernel.node(id))
+                .map_or(exact_kernel::Direction::Ltr, |node| {
+                    node.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
+                }),
+            subtitle_node,
+            subtitle,
+            subtitle_direction,
+            up: r.pushed,
+            leading: buttons(&r.shape.leading),
+            trailing: buttons(&r.shape.trailing),
+            scrolled: false,
+        }
+    }
+
+    fn layout_sheet_bar(&self, route: ViewId, width: f32) -> Option<Shown<Top>> {
+        let r = self.sheet_route_header(route)?;
+        let scrolled = self
+            .content_scroller(route)
+            .is_some_and(|s| self.scroll.get(&s).is_some_and(|at| at.1 > 0.5));
+        let plan = Top {
+            scrolled,
+            ..self.top_plan(r)
+        };
+        let dark = self.dark_at(r.shape.header);
+        let mut authored = self.bar_colors(Some(r.shape.header), dark);
+        if authored.container.is_none() && !plan.scrolled {
+            let ground = super::top::look::Role::SurfaceContainerLow.color(dark);
+            authored.container = Some(look::BarFill {
+                paint: [0, 0, 0, 0],
+                ground,
+            });
+        }
+        let (_, safe, _) = self.bar_window();
+        let margin = (self.viewport.0 - width).max(0.0) / 2.0;
+        let inputs = Inputs {
+            device_inks: &self.bars.device_inks,
+            colors: BarColors {
+                seed: self.bars.seed,
+                ..authored
+            },
+            dark,
+            font_scale: self.bar_font_scale(),
+            width,
+            edge: 0.0,
+            sides: ((safe[3] - margin).max(0.0), (safe[1] - margin).max(0.0)),
+        };
+        let layout = Layout::top(&mut self.text.borrow_mut(), &plan, &inputs);
+        let frame = [0.0, 0.0, layout.size.0, layout.size.1];
+        Some(Shown {
+            plan,
+            layout,
+            frame,
+        })
+    }
+
+    fn sync_sheet_bar(&mut self) {
+        let next = self.top_sheet().and_then(|(route, rect)| {
+            let mut shown = self.layout_sheet_bar(route, rect.2)?;
+            let page = self.chrome().frame;
+            let handle = self.top_sheet_handle();
+            shown.frame = [
+                page[0] + rect.0,
+                page[1] + rect.1 + handle,
+                shown.layout.size.0,
+                shown.layout.size.1,
+            ];
+            Some((route, shown))
+        });
+        self.bars.sheet_top = next;
     }
 
     /// What the bars say now, from the host's projection: the top bar of
@@ -394,38 +594,7 @@ impl<D: DataSource> Presenter<D> {
     fn read_bars(&self) -> (Option<Top>, Option<Bottom>) {
         let kernel = self.host.kernel();
         let bars = self.host.bars();
-        let top = self.bar_header().map(|r| {
-            // A readout (`role="status"`, LLP 1075.003 §9.15) is no
-            // button, and Material's top app bar has no item for it.
-            let buttons = |ids: &[ViewId]| -> Vec<Button> {
-                (ids.iter())
-                    .filter(|id| r.shape.items.contains(id))
-                    .filter_map(|id| self.bar_button(*id, self.dark_at(*id)))
-                    .collect()
-            };
-            Top {
-                route: r.route,
-                heading: r.shape.heading,
-                direction: kernel
-                    .node(r.shape.header)
-                    .unwrap()
-                    .computed_row(exact_kernel::StyleId::Direction, |s| s.direction),
-                title: (r.shape.heading)
-                    .and_then(|heading| kernel.bar_text(heading))
-                    .unwrap_or_default(),
-                title_direction: r
-                    .shape
-                    .heading
-                    .and_then(|id| kernel.node(id))
-                    .map_or(exact_kernel::Direction::Ltr, |node| {
-                        node.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
-                    }),
-                up: r.pushed,
-                leading: buttons(&r.shape.leading),
-                trailing: buttons(&r.shape.trailing),
-                scrolled: false,
-            }
-        });
+        let top = self.bar_header().map(|r| self.top_plan(r));
         let bottom = bars.tabs.as_ref().map(|tabs| Bottom {
             tablist: tabs.tablist,
             direction: kernel
@@ -512,6 +681,7 @@ impl<D: DataSource> Presenter<D> {
             edges: safe,
             colors,
         };
+        let pictures = self.sync_bar_badge_images();
         let read = (epoch, self.bar_scrolled());
         // The same look as before: a bar that says the same is not
         // measured again, so a commit elsewhere in the tree shapes no text.
@@ -522,7 +692,9 @@ impl<D: DataSource> Presenter<D> {
             && !seed_changed
             && self.bars.authored == authored
             && self.bars.read == Some(read)
+            && self.bars.pictures == pictures
         {
+            self.sync_sheet_bar();
             return;
         }
         let (top, bottom) = self.read_bars();
@@ -569,6 +741,28 @@ impl<D: DataSource> Presenter<D> {
                 && bottom
                     .as_ref()
                     .is_some_and(|b| b.tabs.iter().any(|t| t.selected)));
+        fn keep_target<P>(
+            old: Option<&Shown<P>>,
+            new: Option<&Shown<P>>,
+            changed: bool,
+            same: bool,
+            idx: usize,
+        ) -> bool {
+            if !changed {
+                return true;
+            }
+            if !same {
+                return false;
+            }
+            let (Some(old), Some(new)) = (old, new) else {
+                return false;
+            };
+            match (old.layout.targets.get(idx), new.layout.targets.get(idx)) {
+                (Some(a), Some(b)) => a.what == b.what && a.rect == b.rect && b.enabled,
+                _ => false,
+            }
+        }
+        let old_top = repaint_top.then(|| self.bars.top.take()).flatten();
         if repaint_top {
             self.bars.top = top.map(|plan| {
                 let layout = Layout::top(&mut text.borrow_mut(), &plan, &inputs(safe[0], 0));
@@ -580,6 +774,7 @@ impl<D: DataSource> Presenter<D> {
                 }
             });
         }
+        let old_bottom = repaint_bottom.then(|| self.bars.bottom.take()).flatten();
         if repaint_bottom {
             self.bars.bottom = bottom.map(|plan| {
                 let layout = Layout::bottom(&mut text.borrow_mut(), &plan, &inputs(safe[2], 1));
@@ -592,16 +787,144 @@ impl<D: DataSource> Presenter<D> {
             });
         }
         (self.bars.read, self.bars.seen) = (Some(read), Some(seen));
+        self.bars.pictures = pictures;
         if top_changed || bottom_changed {
-            self.bars.pressed = None;
-            self.bars.focused = None;
-            self.bars.ripple = None;
+            let valid = |which: i32, idx: usize| match which {
+                TOP => keep_target(
+                    old_top.as_ref().or(self.bars.top.as_ref()),
+                    self.bars.top.as_ref(),
+                    top_changed,
+                    same,
+                    idx,
+                ),
+                BOTTOM => keep_target(
+                    old_bottom.as_ref().or(self.bars.bottom.as_ref()),
+                    self.bars.bottom.as_ref(),
+                    bottom_changed,
+                    same,
+                    idx,
+                ),
+                _ => false,
+            };
+            if self.bars.pressed.is_some_and(|(w, i)| !valid(w, i)) {
+                self.bars.pressed = None;
+            }
+            if self.bars.focused.is_some_and(|(w, i)| !valid(w, i)) {
+                self.bars.focused = None;
+            }
+            if self.bars.ripple.is_some_and(|(w, i, _)| !valid(w, i)) {
+                self.bars.ripple = None;
+            }
         }
         self.bars.authored = authored;
         self.bars.seed = seed;
+        self.sync_sheet_bar();
         if repaint_top || repaint_bottom {
             self.bars.revision += 1;
         }
+    }
+
+    /// A modal sheet route's projected top bar picture (LLP 1156.008.001 B5).
+    pub(super) fn sheet_bar_picture(
+        &mut self,
+        route: ViewId,
+        width: f32,
+        active: bool,
+    ) -> Option<std::rc::Rc<crate::paint::tape::Tape>> {
+        self.sync_bars();
+        self.ripple_bars();
+        let _roles = self.host.runner().bind_roles();
+        let shown = self.layout_sheet_bar(route, width)?;
+        let (now, still) = self.bar_clock();
+        let lit = active
+            .then(|| match self.bars.ripple.filter(|r| r.0 == SHEET_TOP) {
+                Some((_, index, r)) => Some((index, Some((r, now, still)))),
+                None => self
+                    .bars
+                    .focused
+                    .filter(|f| f.0 == SHEET_TOP)
+                    .map(|f| (f.1, None)),
+            })
+            .flatten();
+        let text = self.text.clone();
+        Some(crate::paint::stage::picture(|backend| {
+            shown.layout.paint(backend, &mut text.borrow_mut(), lit)
+        }))
+    }
+
+    pub(super) fn prepare_sheet_bars(
+        &mut self,
+    ) -> BTreeMap<exact_kernel::NodeKey, std::rc::Rc<crate::paint::tape::Tape>> {
+        let (width, top_modal, sheets, crossing) = self.sheet_bar_slots();
+        for (modal, shown) in sheets {
+            let bar = self
+                .host
+                .kernel()
+                .node_by_key(shown)
+                .map(|n| n.id)
+                .and_then(|id| self.sheet_bar_picture(id, width, top_modal == Some(modal)));
+            self.set_sheet_bar(modal, bar);
+        }
+        let mut out = BTreeMap::new();
+        for key in crossing {
+            if let Some(id) = self.host.kernel().node_by_key(key).map(|n| n.id) {
+                if let Some(tape) = self.sheet_bar_picture(id, width, false) {
+                    out.insert(key, tape);
+                }
+            }
+        }
+        out
+    }
+
+    /// The top open sheet's bar target at page coordinates `(x, y)`, if any.
+    pub(super) fn sheet_bar_target_at(
+        &mut self,
+        x: f32,
+        y: f32,
+    ) -> Option<(usize, What, (f32, f32))> {
+        self.sync_bars();
+        let (_, shown) = self.bars.sheet_top.as_ref()?;
+        let page = self.chrome().frame;
+        let (lx, ly) = (x + page[0] - shown.frame[0], y + page[1] - shown.frame[1]);
+        if lx < 0.0 || ly < 0.0 || lx > shown.frame[2] || ly > shown.frame[3] {
+            return None;
+        }
+        let index = shown.layout.target_at(lx, ly)?;
+        let target = shown.layout.targets[index];
+        target
+            .enabled
+            .then_some((index, target.what, target.held_at(lx, ly)))
+    }
+
+    pub(super) fn sheet_bar_ripple(&mut self, press: Option<(usize, (f32, f32))>, now_ms: f64) {
+        let now = now_ms.max(self.host.now());
+        match press {
+            Some((index, point)) => {
+                self.bars.ripple = Some((SHEET_TOP, index, Ripple::new(Some(point), now)));
+                self.bars.rippled = None;
+                self.dirty = true;
+            }
+            None => {
+                if let Some((SHEET_TOP, _, ripple)) = &mut self.bars.ripple {
+                    ripple.release(now, false);
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// The active modal sheet's bar plan and geometry for accessibility.
+    pub(super) fn sheet_bar_access(
+        &mut self,
+    ) -> Option<(Top, [f32; 4], Vec<Target>, Vec<(ViewId, Rect4)>)> {
+        self.sync_bars();
+        let (_, shown) = self.bars.sheet_top.as_ref()?;
+        Some((
+            shown.plan.clone(),
+            shown.frame,
+            shown.layout.targets.clone(),
+            shown.layout.texts(),
+        ))
     }
 
     /// The bars as they now show, for a driver and a test.
@@ -656,6 +979,9 @@ impl<D: DataSource> Presenter<D> {
         match which {
             TOP => (self.bars.top.as_ref()).map(|s| (&s.layout.targets[..], s.frame)),
             BOTTOM => (self.bars.bottom.as_ref()).map(|s| (&s.layout.targets[..], s.frame)),
+            SHEET_TOP => {
+                (self.bars.sheet_top.as_ref()).map(|(_, s)| (&s.layout.targets[..], s.frame))
+            }
             _ => None,
         }
     }
@@ -777,7 +1103,7 @@ impl<D: DataSource> Presenter<D> {
     /// A person chose what `what` is. Its press carries no point: the bar is
     /// the shell's, outside the page, and a popover it opens hangs from the
     /// item (`surface_anchor`), as the Mac's toolbar item's (LLP 1021 D2).
-    fn bar_choose(&mut self, what: What, now_ms: f64) {
+    pub(super) fn bar_choose(&mut self, what: What, now_ms: f64) {
         self.press_point = None;
         match what {
             What::Up => {
@@ -788,12 +1114,22 @@ impl<D: DataSource> Presenter<D> {
                     self.invoke(node, now_ms, true);
                     return;
                 }
-                // A link follows its `href` after its press, and at once where
-                // nothing hears the press, as a tap on it in the page does
-                // (LLP 1038 §7, LLP 1141.004 D1); an inert one follows nothing.
+                // A link with its own `press` runs that handler instead of following `href`,
+                // matching the web and Apple hosts; a link without its own `press` notifies an
+                // enclosing listener first and then follows `href` (LLP 1141.004 D1).
                 let kernel = self.host.kernel();
-                let href = (kernel.node(node))
-                    .and_then(|n| n.props.link().map(str::to_owned))
+                let own_press = self
+                    .host
+                    .runner()
+                    .handlers_of(node)
+                    .contains(&EventKind::Press);
+                let href = (!own_press)
+                    .then(|| {
+                        kernel
+                            .node(node)
+                            .and_then(|n| n.props.link().map(str::to_owned))
+                    })
+                    .flatten()
                     .filter(|_| !self.host.authored_visibility(node).1);
                 match (href, self.bar_listener(node)) {
                     (Some(href), None) => self.follow(node, &href, now_ms),
@@ -831,8 +1167,18 @@ impl<D: DataSource> Presenter<D> {
                         latest == before.iter().find(|b| b.0 == *id).map_or(0, |b| b.1)
                     });
                 if let Some(id) = scroller {
-                    let x = self.scroll.get(&id).map_or(0.0, |at| at.0);
-                    self.scroll_to(id, (x, 0.0));
+                    let (x, y) = self.scroll_of(id);
+                    // Material's destination tapped again returns to its top as a scroll the person sees, as
+                    // Compose's `animateScrollToItem(0)` and Views' `smoothScrollToPosition(0)` do: a glide where
+                    // the platform animates (`reveal_glides`), else at once.
+                    if y != 0.0 && self.reveal_glides(None) {
+                        self.person_scrolls += 1;
+                        self.cancel_anchor_correction(id);
+                        self.collection_reader_moves(id);
+                        self.begin_glide(id, (x, y), (x, 0.0));
+                    } else {
+                        self.scroll_to(id, (x, 0.0));
+                    }
                 }
             }
         }
@@ -911,11 +1257,17 @@ impl<D: DataSource> Presenter<D> {
     /// of the header that is in neither of the bar's lists).
     pub(super) fn bar_target(&self, id: ViewId) -> Option<(i32, Target)> {
         let stands = |node: ViewId| node == id || self.is_inside(id, node);
-        let up = (self.bars.top.as_ref())
+        let sheet_open = self.sheet_open();
+        let active_top = if sheet_open {
+            self.bars.sheet_top.as_ref().map(|(_, s)| s)
+        } else {
+            self.bars.top.as_ref()
+        };
+        let up = active_top
             .filter(|s| s.plan.up)
             .and_then(|s| {
                 let bars = self.host.bars();
-                (bars.routes.iter()).find(|r| r.route == s.plan.route)
+                (bars.routes.iter()).find(|r| r.sheet == sheet_open && r.route == s.plan.route)
             })
             .is_some_and(|route| {
                 let shape = &route.shape;
@@ -923,7 +1275,12 @@ impl<D: DataSource> Presenter<D> {
                     .filter(|i| !shape.leading.contains(i) && !shape.trailing.contains(i))
                     .any(|i| stands(*i))
             });
-        [TOP, BOTTOM].into_iter().find_map(|which| {
+        let channels: &[i32] = if sheet_open {
+            &[SHEET_TOP]
+        } else {
+            &[TOP, BOTTOM]
+        };
+        channels.iter().copied().find_map(|which| {
             let (targets, _) = self.bar_targets(which)?;
             (targets.iter().copied())
                 .find(|t| match t.what {
@@ -956,13 +1313,15 @@ impl<D: DataSource> Presenter<D> {
     /// node, with its box in the page's coordinates. The Up arrow has no
     /// node; Back does what it does.
     pub(super) fn bar_stops(&mut self) -> Vec<(ViewId, Rect4)> {
-        if self.sheet_open() {
-            return Vec::new();
-        }
         self.sync_bars();
         let page = self.page_origin();
         let mut stops = Vec::new();
-        for which in [TOP, BOTTOM] {
+        let channels: &[i32] = if self.sheet_open() {
+            &[SHEET_TOP]
+        } else {
+            &[TOP, BOTTOM]
+        };
+        for which in channels.iter().copied() {
             let Some((targets, frame)) = self.bar_targets(which) else {
                 continue;
             };
@@ -979,8 +1338,13 @@ impl<D: DataSource> Presenter<D> {
     /// Light the bar target the focus is on, and tell the shell the bar
     /// again when that changed.
     fn sync_bar_focus(&mut self) {
+        let channels: &[i32] = if self.sheet_open() {
+            &[SHEET_TOP]
+        } else {
+            &[TOP, BOTTOM]
+        };
         let focused = self.focus.filter(|_| self.remote()).and_then(|id| {
-            [TOP, BOTTOM].into_iter().find_map(|which| {
+            channels.iter().copied().find_map(|which| {
                 let (targets, _) = self.bar_targets(which)?;
                 (targets.iter())
                     .position(|t| matches!(t.what, What::Item(n) | What::Tab(n) if n == id))
@@ -996,13 +1360,13 @@ impl<D: DataSource> Presenter<D> {
     /// The agent's `tap` on a node a bar stands for: its target is chosen,
     /// as a finger lifting in it chooses it. `None` for any other node.
     pub(super) fn bar_tap(&mut self, id: ViewId) -> Option<Result<String, String>> {
-        // Under a sheet's scrim the bars are the page's, and as inert.
-        if self.sheet_open() {
-            return None;
-        }
         self.sync_bars();
         let (which, target) = self.bar_target(id)?;
-        let name = if which == TOP { "top" } else { "bottom" };
+        let name = match which {
+            TOP => "top",
+            BOTTOM => "bottom",
+            _ => "sheet",
+        };
         if !target.enabled {
             return Some(Err(format!("view {id} is disabled in the {name} bar")));
         }
@@ -1031,7 +1395,9 @@ impl<D: DataSource> Presenter<D> {
         };
         let frame = |f: [f32; 4]| serde_json::json!({"x": r2(f[0]), "y": r2(f[1]), "w": r2(f[2]), "h": r2(f[3])});
         let top = self.bars.top.as_ref().map(|s| {
+            let subtitle_node = s.plan.subtitle_node.filter(|_| !s.plan.subtitle.is_empty());
             serde_json::json!({"route": s.plan.route, "title": s.plan.title, "heading": s.plan.heading,
+                "subtitle": subtitle_node.map(|_| s.plan.subtitle.as_str()), "subtitleNode": subtitle_node,
                 "up": s.plan.up, "scrolled": s.plan.scrolled, "frame": frame(s.frame),
                 "targets": targets(&s.layout.targets, s.frame)})
         });
@@ -1050,4 +1416,4 @@ impl<D: DataSource> Presenter<D> {
 
 #[cfg(test)]
 #[path = "bars_tests.rs"]
-mod tests;
+pub(in crate::presenter) mod tests;

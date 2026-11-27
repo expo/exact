@@ -21,14 +21,23 @@
     function fixed(object, name, value) {
       Object.defineProperty(object, name, { value: value, writable: false, configurable: false });
     }
-    // Not a second door to randomness: `crypto` below is the secure one.
-    fixed(global.Math, "random", function () {
-      throw new Error(
-        "Math.random() is unavailable in data sources; seed from crypto.getRandomValues in a source (docs/recipes/random-and-shuffle.md), or pass a seed as an argument; a roll in the view needs no source (docs/recipes/random-rolls.md)"
-      );
-    });
+    // Virtualized Math.random() (LLP 1195.000 D2.3, D2.5): marks observe_entropy
+    // + module-sticky taint via op 8 ("ambient"), draws from the isolated --seed
+    // substream (op 31) under agent/test or platform PRNG in production.
+    function randomFloat(b) {
+      var hi = ((b[0] << 16) | (b[1] << 8) | b[2]) & 0x1fffff;
+      var lo = ((b[3] << 24) | (b[4] << 16) | (b[5] << 8) | b[6]) >>> 0;
+      return (hi * 4294967296 + lo) / 9007199254740992;
+    }
     var platformCrypto = global.crypto,
       fillRandom = platformCrypto.getRandomValues.bind(platformCrypto);
+    fixed(global.Math, "random", function random() {
+      if (env.overlaying()) throw inOverlay("Math.random()");
+      host(8, "ambient", "");
+      var hex = host(31, env.initializing && env.initializing() ? "init" : "", "");
+      var bytes = hex !== undefined ? new Uint8Array(hexBuffer(hex)) : fillRandom(new Uint8Array(7));
+      return randomFloat(bytes);
+    });
     var platformSubtle = platformCrypto.subtle; // the web's, in a secure context
     // A LAN dev page (no secure context): the dev protocol's SHA-256, which
     // module integrity already uses there. `(Uint8Array) -> Promise<hex>`.
@@ -89,12 +98,36 @@
       for (var i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
       return bytes.buffer;
     }
+    function bytesHex(buf) {
+      var bytes = new Uint8Array(buf),
+        out = "";
+      for (var i = 0; i < bytes.length; i++) out += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+      return out;
+    }
     function algorithmName(algorithm) {
       var name = typeof algorithm === "string" ? algorithm : algorithm && algorithm.name;
       if (typeof name !== "string") throw new TypeError("an algorithm is a name or an object with a name");
       return name;
     }
     var DIGESTS = { "SHA-256": 1, "SHA-384": 1, "SHA-512": 1 };
+    function hashName(hash, api) {
+      var given = algorithmName(hash === undefined ? "" : hash),
+        upper = given.toUpperCase();
+      if (!DIGESTS[upper])
+        throw new DOMException(api + ": " + given + " is unavailable; use SHA-256, SHA-384 or SHA-512", "NotSupportedError");
+      return upper;
+    }
+    function canonAlg(name) {
+      var u = name.toUpperCase();
+      if (u === "ECDSA") return "ECDSA";
+      if (u === "HMAC") return "HMAC";
+      if (u === "AES-GCM") return "AES-GCM";
+      if (u === "PBKDF2") return "PBKDF2";
+      if (u === "HKDF") return "HKDF";
+      if (u === "RSASSA-PKCS1-V1_5") return "RSASSA-PKCS1-v1_5";
+      if (u === "ED25519") return "Ed25519";
+      return null;
+    }
     function SubtleCrypto() {
       throw new TypeError("Illegal constructor");
     }
@@ -209,17 +242,20 @@
       // Natively Rust marks the read where it draws (`exact_data::crypto`).
       if (!bytesDoor) host(8, "", "");
     }
-    function makeKey(handle, type, extractable, usages) {
+    function makeKeyWith(handle, type, extractable, algObj, usages) {
       var key = Object.create(CryptoKey.prototype);
       Object.defineProperties(key, {
         type: { value: type, enumerable: true },
         extractable: { value: !!extractable, enumerable: true },
-        algorithm: { value: Object.freeze({ name: "ECDSA", namedCurve: "P-256" }), enumerable: true },
+        algorithm: { value: Object.freeze(algObj), enumerable: true },
         usages: { value: Object.freeze(usages.slice()), enumerable: true },
       });
       nativeKeys.set(key, handle);
       ownNativeKey(handle, key);
       return Object.freeze(key);
+    }
+    function makeKey(handle, type, extractable, usages) {
+      return makeKeyWith(handle, type, extractable, { name: "ECDSA", namedCurve: "P-256" }, usages);
     }
     function nativePair(json, extractable, usages) {
       var r = JSON.parse(json);
@@ -231,87 +267,357 @@
     function isKey(key) {
       return bytesDoor ? nativeKeys.has(key) : !!PlatformCryptoKey && key instanceof PlatformCryptoKey;
     }
-    function checkKey(key, api) {
+    function requireKey(key, expectedAlg, api) {
       if (!isKey(key)) throw new TypeError(api + ": the key is not a CryptoKey");
-      if (key.algorithm.name !== "ECDSA" || key.algorithm.namedCurve !== "P-256")
-        throw new DOMException(api + ": the key is not ECDSA P-256", "InvalidAccessError");
+      if (expectedAlg && key.algorithm.name !== expectedAlg)
+        throw new DOMException(api + ": the key algorithm is " + key.algorithm.name + ", not " + expectedAlg, "InvalidAccessError");
+    }
+    function requireUsage(key, usage, api) {
+      if (key.usages.indexOf(usage) < 0)
+        throw new DOMException(api + ": the key does not allow " + usage, "InvalidAccessError");
     }
     function webSubtle(api) {
       if (!platformSubtle)
-        throw new DOMException(api + ": ECDSA needs a secure context (HTTPS or localhost)", "NotSupportedError");
+        throw new DOMException(api + ": crypto.subtle needs a secure context (HTTPS or localhost)", "NotSupportedError");
       return platformSubtle;
     }
     SubtleCrypto.prototype.generateKey = function generateKey(algorithm, extractable, usages) {
       return subtleCall(this, "generateKey", function () {
         var api = "crypto.subtle.generateKey()";
-        ecdsa(algorithm, api, true);
-        var list = usageList(usages, ["sign", "verify"], api);
-        if (!only(list, "sign").length)
-          throw new DOMException(api + ": a private key needs the sign usage", "SyntaxError");
-        if (!bytesDoor) webSubtle(api);
-        entropyRead(api);
-        if (bytesDoor) return nativePair(door(2, extractable ? "1" : "0"), extractable, list);
-        return hostWork(platformSubtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, !!extractable, list));
+        var given = algorithmName(algorithm),
+          alg = canonAlg(given);
+        if (alg === "ECDSA") {
+          ecdsa(algorithm, api, true);
+          var list = usageList(usages, ["sign", "verify"], api);
+          if (!only(list, "sign").length)
+            throw new DOMException(api + ": a private key needs the sign usage", "SyntaxError");
+          if (!bytesDoor) webSubtle(api);
+          entropyRead(api);
+          if (bytesDoor) return nativePair(door(2, extractable ? "1" : "0"), extractable, list);
+          return hostWork(platformSubtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, !!extractable, list));
+        }
+        if (alg === "HMAC") {
+          var h = hashName(algorithm && algorithm.hash, api);
+          var list = usageList(usages, ["sign", "verify"], api);
+          if (!list.length) throw new DOMException(api + ": usages cannot be empty", "SyntaxError");
+          if (!bytesDoor) {
+            webSubtle(api);
+            entropyRead(api);
+            var params = { name: "HMAC", hash: h };
+            if (algorithm.length !== undefined) params.length = algorithm.length;
+            return hostWork(platformSubtle.generateKey(params, !!extractable, list));
+          }
+          entropyRead(api);
+          var spec = { alg: "HMAC", hash: h, extractable: !!extractable };
+          if (algorithm.length !== undefined) spec.length = Number(algorithm.length);
+          var out = JSON.parse(door(16, JSON.stringify(spec)));
+          return makeKeyWith(out.handle, "secret", extractable, { name: "HMAC", hash: Object.freeze({ name: h }), length: out.length }, list);
+        }
+        if (alg === "AES-GCM") {
+          var len = Number(algorithm && algorithm.length);
+          if (len !== 128 && len !== 256)
+            throw new DOMException(api + ": AES-GCM length must be 128 or 256", "OperationError");
+          var list = usageList(usages, ["encrypt", "decrypt"], api);
+          if (!list.length) throw new DOMException(api + ": usages cannot be empty", "SyntaxError");
+          if (!bytesDoor) {
+            webSubtle(api);
+            entropyRead(api);
+            return hostWork(platformSubtle.generateKey({ name: "AES-GCM", length: len }, !!extractable, list));
+          }
+          entropyRead(api);
+          var out = JSON.parse(door(16, JSON.stringify({ alg: "AES-GCM", length: len, extractable: !!extractable })));
+          return makeKeyWith(out.handle, "secret", extractable, { name: "AES-GCM", length: out.length }, list);
+        }
+        if (alg === "Ed25519") {
+          var list = usageList(usages, ["sign", "verify"], api);
+          if (!only(list, "sign").length)
+            throw new DOMException(api + ": a private key needs the sign usage", "SyntaxError");
+          if (!bytesDoor) {
+            webSubtle(api);
+            entropyRead(api);
+            return hostWork(platformSubtle.generateKey("Ed25519", !!extractable, list));
+          }
+          entropyRead(api);
+          var pair = JSON.parse(door(16, JSON.stringify({ alg: "Ed25519", extractable: !!extractable })));
+          return {
+            privateKey: makeKeyWith(pair["private"], "private", extractable, { name: "Ed25519" }, only(list, "sign")),
+            publicKey: makeKeyWith(pair["public"], "public", true, { name: "Ed25519" }, only(list, "verify")),
+          };
+        }
+        throw new DOMException(
+          api + ": " + given + " is unavailable in data sources; use ECDSA (P-256), HMAC, AES-GCM or Ed25519",
+          "NotSupportedError"
+        );
       });
     };
     SubtleCrypto.prototype.sign = function sign(algorithm, key, data) {
       return subtleCall(this, "sign", function () {
         var api = "crypto.subtle.sign()";
-        ecdsa(algorithm, api, false);
-        var hash = algorithm && algorithm.hash;
-        if (algorithmName(hash === undefined ? "" : hash).toUpperCase() !== "SHA-256")
-          throw new DOMException(api + ": ECDSA signs with SHA-256 (ES256) in data sources", "NotSupportedError");
-        checkKey(key, api);
-        if (key.type !== "private" || key.usages.indexOf("sign") < 0)
-          throw new DOMException(api + ": the key is not for signing", "InvalidAccessError");
-        var bytes = copyBytes(data, api);
-        if (!bytesDoor) webSubtle(api);
-        entropyRead(api);
-        if (bytesDoor) return hexBuffer(door(3, String(nativeKeys.get(key)), bytes));
-        return hostWork(platformSubtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, bytes));
+        var given = algorithmName(algorithm),
+          alg = canonAlg(given);
+        if (alg === "ECDSA") {
+          var hash = algorithm && algorithm.hash;
+          if (algorithmName(hash === undefined ? "" : hash).toUpperCase() !== "SHA-256")
+            throw new DOMException(api + ": ECDSA signs with SHA-256 (ES256) in data sources", "NotSupportedError");
+          requireKey(key, "ECDSA", api);
+          if (key.type !== "private") throw new DOMException(api + ": the key is not private", "InvalidAccessError");
+          requireUsage(key, "sign", api);
+          var bytes = copyBytes(data, api);
+          if (!bytesDoor) webSubtle(api);
+          entropyRead(api);
+          if (bytesDoor) return hexBuffer(door(3, String(nativeKeys.get(key)), bytes));
+          return hostWork(platformSubtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, bytes));
+        }
+        if (alg === "HMAC") {
+          requireKey(key, "HMAC", api);
+          requireUsage(key, "sign", api);
+          var bytes = copyBytes(data, api);
+          if (!bytesDoor) return hostWork(webSubtle(api).sign("HMAC", key, bytes));
+          return hexBuffer(door(19, JSON.stringify({ handle: nativeKeys.get(key) }), bytes));
+        }
+        if (alg === "Ed25519") {
+          requireKey(key, "Ed25519", api);
+          if (key.type !== "private") throw new DOMException(api + ": the key is not private", "InvalidAccessError");
+          requireUsage(key, "sign", api);
+          var bytes = copyBytes(data, api);
+          if (!bytesDoor) return hostWork(webSubtle(api).sign("Ed25519", key, bytes));
+          return hexBuffer(door(19, JSON.stringify({ handle: nativeKeys.get(key) }), bytes));
+        }
+        throw new DOMException(api + ": " + given + " is unavailable for sign", "NotSupportedError");
+      });
+    };
+    SubtleCrypto.prototype.verify = function verify(algorithm, key, signature, data) {
+      return subtleCall(this, "verify", function () {
+        var api = "crypto.subtle.verify()";
+        var given = algorithmName(algorithm),
+          alg = canonAlg(given);
+        if (alg !== "HMAC" && alg !== "Ed25519" && alg !== "RSASSA-PKCS1-v1_5" && alg !== "ECDSA")
+          throw new DOMException(api + ": " + given + " is unavailable for verify", "NotSupportedError");
+        if (alg === "ECDSA") {
+          var hash = algorithm && algorithm.hash;
+          if (algorithmName(hash === undefined ? "" : hash).toUpperCase() !== "SHA-256")
+            throw new DOMException(api + ": ECDSA verifies SHA-256 (ES256) in data sources", "NotSupportedError");
+        }
+        requireKey(key, alg, api);
+        if ((alg === "Ed25519" || alg === "RSASSA-PKCS1-v1_5" || alg === "ECDSA") && key.type !== "public")
+          throw new DOMException(api + ": verify requires a public key", "InvalidAccessError");
+        requireUsage(key, "verify", api);
+        var sigBytes = copyBytes(signature, api),
+          msgBytes = copyBytes(data, api);
+        if (!bytesDoor) return hostWork(webSubtle(api).verify(algorithm, key, sigBytes, msgBytes));
+        return door(20, JSON.stringify({ handle: nativeKeys.get(key), sig: bytesHex(sigBytes) }), msgBytes) === "1";
+      });
+    };
+    function cipher(op, algorithm, key, data) {
+      var api = "crypto.subtle." + op + "()";
+      var given = algorithmName(algorithm),
+        alg = canonAlg(given);
+      if (alg !== "AES-GCM")
+        throw new DOMException(api + ": " + given + " is unavailable; use AES-GCM", "NotSupportedError");
+      requireKey(key, "AES-GCM", api);
+      requireUsage(key, op, api);
+      if (!algorithm || typeof algorithm !== "object" || algorithm.iv == null)
+        throw new TypeError(api + ": AES-GCM requires an iv");
+      var iv = copyBytes(algorithm.iv, api);
+      var aad = algorithm.additionalData != null ? copyBytes(algorithm.additionalData, api) : null;
+      var tagLength = algorithm.tagLength === undefined ? 128 : Number(algorithm.tagLength);
+      var bytes = copyBytes(data, api);
+      if (!bytesDoor) {
+        var params = { name: "AES-GCM", iv: iv, tagLength: tagLength };
+        if (aad) params.additionalData = aad;
+        return hostWork(webSubtle(api)[op](params, key, bytes));
+      }
+      var spec = { op: op, handle: nativeKeys.get(key), iv: bytesHex(iv), tagLength: tagLength };
+      if (aad) spec.aad = bytesHex(aad);
+      return hexBuffer(door(21, JSON.stringify(spec), bytes));
+    }
+    SubtleCrypto.prototype.encrypt = function encrypt(algorithm, key, data) {
+      return subtleCall(this, "encrypt", function () {
+        return cipher("encrypt", algorithm, key, data);
+      });
+    };
+    SubtleCrypto.prototype.decrypt = function decrypt(algorithm, key, data) {
+      return subtleCall(this, "decrypt", function () {
+        return cipher("decrypt", algorithm, key, data);
+      });
+    };
+    function deriveSpec(algorithm, baseKey, length, api, usage) {
+      var given = algorithmName(algorithm),
+        alg = canonAlg(given);
+      if (alg !== "PBKDF2" && alg !== "HKDF")
+        throw new DOMException(api + ": " + given + " is unavailable; use PBKDF2 or HKDF", "NotSupportedError");
+      requireKey(baseKey, alg, api);
+      requireUsage(baseKey, usage, api);
+      var h = hashName(algorithm && algorithm.hash, api);
+      if (!algorithm || algorithm.salt == null) throw new TypeError(api + ": salt is required");
+      var salt = copyBytes(algorithm.salt, api);
+      var spec = { alg: alg, handle: bytesDoor ? nativeKeys.get(baseKey) : undefined, hash: h, salt: bytesHex(salt), length: length };
+      if (alg === "PBKDF2") {
+        var iters = Number(algorithm.iterations);
+        if (!Number.isInteger(iters) || iters < 1)
+          throw new DOMException(api + ": PBKDF2 iterations must be a positive integer", "OperationError");
+        spec.iterations = iters;
+      } else {
+        if (algorithm.info == null) throw new TypeError(api + ": HKDF requires info");
+        spec.info = bytesHex(copyBytes(algorithm.info, api));
+      }
+      return spec;
+    }
+    SubtleCrypto.prototype.deriveBits = function deriveBits(algorithm, baseKey, length) {
+      return subtleCall(this, "deriveBits", function () {
+        var api = "crypto.subtle.deriveBits()";
+        var bits = Number(length);
+        if (!Number.isInteger(bits) || bits < 0 || bits % 8 !== 0)
+          throw new DOMException(api + ": length must be a non-negative multiple of 8", "OperationError");
+        var spec = deriveSpec(algorithm, baseKey, bits, api, "deriveBits");
+        if (!bytesDoor) return hostWork(webSubtle(api).deriveBits(algorithm, baseKey, bits));
+        return hexBuffer(door(22, JSON.stringify(spec)));
+      });
+    };
+    SubtleCrypto.prototype.deriveKey = function deriveKey(algorithm, baseKey, derivedKeyType, extractable, usages) {
+      return subtleCall(this, "deriveKey", function () {
+        var api = "crypto.subtle.deriveKey()";
+        var targetGiven = algorithmName(derivedKeyType),
+          targetAlg = canonAlg(targetGiven);
+        if (targetAlg !== "HMAC" && targetAlg !== "AES-GCM")
+          throw new DOMException(api + ": derivedKeyType " + targetGiven + " is unavailable; use HMAC or AES-GCM", "NotSupportedError");
+        if (targetAlg === "HMAC") {
+          var th = hashName(derivedKeyType && derivedKeyType.hash, api);
+          var defaultBits = th === "SHA-256" ? 512 : 1024;
+          var bits = derivedKeyType.length === undefined ? defaultBits : Number(derivedKeyType.length);
+          if (!Number.isInteger(bits) || bits <= 0 || bits % 8 !== 0)
+            throw new DOMException(api + ": HMAC derived length must be a positive multiple of 8", "OperationError");
+          var list = usageList(usages, ["sign", "verify"], api);
+          if (!list.length) throw new DOMException(api + ": usages cannot be empty", "SyntaxError");
+          var spec = deriveSpec(algorithm, baseKey, bits, api, "deriveKey");
+          if (!bytesDoor) return hostWork(webSubtle(api).deriveKey(algorithm, baseKey, derivedKeyType, !!extractable, list));
+          spec.target = { alg: "HMAC", hash: th, extractable: !!extractable };
+          var out = JSON.parse(door(22, JSON.stringify(spec)));
+          return makeKeyWith(out.handle, "secret", extractable, { name: "HMAC", hash: Object.freeze({ name: th }), length: out.length }, list);
+        }
+        var len = Number(derivedKeyType && derivedKeyType.length);
+        if (len !== 128 && len !== 256)
+          throw new DOMException(api + ": AES-GCM derived length must be 128 or 256", "OperationError");
+        var list = usageList(usages, ["encrypt", "decrypt"], api);
+        if (!list.length) throw new DOMException(api + ": usages cannot be empty", "SyntaxError");
+        var spec = deriveSpec(algorithm, baseKey, len, api, "deriveKey");
+        if (!bytesDoor) return hostWork(webSubtle(api).deriveKey(algorithm, baseKey, derivedKeyType, !!extractable, list));
+        spec.target = { alg: "AES-GCM", extractable: !!extractable };
+        var out = JSON.parse(door(22, JSON.stringify(spec)));
+        return makeKeyWith(out.handle, "secret", extractable, { name: "AES-GCM", length: out.length }, list);
       });
     };
     SubtleCrypto.prototype.importKey = function importKey(format, keyData, algorithm, extractable, usages) {
       return subtleCall(this, "importKey", function () {
         var api = "crypto.subtle.importKey()";
-        if (format !== "jwk")
-          throw new DOMException(
-            api + ": the format " + format + " is unavailable in data sources; use jwk",
-            "NotSupportedError"
+        var given = algorithmName(algorithm),
+          alg = canonAlg(given);
+        if (alg === "ECDSA") {
+          if (format !== "jwk")
+            throw new DOMException(api + ": the format " + format + " is unavailable for ECDSA; use jwk", "NotSupportedError");
+          ecdsa(algorithm, api, true);
+          if (!keyData || typeof keyData !== "object") throw new TypeError(api + ": a JWK is an object");
+          if (keyData.kty !== "EC" || keyData.crv !== "P-256")
+            throw new DOMException(api + ": the JWK is not EC P-256", "DataError");
+          var isPrivate = typeof keyData.d === "string";
+          var list = usageList(usages, isPrivate ? ["sign"] : ["verify"], api);
+          if (isPrivate && !list.length)
+            throw new DOMException(api + ": a private key needs the sign usage", "SyntaxError");
+          if (!bytesDoor)
+            return hostWork(webSubtle(api).importKey("jwk", keyData, { name: "ECDSA", namedCurve: "P-256" }, !!extractable, list));
+          var jwk = { kty: "EC", crv: "P-256", x: String(keyData.x), y: String(keyData.y) };
+          if (isPrivate) jwk.d = keyData.d;
+          var handle = Number(door(4, JSON.stringify({ jwk: jwk, extractable: !!extractable })));
+          return makeKey(handle, isPrivate ? "private" : "public", isPrivate ? extractable : true, list);
+        }
+        if (alg === "HMAC") {
+          if (format !== "raw" && format !== "jwk")
+            throw new DOMException(api + ": HMAC supports raw or jwk", "NotSupportedError");
+          var h = hashName(algorithm && algorithm.hash, api);
+          var list = usageList(usages, ["sign", "verify"], api);
+          if (!list.length) throw new DOMException(api + ": usages cannot be empty", "SyntaxError");
+          if (!bytesDoor) return hostWork(webSubtle(api).importKey(format, keyData, { name: "HMAC", hash: h }, !!extractable, list));
+          var raw = format === "raw" ? copyBytes(keyData, api) : undefined;
+          var out = JSON.parse(door(17, JSON.stringify({ alg: "HMAC", format: format, hash: h, extractable: !!extractable, jwk: format === "jwk" ? keyData : undefined }), raw));
+          return makeKeyWith(out.handle, "secret", extractable, { name: "HMAC", hash: Object.freeze({ name: h }), length: out.length }, list);
+        }
+        if (alg === "AES-GCM") {
+          if (format !== "raw" && format !== "jwk")
+            throw new DOMException(api + ": AES-GCM supports raw or jwk", "NotSupportedError");
+          var list = usageList(usages, ["encrypt", "decrypt"], api);
+          if (!list.length) throw new DOMException(api + ": usages cannot be empty", "SyntaxError");
+          if (!bytesDoor) return hostWork(webSubtle(api).importKey(format, keyData, { name: "AES-GCM" }, !!extractable, list));
+          var raw = format === "raw" ? copyBytes(keyData, api) : undefined;
+          var out = JSON.parse(door(17, JSON.stringify({ alg: "AES-GCM", format: format, extractable: !!extractable, jwk: format === "jwk" ? keyData : undefined }), raw));
+          return makeKeyWith(out.handle, "secret", extractable, { name: "AES-GCM", length: out.length }, list);
+        }
+        if (alg === "PBKDF2" || alg === "HKDF") {
+          if (format !== "raw") throw new DOMException(api + ": " + alg + " supports raw only", "NotSupportedError");
+          if (extractable) throw new DOMException(api + ": " + alg + " keys cannot be extractable", "SyntaxError");
+          var list = usageList(usages, ["deriveBits", "deriveKey"], api);
+          if (!list.length) throw new DOMException(api + ": usages cannot be empty", "SyntaxError");
+          if (!bytesDoor) return hostWork(webSubtle(api).importKey("raw", keyData, alg, false, list));
+          var out = JSON.parse(door(17, JSON.stringify({ alg: alg, format: "raw", extractable: false }), copyBytes(keyData, api)));
+          return makeKeyWith(out.handle, "secret", false, { name: alg }, list);
+        }
+        if (alg === "RSASSA-PKCS1-v1_5") {
+          if (format !== "spki" && format !== "jwk")
+            throw new DOMException(api + ": RSASSA-PKCS1-v1_5 supports spki or jwk", "NotSupportedError");
+          var h = hashName(algorithm && algorithm.hash, api);
+          var list = usageList(usages, ["verify"], api);
+          if (!bytesDoor) return hostWork(webSubtle(api).importKey(format, keyData, { name: "RSASSA-PKCS1-v1_5", hash: h }, !!extractable, list));
+          var raw = format === "spki" ? copyBytes(keyData, api) : undefined;
+          var out = JSON.parse(door(17, JSON.stringify({ alg: "RSASSA-PKCS1-v1_5", format: format, hash: h, extractable: true, jwk: format === "jwk" ? keyData : undefined }), raw));
+          return makeKeyWith(
+            out.handle,
+            "public",
+            !!extractable,
+            {
+              name: "RSASSA-PKCS1-v1_5",
+              modulusLength: out.modulusLength,
+              publicExponent: new Uint8Array(hexBuffer(out.publicExponentHex)),
+              hash: Object.freeze({ name: out.hash }),
+            },
+            list
           );
-        ecdsa(algorithm, api, true);
-        if (!keyData || typeof keyData !== "object") throw new TypeError(api + ": a JWK is an object");
-        if (keyData.kty !== "EC" || keyData.crv !== "P-256")
-          throw new DOMException(api + ": the JWK is not EC P-256", "DataError");
-        var isPrivate = typeof keyData.d === "string";
-        var list = usageList(usages, isPrivate ? ["sign"] : ["verify"], api);
-        if (isPrivate && !list.length)
-          throw new DOMException(api + ": a private key needs the sign usage", "SyntaxError");
-        if (!bytesDoor)
-          return hostWork(
-            webSubtle(api).importKey("jwk", keyData, { name: "ECDSA", namedCurve: "P-256" }, !!extractable, list)
-          );
-        var jwk = { kty: "EC", crv: "P-256", x: String(keyData.x), y: String(keyData.y) };
-        if (isPrivate) jwk.d = keyData.d;
-        var handle = Number(door(4, JSON.stringify({ jwk: jwk, extractable: !!extractable })));
-        return makeKey(handle, isPrivate ? "private" : "public", isPrivate ? extractable : true, list);
+        }
+        if (alg === "Ed25519") {
+          if (format !== "raw" && format !== "spki" && format !== "pkcs8" && format !== "jwk")
+            throw new DOMException(api + ": Ed25519 supports raw, spki, pkcs8 or jwk", "NotSupportedError");
+          var isPrivate = format === "pkcs8" || (format === "jwk" && keyData && typeof keyData.d === "string");
+          var list = usageList(usages, isPrivate ? ["sign"] : ["verify"], api);
+          if (isPrivate && !list.length)
+            throw new DOMException(api + ": a private Ed25519 key needs the sign usage", "SyntaxError");
+          if (!bytesDoor) return hostWork(webSubtle(api).importKey(format, keyData, "Ed25519", !!extractable, list));
+          var raw = format === "jwk" ? undefined : copyBytes(keyData, api);
+          var out = JSON.parse(door(17, JSON.stringify({ alg: "Ed25519", format: format, extractable: !!extractable, jwk: format === "jwk" ? keyData : undefined }), raw));
+          return makeKeyWith(out.handle, out.type, isPrivate ? !!extractable : true, { name: "Ed25519" }, list);
+        }
+        throw new DOMException(api + ": " + given + " is unavailable for importKey", "NotSupportedError");
       });
     };
     SubtleCrypto.prototype.exportKey = function exportKey(format, key) {
       return subtleCall(this, "exportKey", function () {
         var api = "crypto.subtle.exportKey()";
-        if (format !== "jwk")
-          throw new DOMException(
-            api + ": the format " + format + " is unavailable in data sources; use jwk",
-            "NotSupportedError"
-          );
-        checkKey(key, api);
+        requireKey(key, null, api);
         if (!key.extractable) throw new DOMException(api + ": the key is not extractable", "InvalidAccessError");
-        if (!bytesDoor) return hostWork(webSubtle(api).exportKey("jwk", key));
-        var jwk = JSON.parse(door(5, String(nativeKeys.get(key))));
-        jwk.ext = true;
-        jwk.key_ops = key.usages.slice();
-        return jwk;
+        if (key.algorithm.name === "ECDSA" && format !== "jwk")
+          throw new DOMException(api + ": the format " + format + " is unavailable for ECDSA; use jwk", "NotSupportedError");
+        if (!bytesDoor) return hostWork(webSubtle(api).exportKey(format, key));
+        if (key.algorithm.name === "ECDSA") {
+          var jwk = JSON.parse(door(5, String(nativeKeys.get(key))));
+          jwk.ext = true;
+          jwk.key_ops = key.usages.slice();
+          return jwk;
+        }
+        var out = door(18, JSON.stringify({ handle: nativeKeys.get(key), format: format }));
+        if (format === "jwk") {
+          var jwk = JSON.parse(out);
+          jwk.ext = true;
+          jwk.key_ops = key.usages.slice();
+          return jwk;
+        }
+        return hexBuffer(out);
       });
     };
     Object.defineProperty(CryptoKey.prototype, Symbol.toStringTag, { value: "CryptoKey", configurable: true });

@@ -18,7 +18,7 @@ package enum DevLoopStatus: Equatable { case preparing(String), failed(String) }
 /// What the window's dev pill says, the first that holds (LLP 1159.001 D2):
 /// the loop's own status, a host whose native code the server no longer
 /// runs, or a save that did not apply.
-package enum DevNotice: Equatable { case loop(DevLoopStatus), stale, refused(String) }
+package enum DevNotice: Equatable { case loop(DevLoopStatus), stale, refused(String), disconnected(String) }
 
 /// What the core asks of the app's dev connection.
 package protocol PlanConnection: AnyObject {

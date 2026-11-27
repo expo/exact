@@ -133,6 +133,7 @@ function reportRefused(r) {
   if (!maybe(r.plan, v => text(v, 1024)) || !maybe(r.design, v => text(v, 1024))) return '`plan` and `design` are strings, or null';
   if (!maybe(r.planDigest, v => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v))) return '`planDigest` is a SHA-256 in hex, or null';
   if (r.kind === 'status') {
+    if (r.rendered !== undefined && !(Number.isSafeInteger(r.rendered) && r.rendered >= 0)) return '`rendered` is a nonnegative build sequence';
     if (!maybe(r.scheme, v => text(v, 32)) || !maybe(r.contrast, v => text(v, 32))) return '`scheme` and `contrast` are strings, or null';
     if (!maybe(r.mode, v => object(v) && Object.keys(v).length <= 64 && Object.entries(v).every(([a, x]) => a.length <= 64 && text(x, 64)))) return '`mode` is {axis: value}, or null';
     if (!maybe(r.rootFontSize, Number.isFinite) || !maybe(r.revision, v => Number.isSafeInteger(v) && v >= 0)) return '`rootFontSize` is a number and `revision` a whole number, or null';
@@ -151,7 +152,7 @@ function reportRefused(r) {
  * `hold-cleared`). `correspond(from, to, site)` is the one site of plan `to`
  * that site `site` of plan `from` is, by their source maps, or null.
  * `timers` (`{set, clear}`, a test's clock) wait out a design-only status. */
-export function buildChannel({ send = () => {}, log = () => {}, selected = null, correspond = () => null, copiesFor = () => null, timers = { set: setTimeout, clear: clearTimeout } } = {}) {
+export function buildChannel({ send = () => {}, log = () => {}, selected = null, correspond = () => null, holdMap = () => null, copiesFor = () => null, timers = { set: setTimeout, clear: clearTimeout } } = {}) {
   // Its plan's copies (forma/1.17, `copiesFor(planDigest)`: their encoding, null with no map read yet, false past the
   // copies limit), for `select` to walk by: once per plan per registration,
   // to a build that says it walks by them (the `copies` capability; a page of an older build gets none, and `levels`),
@@ -160,7 +161,7 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
   const copiesOf = id => {
     const b = builds.get(id), digest = b?.planDigest ?? null;
     if (!digest || !b.capabilities?.includes('copies') || copiesSent.get(id) === digest) return null;
-    const data = copiesFor(digest);
+    const data = copiesFor(digest, id);
     if (!data) return null; // (null: no map read yet; false: past the copies limit, which `selectUp` answers)
     copiesSent.set(id, digest);
     return { plan: digest, data };
@@ -275,9 +276,10 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
     const h = holds.get(id);
     if (!h) { if (always) sendHold(id, null); return; }
     // Held before the build named its plan: the first plan it names is the one held under.
-    if (!h.plan && plan && !always) { h.plan = plan; return; }
-    if (h.plan && plan && h.plan !== plan) {
-      const site = correspond(h.plan, plan, h.hold.site);
+    if (!h.plan && plan && !always) { h.plan = plan; h.map = holdMap(plan, id); return; }
+    const nextMap = plan && holdMap(plan, id);
+    if (h.plan && plan && (h.plan !== plan || (h.map && nextMap && h.map !== nextMap))) {
+      const site = correspond(h.plan, plan, h.hold.site, id, h.map);
       if (site == null) {
         sendHold(id, null);
         log(`forma: hold on ${id} cleared: no single site corresponds in its new plan`);
@@ -287,17 +289,17 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
       }
       h.hold = { ...h.hold, site };
     }
-    h.plan = plan ?? h.plan;
+    if (plan) { h.plan = plan; h.map = nextMap; }
     h.revision = sendHold(id, h.hold, h.plan);
   };
 
   return {
     /** A build's stream opened; `write(frame)` sends it one. Its nonce, for
      * its hello, and `close()` when the stream ends; null with 256 open. */
-    open(write) {
+    open(write, sources) {
       if (streams.size >= STREAMS) return null;
       const n = nonce();
-      streams.set(n, { write, build: null });
+      streams.set(n, { write, sources, build: null });
       return { nonce: n, close: () => close(n) };
     },
     /** A stream for a build that polls (Linux, the resident loop's relay):
@@ -445,6 +447,15 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
       // design the build runs now: a design still waiting is told first.
       if (r.kind !== 'status' && toldLater.has(b.id)) tellStatus(b, true);
       if (r.kind === 'status') {
+        if (r.rendered !== undefined) {
+          const current = s.sources?.sequence?.();
+          if (r.rendered !== current) {
+            // A status in flight at publication still describes the old page. Keep its facts
+            // until this registration has reported the current build.
+            if (current !== undefined && b.status?.rendered === current) return { status: 204, body: null };
+            delete r.rendered;
+          }
+        }
         // A late report (older than the status kept) cannot rewind it; a
         // revision this registration was never sent (an earlier run's, a
         // report queued before it registered) acknowledges nothing.
@@ -457,7 +468,7 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
         // status stays at that revision, gone once it moves on.
         if (b.unsupported && b.unsupported.revision === undefined) b.unsupported.revision = at;
         else if (b.unsupported && b.unsupported.revision !== at) b.unsupported = null;
-        b.status = { scheme: r.scheme ?? null, contrast: r.contrast ?? null, mode: r.mode ?? null, rootFontSize: r.rootFontSize ?? null, revision: at, location: r.location ?? null, app: r.app ?? null };
+        b.status = { ...(r.rendered === undefined ? {} : { rendered: r.rendered }), scheme: r.scheme ?? null, contrast: r.contrast ?? null, mode: r.mode ?? null, rootFontSize: r.rootFontSize ?? null, revision: at, location: r.location ?? null, app: r.app ?? null };
         if (typeof r.plan === 'string') b.plan = r.plan;
         // (Said unknown, null, it is unknown: such a build is sent every plan's outline.)
         const was = b.planDigest;
@@ -540,6 +551,8 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
       }
       return { status: 204, body: null };
     },
+    /** The source resolver attached by the loop that opened this build's stream. */
+    sources: id => streams.get(builds.get(id)?.nonce)?.sources,
     /** The registered builds with an open stream. */
     list: () => { sweep(); return listed(); },
     /** Polled streams past their time closed (their builds announced gone):
@@ -599,7 +612,7 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
       // (unsupported, theme2's ruling; the tool greys its up control until it registers again), never stale, which
       // would have the tool ask again for good.
       const b = builds.get(id);
-      if (b.capabilities?.includes('copies') && b.planDigest && copiesFor(b.planDigest) === false) {
+      if (b.capabilities?.includes('copies') && b.planDigest && copiesFor(b.planDigest, id) === false) {
         const detail = 'this build cannot move its selection up (select): its plan is past the copies limit (2^20 sites, 512 KiB encoded); click the node instead';
         b.unsupported = { what: 'inspect', detail };
         send({ event: 'unsupported', build: id, what: 'inspect', detail });
@@ -664,7 +677,7 @@ export function buildChannel({ send = () => {}, log = () => {}, selected = null,
       if (!b.capabilities?.includes('hold')) return { unsupported: `build \`${id}\` (${b.host}) holds no state` };
       const held = plan ?? b.planDigest ?? null;
       const revision = sendHold(id, hold, held);
-      if (hold !== null) holds.set(id, { client, hold, revision, plan: held });
+      if (hold !== null) holds.set(id, { client, hold, revision, plan: held, map: held && holdMap(held, id) });
       log(`forma: ${client} ${hold ? `held ${hold.state} on site ${hold.site}` : 'let go'} on ${id} (hold ${revision})`);
       announce();
       return { build: id, revision };

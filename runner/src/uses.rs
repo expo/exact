@@ -81,8 +81,9 @@ pub enum Capability {
     /// reach the algorithm ([`apple_uses`]).
     Grid,
     /// `frame` and `measure` (LLP 1051.000): a plan whose actions read
-    /// geometry. Native hosts answer from the kernel; the web links a
-    /// synchronous import the page answers.
+    /// geometry, or that reads a geometry fact (LLP 1123 D6). Native hosts
+    /// answer from the kernel; the web links a synchronous import the page
+    /// answers.
     Geometry,
     /// `env(viewport-segment-*)` lengths (LLP 1078 D3): the segment grammar,
     /// resolution and wire decode, for a plan whose strings name a segment.
@@ -579,6 +580,10 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
     if plan.strings.iter().any(names_segment) {
         uses = uses.with(Capability::Segments);
     }
+    // A geometry fact is the page's to answer where the page lays out (LLP 1123 D6)
+    if (plan.resources.iter()).any(|r| crate::native_geometry::is_geometry(plan.str(r.source))) {
+        uses = uses.with(Capability::Geometry);
+    }
     if !plan.surfaces.is_empty()
         || plan.resources.iter().any(|r| {
             matches!(
@@ -598,8 +603,17 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
                 Some(PropId::Markup) if can_be(&binding, &|v| v == "markdown") => {
                     uses = uses.with(Capability::Markdown);
                 }
-                Some(PropId::HeightDragFor | PropId::TransformDragFor | PropId::ReorderFor) => {
+                Some(PropId::HeightDragFor | PropId::TransformDragFor) => {
                     uses = uses.with(Capability::Motion).with(Capability::Drag);
+                }
+                // Arrange synthesizes `transition: translate -exact-spring(…)`
+                // on list rows (`collection/reorder.rs`, `mounted_reorder.rs`),
+                // so a plan with reorder needs the transition grammar too.
+                Some(PropId::ReorderFor | PropId::ReorderGroup) => {
+                    uses = uses
+                        .with(Capability::Motion)
+                        .with(Capability::Drag)
+                        .with(Capability::Transitions);
                 }
                 // A drag's data is admitted for its host whether or not the
                 // node drags now, and `draggable=false` is the web's too.
@@ -683,10 +697,14 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
             }
             EventKind::Heightrelease
             | EventKind::Transformgeometry
-            | EventKind::Transformrelease
-            | EventKind::Reorderdrop
-            | EventKind::Reordertargetchange => {
+            | EventKind::Transformrelease => {
                 uses = uses.with(Capability::Motion).with(Capability::Drag);
+            }
+            EventKind::Reorderdrop | EventKind::Reordertargetchange => {
+                uses = uses
+                    .with(Capability::Motion)
+                    .with(Capability::Drag)
+                    .with(Capability::Transitions);
             }
             // Dropped and pasted files become `doc:` handles; the web's drag
             // is heard beside its drop (files.js), and UIKit's is a module's.
@@ -700,7 +718,10 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
     if plan.handlers.iter().any(|h| {
         matches!(
             h.event,
-            EventKind::Reachstart | EventKind::Reachend | EventKind::Reorderdrop
+            EventKind::Reachstart
+                | EventKind::Reachend
+                | EventKind::Reorderdrop
+                | EventKind::Reordertargetchange
         )
     }) {
         uses = uses.with(Capability::Collections);
@@ -1000,6 +1021,50 @@ pub(super) fn decoration_rows(
             })
             .collect(),
     )
+}
+
+/// Whether an iOS bake must allow audible video to continue after Home (LLP 1042.001 D8).
+pub fn uses_background_video(plan: &Plan) -> bool {
+    plan.bindings.iter().any(|b| {
+        b.kind == BindingKind::Prop
+            && b.id == PropId::AudiovisualBackgroundPlaybackPolicy as u16
+            && may_continue(plan, plan.code(b.expr))
+    })
+}
+
+// Follow the result of a bound choice back to its producing instructions.
+// A runtime string can opt in. A choice between two pausing literals cannot.
+fn may_continue(plan: &Plan, code: &[u8]) -> bool {
+    let body = plan.read_code(code).0;
+    if let Some(policy) = constant_str(plan, code) {
+        return policy == "continuesIfPossible";
+    }
+    let mut results = std::collections::BTreeSet::new();
+    let mut next = body.len();
+    let instructions: Vec<_> = crate::vm::instructions(body).flatten().collect();
+    for i in instructions.iter().rev() {
+        match i.op {
+            Opcode::Return => {
+                results.insert(i.pc);
+            }
+            Opcode::Jump if results.contains(&(i.args[0] as usize)) => {
+                results.insert(i.pc);
+            }
+            Opcode::Jump => {}
+            Opcode::DropLocal if results.contains(&next) => {
+                results.insert(i.pc);
+            }
+            Opcode::Str if results.contains(&next) => {
+                if plan.str(StrId(i.args[0] as u32)) == "continuesIfPossible" {
+                    return true;
+                }
+            }
+            _ if results.contains(&next) => return true,
+            _ => {}
+        }
+        next = i.pc;
+    }
+    false
 }
 
 pub(crate) fn constant_str<'a>(plan: &'a Plan, code: &[u8]) -> Option<&'a str> {

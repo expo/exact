@@ -174,6 +174,9 @@ pub struct Module {
     /// said once in the journal, and what is still to say.
     told_overlay: Vec<String>,
     overlay_notes: Vec<String>,
+    /// Module-level ambient clock / Math.random() taint (LLP 1195.000 D2.4).
+    ambient_clock: bool,
+    ambient_entropy: bool,
 }
 
 impl Module {
@@ -194,6 +197,8 @@ impl Module {
             background_out: false,
             told_overlay: Vec::new(),
             overlay_notes: Vec::new(),
+            ambient_clock: false,
+            ambient_entropy: false,
         }
     }
 
@@ -258,6 +263,7 @@ impl Module {
             ("store", store_pairs(&snapshot)),
             ("grants", grants),
             ("clock", store.clock_ms().into()),
+            ("epoch", store.epoch_at_zero().into()),
         ]);
         // Its next turn's request, should this one wait for its own timer.
         let resume = input.clone();
@@ -356,6 +362,16 @@ impl Module {
         // LLP 1069.005 D2: the realm's `crypto` drew entropy, as Hermes marks it.
         if response["entropy"] == true {
             store.observe_entropy();
+        }
+        // LLP 1195.000 D2.4: ambient clock reads and module-level taint.
+        if response["clockRead"] == true {
+            store.observe_clock();
+        }
+        if response["moduleClock"] == true {
+            self.ambient_clock = true;
+        }
+        if response["moduleEntropy"] == true {
+            self.ambient_entropy = true;
         }
         if let Some(reads) = response["reads"].as_array() {
             for name in reads {
@@ -785,6 +801,10 @@ impl DataSource for Module {
         self.placement
     }
 
+    fn ambient_taint(&self, _source: &str) -> (bool, bool) {
+        (self.ambient_clock, self.ambient_entropy)
+    }
+
     /// The turn takes its snapshot now, from the store as committed (LLP
     /// 1027.002 D3, change 1), scoped to this module's own names; the
     /// loader's registry runs the token its way.
@@ -807,6 +827,7 @@ impl DataSource for Module {
             ("store", store_pairs(&snapshot)),
             ("grants", grants),
             ("clock", store.clock_ms().into()),
+            ("epoch", store.epoch_at_zero().into()),
         ]))
         .and_then(|bytes| json::parse(&bytes).map_err(|e| unavailable(e.to_string())))
         {

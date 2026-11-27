@@ -6,7 +6,7 @@ Change app.json's `app.id` and any `appId` exported by app.ts together. An app s
 its own on its first run, and `bun exact.mjs update --without <platform>` stops shipping one
 (LLP 1153 D1). A port that ran `linux` once hears each `symbol:sf/…` warn that Linux draws it
 blank until `update --without linux`; one that ran `mac` hears `forma-unreachable` name a Mac
-control that ignores the design (NSSlider's accent) until `update --without macos`. The SF
+control that ignores the design (NSSwitch's accent) until `update --without macos`. The SF
 Symbols the web draws blank are one warning line.
 
 **Comparing with the original.** `agent ios --touch platform` makes each tap a real touch,

@@ -119,7 +119,7 @@ extension WindowToolbarHost {
                 // A run taking a name a read button or label refers to: an invocation finds paragraphs' runs too.
                 if !names.isEmpty, op.runs.contains(where: { $0.props["id"].map(names.contains) == true }) { return true }
             case .destroy:
-                if nodes.contains(id) { return true }
+                if !nodes.isEmpty, nodes.contains(id) { return true }
             case .children:
                 if nodes.contains(id) || op.ids.contains(where: nodes.contains) || unplaced(id) { return true }
             case .present:
@@ -184,6 +184,11 @@ extension WindowToolbarHost {
     /// once more, after it.
     func languageApplied(_ batch: Batch) {
         if batch.ops.contains(where: { $0.op == .language }) { sync() }
+    }
+
+    /// Whether any node retired in bulk at a staged reveal was read by the bar.
+    func concernsRetired(_ ids: Set<UInt32>) -> Bool {
+        !reads.nodes.isEmpty && !ids.isEmpty && !reads.nodes.isDisjoint(with: ids)
     }
 
     /// Whether what the navigation decided moved since the bar's last present.

@@ -209,9 +209,9 @@ test('a render answers the bake default for frozen', async () => {
   } finally { globalThis.document = document; rmSync(dir, {recursive:true, force:true}); }
 });
 
-test('the geometry facts are unavailable on the web, each quantity none', async () => {
-  // LLP 1123 D6: the web has no owner's geometry to report until D17, so a reader is answered,
-  // not failed, with what it declares
+test('the geometry facts are unavailable where nothing is laid out, the native quantities none', async () => {
+  // LLP 1123 D6: with no element of that id laid out a reader is answered, not failed, with what it declares; the
+  // native chain and the unsettled list are unavailable on the web
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-facts-'));
   try {
     writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
@@ -226,4 +226,120 @@ test('the geometry facts are unavailable on the web, each quantity none', async 
     expect(data.reserved.exactNativeChain(null, ['hero'], 'c')).toEqual([false]);
     expect(data.reserved.exactSafeAreaUnsettled(null, [], 'u')).toEqual([false, 0, []]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a geometry fact is the browser's layout of the element, answered again as the layout moves it", async () => {
+  // LLP 1123 D6: the element's size and frame in the document, the viewport or a node's border box, the other
+  // quantities none; after a commit that moves it a commit of its own answers again at the next generation, and at
+  // the bound of eight such commits in a row the answers hold until another cause
+  const rects = { hero: { left: 10, top: 120, width: 200, height: 80 }, card: { left: 0, top: 100, width: 300, height: 400 } };
+  const element = (id) => rects[id] && { getClientRects: () => [rects[id]], getBoundingClientRect: () => rects[id] };
+  const prior = globalThis.document;
+  Object.assign(globalThis, { document: { getElementById: element }, scrollX: 0, scrollY: 40 });
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-layout-'));
+  try {
+    writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [], said = [];
+      export const Resources = [{ name: 'g', source: 'exactGeometry', asked: ['hero'] }, { name: 'n', source: 'exactGeometry', asked: ['hero', 'node', 'card'] }];
+      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.asked, r.name)); }
+      export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
+      export const Refusal = Error, Kept = () => '', say = (m) => said.push(m);`);
+    const { geometry } = await import(resolve(dir, 'facts.js'));
+    const { data, After, commits, said } = await import(resolve(dir, 'rt.js'));
+    const rect = { x: 'n', y: 'n', width: 'n', height: 'n' };
+    const shape = { available: 'b', generation: 'n', size: ['?', { width: 'n', height: 'n' }], frame: ['?', rect], observations: ['?', 'n'], keyboard: ['?', 'n'] };
+    geometry({ g: [['available', 'generation', 'size', 'frame', 'observations', 'keyboard'], shape], n: [['available', 'generation', 'size', 'frame', 'observations', 'keyboard'], shape] });
+    const read = (name, args) => data.reserved.exactGeometry(null, args, name);
+    expect(read('g', ['hero'])).toEqual([true, 0, [200, 80], [10, 160, 200, 80], null, null]);
+    expect(read('n', ['hero', 'node', 'card'])).toEqual([true, 0, [200, 80], [10, 20, 200, 80], null, null]);
+    expect(read('g', ['hero', 'window'])[3]).toEqual([10, 120, 200, 80]);
+    expect(read('g', ['gone'])).toEqual([false, 0, null, null, null, null]);
+    read('g', ['hero']);
+    // A commit that moves the element: one of its own answers again at the next generation, and then it rests
+    rects.hero = { left: 10, top: 130, width: 200, height: 80 };
+    for (const a of After) a();
+    expect(commits.map(c => c.why)).toEqual(['geometry']);
+    expect(commits[0].read).toEqual([[true, 1, [200, 80], [10, 170, 200, 80], null, null], [true, 1, [200, 80], [10, 30, 200, 80], null, null]]);
+    // An answer that moves its own layout each time: eight in a row, then the answers hold
+    commits.length = 0;
+    let top = 130;
+    data.reserved.exactGeometry = ((read) => (s, args, name) => { rects.hero = { ...rects.hero, top: ++top }; return read(s, args, name); })(data.reserved.exactGeometry);
+    rects.hero = { ...rects.hero, top: ++top };
+    for (const a of After) a();
+    expect(commits.length).toBe(8);
+    expect(said.some(m => m.startsWith('geometry-feedback'))).toBe(true);
+  } finally { globalThis.document = prior; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("each geometry reader's answer is its own, refreshed only for a move, and a transformed node's space is none", async () => {
+  // LLP 1123 D6: two instances of one declaration reading two elements keep their own snapshots, so moving the second
+  // refreshes; a refresh's new generation alone moves nothing, so a quiet layout makes no further commit; and a frame in
+  // a transformed node's space is none
+  const rects = { hero: { left: 10, top: 120, width: 200, height: 80 }, card: { left: 0, top: 100, width: 300, height: 400 } };
+  const style = {};
+  const element = (id) => rects[id] && { nodeType: 1, id, getClientRects: () => [rects[id]], getBoundingClientRect: () => rects[id] };
+  const prior = { document: globalThis.document, getComputedStyle: globalThis.getComputedStyle };
+  Object.assign(globalThis, { document: { getElementById: element }, scrollX: 0, scrollY: 0, getComputedStyle: (el) => style[el.id] ?? {} });
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-instances-'));
+  try {
+    writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [];
+      export const Resources = [{ name: 'g', source: 'exactGeometry', asked: ['hero'] }, { name: 'g', source: 'exactGeometry', asked: ['card'] }];
+      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.asked, r.name)); }
+      export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
+      export const Refusal = Error, Kept = () => '', say = () => {};`);
+    const { geometry } = await import(resolve(dir, 'facts.js'));
+    const { data, After, commits } = await import(resolve(dir, 'rt.js'));
+    const rect = { x: 'n', y: 'n', width: 'n', height: 'n' };
+    geometry({ g: [['generation', 'frame'], { generation: 'n', frame: ['?', rect] }] });
+    const read = (args) => data.reserved.exactGeometry(null, args, 'g');
+    expect(read(['hero'])).toEqual([0, [10, 120, 200, 80]]);
+    expect(read(['card'])).toEqual([0, [0, 100, 300, 400]]);
+    // The second instance's element moves: one commit answers both at generation 1, and then nothing more
+    rects.card = { left: 0, top: 110, width: 300, height: 400 };
+    for (const a of After) a();
+    expect(commits.map((c) => c.why)).toEqual(['geometry']);
+    expect(commits[0].read).toEqual([[1, [10, 120, 200, 80]], [1, [0, 110, 300, 400]]]);
+    // A node's space under a transform cannot be recovered from rectangles
+    style.card = { transform: 'matrix(2, 0, 0, 2, 0, 0)' };
+    expect(read(['hero', 'node', 'card'])).toEqual([1, null]);
+  } finally { Object.assign(globalThis, prior); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a geometry reader that reads other arguments, or has gone, keeps no snapshot of what it read", async () => {
+  // LLP 1123 D6: after each commit only what a live instance reads now is compared, so an element a reader has left, or
+  // the element of a reader disposed of, moves nothing
+  const rects = { old: { left: 0, top: 0, width: 10, height: 10 }, current: { left: 0, top: 50, width: 10, height: 10 } };
+  const element = (id) => rects[id] && { nodeType: 1, id, getClientRects: () => [rects[id]], getBoundingClientRect: () => rects[id] };
+  const prior = { document: globalThis.document, getComputedStyle: globalThis.getComputedStyle };
+  Object.assign(globalThis, { document: { getElementById: element }, scrollX: 0, scrollY: 0, getComputedStyle: () => ({}) });
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-live-'));
+  try {
+    writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [];
+      export const Resources = [{ name: 'g', source: 'exactGeometry', asked: ['old'] }];
+      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.asked, r.name)); }
+      export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
+      export const Refusal = Error, Kept = () => '', say = () => {};`);
+    const { geometry } = await import(resolve(dir, 'facts.js'));
+    const { data, After, commits, Resources } = await import(resolve(dir, 'rt.js'));
+    geometry({ g: [['frame'], { frame: ['?', { x: 'n', y: 'n', width: 'n', height: 'n' }] }] });
+    const read = (args) => data.reserved.exactGeometry(null, args, 'g');
+    read(['old']);
+    // The reader now reads another element: the one it left moves, and nothing is answered again
+    Resources[0].asked = ['current'];
+    read(['current']);
+    for (const a of After) a();
+    rects.old = { ...rects.old, top: 5 };
+    for (const a of After) a();
+    expect(commits).toEqual([]);
+    // Disposed of, its element moving answers nothing either
+    Resources[0].gone = true;
+    rects.current = { ...rects.current, top: 60 };
+    for (const a of After) a();
+    expect(commits).toEqual([]);
+  } finally { Object.assign(globalThis, prior); rmSync(dir, { recursive: true, force: true }); }
 });

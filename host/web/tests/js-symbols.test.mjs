@@ -13,6 +13,7 @@ const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-symbols-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 writeFileSync(resolve(dir, 'symbols.js'), localImports(readFileSync(resolve(import.meta.dir, '../../web-js/symbols.js'), 'utf8')));
 copyFileSync(resolve(import.meta.dir, '../symbol-geometry.js'), resolve(dir, 'symbol-geometry.js'));
+copyFileSync(resolve(import.meta.dir, '../load-once.js'), resolve(dir, 'load-once.js'));
 writeFileSync(resolve(dir, 'rt.js'), 'export const { After, PropHooks, Hooks, inflight, journal, clock, data, onEnd } = globalThis.rtStandIn;\n');
 writeFileSync(resolve(dir, 'picker-glue.js'), '');
 const After = [], PropHooks = {}, inflight = { n: 0 };
@@ -239,7 +240,6 @@ test('symbol axes follow the current projected title and root font without anoth
   }
 }, 30000);
 
-
 // LLP 1081 stage 2: a conditional colour that goes leaves the colour past it;
 // one that comes back takes it again.
 test('a symbol under a bound colour follows whether it has a value', async () => {
@@ -362,7 +362,6 @@ test('a symbol under a mode boundary follows its implied row and its binding', a
     try { await browser?.close(); } finally { server.stop(true); }
   }
 }, 30000);
-
 
 test('adoption draws the static icon selected by the client viewport', async () => {
   const wide = 'M2 2H8V22H2Z', narrow = 'M16 2H22V22H16Z';

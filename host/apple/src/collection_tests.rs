@@ -327,6 +327,49 @@ fn collection_feedback_rejects_invalid_time_before_mutation() {
     }
 }
 
+/// A commit that moves a list's rows has the presenter ride the move
+/// (`"rides"`), as a collection view's batch update moves its cells; a
+/// report that moves nothing and a resize, which takes places without
+/// motion, do not.
+#[test]
+fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
+    let source = SOURCE
+        .replace("action toggle", "state tall = false\n  action grow\n    tall = true\n  action toggle")
+        .replace(
+            "      if showing\n",
+            "      button press=grow testId=\"grow\"\n        text \"grow\"\n      if showing\n",
+        )
+        .replace(
+            "            text `${row}` testId=`row-${row}`",
+            "            column height=(tall and row == 0 ? 80 : 20)\n              text `${row}` testId=`row-${row}`",
+        );
+    let (mut bridge, _, _) = fixture(&source);
+    let list = snapshot(&bridge).view;
+    let rides = format!("\"rides\":[{list}]");
+    // Reports until the window rests: the last one moves no row
+    let mut rested = String::new();
+    for now in 1..=8 {
+        let before = snapshot(&bridge);
+        rested = send(&mut bridge, &facts(&before, 0.), f64::from(now) / 10.);
+        if snapshot(&bridge).revision == before.revision {
+            break;
+        }
+    }
+    assert!(!rested.contains("\"rides\""), "nothing moved: {rested}");
+    let host = bridge.host.as_ref().unwrap();
+    let kernel = host.runner().kernel();
+    let grow = kernel
+        .node_by_key(kernel.find_by_test_id("grow")[0])
+        .unwrap()
+        .id;
+    let len = bridge.dispatch(grow, 0, 0, 3.);
+    let grown = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(grown.contains(&rides), "the first row grew: {grown}");
+    let len = bridge.resize(400., 600.);
+    let resized = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(!resized.contains("\"rides\""), "{resized}");
+}
+
 #[test]
 fn collection_removal_clears_snapshot_and_recreation_rejects_old_feedback() {
     let (mut bridge, _, _) = fixture(SOURCE);
@@ -430,6 +473,57 @@ mod exports {
         exact_destroy(rt);
         exact_collection_feedback(rt, bytes.len(), 1000.);
         REFUSAL.with(|r| assert!(String::from_utf8_lossy(&r.borrow()).contains("no such runtime")));
+    }
+
+    /// `exact_press_writes_router` (LLP 1127 D16): a row that pushes, a
+    /// button that only counts, and a text with no press answer 1, 0 and 2;
+    /// a busy or gone runtime answers 2, never its refusal's length.
+    #[test]
+    fn press_writes_router_export_answers_each_press_and_two_when_refused() {
+        const APP: &str = r#"routes nav
+  list "/"
+  item "/item/:id"
+
+component App
+  state refreshes = 0
+  action open(id: string)
+    nav = push(nav, path("item", id))
+  action refresh
+    refreshes = refreshes + 1
+  view
+    column navigationBack="back"
+      for e in stack(nav) key=e.id
+        if e.name == "list"
+          column navigationKey=`${e.id}`
+            button press=open("a") testId="row"
+              text "A"
+            button press=refresh testId="refresh"
+              text "Refresh"
+            text `${refreshes}` testId="count"
+"#;
+        let mut bridge = Bridge::<Rows>::new();
+        bridge.boot(
+            &contract::compile(APP).unwrap().encode(),
+            Rows::default(),
+            Hooks::none(),
+            400.,
+            800.,
+        );
+        let kernel = bridge.host.as_ref().unwrap().runner().kernel();
+        let views = ["row", "refresh", "count"]
+            .map(|t| kernel.node_by_key(kernel.find_by_test_id(t)[0]).unwrap().id);
+        let rt = exact_create();
+        with_entry(&EXACT_RUNTIMES, rt, |entry| entry.bridge = bridge);
+        assert_eq!(
+            views.map(|view| exact_press_writes_router(rt, view)),
+            [1, 0, 2]
+        );
+        let entry = EXACT_RUNTIMES.with(|r| r.borrow().get(rt)).unwrap();
+        let busy = entry.borrow();
+        assert_eq!(exact_press_writes_router(rt, views[0]), 2, "busy");
+        drop(busy);
+        exact_destroy(rt);
+        assert_eq!(exact_press_writes_router(rt, views[0]), 2, "gone");
     }
 }
 

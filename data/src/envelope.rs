@@ -49,7 +49,7 @@ pub fn encode_optional(
             ])
         })
         .collect();
-    let mut body = json!({"turn": 1, "reads": local.reads(), "draws": local.entropy_draws(), "topics": local.take_topics(), "announced": local.take_announced(), "writes": writes, "logs": logs});
+    let mut body = json!({"turn": 1, "reads": local.reads(), "draws": local.entropy_draws(), "clocks": local.clock_reads(), "topics": local.take_topics(), "announced": local.take_announced(), "writes": writes, "logs": logs});
     match result {
         Ok(Some(Answer::Now(value))) => body["value"] = Json::String(base64(&value.to_bytes())),
         // A long poll no host may run (LLP 1016.000 D8) is refused before it crosses: the envelope carries
@@ -145,6 +145,9 @@ pub fn apply_optional(
     for _ in 0..draws {
         store.observe_entropy();
     }
+    for _ in 0..json["clocks"].as_u64().unwrap_or(0) {
+        store.observe_clock();
+    }
     for _ in topics.len() as u64 + draws..json["reads"].as_u64().unwrap_or(0) {
         store.observe_external_read();
     }
@@ -228,6 +231,7 @@ fn error_from(error: &Json) -> DataError {
 fn request_json(request: &Request) -> Json {
     json!({
         "continuation": request.continuation,
+        "local": request.local.then_some(true),
         "max_response_bytes": match request.http {
             HttpScheduling::Ordered => None,
             HttpScheduling::Independent { max_response_bytes } => Some(max_response_bytes),
@@ -288,6 +292,7 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         reach: Default::default(),
         listen: None,
         continuation: json["continuation"].as_u64(),
+        local: json["local"].as_bool().unwrap_or(false),
         http: match &json["max_response_bytes"] {
             Json::Null => HttpScheduling::Ordered,
             value => HttpScheduling::Independent {
@@ -549,6 +554,18 @@ mod tests {
         match apply(outcome, &mut live, &mut logs).unwrap() {
             Answer::Later(r) => assert_eq!(r, storage),
             _ => panic!("a storage yield"),
+        }
+        let mut local_continuation = Request::get("");
+        local_continuation.continuation = Some(9);
+        local_continuation.local = true;
+        let outcome = encode(
+            Ok(Answer::Later(local_continuation.clone())),
+            &mut Store::default(),
+            vec![],
+        );
+        match apply(outcome, &mut live, &mut logs).unwrap() {
+            Answer::Later(r) => assert_eq!(r, local_continuation),
+            _ => panic!("a local continuation yield"),
         }
     }
 

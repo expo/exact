@@ -4,12 +4,33 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { readManifest } from '../scripts/app.mjs';
 import { appVerbs } from '../scripts/app-cli.mjs';
 import { bringPlatform, ensureShells } from '../scripts/app-shells.mjs';
 import { createApp } from './new.mjs';
 import { checkoutOf, slashRelative, within } from '../scripts/paths.mjs';
+
+test('an app command receives the LLVM directory relative to the launcher caller', () => {
+  const parent = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-llvm-launcher-')));
+  const caller = resolve(parent, 'caller'), app = resolve(parent, 'app');
+  const bin = process.platform === 'win32' ? 'tools' : 'active/../tools';
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('EXACT')));
+  try {
+    mkdirSync(resolve(caller, 'sdk/version'), { recursive: true });
+    if (process.platform !== 'win32') symlinkSync('sdk/version', resolve(caller, 'active'), 'dir');
+    mkdirSync(resolve(caller, process.platform === 'win32' ? 'tools' : 'sdk/tools'));
+    createApp(app);
+    const manifest = resolve(app, 'app.json'), declared = JSON.parse(readFileSync(manifest, 'utf8'));
+    declared.commands = { probe: ['bun', 'probe.mjs'] };
+    writeFileSync(manifest, JSON.stringify(declared));
+    writeFileSync(resolve(app, 'probe.mjs'), 'console.log(JSON.stringify([process.cwd(), process.env.EXACT_APPLE_LLVM_BIN]));');
+    const result = spawnSync(process.execPath, [resolve(app, 'exact.mjs'), 'probe'], { cwd: caller, encoding: 'utf8',
+      env: { ...env, EXACT_FEEDBACK: '0', EXACT_APPLE_LLVM_BIN: bin } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [app, `${caller}${sep}${bin}`]);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
 
 test.each([
   { name: 'plain checkout' },

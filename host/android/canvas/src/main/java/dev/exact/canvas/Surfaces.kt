@@ -3,6 +3,7 @@ package dev.exact.canvas
 import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
@@ -34,8 +35,10 @@ import java.nio.IntBuffer
 internal class Pane(
     context: Context, private val faces: HashMap<List<Int>, Font>,
     private val touch: (Int, Float, Float) -> Unit, private val key: ((Int) -> Unit)?,
+    private val picture: (Int, Int, Int) -> Bitmap = { id, w, h -> makePicture(id, w, h, false) },
 ) : View(context) {
     private val fonts = HashMap<Int, Font>()
+    private val bitmaps = HashMap<Int, Bitmap>()
     private val player = Player(fonts)
     private var ops: IntBuffer? = null
     private val walker = Structure()
@@ -63,6 +66,7 @@ internal class Pane(
     override fun dispatchHoverEvent(event: MotionEvent): Boolean = access?.hover(event) == true || super.dispatchHoverEvent(event)
 
     init {
+        player.image = { bitmaps[it] }
         // Keys reach the window's focused view: a hardware keyboard's Tab, arrows and Enter go to exact2 from here.
         isFocusable = key != null
         isFocusableInTouchMode = key != null
@@ -72,10 +76,10 @@ internal class Pane(
         }
     }
 
-    /** A new picture of the surface: the faces it announces made (each file's face once, however often a stream
-     * names it), then drawn. */
+    /** A new picture of the surface: the faces and images it announces made, then drawn. */
     fun show(stream: IntBuffer) {
         fonts.clear()
+        val kept = HashMap<Int, Bitmap>()
         var i = 0
         val n = stream.limit()
         while (i < n) {
@@ -85,11 +89,26 @@ internal class Pane(
                 // A face is its file, index, weight and axes: every word of the op but its key.
                 val words = List(end - i - 2) { stream.get(i + 2 + it) }
                 fonts[stream.get(i + 1)] = faces.getOrPut(words) { fontAt(stream, i) }
+            } else if (op == 11) {
+                val id = stream.get(i + 1)
+                val w = stream.get(i + 2)
+                val h = stream.get(i + 3)
+                kept[id] = bitmaps[id] ?: picture(id, w, h)
             }
             i = end
         }
+        for ((id, bmp) in bitmaps) if (kept[id] !== bmp) bmp.recycle()
+        bitmaps.clear()
+        bitmaps.putAll(kept)
         ops = stream
         invalidate()
+    }
+
+    /** Release any bitmaps held by this pane when its surface closes or hides. */
+    fun clearBitmaps() {
+        ops = null
+        for (bmp in bitmaps.values) bmp.recycle()
+        bitmaps.clear()
     }
 
     var legacyBack: (() -> Unit)? = null
@@ -179,6 +198,8 @@ private class MenuWindow(activity: ExactActivity, private val pane: Pane) : Popu
  * (`res/anim/exact_menu_*`, `res/values/motion.xml`). The system's animation scale and "remove animations" apply.
  */
 internal class Surfaces(private val activity: ExactActivity, private val root: View) {
+    /** Resolves `IMAGE_DEF` bitmaps for surface panes; wired to the active reader view. */
+    var picture: (Int, Int, Int) -> Bitmap = { id, w, h -> makePicture(id, w, h, false) }
     /** Called when a surface's window comes over the page (true) and when it goes (false): the page under one is
      * inert, and what the page hosts is told so ([Fields.covered]). */
     var covering: (Boolean) -> Unit = {}
@@ -242,7 +263,7 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
     }
 
     private fun open(serial: Int, what: Int, flags: Int, frame: IntArray, radius: Float, elevation: Float, stream: IntBuffer) {
-        val pane = Pane(activity, faces, { action, x, y -> Exact.surface(serial, action, x, y) }) { key -> Exact.surface(serial, key, 0f, 0f) }
+        val pane = Pane(activity, faces, { action, x, y -> Exact.surface(serial, action, x, y) }, { key -> Exact.surface(serial, key, 0f, 0f) }) { id, w, h -> picture(id, w, h) }
         pane.radius = radius
         if (log) {
             val asked = SystemClock.uptimeMillis() - Exact.touched
@@ -379,6 +400,7 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
         s.quiet = true
         s.removeBack?.invoke()
         if (shown === s) { shown = null; covering(false) }
+        s.pane.clearBitmaps()
         try { s.dialog?.dismiss(); s.popup?.close() } catch (e: RuntimeException) { Log.w(TAG, "surface ${s.serial}: $e") }
     }
 

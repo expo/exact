@@ -319,10 +319,10 @@ impl<D: DataSource> Runner<D> {
             let action = self.timer_row(i).action;
             let was_poisoned = self.poisoned;
             match self.scheduled(at, |r| r.task_action(i)) {
-                Ok(receipt) => a.receipts.push(Timed {
+                Ok(receipt) => a.receipts.extend(receipt.map(|receipt| Timed {
                     at_ms: self.now_ms,
                     receipt,
-                }),
+                })),
                 Err(e) => {
                     let what = format!(
                         "frame {} ({})",
@@ -501,6 +501,8 @@ impl<D: DataSource> Runner<D> {
         // their virtual frames are timers (LLP 1073 D3).
         let frames = !self.clock.presenting;
         let mut receipts = Vec::new();
+        // Timer firings that committed nothing: they count toward the limit.
+        let mut idle = 0;
         if !now_ms.is_finite() {
             return Advanced {
                 receipts,
@@ -1010,7 +1012,7 @@ impl<D: DataSource> Runner<D> {
                     needs_apply: true,
                 };
             }
-            if receipts.len() == TIMER_FIRE_LIMIT {
+            if receipts.len() + idle >= TIMER_FIRE_LIMIT {
                 return Advanced {
                     receipts,
                     now_ms: self.now_ms,
@@ -1027,10 +1029,11 @@ impl<D: DataSource> Runner<D> {
             let action = self.timer_row(i).action;
             let result = self.fire_timer(i, nominal, at, if live { now_ms } else { at }, false);
             match result {
-                Ok(receipt) => receipts.push(Timed {
+                Ok(Some(receipt)) => receipts.push(Timed {
                     at_ms: self.now_ms,
                     receipt,
                 }),
+                Ok(None) => idle += 1,
                 Err(e) => {
                     let what = format!(
                         "timer {} ({})",
@@ -1127,7 +1130,7 @@ impl<D: DataSource> Runner<D> {
         }
         if !receipts.is_empty() {
             let line = super::lines::advanced(
-                receipts.len(),
+                receipts.len() + idle,
                 receipts.last().map_or(0, |t| t.receipt.epoch),
             );
             self.log(line);

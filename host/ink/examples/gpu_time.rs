@@ -11,7 +11,8 @@
 //! calls and in ending the frame's span, where the wgpu device submits what the calls
 //! encoded: it leaves out a driver's own threads, and includes a call's wait for the
 //! GPU. Its GPU time is the device's (`Device::gpu_times`): the span from the start of
-//! its first render pass to the end of its last, and the sum of its passes. With
+//! its first render pass to the end of its last, and the sum of its passes. Its target
+//! pixels are those of each pass's target, whatever part of it the pass draws. With
 //! `EXACT_INK_COUNTERS` set, its submits are the wgpu device's queue submits in that
 //! time.
 //!
@@ -31,7 +32,7 @@ mod stream;
 
 use exact_ink::counters::{self, Counter};
 use exact_ink::device::{Device, Result, Selected};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use stream::{Record, Replay, Stream};
 
@@ -100,6 +101,26 @@ fn drawn(frame: &[Record]) -> (usize, usize) {
         _ => None,
     });
     (renders.clone().sum(), renders.count())
+}
+
+/// The pixels of each frame's render targets, a target counted once for each pass
+/// into it: what a tile-based GPU loads or clears, and stores.
+fn target_pixels(frames: &[&[Record]]) -> Vec<u64> {
+    let mut sizes = HashMap::new();
+    let pixels = |frame: &&[Record]| {
+        let mut pixels = 0;
+        for record in *frame {
+            match record {
+                Record::CreateTarget { id, size } | Record::ResizeTarget { id, size, .. } => {
+                    sizes.insert(*id, u64::from(size[0]) * u64::from(size[1]));
+                }
+                Record::Render { target, .. } => pixels += sizes[target],
+                _ => {}
+            }
+        }
+        pixels
+    };
+    frames.iter().map(pixels).collect()
 }
 
 /// Move the GPU times that have arrived to the frames awaiting them, oldest first. A
@@ -198,11 +219,12 @@ fn main() {
     let spacing = if back_to_back { ", back to back" } else { "" };
     println!("{name}: {replays} replays after {warm}{spacing}; milliseconds a frame");
     println!(
-        "{:<10} {:>6} {:>9} {:>6} {:>7} {:>18} {:>27} {:>27}",
+        "{:<10} {:>6} {:>9} {:>6} {:>9} {:>7} {:>18} {:>27} {:>27}",
         "stream",
         "frames",
         "instances",
         "passes",
+        "target px",
         "submits",
         "CPU p50 p95",
         "GPU span p50 p95 max",
@@ -221,28 +243,30 @@ fn main() {
         let a_frame = |total: usize| total as f64 / frames.len() as f64;
         let instances = a_frame(frames.iter().map(|frame| drawn(frame).0).sum());
         let passes = a_frame(frames.iter().map(|frame| drawn(frame).1).sum());
+        let pixels = target_pixels(&frames);
+        let target = a_frame(pixels.iter().sum::<u64>() as usize);
         let [cpu, span, in_passes] = summaries(&samples);
         let submits = submits_a_frame(&samples);
         println!(
-            "{scene:<10} {:>6} {instances:>9.0} {passes:>6.1} {submits:>7} {} {} {}",
+            "{scene:<10} {:>6} {instances:>9.0} {passes:>6.1} {target:>9.0} {submits:>7} {} {} {}",
             frames.len(),
             columns(cpu, 2),
             columns(span, 3),
             columns(in_passes, 3)
         );
-        let by_frame: Vec<_> = (frames.iter().zip(&samples))
-            .map(|(frame, samples)| {
+        let by_frame: Vec<_> = (frames.iter().zip(&samples).zip(&pixels))
+            .map(|((frame, samples), target)| {
                 let (instances, passes) = drawn(frame);
                 let samples = std::slice::from_ref(samples);
                 format!(
-                    r#"{{"instances":{instances},"passes":{passes},"submits":{},{}}}"#,
+                    r#"{{"instances":{instances},"passes":{passes},"target_pixels":{target},"submits":{},{}}}"#,
                     submits_a_frame(samples),
                     json(summaries(samples))
                 )
             })
             .collect();
         streams.push(format!(
-            r#"{{"name":{scene:?},"frames":{},"instances_per_frame":{instances:.1},"passes_per_frame":{passes:.2},"submits_per_frame":{submits},{},"by_frame":[{}]}}"#,
+            r#"{{"name":{scene:?},"frames":{},"instances_per_frame":{instances:.1},"passes_per_frame":{passes:.2},"target_pixels_per_frame":{target:.0},"submits_per_frame":{submits},{},"by_frame":[{}]}}"#,
             frames.len(),
             json([cpu, span, in_passes]),
             by_frame.join(",")

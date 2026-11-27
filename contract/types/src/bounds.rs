@@ -8,21 +8,65 @@
 //! runner's `MAX_VALUE_DEPTH` becomes a rule every target checks once.
 
 use crate::{err, Shapes, Ty, TypeError};
-use contract_syntax::Span;
+use contract_syntax::{Span, TypeExpr};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The deepest a value may nest: the runner's `MAX_VALUE_DEPTH`.
 pub const MAX_TYPE_DEPTH: u32 = 64;
 
 impl Shapes {
+    /// Resolve `t` iteratively so deeply nested wrapper chains never exhaust
+    /// native stack space before [`Shapes::bounded`] runs.
+    pub(crate) fn resolve_unbounded(&self, mut t: &TypeExpr) -> Result<Ty, TypeError> {
+        let mut wrappers = Vec::new();
+        let mut ty = loop {
+            match t {
+                TypeExpr::Option(inner, _) => {
+                    wrappers.push(true);
+                    t = inner;
+                }
+                TypeExpr::List(inner, _) => {
+                    wrappers.push(false);
+                    t = inner;
+                }
+                TypeExpr::Enum(values, _) => break Ty::Enum(values.clone()),
+                TypeExpr::Named(n, span) => {
+                    break match n.as_str() {
+                        "number" => Ty::Number,
+                        "string" => Ty::String,
+                        "bool" => Ty::Bool,
+                        "unit" => Ty::Unit,
+                        other if self.map.contains_key(other) => Ty::Record(other.to_string()),
+                        // Bare `action` is an action prop of inferred arity (LLP 1006 §2).
+                        // Near-prefix names are ordinary unknown types.
+                        "action" => Ty::Action(Vec::new()),
+                        other => return Err(self.unknown_type(other, *span)),
+                    };
+                }
+            }
+        };
+        for is_option in wrappers.into_iter().rev() {
+            ty = if is_option {
+                Ty::Option(Box::new(ty))
+            } else {
+                Ty::List(Box::new(ty))
+            };
+        }
+        Ok(ty)
+    }
+
     /// How deep a value of `t` can nest: 0 for a scalar, one more than what
     /// it holds for an option, list or record. `?` and an action are 0. A
     /// shape not yet measured counts 1, the least it can be.
-    pub fn depth(&self, t: &Ty) -> u32 {
+    pub fn depth(&self, mut t: &Ty) -> u32 {
+        let mut wrappers = 0;
+        while let Ty::Option(inner) | Ty::List(inner) = t {
+            wrappers += 1;
+            t = inner;
+        }
         match t {
-            Ty::Option(inner) | Ty::List(inner) => 1 + self.depth(inner),
-            Ty::Record(name) => self.depths.get(name).copied().unwrap_or(1),
-            _ => 0,
+            Ty::Record(name) => wrappers + self.depths.get(name).copied().unwrap_or(1),
+            _ => wrappers,
         }
     }
 
@@ -100,13 +144,15 @@ impl Shapes {
 }
 
 /// What the first option directly inside an option in `t` holds.
-fn option_in_option(t: &Ty) -> Option<&Ty> {
-    match t {
-        Ty::Option(inner) => match &**inner {
-            Ty::Option(held) => Some(held),
-            inner => option_in_option(inner),
-        },
-        Ty::List(inner) => option_in_option(inner),
-        _ => None,
+fn option_in_option(mut t: &Ty) -> Option<&Ty> {
+    loop {
+        match t {
+            Ty::Option(inner) => match &**inner {
+                Ty::Option(held) => return Some(held),
+                next => t = next,
+            },
+            Ty::List(inner) => t = inner,
+            _ => return None,
+        }
     }
 }

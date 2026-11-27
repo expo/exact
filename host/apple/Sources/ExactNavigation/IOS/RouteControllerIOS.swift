@@ -85,6 +85,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var barSpaces: [UInt32: UIBarButtonItem] = [:]
     /// The header's search field as UIKit's search controller (§9.6).
     var search: HeaderSearch?
+    #if os(iOS)
+    /// Where UIKit had put the search field when the route's filter was last projected (`searchLayout`, `scope`).
+    var searchLayoutRead: [Int]?
+    #endif
     /// The title Exact drew from the heading's group, and the subtitle it
     /// wrote; whether the root's tablist was hidden when it last looked (§9.10).
     let titleInk = NavigationTitleInk()
@@ -97,6 +101,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.init(nibName: nil, bundle: nil)
         #if os(iOS)
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (c: RouteController, _: UITraitCollection) in c.reopenTitle() }
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (c: RouteController, _: UITraitCollection) in c.widthClassChanged() }
         #endif
     }
     /// Whether UIKit is making it appear as the destination of its stack's pop: from `viewIsAppearing` until
@@ -123,11 +128,80 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         appeared?()
     }
     required init?(coder: NSCoder) { nil }
+
+    /// D4's controller allocation and vertical bar, from the route's node (LLP 1123): the edges and bars its view lies
+    /// under, and on iOS 27.1 whether its bars may move into the vertical bar, which UIKit's containers take from the
+    /// child that shows, and which of its bar items and the tab bar compress first there; and D8's minimum margins.
+    func followAllocation() {
+        followMinimumMargins(of: node)
+        let props = node.props
+        let edges = Self.extendedEdges(props["navigationExtendedLayout"])
+        if edgesForExtendedLayout != edges { edgesForExtendedLayout = edges }
+        let opaque = props["navigationExtendsUnderOpaqueBars"] == "true"
+        if extendedLayoutIncludesOpaqueBars != opaque { extendedLayoutIncludesOpaqueBars = opaque }
+        #if os(iOS)
+        guard #available(iOS 27.1, *) else { return }
+        let disabled = props["navigationVerticalBar"] == "disabled"
+        if verticalBarDisabled != disabled {
+            verticalBarDisabled = disabled
+            setNeedsUpdateOfVerticalBarConfiguration()
+        }
+        let compression: UIVerticalBarCompressionBehavior = switch props["navigationVerticalBarCompression"] {
+        case "prefers-bar-items": .prefersBarItems
+        case "prefers-tab-bar": .prefersTabBar
+        default: .automatic
+        }
+        if navigationItem.verticalBarCompressionBehavior != compression { navigationItem.verticalBarCompressionBehavior = compression }
+        #endif
+    }
+
+    /// `navigationExtendedLayout`'s edges: `all` unsaid, `none`, or the edges it names.
+    static func extendedEdges(_ word: String?) -> UIRectEdge {
+        guard let word, word != "all" else { return .all }
+        return word.split(separator: " ").reduce(into: []) { edges, edge in
+            switch edge {
+            case "top": edges.insert(.top)
+            case "left": edges.insert(.left)
+            case "bottom": edges.insert(.bottom)
+            case "right": edges.insert(.right)
+            default: break
+            }
+        }
+    }
+
+    #if os(iOS)
+    /// Whether the route said `navigationVerticalBar="disabled"`.
+    private var verticalBarDisabled = false
+    /// Whether UIKit sets its bar in the vertical bar (an iPhone Duo).
+    var inVerticalBar: Bool { traitCollection.placesVerticalBar && !verticalBarDisabled }
+    @available(iOS 27.1, *)
+    override var preferredVerticalBarBehavior: UIVerticalBarBehavior { verticalBarDisabled ? .disabled : .automatic }
+    #endif
     // The bar's height changed (a push to an inline title, a rotation, a
     // hatch): the route's content area follows (LLP 1075.003 §3.5), once
     // Exact's own writes settle (LLP 1123 D11).
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        // While UIKit presents the route it changes the safe area from inside the presentation's setup, as it adds the
+        // sheet to the window, having armed the transition's alongside animations to run at the end of the next
+        // animation block. Laid out there, a control of the route's animates (a segmented control's indicator), which
+        // runs UIKit's layout of the sheet early, inside that animation: it holds the route's scroller at the size it
+        // had then until the animation ends, over Exact's layout from the sheet's own size and safe area. A native view
+        // only invalidates its layout here; the route takes its safe area in UIKit's next layout pass.
+        if inPresentation {
+            safeAreaOwed = true
+            viewIfLoaded?.setNeedsLayout()
+            return
+        }
+        takeSafeArea()
+    }
+    /// A safe-area change that came while UIKit presented the route, taken in its next layout (`viewDidLayoutSubviews`).
+    private var safeAreaOwed = false
+    /// Whether UIKit is presenting the route's controller or a container holding it.
+    private var inPresentation: Bool {
+        sequence(first: self as UIViewController, next: \.parent).contains { $0.isBeingPresented }
+    }
+    private func takeSafeArea() {
         SafeAreaSteps.react(self) { [weak self] in
             self?.rideBars()
             self?.host?.coversChanged()
@@ -169,11 +243,17 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     // Its route is laid out in this view's bounds (LLP 1123 D2).
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if safeAreaOwed {
+            safeAreaOwed = false
+            takeSafeArea()
+        }
         fitContentViewport()
         host?.presenter.owners.publish()
         if scrollEdgesOwed { host?.settleScrollEdges() }
         #if os(iOS)
         search?.labelScopes()
+        // A fold or a width class can move where a filter the bar projects belongs (LLP 1134 and 1135, amended)
+        filterPlacementMoved()
         #endif
     }
 
@@ -202,7 +282,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         let view = surface
         // The route's view takes its accent as its tint, which its backdrop in the tint is resolved by
         assign(view, \.tintColor, node.ownAccent)
-        let modal = node.props["navigationPresentation"] == "modal"
+        let modal = NavigationRules.sheetLike(node.props["navigationPresentation"])
         let overPage = node.paintsOverPage
         let key = overPage ? []
             : modal ? [ownBackdrop(dark: false), ownBackdrop(dark: true)]
@@ -344,6 +424,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         }
         presenter.owners.publish()
         presenter.stickies.scrolled(node.id)
+        #if os(iOS)
+        presenter.textSelection.scrolled(scrollView)
+        #endif
         presenter.transformGeometry.changed()
         presenter.videoVisibility?.changed()
         presenter.scrollPump.scrolled(nil)
@@ -356,6 +439,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     private var dragOrigin: CGPoint?
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         if scrollView === contentViewport { dragOrigin = scrollView.contentOffset }
+        #if os(iOS)
+        host?.presenter.textSelection.scrollWillBeginDragging(scrollView)
+        #endif
         host?.presenter.elementScrolls.userScrolled(scrollView)
         if let session = host?.presenter.session { session.frameHealth.beginScroll(scrollView, session: session) }
     }
@@ -430,6 +516,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         held = true
         if let nav = parent as? UINavigationController { lastStack = nav }
         host?.moved(into: parent)
+        host?.moved(root: self)
     }
 
     private(set) var nativeContentScrollEdges: NSDirectionalRectEdge = []

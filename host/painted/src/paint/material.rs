@@ -418,10 +418,12 @@ impl super::Painter {
         let shape = self.filled_field(node, rect, focused, true, ts);
         let style = node.computed_style(StyleMask::INHERITED);
         // An inherited `color` does not tint the field (D9); the node's own does.
-        let ink = match (off, node.style.mask.has(StyleId::TextColor)) {
-            (true, _) => look::role("GrayText", dark),
-            (false, true) => rgba(node.text_color().resolve(dark)),
-            (false, false) => look::role("FieldText", dark),
+        let ink = if node.style.written.has(StyleId::TextColor) {
+            rgba(node.text_color().resolve(dark))
+        } else if off {
+            look::role("GrayText", dark)
+        } else {
+            look::role("FieldText", dark)
         };
         let rtl = style.direction == Direction::Rtl;
         let (x, y, w, h) = rect;

@@ -5,6 +5,7 @@
 //! what its shape implies of its outside (LLP 1115.000 D13.4): an alert has
 //! none.
 
+use crate::alert_role::{alertdialog_role, AlertRole};
 use crate::{err, LowerError, Lowerer};
 use contract_syntax::{Attr, Expr, Node, Span};
 use exact_kernel::StyleId;
@@ -334,11 +335,21 @@ pub(crate) const HR: &[(StyleId, &str)] = &[
     (StyleId::OverflowY, "hidden"),
 ];
 
+/// What [`Lowerer::check_menu_shapes`] established about an element: whether
+/// its role is unconditionally `"alertdialog"`, and whether its rows have the
+/// alert (rather than chooser) shape.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AlertShape {
+    pub(crate) always_alertdialog: bool,
+    pub(crate) alert: bool,
+}
+
 /// A `dialog` whose role is `alertdialog` is presented as the platform's
 /// confirmation, and its `closedby`, unless written, is what that
 /// confirmation does (LLP 1115 D6; LLP 1115.000 D13.4), so every host and
-/// the web's `dialog` behave alike. `alert` is whether its rows are an
-/// alert's ([`Lowerer::check_menu_shapes`]). **An alert has no outside:**
+/// the web's `dialog` behave alike. `shape` is whether its role is always
+/// `alertdialog` and whether its rows are an alert's
+/// ([`Lowerer::check_menu_shapes`]). **An alert has no outside:**
 /// `closerequest`, so Escape and Back cancel it and a tap outside does
 /// nothing, as `UIAlertController(.alert)`, `NSAlert` and Material's dialog
 /// do. Any other shape is the platform's chooser (an action sheet, a menu),
@@ -348,15 +359,18 @@ pub(crate) fn implied_closedby(
     tag: &str,
     attrs: &[Attr],
     span: Span,
-    alert: bool,
+    shape: AlertShape,
 ) -> Option<Vec<Attr>> {
-    if tag != "dialog" || literal(attrs, "role") != Some("alertdialog") || has(attrs, "closedby") {
+    if tag != "dialog" || !shape.always_alertdialog || has(attrs, "closedby") {
         return None;
     }
     let mut attrs = attrs.to_vec();
     attrs.push(Attr {
         name: "closedby".into(),
-        value: Expr::Str(if alert { "closerequest" } else { "any" }.into(), span),
+        value: Expr::Str(
+            if shape.alert { "closerequest" } else { "any" }.into(),
+            span,
+        ),
         span,
         written: crate::IMPLIED,
     });
@@ -458,24 +472,37 @@ impl Row<'_> {
 }
 
 impl Lowerer<'_> {
-    /// `hr` is void; a popover or `dialog` whose role is `alertdialog` is a
-    /// confirmation, which an Apple host presents as the platform's sheet.
-    /// Its rows are text, text fields when it is an alert (a prompt),
-    /// actions (a `button` with `press` that hides it) and at most one
+    pub(crate) fn under_view_binding<T>(
+        &mut self,
+        name: &str,
+        subject: Option<&Expr>,
+        lower: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.view_bindings.push((name.to_owned(), subject.cloned()));
+        let out = lower(self);
+        self.view_bindings.pop();
+        out
+    }
+
+    /// `hr` is void; a popover or `dialog` whose role is or can evaluate to
+    /// `alertdialog` is a confirmation, which an Apple host presents as the
+    /// platform's sheet. Its rows are text, text fields when it is an alert (a
+    /// prompt), actions (a `button` with `press` that hides it) and at most one
     /// cancel (a `button` without `press` that hides it), with at least one
-    /// action unless it is an alert with no field: text and its one
-    /// button, the platform's one-button alert ("Couldn't save." and OK). What a
-    /// literal shows breaks that is refused;
-    /// a value known only at run time is left to the host. Returns whether
-    /// it is a confirmation whose rows are an alert's ([`alert_shaped`]),
-    /// which decides the `closedby` a `dialog` implies and may take.
+    /// action unless it is an alert with no field: text and its one button, the
+    /// platform's one-button alert ("Couldn't save." and OK). Any expression
+    /// whose reachable values include `"alertdialog"` is checked here; an
+    /// opaque runtime value is left to the host. Returns whether its role is
+    /// unconditionally `alertdialog` and whether its rows are an alert's
+    /// ([`alert_shaped`]), which decides the `closedby` a `dialog` implies and
+    /// may take.
     pub(crate) fn check_menu_shapes(
-        &self,
+        &mut self,
         tag: &str,
         attrs: &[Attr],
         children: &[Node],
         span: Span,
-    ) -> Result<bool, LowerError> {
+    ) -> Result<AlertShape, LowerError> {
         if tag == "hr" {
             if let Some(child) = children.first() {
                 return err(
@@ -486,9 +513,29 @@ impl Lowerer<'_> {
             }
         }
         let dialog = tag == "dialog";
-        if literal(attrs, "role") != Some("alertdialog") || !(dialog || has(attrs, "popover")) {
-            return Ok(false);
+        if !(dialog || has(attrs, "popover")) {
+            return Ok(AlertShape::default());
         }
+        let view_bindings: Vec<(&str, Option<&Expr>)> = self
+            .view_bindings
+            .iter()
+            .map(|(n, e)| (n.as_str(), e.as_ref()))
+            .collect();
+        let fns = &self.fns;
+        let role = alertdialog_role(
+            attrs,
+            self.root,
+            &view_bindings,
+            &|name| {
+                fns.get(name)
+                    .map(|(decl, body)| (decl.params.as_slice(), *body))
+            },
+            &mut self.role_cache,
+        );
+        if role == AlertRole::Never {
+            return Ok(AlertShape::default());
+        }
+        let always_alertdialog = role == AlertRole::Always;
         let mut rows = Vec::new();
         self.rows(children, false, &mut Vec::new(), &mut rows);
         let alert = alert_shaped(&rows);
@@ -515,7 +562,10 @@ impl Lowerer<'_> {
             );
         }
         let Some(id) = literal(attrs, "id") else {
-            return Ok(alert);
+            return Ok(AlertShape {
+                always_alertdialog,
+                alert,
+            });
         };
         // An unwritten `closedby` is implied (`implied_closedby`); one written
         // otherwise asks for what the native confirmation of this shape
@@ -619,7 +669,10 @@ impl Lowerer<'_> {
                 span,
             );
         }
-        Ok(alert)
+        Ok(AlertShape {
+            always_alertdialog,
+            alert,
+        })
     }
 
     /// The element rows `nodes` produce, through `for`, `if` and `match`;

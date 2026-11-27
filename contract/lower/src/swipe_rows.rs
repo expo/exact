@@ -525,16 +525,12 @@ impl At {
             Node::Element { tag, .. } if self == Self::Section && self.row(tag) => {
                 Cow::Owned(grouped(node, &|n, swiped| {
                     crate::grouped::row(n, false, swiped, &|attrs| {
-                        crate::class::rows(
-                            attrs,
-                            &|name| {
-                                styles
-                                    .iter()
-                                    .find(|s| s.name == name)
-                                    .map(|s| s.attrs.as_slice())
-                            },
-                            &[],
-                        )
+                        crate::class::rows(attrs, &|name| {
+                            styles
+                                .iter()
+                                .find(|s| s.name == name)
+                                .map(|s| s.attrs.as_slice())
+                        })
                     })
                 }))
             }
@@ -861,7 +857,7 @@ fn drawn(attrs: &[Attr], styles: &[StyleDecl]) -> Vec<Attr> {
             .find(|s| s.name == name)
             .map(|s| s.attrs.as_slice())
     };
-    let class = crate::class::rows(attrs, &style, &[]).ok().flatten();
+    let class = crate::class::rows(attrs, &style).ok().flatten();
     let own = attrs.iter().filter(|a| a.name != "class").cloned();
     sheet
         .into_iter()

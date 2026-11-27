@@ -31,9 +31,10 @@ extension NavigationHost {
 
     /// One walk of the root's children and, within each child that holds panels, down to the
     /// routes (LLP 1083.000 D4). It answers the rows below the panels that stay in CSS flow
-    /// while UIKit's container fills the page and the tab bar is hidden, whose highest top
-    /// bounds the routes' bottom safe area (`bottom`; `rows` are those that are the root's own
-    /// children, which `clearBesideRoutes` raises over the container). Below the root it
+    /// while UIKit's container fills the page and the tab bar is hidden, or that lie on the shown
+    /// bar where the tablist keeps its room (`barRoom`), whose highest top bounds the routes'
+    /// bottom safe area (`bottom`, or `raised` while the bar shows; `rows` are those that are the
+    /// root's own children, which `clearBesideRoutes` raises over the container). Below the root it
     /// answers the nodes that paint over the container (`lifts`): those their parent paints
     /// after the children that hold the panels where a route's box meets them, those beside the
     /// routes (`PanelSiblings.beside`), and those rows, each by the box it paints over
@@ -41,21 +42,24 @@ extension NavigationHost {
     /// already is among its parent's children as last placed (`PanelSiblings.placedIDs`); a flat
     /// leaf that would lift is answered in `promote`, to be given a view first.
     func panelSiblings(in area: CGRect, routes: [CGRect], drawn: [CGRect], skipping owned: Set<UInt32>, hidden: Bool? = nil)
-        -> (bottom: CGFloat, rows: [NodeView], lifts: [PanelSiblings.Lift], promote: [UInt32]) {
-        guard !ExactEnv.authoredChrome, let root = container, tabOwner != nil, !routes.isEmpty else { return (0, [], [], []) }
+        -> (bottom: CGFloat, raised: CGFloat, rows: [NodeView], lifts: [PanelSiblings.Lift], promote: [UInt32]) {
+        guard !ExactEnv.authoredChrome, let root = container, tabOwner != nil, !routes.isEmpty else { return (0, 0, [], [], []) }
         var barHidden = false
         if let tabs = tabController, tabOwner === tabs {
             if #available(iOS 18.0, tvOS 18.0, *) { barHidden = hidden ?? tabs.isTabBarHidden } else { barHidden = hidden ?? tabs.tabBar.isHidden }
         }
+        // The rows the kernel names above the tablist, once the bar's room is laid out, lift where their box clears the bar
+        let onBar = barHidden ? nil : rowsOnBar(in: root)
         let panels = tabPanels.compactMap { presenter.views[$0] }
         // The panels whose routes are shown: a hidden tab's panel is hidden and inert on the web
         let shown = Set(primaryRoutes.filter { $0.viewIfLoaded?.window != nil }.compactMap { logicalParent(of: $0.node)?.id })
-        var bottom: CGFloat = 0, rows: [NodeView] = [], lifts: [PanelSiblings.Lift] = [], promote: [UInt32] = []
+        var bottom: CGFloat = 0, raised: CGFloat = 0, rows: [NodeView] = [], lifts: [PanelSiblings.Lift] = [], promote: [UInt32] = []
         var tick = 0
         func isRoute(_ node: NodeView) -> Bool { node.props["navigationKey"] != nil }
         /// A child of `parent` as its order has it: its view, or a flat leaf's id and box in
         /// `parent`.
         enum Child { case view(NodeView), leaf(UInt32, CGRect) }
+        func childID(_ child: Child) -> UInt32 { switch child { case let .view(view): view.id; case let .leaf(id, _): id } }
         func visit(_ parent: NodeView?, _ children: [Child]) {
             let enter = tick
             tick += 1
@@ -91,13 +95,18 @@ extension NavigationHost {
                     inFlow = true
                 }
                 guard !box.isEmpty, box.intersects(area) else { continue }
-                var below = false
+                var below = false, onBarRow = false
                 if barHidden, !inPanel, inFlow, box.minY >= end - 0.5, routes.contains(where: { $0.minX < box.maxX && $0.maxX > box.minX }) {
                     bottom = max(bottom, area.maxY - box.minY)
                     below = true
+                } else if let onBar, onBar.rows.contains(childID(children[i])), box.minY >= end - 0.5, box.maxY <= onBar.top + 0.5 {
+                    below = true
+                    onBarRow = true
                 }
+                // A row on the bar bounds the routes once it lifts (`raised`)
+                let lifting = { if onBarRow { raised = max(raised, area.maxY - box.minY) } }
                 guard let parent else {
-                    if below, let child = views(i) { rows.append(child) }
+                    if below, let child = views(i) { rows.append(child); lifting() }
                     continue
                 }
                 let key = (rank(i), i)
@@ -109,6 +118,7 @@ extension NavigationHost {
                     // back there by a flight's landing)
                     guard child.superview === parent.container || siblings.parent(of: child) === parent, !heldElsewhere(child, under: parent) else { continue }
                     level.append((child, key > firstPainted, i > firstHolder))
+                    lifting()
                 case let .leaf(id, _):
                     promote.append(id)
                 }
@@ -124,7 +134,7 @@ extension NavigationHost {
             }
         }
         visit(nil, PanelSiblings.nodes(in: ownerMount(root)).map(Child.view))
-        return (bottom, rows, lifts, promote)
+        return (bottom, raised, rows, lifts, promote)
     }
 
     /// The box `node` paints over, in `root`'s coordinates: its own, or, where it has no area,
@@ -161,6 +171,13 @@ final class PanelSiblings: LiftedNodes {
     unowned let navigation: NavigationHost
     var presenter: Presenter { navigation.presenter }
     init(navigation: NavigationHost) { self.navigation = navigation }
+
+    /// A tab's stack that clears the rows on the shown bar, and the identity it holds that
+    /// clearance under (`clearRowsOnStacks`).
+    struct RowStack { weak var stack: UIViewController?; let identity: ContributionsIOS.Identity }
+    var rowStacks: [RowStack] = []
+    /// While the stacks are offered to an app's container, no clearance is written to them.
+    var rowStacksHeld = false
 
     /// One node to lift: its parent; the parent's entry and exit in a depth-first walk of the
     /// tree, which nest the stands as the tree nests the parents; the side of the holders of

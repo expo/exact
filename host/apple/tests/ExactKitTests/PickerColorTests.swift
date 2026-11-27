@@ -17,6 +17,17 @@ final class PickerColorTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testDocumentPanelMessage() {
+        _ = NSApplication.shared
+        for name in ["showOpenFilePicker", "showDirectoryPicker", "showSaveFilePicker"] {
+            for message in [nil, "Choose a project folder."] as [String?] {
+                let panel = Picker.documentPanel(name, multiple: false, suggestedName: "Notes", message: message, startIn: nil)
+                let stock = name == "showSaveFilePicker" ? NSSavePanel() : NSOpenPanel()
+                XCTAssertEqual(panel.message, message ?? stock.message, name)
+            }
+        }
+    }
+
     func testUnrestrictedPanelHasNoTypeFilter() {
         let session = ExactApp.shared.makeSession(label: "panel")
         defer { session.destroy() }

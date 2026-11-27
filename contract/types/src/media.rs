@@ -2,7 +2,7 @@
 //! `fastSeek(id, seconds)` seeks every time it runs, where the bound
 //! `currentTime` seeks only when its value changes, and `load(id)` loads the
 //! source again (a retry after an `error`, or a file that changed).
-//! `requestPictureInPicture(id)` floats an `image` and `exitPictureInPicture()`
+//! `requestPictureInPicture(id)` floats an `image` or URL-backed `video` and `exitPictureInPicture()`
 //! ends it (LLP 1042 §9); `presentation="window"` or `"panel"` asks for a
 //! floating window Exact draws in place of the platform's, with its `title`,
 //! `width` and `height` (LLP 1042 §9.1).
@@ -29,7 +29,7 @@ pub(super) fn command_args(
         err(
             "type-media-command",
             if wants.is_empty() {
-                format!("{usage} takes no arguments: one image floats at a time")
+                format!("{usage} takes no arguments: one element floats at a time")
             } else {
                 format!("{usage}: the element's `id`, as `focus` takes one")
             },

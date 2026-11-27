@@ -145,7 +145,7 @@ process.exit(await run({dir: import.meta.dir, name: 'backend', exact2: ${JSON.st
       ? [resolve(dir, 'exact.mjs'), 'agent', 'web', '--backend', origin, 'tree']
       : selector === 'verify --backend' ? ['scripts/verify.mjs', 'web', '--app', dir, '--backend', origin]
       : ['host/web-js/build.mjs', 'backend', '--check', '--out', resolve(dir, 'dist')];
-    const r = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8', timeout: 60000 });
+    const r = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8', timeout: 300_000 });
     const report = r.stdout + r.stderr;
     assert.equal(r.status, 1, report);
     assert.ok(report.includes(`error [backend-selection]: ${selector === 'verify --backend' ? '--backend' : selector}:`), report);
@@ -153,7 +153,7 @@ process.exit(await run({dir: import.meta.dir, name: 'backend', exact2: ${JSON.st
     assert.match(report, /import\.meta\.env\.NAME/);
     assert.doesNotMatch(report, /failed the type check/);
   }
-}), 60000);
+}), 600_000); // A cold checkout may compile exact-web-js on the first call.
 
 test('contract JSON preserves the backend-selection diagnostic id', () => inDir(dir => {
   backendApp(dir);

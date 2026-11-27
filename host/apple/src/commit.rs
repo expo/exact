@@ -123,6 +123,13 @@ impl<D: DataSource> Host<D> {
                     self.update(id, &mut batch);
                 }
             }
+            if let Some(node) = r
+                .reconcile_field
+                .and_then(|k| self.runner.kernel().node_by_key(k))
+            {
+                let value = exact_kernel::control::bound_field_value(node.props);
+                batch.props(node.id, &[("value", value.into_owned())], &[]);
+            }
         }
         self.withdraw_flat_hits(&omitted_gone, &mut batch);
         // The `portal` movers placement moved this batch or before.
@@ -215,7 +222,14 @@ impl<D: DataSource> Host<D> {
         } else if inert {
             self.inert_layout(&mut batch, !receipts.is_empty()).err()
         } else {
-            self.layout(&mut batch).err()
+            // The flag ends with this layout, even when a panic unwinds
+            // through it to a caller that keeps the host
+            self.presence.committed = !receipts.is_empty();
+            let laid =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.layout(&mut batch)));
+            self.presence.committed = false;
+            laid.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                .err()
         };
         if layout_error.is_some() && !receipts.is_empty() {
             self.emit_ranks(&mut batch);

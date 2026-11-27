@@ -287,7 +287,7 @@ mod tests {
                 },
                 "spawned an entity",
             ),
-            (|w| emitter::step(w), "queried `Emitter` mutably"),
+            (|w| emitter::step(w), "stepped emitters"),
         ];
         for (change, named) in cases {
             let mut w = World::new(60, 1);

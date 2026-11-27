@@ -235,7 +235,7 @@ pub(crate) fn derive(
                 modes.extend(grant.device.ios_modes);
                 tasks.extend(grant.device.ios_tasks);
             }
-            "linux" => {
+            "linux" | "android" => {
                 android.extend(grant.device.android);
                 features.extend(grant.device.android_features);
                 for pair in grant.device.android_services {
@@ -344,7 +344,7 @@ pub(crate) fn derive(
         Vec::new()
     };
     let (bonjour, local_source, multicast) = local_network_reach(&ceiling);
-    if multicast && platform == "linux" {
+    if multicast && matches!(platform, "linux" | "android") {
         android.push("android.permission.CHANGE_WIFI_MULTICAST_STATE");
     }
     android.sort_unstable();
@@ -406,7 +406,7 @@ fn privacy_policy(
     devices: &[exact_runner::device::DeviceGrant<'_>],
 ) -> Result<(), String> {
     let health = devices.iter().any(|g| g.device.name.starts_with("health-"));
-    if !health || !matches!(platform, "linux" | "ios") {
+    if !health || !matches!(platform, "linux" | "android" | "ios") {
         return Ok(());
     }
     let manifest: Value = std::fs::read_to_string(app_dir.join("app.json"))
@@ -417,7 +417,7 @@ fn privacy_policy(
         return Ok(());
     }
     let why = "grant-privacy-policy: an app granting `device.health-read` or `device.health-write` names its privacy policy in app.json, `\"privacy_policy\": \"https://…\"` (LLP 1133.026 D4)";
-    if platform == "linux" {
+    if matches!(platform, "linux" | "android") {
         return Err(why.into());
     }
     if std::env::var_os("OUT_DIR").is_some() {
@@ -541,7 +541,7 @@ fn presence(app_dir: &Path, sources: &[(Option<&str>, &str); 2]) -> Vec<String> 
 /// (`grant-missing`); and in a production build the `development` word,
 /// which only a development build's bake writes and which admits loopback.
 fn local_network(sources: &[(Option<&str>, &str); 2], production: bool) -> Vec<String> {
-    use exact_runner::grants::{is_service_type, DEVELOPMENT, LOCAL_NETWORK};
+    use exact_runner::grants::{is_service_type, DEVELOPMENT, LOCAL_NETWORK, LOOPBACK};
     let mut errors = Vec::new();
     let (mut device, mut needs) = (false, None);
     for (spec, source) in sources {
@@ -560,8 +560,8 @@ fn local_network(sources: &[(Option<&str>, &str); 2], production: bool) -> Vec<S
                     needs = needs.or(Some(*line));
                     if production && words.get(2) == Some(&DEVELOPMENT) {
                         errors.push(format!(
-                            "grant-parse: {source}: `{line}`: a production build admits no loopback by this line; write `{} {LOCAL_NETWORK}`, and name a loopback origin the app serves itself on",
-                            words[0]
+                            "grant-parse: {source}: `{line}`: a production build admits no loopback by this line; write `{} {LOCAL_NETWORK}`, or `{} {LOOPBACK}` for loopback",
+                            words[0], words[0]
                         ));
                     }
                 }
@@ -644,10 +644,12 @@ fn auth(ceiling: &str, platform: &str, compat: &Compat) -> Result<Value, String>
         .filter_map(|c| c.strip_prefix("https://"))
         .filter_map(|rest| rest.split('/').next())
         .filter(|host| {
-            !matches!(
-                host.split(':').next(),
-                Some("localhost" | "127.0.0.1" | "[::1]")
-            )
+            // The host less its port; an IPv6 literal's own colons are inside `[]`.
+            let name = match host.split_once(']') {
+                Some((literal, _)) => &host[..=literal.len()],
+                None => host.split(':').next().unwrap_or(host),
+            };
+            !matches!(name, "localhost" | "127.0.0.1" | "[::1]")
         })
         .map(|host| format!("webcredentials:{host}"))
         .collect();
@@ -701,8 +703,8 @@ fn sign_in(ceiling: &str, platform: &str) -> Result<Value, String> {
     }
     let audiences = match platform {
         "web" => json!({ "apple": apple, "google": google }),
-        "android" => json!({ "google": google }),
-        _ => json!({ "apple": ["<the bundle ID>"], "google": google }),
+        "ios" | "macos" => json!({ "apple": ["<the bundle ID>"], "google": google }),
+        _ => json!({ "google": google }),
     };
     Ok(json!({ "apple": apple, "google": google, "audiences": audiences, "notes": notes }))
 }
@@ -1379,6 +1381,15 @@ mod tests {
         derive(&dir.0, "ios", None, &mut fetch_only).unwrap();
         assert!(fetch_only.reach["bonjour"].is_null());
         assert_eq!(fetch_only.reach["localNetworking"], json!(true));
+        // LLP 1016 D6: `loopback` needs no `device.local-network` and derives no ATS/Bonjour keys.
+        let lb = "net.fetch loopback\nnet.websocket loopback";
+        parsed(&dir.0, Some(lb), None, false).unwrap();
+        parsed(&dir.0, Some(lb), None, true).unwrap();
+        for p in ["ios", "macos"] {
+            let mut c = compat(lb);
+            derive(&dir.0, p, None, &mut c).unwrap();
+            assert!(c.reach["bonjour"].is_null() && c.reach["localNetworking"].is_null());
+        }
     }
 
     #[test]

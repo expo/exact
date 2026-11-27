@@ -44,9 +44,13 @@ fn tree(element: &Element) -> (Kernel, BTreeMap<String, ViewId>) {
         assert!(ids.insert(e.id.clone(), id).is_none());
         let tag = e.tag.as_deref().unwrap_or("div");
         // A node a Contract element names is built as contract/lower builds
-        // it (tags.rs, controls.rs `native_tag`); any other from its tag.
+        // it (tags.rs, controls.rs `native_tag`); any other from its tag. A
+        // raw HTML `<a>` without `href` is non-interactive, whereas a
+        // Pressable without a link destination renders as `<button>`.
         let (node_type, semantic, fixed): (_, _, &[(PropId, &str)]) = match e.contract.as_deref() {
-            None if matches!(tag, "button" | "a") => (NodeType::Pressable, Some(tag), &[]),
+            None if tag == "button" || (tag == "a" && e.attrs.contains_key("href")) => {
+                (NodeType::Pressable, Some(tag), &[])
+            }
             None => (NodeType::View, Some(tag), &[]),
             Some("button") => (
                 NodeType::Control,

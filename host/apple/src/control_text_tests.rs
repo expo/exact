@@ -128,7 +128,7 @@ fn control_fonts_and_chrome_are_final_before_the_first_batch_and_survive_insets(
     assert_eq!(text.font_size, 17.0);
     assert_eq!(text.font_family, 42);
     assert_eq!(text.font_style, FontStyle::Normal);
-    assert_eq!(text.line_height, None);
+    assert_eq!(text.used_line_height(), None);
     assert_eq!(text.letter_spacing, 0.0);
     assert_eq!(kernel.node(bare).unwrap().text_style().font_size, 22.0);
     assert_eq!(

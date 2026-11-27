@@ -474,11 +474,17 @@ fn separated_negations_stay_separate() {
 
 #[test]
 fn numeric_path_indices_stay_tight() {
-    let src = "test \"indexed path\"\n  expect state nav.tabs.0.stack.3.name == \"home\"\n  expect state matrix.0 .1 == \"x\"\n  clock until state rows.0.ready == true within 1000\n";
+    let src = "test \"indexed path\"\n  expect state nav.tabs.0.stack.3.name == \"home\"\n  expect state matrix.0.1 == \"x\"\n  clock until state rows.0.ready == true within 1000\n";
     assert_eq!(preserved(src), src);
-    let spaced = "test \"indexed path\"\n  expect state rows.0 .id == \"a\"\n";
+    let spaced = "test \"indexed path\"\n  expect state rows.0 .id == \"a\"\n  expect state rows.0 .1 == 2\n";
     assert_eq!(
         preserved(spaced),
-        "test \"indexed path\"\n  expect state rows.0.id == \"a\"\n"
+        "test \"indexed path\"\n  expect state rows.0.id == \"a\"\n  expect state rows.0.1 == 2\n"
     );
+}
+
+#[test]
+fn a_package_substitute_keeps_its_json_value() {
+    let src = "test \"t\" on linux\n  prefer extension device.powerState={\"lowPowerMode\":true} // on\n  clock settle\n  prefer extension serial.ports=[1, 2]\n  clock settle\n  prefer extension device.powerState=clear\n";
+    assert_eq!(preserved(src), src);
 }

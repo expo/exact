@@ -42,7 +42,7 @@ open class Provider : AppWidgetProvider() {
     }
 
     override fun onRestored(context: Context, old: IntArray, new: IntArray) {
-        old.zip(new).forEach { (from, to) -> Store.move(context, from, to) }
+        Store.move(context, old, new)
     }
 
     companion object {

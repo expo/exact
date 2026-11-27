@@ -17,7 +17,7 @@ pub(super) enum Cause {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Geometry {
+pub(super) enum Geometry {
     Presented,
     /// An internal preflight walk; never used to route input to an unshown node.
     Current,
@@ -358,7 +358,17 @@ impl<D: DataSource> Presenter<D> {
             if !scrolls(x) && !scrolls(y) {
                 return None;
             }
-            let (rx, ry) = self.scroll_range(id, &limits);
+            let bounds = self.display.bounds(kernel, id).unwrap_or_else(|| {
+                self.brush.scroll_bounds(
+                    kernel,
+                    self.host.content_region(),
+                    &node,
+                    limits.get(&id).copied(),
+                    &|id| self.host.presented(id),
+                    self.host.scaled_presented(),
+                )
+            });
+            let (min_x, rx, ry) = (bounds.min.0, bounds.max.0, bounds.max.1);
             let authored = |p| {
                 (node.props.get(p))
                     .and_then(exact_kernel::PropValue::as_float)
@@ -369,7 +379,7 @@ impl<D: DataSource> Presenter<D> {
                 (self.scroll_of(id).0, ry)
             } else {
                 (
-                    authored(PropId::ScrollLeft).clamp(0., rx),
+                    authored(PropId::ScrollLeft).clamp(min_x, rx),
                     authored(PropId::ScrollTop).clamp(0., ry),
                 )
             };
@@ -461,12 +471,12 @@ impl<D: DataSource> Presenter<D> {
         let off = self.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
         let next = (
             if scrolls(ox) {
-                (off.0 + dx).clamp(0.0, bounds.max.0)
+                (off.0 + dx).clamp(bounds.min.0, bounds.max.0)
             } else {
                 off.0
             },
             if scrolls(oy) {
-                (off.1 + by(2)).clamp(0.0, bounds.max.1)
+                (off.1 + by(2)).clamp(bounds.min.1, bounds.max.1)
             } else {
                 off.1
             },
@@ -580,6 +590,7 @@ impl<D: DataSource> Presenter<D> {
                     a,
                     scrolls(ox),
                     scrolls(oy),
+                    bounds.min,
                     bounds.max,
                     padding,
                     node.style.border_widths(),
@@ -590,7 +601,7 @@ impl<D: DataSource> Presenter<D> {
             }
             at = self.reveal_parent(a, geometry);
         }
-        for (a, sx, sy, max, padding, borders) in scrollers {
+        for (a, sx, sy, min, max, padding, borders) in scrollers {
             let (Some((target_map, target)), Some((port_map, port))) = (
                 self.reveal_geometry(id, geometry),
                 self.reveal_geometry(a, geometry),
@@ -604,6 +615,16 @@ impl<D: DataSource> Presenter<D> {
                 continue;
             };
             let port = inset(self.brush.split_port(a, port.scroll_rect()), borders);
+            // A claimed scroller aligns what it reveals in its clear region, its reached port less its insets (D14). This
+            // geometry places content at the CSS offset, which under the claim lies `insets - reach` below where it is
+            // painted, so the region begins at the port's laid-out start and is as long as the clear region.
+            let port = match self.host.presented(a).scroll {
+                Some(c) => {
+                    let [t, r, b, l] = std::array::from_fn(|i| c.insets[i] - c.reach[i]);
+                    inset(port, [0.0, l + r, t + b, 0.0])
+                }
+                None => port,
+            };
             let basis = [port.3, port.2, port.3, port.2];
             let padding = std::array::from_fn(|i| {
                 padding[i]
@@ -619,12 +640,12 @@ impl<D: DataSource> Presenter<D> {
             let (dx, dy) = by(area, port);
             let next = (
                 if sx {
-                    (off.0 + dx).clamp(0.0, max.0)
+                    (off.0 + dx).clamp(min.0, max.0)
                 } else {
                     off.0
                 },
                 if sy {
-                    (off.1 + dy).clamp(0.0, max.1)
+                    (off.1 + dy).clamp(min.1, max.1)
                 } else {
                     off.1
                 },
@@ -707,7 +728,7 @@ impl<D: DataSource> Presenter<D> {
         b.scroll_bounds(&mapping)
     }
 
-    fn reveal_box(&mut self, id: ViewId, geometry: Geometry) -> Option<PaintedBox> {
+    pub(super) fn reveal_box(&mut self, id: ViewId, geometry: Geometry) -> Option<PaintedBox> {
         match geometry {
             Geometry::Presented => self.box_of(id),
             Geometry::Current => self

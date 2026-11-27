@@ -22,10 +22,12 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 import { createConnection } from 'node:net';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { pushDrops, readerReply } from './agent-android-requests.mjs';
+import { adbInstallError, pushDrops, readerReply, readerScreenshotReply } from './agent-android-requests.mjs';
 import { within } from './paths.mjs';
+import { packageDirectories } from './cargo-dep-info.mjs';
 import { parseColour, schemeColours } from './scheme-colours.mjs';
 import { missingDependencies } from './package-libraries.mjs';
+import { withSeedTempFile } from './agent-secrets.mjs';
 import { HOST_DEV, PINNED_RUST, androidPackageId, bakeOutput, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, linuxBuild, mavenProblems, resolveApp } from './app.mjs';
 import { ANDROID_MIN_API } from './hermes-android.mjs';
 import { ANDROID_TARGET, ANDROID_ABIS, androidAbis, androidSdk, androidToolchainEnv, androidHermesDir, androidBakeLibraryName, stageAndroidBake, stageSoundLibrary } from './android-abi.mjs';
@@ -191,8 +193,9 @@ const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
  * directory is this drive's, so two drives of one app do not share a binary or a screenshot. Only
  * EXACT_* variables cross, with the device's own HOME, assets, native-module directory and fonts. A dev loop and
  * the app's server on this Mac are reached through `adb reverse` for the drive (`reversedPorts`). */
-export function androidDeploy(app, bin, env) {
-  if (bin.endsWith('.apk')) return readerDeploy(app, bin, env);
+export function androidDeploy(app, bin, env, appServerUrl, backend) {
+  const reverse = (tool, serial, vars) => reverseForDrive(tool, serial, reversedPorts(vars, appServerUrl, backend));
+  if (bin.endsWith('.apk')) return readerDeploy(app, bin, env, reverse);
   if (env.EXACT_AGENT === 'live') throw new Error('android --live requires the reader APK. Set EXACT_ANDROID_BIN to an APK.');
   const serial = androidDevice(env), tool = adb(env);
   const base = `/data/local/tmp/exact/${app.id}`, home = `${base}/home`;
@@ -217,9 +220,16 @@ export function androidDeploy(app, bin, env) {
     vars.EXACT_PLAN = `${dir}/${basename(plan)}`;
   }
   pushSubstitutes(vars, dir, run);
+  if (vars.EXACT_AGENT_STORED) {
+    const remote = `${dir}/seed-${process.pid}.json`;
+    withSeedTempFile(vars.EXACT_AGENT_STORED, (file) => run(['push', file, remote], 'push stored seed'));
+    run(['shell', `chmod 600 ${quote(remote)}`], 'chmod stored seed');
+    vars.EXACT_AGENT_STORED_FILE = remote;
+    delete vars.EXACT_AGENT_STORED;
+  }
   Object.assign(vars, { HOME: home, EXACT_ASSETS: dir, EXACT_NATIVE_LIBS: dir, EXACT_PAINTER: env.EXACT_PAINTER ?? 'cpu' });
   const assignments = Object.entries(vars).map(([k, v]) => `${k}=${quote(v)}`).join(' ');
-  const shot = `${dir}/agent-shot.png`, { lease, release: releasePorts } = reverseForDrive(tool, serial, vars);
+  const shot = `${dir}/agent-shot.png`, { lease, release: releasePorts } = reverse(tool, serial, vars);
   return {
     serial, dir, shot, cleanup: releasePorts,
     spawn: (args = []) => {
@@ -314,7 +324,7 @@ const RELAY_CLEANED_ERROR = 70;
  * boots at as a link's location. A drive's `--world` and `--size` do not reach it, and are refused (a test that names a
  * size is skipped, agent-test.mjs). A dev loop's `--url` does: the reader polls it (LLP 1122 D4),
  * through `adb reverse` when it is this Mac's loopback, as is the app's server a test runs here. */
-function readerDeploy(app, apk, env) {
+function readerDeploy(app, apk, env, reverse) {
   if (env.EXACT_WORLD) throw new Error('android --reader: --world does not reach the reader, which boots the plan its APK bakes');
   // A launch URL (a test's `at "/item/7"`) is the launching intent's data, which the reader boots at as a link's
   // location (EXACT_LAUNCH_URL, LLP 1133.023 D15 item 3). `/` is where it boots anyway.
@@ -335,7 +345,7 @@ function readerDeploy(app, apk, env) {
   const dir = `/data/local/tmp/exact/${id}`, shot = `${dir}/reader-shot-${process.pid}.png`;
   const run = (args, what) => {
     const r = spawnSync(tool, ['-s', serial, ...args], { encoding: 'utf8' });
-    if (r.status !== 0 || /^Failure/m.test(r.stdout)) throw new Error(`adb ${what}: ${(r.stderr || r.stdout || r.error?.message || '').trim()}`);
+    if (r.status !== 0 || /^Failure/m.test(r.stdout)) throw new Error(adbInstallError(r.stderr || r.stdout || r.error?.message, `adb ${what}`));
   };
   // An APK the device already holds, byte for byte, is not installed again: an install is tens of seconds on an emulator.
   const local = createHash('sha256').update(readFileSync(apk)).digest('hex');
@@ -350,15 +360,17 @@ function readerDeploy(app, apk, env) {
     env = { ...env, EXACT_PLAN: plan };
   }
   const vars = readerVariables(env), fixture = pushSubstitutes(vars, dir, run);
-  const { lease, release: releasePorts } = reverseForDrive(tool, serial, vars);
+  const { lease, release: releasePorts } = reverse(tool, serial, vars);
   const cleanup = code => {
     if (code !== 0 && code !== RELAY_CLEANED_ERROR) spawnSync(tool, ['-s', serial, 'shell', 'am', 'force-stop', id], { timeout: 5000 });
     if (fixture) spawnSync(tool, ['-s', serial, 'shell', 'rm', '-f', fixture], { timeout: 5000 });
     releasePorts();
   };
+  const { EXACT_AGENT_STORED: storedSeed, ...publicVars } = vars;
   return {
     serial, dir, shot, cleanup,
-    spawn: () => spawnCarrier(['relay', serial, id, JSON.stringify(vars), JSON.stringify(lease)], env)
+    spawn: () => spawnCarrier(['relay', serial, id, JSON.stringify(publicVars), JSON.stringify(lease)],
+      storedSeed ? { ...env, EXACT_ANDROID_RELAY_STORED: storedSeed } : env)
       .on('close', cleanup).on('error', releasePorts),
     pull(path) {
       const r = spawnSync(tool, ['-s', serial, 'pull', shot, resolve(path)], { encoding: 'utf8' });
@@ -384,12 +396,13 @@ function pushSubstitutes(vars, dir, run) {
 export const readerVariables = (env) => Object.fromEntries(Object.entries(env).filter(([k]) =>
   k === 'EXACT_AGENT' || k.startsWith('EXACT_AGENT_') || ['EXACT_STORE', 'EXACT_AUTH_FIXTURE', 'EXACT_DEV_PLAN', 'EXACT_PLAN', 'EXACT_UPDATE_ORIGIN', 'EXACT_UPDATE_DIR'].includes(k)));
 
-/** The ports of this Mac's loopback the reader is to reach through `adb reverse`, for the drive: a dev loop's
- * (`--url`), the app's server that a test declares its auth fixture (`test android` starts it here) and an update
- * origin `serve.mjs` serves. */
-export const reversedPorts = (vars) => [...new Set([vars.EXACT_DEV_PLAN, vars.EXACT_AUTH_FIXTURE, vars.EXACT_UPDATE_ORIGIN].map((v) => URL.parse(v ?? ''))
-  .filter((url) => url && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))
-  .map((url) => url.port || (url.protocol === 'https:' ? '443' : '80')))];
+/** Host services reached by the driven app. EXACT_PLAN can also be a URL on headless Android.
+ * EXACT_LAUNCH_URL is the app's route, and local plan files are pushed to the device. */
+export const reversedPorts = (vars, appServerUrl, backend) => [...new Set([
+  appServerUrl, backend, vars.EXACT_DEV_PLAN, /^https?:\/\//i.test(vars.EXACT_PLAN) ? vars.EXACT_PLAN : null, vars.EXACT_AUTH_FIXTURE, vars.EXACT_UPDATE_ORIGIN,
+].map((v) => URL.parse(v ?? ''))
+  .filter((url) => url && ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) && /^(?:127(?:\.\d+){3}|localhost|\[::1\])$/.test(url.hostname))
+  .map((url) => url.port || (['https:', 'wss:'].includes(url.protocol) ? '443' : '80')))];
 
 // SQLite supplies a process lock on every desktop host. The ownership file stays outside its transaction
 // so a rollback after SIGKILL cannot discard a claim for an adb change that already happened.
@@ -430,8 +443,7 @@ export function reverseRoot(serial) {
 }
 
 // Existing mappings without an ownership record are external and are never removed by a drive.
-function reverseForDrive(tool, serial, vars) {
-  const ports = reversedPorts(vars);
+function reverseForDrive(tool, serial, ports) {
   const lease = { root: reverseRoot(serial), token: randomUUID(), owner: reverseOwner(), ports: [] };
   if (ports.length) lease.ports = reverseCall('acquire', tool, serial, lease, ports);
   return { lease, release: () => releaseReverse(tool, serial, lease) };
@@ -674,8 +686,10 @@ async function relay([serial, id, vars, encodedLease]) {
   try {
     // EXACT_AGENT_INTENT: `am start` words the launch carries besides the drive's, for a drive that starts the app
     // as another app would (a share's `-a android.intent.action.SEND …`, LLP 1133.024 D5).
-    const { EXACT_AGENT_INTENT: intent = '', ...launch } = JSON.parse(vars);
+    const { EXACT_AGENT_INTENT: intent = '', EXACT_AGENT_STORED: argStored = '', ...launch } = JSON.parse(vars || '{}');
+    const storedSeed = process.env.EXACT_ANDROID_RELAY_STORED || argStored;
     const extras = Object.entries(launch).flatMap(([k, v]) => ['--es', `x_${k.slice('EXACT_'.length).toLowerCase()}`, quote(v)]);
+    if (storedSeed) extras.push('--es', 'x_agent_seed_wait', '1');
     console.error(`Android screen before launch: ${await prepareAndroidScreen(tool, serial)}`);
     sh('shell', 'am', 'force-stop', id);
     try {
@@ -707,6 +721,7 @@ async function relay([serial, id, vars, encodedLease]) {
     socket.on('close', () => done(1));
     socket.on('error', () => done(1));
     const answer = () => ready.length ? Promise.resolve(ready.shift()) : new Promise((r) => waiting.push(r));
+    if (storedSeed) socket.write(JSON.stringify({ op: 'seed', stored: storedSeed }) + '\n');
     const say = (line) => process.stdout.write(line + '\n');
     say(await answer()); // the app's `ready`
     connected = true;
@@ -718,16 +733,14 @@ async function relay([serial, id, vars, encodedLease]) {
       const dropped = pushDrops(req, drops, sh);
       if (dropped.error) return say(JSON.stringify(dropped));
       if (dropped.request) line = JSON.stringify(dropped.request);
-      if (req?.op !== 'screenshot') return say(await readerReply(req, () => {
-        socket.write(line + '\n');
+      if (req?.op !== 'screenshot') return say(await readerReply(req, (next = line) => {
+        socket.write(next + '\n');
         return answer();
-      }));
+      }, Bun.sleep, sh));
       if (req.film) return say(JSON.stringify({ error: 'the reader carrier films nothing: its picture is a screencap of the device' }));
       await new Promise((r) => setTimeout(r, SHOT_SETTLE_MS));
       const shot = sh('shell', `screencap -p ${quote(req.path)}`);
-      socket.write('{"op":"tags"}\n');
-      const tags = JSON.parse(await answer());
-      say(JSON.stringify(shot.status === 0 ? { screenshot: req.path, device: true, ...tags } : { error: `screencap: ${(shot.stderr || shot.stdout).trim()}` }));
+      say(JSON.stringify(await readerScreenshotReply(req.path, shot, (next) => { socket.write(next + '\n'); return answer(); })));
     };
     input = d => { const lines = (pending + d).split('\n'); pending = lines.pop(); for (const l of lines) if (l.trim()) turn = turn.then(() => one(l)); };
     input(buffered); buffered = '';
@@ -1139,6 +1152,8 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, names, a
   try { for (const abi of abis.slice(1)) bake(abi); }
   catch (error) { console.error(error.message); return null; }
   const started = new Date().toISOString(), uses = planUses(out);
+  const kotlinRoots = [...READER_SOURCES, resolve(app.dir, 'modules/android')];
+  const kotlin = {paths:kotlinRoots, missing:kotlinRoots.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(kotlinRoots), products:[]};
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
   // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
   if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
@@ -1175,9 +1190,9 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, names, a
     if (kept) { console.error(`exact android ${abi}: ${kept}`); return null; }
   }
   writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, package: androidPackageId(app.manifest), abis, libraries: abis.map(abi => built(ANDROID_ABIS[abi])), workspace: app.workspace ?? app.dir,
-    bakeStarted, bakes: bakes.flatMap(receipt => receipt.linkedInputs ?
-      [{ ...receipt.linkedInputs, products: receipt.products.filter(({path}) => receipt.linkedInputs.paths.includes(path)) }] : []),
-    sources: [...READER_SOURCES, resolve(app.dir, 'modules/android'), ...icons.files, ...launch.files] }) + '\n');
+    bakeStarted, bakes: [kotlin, ...bakes.flatMap(receipt => receipt.linkedInputs ?
+      [{ ...receipt.linkedInputs, products: receipt.products.filter(({path}) => receipt.linkedInputs.paths.includes(path)) }] : [])],
+    sources: [...icons.files, ...launch.files] }) + '\n');
   // What its bake inlined of each setting (LLP 1153 D4), bound to the APK, for a drive to compare with their sources.
   recordBuiltSettings(apk, app, out);
   for (const receipt of bakes) {
@@ -1350,7 +1365,7 @@ function installApk(app, apk, { run = false, url = null, built = 0, installed: o
   }
   const id = androidPackageId(app.manifest ?? { app }), started = Date.now();
   const installed = spawnSync(adb(), ['-s', serial, 'install', '-r', apk], { encoding: 'utf8' });
-  if (installed.status !== 0 || /^Failure/m.test(installed.stdout)) { console.error(`adb install: ${(installed.stderr || installed.stdout).trim()}`); return 1; }
+  if (installed.status !== 0 || /^Failure/m.test(installed.stdout)) { console.error(adbInstallError(installed.stderr || installed.stdout)); return 1; }
   console.error(`built in ${(built / 1000).toFixed(1)} s, installed on ${serial} as ${id} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
   onInstalled(serial);
   if (!run) return 0;

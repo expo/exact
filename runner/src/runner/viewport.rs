@@ -87,14 +87,16 @@ impl<D: DataSource> Runner<D> {
         preferences: Preferences,
         bold: bool,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let appearance =
+            !self.surface_colors.is_empty() && self.viewport.preferences != preferences;
         self.replace_fact(
             |r| &mut r.viewport,
             viewport,
             SOURCE,
             |r, _, readers| {
                 let result = r.recommit(readers, "preferences").and_then(|receipt| {
-                    if bold && receipt.is_none() {
-                        r.commit_again(Vec::new(), "bold text").map(Some)
+                    if (bold || appearance) && receipt.is_none() {
+                        r.commit_again(Vec::new(), "appearance").map(Some)
                     } else {
                         Ok(receipt)
                     }
@@ -156,9 +158,12 @@ impl<D: DataSource> Runner<D> {
     /// insets and segment rectangles first, and where they did not change,
     /// every geometry resource whose answer the layout moved (LLP 1123 D6,
     /// [`Runner::deliver_geometry`]). A host calls it after an environment
-    /// update and after each layout, laying out again while it commits.
+    /// update and after each layout, laying out again while it commits;
+    /// a page that lays out, as on the web's wasm target, after each of its
+    /// layouts, which the facts count in place of the kernel's (LLP 1123 D6).
     /// Unchanged geometry commits nothing.
     pub fn refresh_geometry(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.count_page_layout();
         match self.replace_viewport(self.viewport, "viewport geometry")? {
             Some(receipt) => Ok(Some(receipt)),
             None => self.deliver_geometry(),

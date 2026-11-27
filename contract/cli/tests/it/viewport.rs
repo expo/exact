@@ -253,6 +253,32 @@ component App
 }
 
 #[test]
+fn a_postures_type_is_checked_when_its_value_is_unread_or_interpolated() {
+    for (ty, text) in [
+        ("number", "`${fold.devicePosture}`"),
+        ("bool", "`${fold.devicePosture}`"),
+        ("option<string>", "\"fold\""),
+        ("string[]", "\"fold\""),
+    ] {
+        let source = format!("shape Fold\n  devicePosture: {ty}\ncomponent App\n  resource fold = exactViewport() as shape Fold\n  view\n    text {text}\n");
+        let plan = contract::compile(&source).unwrap();
+        let why = match contract::bake(plan, boxed(NoData)) {
+            Err(contract::BakeError::Runner(RunnerError::Shape { resource, why })) => {
+                assert_eq!(resource, "fold");
+                why
+            }
+            other => panic!("devicePosture: {ty}: expected a shape refusal, got {other:?}"),
+        };
+        assert!(
+            why.contains("Fold.devicePosture") && why.contains("continuous"),
+            "{why}"
+        );
+        let repaired = source.replace(&format!("devicePosture: {ty}"), "devicePosture: string");
+        contract::bake(contract::compile(&repaired).unwrap(), boxed(NoData)).unwrap();
+    }
+}
+
+#[test]
 fn display_ratio_is_optional_host_data_and_updates_without_display_lengths() {
     let plan = contract::bake(contract::compile(
         "shape Viewport\n  devicePixelRatio: option<number>\ncomponent App\n  resource viewport = exactViewport() as shape Viewport\n  view\n    text \"Display\"\n",
@@ -660,6 +686,13 @@ fn bottom_toolbar_warns_only_for_a_proven_visit_under_native_tabs() {
     ] {
         check(&route.replace(toolbar, &block), &[]);
     }
+    check(
+        &route.replace(
+            toolbar,
+            &format!("{toolbar}                  if last == \"\"\n                    {row}\n                      spacer\n"),
+        ),
+        names,
+    );
     // Detail itself is pushed, but its Section parent starts a presented stack.
     let presented = route.replace("              else\n                Page", "              else if e.name == \"section\"\n                column navigationKey=`${e.id}` navigationPresentation=\"modal\"\n                  text \"Section\"\n              else\n                Page");
     check(&presented, &["typography", "swift", "single"]);
@@ -677,6 +710,7 @@ fn bottom_toolbar_warns_only_for_a_proven_visit_under_native_tabs() {
     for host in [
         r#"{"app":{"id":"dev.test.tabs","name":"Tabs"},"host":{"ios":{"deviceFamily":["ipad"]}}}"#,
         r#"{"app":{"id":"dev.test.tabs","name":"Tabs"},"host":{"web":{}}}"#,
+        r#"{"app":{"id":"dev.test.tabs","name":"Tabs"},"host":{"android":{}}}"#,
     ] {
         std::fs::write(&manifest, host).unwrap();
         check(route, &[]);
@@ -725,4 +759,129 @@ fn shared_placement_action_keeps_its_old_words_and_cannot_make_an_unchecked_bott
         );
     }
     assert!(agent::logs(&runner, 0).contains("write a literal bottom toolbar row"));
+}
+
+#[test]
+fn child_gated_device_fact_and_device_fact_mutation_refresh_bind_to_child() {
+    // Gated child device fact compiles with and without a same-named root state,
+    // and its gate reads the child's prop rather than the root's `active`.
+    let gated_without_root = r#"shape VP
+  width: number
+component App
+  state ready = true
+  view
+    Child(active=ready)
+component Child
+  props
+    active: bool
+  resource vp = exactViewport() when active as shape VP
+  view
+    text `${vp.width}` testId="w"
+"#;
+    contract::compile(gated_without_root).unwrap();
+
+    let gated_with_root = r#"shape VP
+  width: number
+component App
+  state active = false
+  state ready = true
+  action toggleReady
+    ready = not ready
+  view
+    column
+      button "Toggle" testId="toggle" press=toggleReady
+      Child(active=ready)
+component Child
+  props
+    active: bool
+  resource vp = exactViewport() when active as shape VP
+  view
+    text `${vp.width}` testId="w"
+"#;
+    let plan = contract::compile(gated_with_root).unwrap();
+    let gate_arg = plan.resources[0].gate.iter().next().unwrap();
+    let gate = plan.code(plan.arg(gate_arg).expr);
+    let loaded_slots: Vec<u64> = exact_runner::vm::instructions(gate)
+        .map(Result::unwrap)
+        .filter(|ins| ins.op == exact_plan::Opcode::LoadSlot)
+        .map(|ins| ins.args[0])
+        .collect();
+    let ready_slot = plan
+        .slots
+        .iter()
+        .position(|s| plan.str(s.name) == "ready")
+        .unwrap() as u64;
+    assert_eq!(loaded_slots, vec![ready_slot]);
+
+    // Child mutation refreshing a hoisted device fact compiles without a root
+    // `vp`, and with a root `vp` still refreshes `vp@Child` rather than root `vp`.
+    let refresh_without_root = r#"shape VP
+  width: number
+component App
+  view
+    Child()
+component Child
+  resource vp = exactViewport() as shape VP
+  mutation save as shape number refreshes vp
+  view
+    text `${vp.width}`
+"#;
+    let plan = contract::compile(refresh_without_root).unwrap();
+    let range = plan.mutations[0].refreshes;
+    let refreshed: Vec<&str> = plan.mutation_refreshes
+        [range.start as usize..(range.start + range.len) as usize]
+        .iter()
+        .map(|row| plan.str(plan.resources[row.resource.0 as usize].name))
+        .collect();
+    assert_eq!(refreshed, vec!["vp@Child"]);
+
+    let refresh_with_root = r#"shape VP
+  width: number
+component App
+  resource vp = loadRoot() as shape number
+  view
+    column
+      text `${vp}`
+      Child()
+component Child
+  resource vp = exactViewport() as shape VP
+  mutation save as shape number refreshes vp
+  view
+    text `${vp.width}`
+"#;
+    let plan = contract::compile(refresh_with_root).unwrap();
+    let range = plan.mutations[0].refreshes;
+    let refreshed: Vec<(&str, &str)> = plan.mutation_refreshes
+        [range.start as usize..(range.start + range.len) as usize]
+        .iter()
+        .map(|row| {
+            let r = &plan.resources[row.resource.0 as usize];
+            (plan.str(r.name), plan.str(r.source))
+        })
+        .collect();
+    assert_eq!(refreshed, vec![("vp@Child", "exactViewport")]);
+
+    // A package component may still declare a gated device fact.
+    let dir = std::env::temp_dir().join(format!("exact-pkg-gated-vp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("node_modules/pkg/src")).unwrap();
+    std::fs::write(
+        dir.join("node_modules/pkg/package.json"),
+        r#"{"name":"pkg","exports":{"./card":"./src/card.contract"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("node_modules/pkg/src/card.contract"),
+        "shape VP\n  width: number\ncomponent Card\n  props\n    active: bool\n  resource vp = exactViewport() when active as shape VP\n  view\n    text `${vp.width}`\n",
+    )
+    .unwrap();
+    let root = dir.join("app.contract");
+    std::fs::write(
+        &root,
+        "use Card from \"pkg/card\"\ncomponent App\n  state on = true\n  view\n    Card(active=on)\n",
+    )
+    .unwrap();
+    let compiled = contract::compile_path(&root);
+    let _ = std::fs::remove_dir_all(&dir);
+    compiled.unwrap();
 }

@@ -119,7 +119,13 @@ test('the Android reader variable filter and activity allowlist include the auth
   expect(reversedPorts(vars)).toEqual(['4791', '8790']);
   expect(reversedPorts({ EXACT_AUTH_FIXTURE: 'http://[::1]:4791' })).toEqual(['4791']);
   expect(reversedPorts({ EXACT_DEV_PLAN: 'http://localhost:8080/', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:8080' })).toEqual(['8080']);
-  expect(reversedPorts({ EXACT_DEV_PLAN: 'https://example.com/plan' })).toEqual([]);
+  expect(reversedPorts({ EXACT_DEV_PLAN: 'https://127.0.0.2.example.com/plan' })).toEqual([]);
+  expect(reversedPorts({ EXACT_PLAN: 'http://127.0.0.2:8100/plan' })).toEqual(['8100']);
+  expect(reversedPorts({ EXACT_AUTH_FIXTURE: 'wss://localhost:8810', EXACT_PLAN: 'ws://localhost:8112' })).toEqual(['8810']);
+  expect(reversedPorts({ ...vars, EXACT_PLAN: 'https://localhost/plan', EXACT_DEV_PLAN: 'http://localhost' },
+    'http://127.0.0.1:8787/api', 'http://localhost:8350')).toEqual(['8787', '8350', '80', '443', '4791', '8790']);
+  expect(reversedPorts({ EXACT_PLAN: '/tmp/app.plan', EXACT_LAUNCH_URL: 'http://localhost:8150/deep-link' },
+    'http://192.168.1.2:8787')).toEqual([]);
   const activity = readFileSync(resolve(import.meta.dir, '../host/android/canvas/src/main/java/dev/exact/canvas/ExactActivity.kt'), 'utf8');
   expect(Object.keys(vars).map((name) => `x_${name.slice('EXACT_'.length).toLowerCase()}`).filter((extra) => !activity.includes(`"${extra}"`))).toEqual([]);
 });
@@ -633,13 +639,19 @@ for (const reader of [false, true]) for (const present of [false, true]) test(`t
       fixture.dispose();
     }
   });
-for (const reader of [false, true]) test(`the Android ${reader ? 'reader' : 'headless'} drive refuses a conflicting reverse without changing it`, async () => {
+for (const reader of [false, true]) test(`the Android ${reader ? 'reader' : 'headless'} drive preserves a conflicting app server mapping and releases its own`, async () => {
   const { androidDeploy } = await import('./agent-android.mjs');
   const fixture = androidDriveFixture(reader, 'tcp:9000');
   try {
-    expect(() => androidDeploy(fixture.app, fixture.bin, fixture.env)).toThrow('tcp:4791 maps to tcp:9000; needed tcp:4791');
+    delete fixture.env.EXACT_AUTH_FIXTURE;
+    expect(() => androidDeploy(fixture.app, fixture.bin, fixture.env, 'http://127.0.0.1:4791')).toThrow('tcp:4791 maps to tcp:9000; needed tcp:4791');
     expect(fixture.commands().map(args => args.slice(2)).filter(args => args[0] === 'reverse')).toEqual([['reverse', '--list']]);
     expect(fixture.mappings()).toEqual({ 'tcp:4791': 'tcp:9000' });
+    fixture.replace(null);
+    const carrier = androidDeploy(fixture.app, fixture.bin, fixture.env, 'http://127.0.0.1:4791');
+    expect(fixture.mappings()).toEqual({ 'tcp:4791': 'tcp:4791' });
+    carrier.cleanup(0);
+    expect(fixture.mappings()).toEqual({});
   } finally { fixture.dispose(); }
 });
 
@@ -1419,7 +1431,8 @@ test('Android compilers and GPU bakes use the requested x86_64 ABI', async () =>
   expect(androidAbis()).toEqual(['arm64-v8a']);
   expect(androidAbis('arm64-v8a,x86_64,x86_64')).toEqual(['arm64-v8a', 'x86_64']);
   expect(() => androidAbis('armeabi-v7a')).toThrow('--abis');
-  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR: '/host' }, '/arm64', 'x86_64-linux-android')).toBeNull();
+  const noCargo = resolve(tmpdir(), 'exact-no-hermes-cargo');
+  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR: '/host', CARGO_HOME: noCargo }, '/arm64', 'x86_64-linux-android')).toBeNull();
   expect(androidHermesDir({ HERMES_LEAN_SYS_DIR_x86_64_linux_android: '/intel' }, '/arm64', 'x86_64-linux-android')).toBe('/intel');
   const { guardFlags } = await import('./help.mjs');
   expect(guardFlags('android', ['--abis', 'arm64-v8a,x86_64'])).toEqual(['--abis', 'arm64-v8a,x86_64']);

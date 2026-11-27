@@ -9,13 +9,12 @@ package struct ChromeIndex {
                        "contextTarget", "contextPopover", "href", "toolbarPlacement", "accessibilityKeyShortcuts", "menuPlacement",
                        "commandfor", "swipeContent", "id", "accessibilityLive", "autofocus", "listStyle",
                        "accessibilityModal", "accessibilityDescribedBy", "accessibilityActions", "accessibilityLabelledBy", "focusGuide", "statusBarStyle",
-                       "systemBarsHidden", "tip", "draggable"]
+                       "systemBarsHidden", "tip", "draggable", "arrangement"]
     /// Props a pass reads for one value. Every list row has a role and every
     /// `main` or `header` a tag, so these are indexed by that value, never by
     /// presence.
     static let values = [("role:tablist", "accessibilityRole", "tablist"), ("role:radiogroup", "accessibilityRole", "radiogroup"),
                          ("tag:dialog", "semanticTag", "dialog"), ("tag:header", "semanticTag", "header"),
-                         ("split:placeholder", "navigationSplit", "placeholder"),
                          ("role:status", "accessibilityRole", "status"), ("role:alert", "accessibilityRole", "alert"), ("role:menu", "accessibilityRole", "menu"),
                          ("type:checkbox", "type", "checkbox"), ("type:radio", "type", "radio"), ("type:select", "type", "select"),
                          ("type:range", "type", "range"), ("type:date", "type", "date"),

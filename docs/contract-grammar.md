@@ -44,8 +44,9 @@ a `keyframes` or `font` block, and a component need at least one entry.
   digit follows (`12`, `12.5`), so `rows.0.steps` is a list index and then a
   field. An exponent is part of the number only when digits follow its `e` or
   `E` and optional sign (`1e300`, `2.5E-3`, `4e+2`), so `2em` is a number and a
-  unit; one past the largest double is refused. Numeric parsing rejects invalid
-  spellings. Negative values are unary minus applied to a number; as an
+  unit; one past the largest double is refused. A number right after `.` is a
+  list index, digits only, so `rows.1.0` is two indexes. Numeric parsing
+  rejects invalid spellings. Negative values are unary minus applied to a number; as an
   attribute's whole value (`min=-40`, `step=-0.5`, `margin-top=-8`,
   `min=-1e300`) it is the negative literal, the number it is, as `40` is, and
   a text field's `min`, `max` and `step` take a number of either sign as a
@@ -729,7 +730,7 @@ view-if       = "if" expr block(node) [ "else" ( view-if | block(node) ) ] ;
 for           = "for" IDENT [ "," IDENT ] "in" expr "key" "=" expr block(node) ;
 view-match    = "match" expr block(view-case) ;
 view-case     = "case" "some" "(" IDENT ")" block(node)
-              | "case" "none" block(node) ;
+              | "case" "none" block(node) | "case" STRING block(node) ;
 children      = "children" NL ;
 special-word  = "document" | "switch" | "multiple" ;
 ```
@@ -748,7 +749,8 @@ arguments; its name starts uppercase to distinguish it from an element.
 
 A `for` key is a string, number, or boolean, with unique stable values required
 for useful row identity. Its optional second binding is the numeric row index.
-`if` conditions are boolean and `match` subjects are options. Root regions are
+`if` conditions are boolean. Match an option with `case some(value)` and
+`case none`. Match `page.platform` with a quoted host name per case. Root regions are
 refused: wrap them in an element. `children` requires a declared slot.
 
 ## Expressions and types
@@ -795,12 +797,18 @@ comparison semantics. Logical operators short-circuit; ternary/match evaluates
 only its selected arm. Conditions require booleans.
 
 Named arguments are accepted only by the corresponding constructs: component
-uses, a native module's sources and sends (the only place a dotted name,
-`apple.desiredAccuracy=`, is one), record construction/copy, localization (`t`), placeholders (`empty`),
+uses, a native module's sources and sends (including dotted names such as
+`apple.desiredAccuracy=`), record construction/copy, localization (`t`), placeholders (`empty`),
 canvas `surface=` bindings, `dataTransfer=DataTransfer(…)` (LLP 1094.000),
-and specialized host commands (`share`, `scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
+and specialized host commands such as `share`, `scrollIntoView` and the three document pickers (which take `apple.message=`). Ordinary function calls are positional. Arrow expressions are admitted
 as the callbacks to `map` and `filter`, with at most item and index parameters;
 they are not first-class values or event handlers.
+
+In a GPU surface call, a complete positional or named argument may be
+`color("token.name")`. The operand must be one literal string naming a
+Forma colour token. This position reserves `color`. If the app also declares a
+function named `color`, the surface call reports the collision. The function
+can still be called elsewhere. The token constructor requires a surface argument.
 
 An app-declared shape's call constructs a record: either all named fields, or one
 positional base followed by zero or more replacements. A `list` literal is
@@ -849,6 +857,7 @@ extension-preference = "prefer" "extension" extension-key "=" ( json | "clear" )
 extension-key = ? a drive key of the form extension.name or extension.name#import-path ? ;
 step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                                                      (* bytes into an input; or clock ticks: bpm, ms *)
+              | "tap" STRING ( IDENT | STRING ) NL   (* when target starts with `@`: answer a held ticket by capability or target, e.g. `tap "@browser" dismissed` *)
               | "tap" STRING [ "hover" | "dblclick" | "contextmenu"
                   | "pinch" NUMBER [ "at" NUMBER NUMBER ]
                   | "wheel" [ "-" ] NUMBER [ "-" ] NUMBER
@@ -861,6 +870,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   | "from" NUMBER NUMBER | "mouse" | "into" "keyboard" | "during" STRING { STRING } }
                   { "then" [ "-" ] NUMBER [ "-" ] NUMBER
                     { ( "over" | "hold" ) NUMBER | "during" STRING { STRING } } } NL
+              | "type" STRING STRING NL                (* when target starts with `@`: type text into a held ticket, e.g. `type "@date" "2026-10-10"` *)
               | "type" STRING ( STRING [ "append" ]
                   | "key" STRING [ "down" | "up" | "for" NUMBER ]
                   | "copy" | "cut" | "paste" STRING ) NL
@@ -948,6 +958,15 @@ block in a run under platform timing. `query` and `built` read the same on every
 `evaluated` is each runtime's own, so a test that compares it names one host. The development
 source map names components; a host without one says so. A drive's `perf <target> during "…"`
 shows the same counts while a test is being written.
+
+`tap "@<target>" <choice>` and `type "@<target>" "<text>"` wait as `clock data` does,
+with the virtual clock frozen, then answer the held device or package ticket named by
+capability or target (for example `tap "@browser" dismissed` or `type "@date" "2026-10-10"`).
+Numeric ticket ids (`"@1"`) are refused in authored tests because ticket numbers vary across
+runs. For a package `choose` ticket declared by the app, the compiler checks the choice
+against the package's declared choices (plus `cancel`) and refuses typed text when the
+ticket takes choices only. For file pickers, use `pick` so paths resolve from the test file.
+Run `clock data` after the answer before checking the resulting state.
 
 `presence <answer>` waits as `clock data` does, with the virtual clock frozen, then
 answers the pending user-presence prompt through the driver's `tap @presence`.
@@ -1070,6 +1089,11 @@ focused "picker"` passes when that node holds the keyboard focus, as every host'
 four points from the left and five from the top of the badge. Colors are
 sRGB `#rrggbb` (opaque) or `#rrggbbaa`. The optional tolerance is the
 largest allowed difference in each 8-bit channel, from 0 through 255.
+On Apple this includes the last frame of a GPU canvas and hosted `iframe`
+snapshots, clipped and blended with the views around them: an unpartitioned
+`iframe` reads the node behind its transparent pixels. If the point depends on a live camera preview,
+a video frame the player withholds or a hosted layer without a readable
+picture, the assertion names the node and the reason.
 
 `expect screenshot "badge" matches "refs/badge.png"` compares the visible
 border box with a PNG relative to the test file. The full box must be in
@@ -1287,7 +1311,11 @@ with the mouse anyway). A finger's drag the browser takes to scroll an
 ancestor ends in `panrelease` and a `pan cancelled` journal line naming the
 `touch-action` that keeps it. `during "op" …`: each quoted op is a read
 (`tree`, `layout`, `state`, `logs`, `screenshot`) or `clock`, run while the finger
-is down, after its leg's move and before its hold. The gesture takes its `press`,
+is down, after its leg's move and before its hold. A test file runs these reads
+and compares nothing, and refuses an `expect` there; a drive returns them in its
+reply's `during` list (`bun exact.mjs agent macos 'tap knob drag 0 40 mouse hold
+300 during "state"'`), which is how to inspect what a drag shows while it is held.
+The gesture takes its `press`,
 `over` and `hold` on the test's clock, so `performanceNow()` in the app's pointer
 actions reads them: a move's samples are a frame apart on the clock, the first
 one frame after the press (500 ms of press reads 515 on the web before a 200 ms
@@ -1329,8 +1357,8 @@ report unsupported. Scope these tests with `on web`.
 the driver's drop (the agent's `tap <t> drop`) at the node's middle: a drag
 from another app carrying the files, each `file` once and its path from the
 test file's folder, the plain text and the link, at least one of them
-([Pointer](#pointer), `drop`). It runs where drops do: the web, macOS, iOS
-and Windows.
+([Pointer](#pointer), `drop`). It runs where drops do
+([the reference's table](reference.md#files-dropped-or-pasted)).
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
@@ -1391,6 +1419,9 @@ the app's own control to press it.
 `type` on a `select` chooses an enabled option by value, else by its one label;
 on a date, time or range input it sets the value in HTML's format; on a checkbox
 it takes `true` or `false`, on a radio `true`. A target out of view is scrolled into view first.
+A plain `tap` the host refuses as covered is scrolled into view again and pressed once more when that
+moved it (an Android keyboard leaving between the two gives the navigation bar its room back, which
+can park the target under it); one nothing scrolls clear is refused.
 An input step ends with what it settled (an answer given in the input's turn,
 and its mutation's `then`; on a native host, not one given while another
 answer's storage is in flight, LLP 1097); otherwise the clock stands still between steps:
@@ -1845,7 +1876,11 @@ A link (`link href`, a text run's `href`, a Markdown link) to a path in the
 app (`/note/3`, one of its declared routes) navigates in it, through the
 navigation root's `navigate`, on every host; a path that names no route (a
 file beside a document) is the browser's, or natively the app's document to
-open. An `href` that turns out empty is no link: the run or `link` has no
+open. When a `link` or inline text run has both `href` and `press`, a plain
+tap or `Enter` runs `press` and does not follow `href`, on every host;
+`href` still supplies the URL for modified or non-primary clicks, `target`,
+`download`, context menus, drags, and accessibility. An `href` that turns
+out empty is no link: the run or `link` has no
 link colour, role or pointer and follows nothing, on every host, so a
 component may write `href=r.href` on every run and leave plain prose's empty.
 A relative path (`note/3`) has no base natively; write it from `/`. One to an absolute URL (`https://…`, `//…`) leaves the
@@ -2255,6 +2290,7 @@ host.
 | One `MarkdownSelection` | `select` on the Markdown editor (`textarea markup="markdown"`) |
 | One `InputEvent` | `select` on a text field or any other `textarea` ([form controls](#form-controls-radio-inputevent-setselectionrange)) |
 | Two numbers | `pan`, `panrelease`, `heightrelease` |
+| Three numbers | `pinch`, `pinchrelease` (scale, viewport x, viewport y) |
 | A string, an `option<string>`, then optionally a `ReorderEvent` | `reorderdrop`, on a vertical `list virtualized=true` only: the dragged row's key, then the key it lands before (`none` at the end); an action taking one more parameter also hears `ReorderEvent { from, to }`, the two lists' `id`s (equal within one list; LLP 1094 D2) |
 | Four numbers | `transformgeometry` |
 | Six numbers | `transformrelease` |
@@ -2274,7 +2310,7 @@ host.
 | Zero or one frame record (the action takes it or leaves it) | on an `iframe`: `currententrychange`, `navigatesuccess` and `navigateerror` (`FrameNavigation`), `capture` (`FrameCapture`), `download` (`FrameDownload`), `newwindow` (`FrameNewWindow`) and `userpromptopened` (`FrameUserPrompt`) |
 | Zero or one `MIDIMessageEvent` (the action takes it or leaves it) | `midimessage`, on an element with `midiinputs=` ([MIDI](#midi-exactmidi-sendmidi-midimessage)) |
 | Zero or one `MouseEvent` (the action takes it or leaves it) | `press`: the modifier keys held, `shiftKey`, `ctrlKey`, `altKey`, `metaKey` (a shift-click, a ⌘-click; all false from a keyboard or assistive activation), and where the pointer was, `clientX`, `clientY`, from the viewport (0, 0 from a keyboard or assistive activation, as Chrome's; a popover's `left`/`top` can open it there, LLP 1021 D2) |
-| None | `enterpictureinpicture`, `leavepictureinpicture`, `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swiperight`, `swipeleft`, `swipe`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
+| None | `enterpictureinpicture`, `leavepictureinpicture`, `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swipe`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
 
 On text fields and textareas, `input` reports every edit. An `input` handler
 should update raw draft state so live search, validation and button enablement
@@ -2484,6 +2520,16 @@ web's history is the browser's, and the other hosts ignore it. Transform geometr
 bindings are required as a pair. See
 [`handler_arity`](../contract/analyze/src/lib.rs) and the corresponding corpus/tests.
 
+Any node, including a `list` or `scroll`, can bind `pinch=action` and
+`pinchrelease=action` independently. Each appends `(scale, x, y)` after any
+bound arguments. Scale is positive and relative to the initial span (1). The focal point
+uses `PointerEvent.clientX` and `clientY` coordinates. Movement reports
+`pinch`. The first lift ends the pair with one `pinchrelease` carrying the scale and focal point
+from the last moment both fingers were down. Cancellation releases at scale 1. Both
+bindings observe alongside one-finger scrolling and pointer events. On iOS and iPadOS,
+UIKit delivers both bindings; other hosts accept them and stay silent
+([reporting a pinch](reference.md#reporting-a-pinch)).
+
 ### Pointer
 
 `pointerdown`, `pointerup`, `pointercancel` and `pointermove` are DOM's, on every host. A
@@ -2589,7 +2635,10 @@ it before following it. Each is `""` when the drag has none, so a link
 whose source gives no plain text has `text` `""`. Each file
 arrives as a `doc:` handle, whatever its type, on the hosts that take files (the reference's table), and a dropped folder, on a host that takes one, is a folder's handle (`fs.stat` says
 `isDirectory`, `fs.readdir` lists it); the app never learns an absolute
-path. A drag with files over an `input` or a `textarea` inside such a node
+path. A dropped file is lent, not given: its handle reads the source's file,
+which may change or be deleted, or the session's copy, and a handle not kept
+ends with its window, so an app copies an attachment it keeps into
+`app:/data` ([recipe](recipes/drag-in.md)). A drag with files over an `input` or a `textarea` inside such a node
 is the node's, as on the web, where its listener prevents the field's own
 drop: the field inserts no path text. A drag of text over a field is the
 field's, which inserts it, unless the field itself declares `drop`. On the
@@ -2614,10 +2663,13 @@ declares `drop`, and gives a file to the `drop` above it. Android's apps
 send a link as text, so Android alone makes `url` from text: while a drop
 has no `url` yet, a text item whose whole last line is an `http://` or
 `https://` link gives that link as `url`, and its lines before it, such as
-the title Chrome sends, as `text`. Linux's Wayland window takes a drag from another app as a
-copy: its files and folders in place, its text, and its link from the URI list or the titled
-link a browser sends; its fields take no drag, and Wayland tells it no keys, so a drop's
-modifiers are those the window holds. tvOS and the terminal take no drop. The driver's
+the title Chrome sends, as `text`. Linux's Wayland window takes a drag from another app, or
+from its own window, as a copy: its files and folders in place, its text, and its link from
+the URI list or the titled link a browser sends; its fields take no drag, and Wayland tells it
+no keys, so a drop's modifiers are those the window holds. In a Flatpak sandbox it takes a
+drag's files from the document portal's file transfer key, else only those the sandbox shares
+with the host. A drop
+waits for a source still copying its files until the source ends or another drop is taken. tvOS and the terminal take no drop. The driver's
 `tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
 folders (not on iOS or Android), text and a link, at least one of them, as a test's
 `tap "zone" drop …` step does.
@@ -2659,11 +2711,21 @@ dragleave` takes it away undropped.
 
 `draggable` is HTML's attribute: a node a person can lift and drop into
 another app, a boolean that may be bound, on a box, a `link`, a `button` or
-an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…])`
+an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…], names=[…])`
 declares what the drag carries, by `DataTransfer`'s names: `text` as
 `text/plain`, `url` (absolute `http:` or `https:`) as `text/uri-list`, and
 each file as itself, a shipped `assets/` file or an `app:/` path behind
-`fs.read`. Each needs the other. A file the app opens as a database is not
+`fs.read`. `names`, which needs `files`, gives the name a destination is
+offered for the file at the same place; a missing or empty name keeps the
+file's own. A name whose suffix is the file's, or another spelling of its
+type (`.jpeg` for a `.jpg` file), is offered as written; any other gets the
+file's suffix added (`Mount Fuji` for a `.jpg` file is offered as
+`Mount Fuji.jpg`, `Fuji.png` as `Fuji.png.jpg`). Exact accepts a name of 1
+to 255 bytes of UTF-8 with no control character, none of
+`< > : " / \ | ? *`, no space at either end, no dot at the end, and not a
+name Windows keeps for a device (`CON`, `NUL`, `COM1`, …); a bound name it
+refuses is journaled, and the file keeps its own. `draggable` and
+`dataTransfer` each need the other. A file the app opens as a database is not
 one to drag: on Apple and Android the host opens and closes the file as a
 destination asks for it, which drops SQLite's locks on it
 ([How To Corrupt An SQLite Database File, §2.2](https://sqlite.org/howtocorrupt.html#_posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)),
@@ -2671,11 +2733,21 @@ so drag a copy made with `storage.fs` while the database is closed, or an
 export of its rows. The data is declared on the node, not set in
 a `dragstart` listener, because every platform takes a drag's items as it
 begins; `dragstart`, `drag` and `dragend` are refused for now
-(`lower-handler-later`). The runner admits each file and `url` for the host
-and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
+(`lower-handler-later`). The runner admits each file, name and `url` for the
+host and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
 carries ([recipe](recipes/drag-out.md)). On iOS, iPadOS and Android a press
 held on the node lifts it into another app, and on the Mac and the web a mouse
-drags it.
+drags it. In Linux's Wayland window a mouse drags its `text` (UTF-8, as
+`text/plain;charset=utf-8` and `UTF8_STRING`), its `url` (as
+`text/uri-list` and `text/x-moz-url`) and its files, into another app or
+back into this one. Each file goes as a copy made when a receiver first
+asks, never as the app's own file, in `text/uri-list` and, while the
+document portal answers, as its file transfer key, which a Flatpak receiver
+reads. The copies are temporaries the receiver may keep: in the system's
+folder for large temporary files (as `systemd-path temporary-large` names
+it), aged as the system's configuration ages that folder, or in a Flatpak
+app's own cache, which the app empties of copies unused for 30 days as it
+starts and as each drag makes its folder.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).
@@ -2685,9 +2757,17 @@ its own question, and calls the host command `close()` once it is answered,
 which closes the window without asking again (on the web, `window.close()`, which
 a browser honours only for a window a script opened). Windows asks it as the Mac
 does, before its close button, Alt+F4 or the taskbar's Close window closes the
-window (a window that `keepRunning` hides asks nothing), and its bare `close()`
-closes the window and ends the one-window app without asking again. iOS and
-Linux close no window. `head edited=…` marks the document
+window (a window that `keepRunning` hides asks nothing) and before a sign-out,
+restart or shutdown ends the app (a handler that keeps the window keeps the
+session, and Windows names the app as preventing it; a critical end asks
+nothing), and its bare `close()`
+closes the window and ends the one-window app without asking again. A Wayland
+window asks before its title-bar close or the desktop's close command, and
+`close()` ends the app without asking again. SIGTERM, SIGINT and SIGHUP
+end the Wayland app without asking. A second termination signal ends the
+process immediately. iOS has no window-close event.
+
+`head edited=…` marks the document
 as unsaved: on macOS the dot in the window's close button, beside the proxy icon
 of the file the window opened;
 other hosts show nothing (a declared deviation: the web has no unsaved mark).
@@ -2792,7 +2872,15 @@ Nothing selected
 there is `text: ""` with `start == end == 0` and `rects: []`; it fires while a drag moves,
 once per change. The web and macOS select text; iOS selects text its author
 made selectable (`user-select="text"`), by a long press, a double tap and the
-selection's handles. On Android a long press selects a word in an opted-in
+selection's handles; a `user-select="text"` container around multiple selectable
+paragraphs shares one selection across them when none has a context menu and no
+scroll container or pressable lies between the touched paragraph and the
+container (a paragraph inside a nested scroll container joins while a selection
+started outside that scroller is active, and stays local when started inside
+it; a `user-select="all"` container spans its paragraphs atomically when none has
+a context menu). Copy joins separate `text` blocks with a blank line
+(`\n\n`) on macOS and iOS; the iOS edit menu offers Select All alongside Copy
+and the system actions, and tapping outside the selection clears it. On Android a long press selects a word in an opted-in
 paragraph. Dragging its handles changes the selected range and Select all
 takes the paragraph's selectable text. On Linux and Windows, dragging the mouse selects
 text in opted-in paragraphs. Double-click selects a word and triple-click selects
@@ -2803,16 +2891,15 @@ paragraphs, when the host supplies a clipboard. In a
 or a double tap on iOS) selects the whole element, and a selection that reaches
 into it takes all of it.
 
-On web and macOS, `removeAllRanges()` clears the reader's selection. Each
+On web, macOS and iOS, `removeAllRanges()` clears the reader's selection. Each
 paragraph that held a part reports its empty selection. The documented
 extension `setSelectionRange(id, start, end[, direction])` also selects a
-`text`: offsets are UTF-16 in its source text, clamped as for a field; an end
+`text` on web and macOS: offsets are UTF-16 in its source text, clamped as for a field; an end
 before the start collapses at the end. Requested source boundaries survive
 CSS whitespace collapsing. `backward` puts the anchor at the end,
 as `Selection.setBaseAndExtent` does. The command replaces the page's previous
 selection and fires `selectionchange` for changed parts without focusing a
-field. An unchanged part does not fire again. These two commands on reader
-text are available on web and macOS. On iOS and Android selection events carry
+field. An unchanged part does not fire again. On iOS and Android selection events carry
 an empty rectangle list.
 
 Rectangles are snapshots at that event, not live layout facts. On the web they
@@ -2923,6 +3010,16 @@ extended), and when `setSelectionRange` changes the selection, collapsed
 included; typing and a plain caret move do not fire it. Its payload is the
 `InputEvent`.
 
+A text field (including search) or textarea shows its
+bound `value` after its own `input` action assigns state that expression
+read. Assigning the old value counts. For `value=form.name` the slot is
+`form`, including when a child receives the name from its parent and calls
+the parent's action. A guard that skips the assignment, a data layer that
+issues no write, validation and a save awaiting a reply all leave the draft
+visible. A later change to the binding updates the field normally. The
+caret follows the accepted part of the edit. The terminal currently displays
+the bound text between keystrokes even when the action only validates.
+
 While an input method composes in a text field or a textarea (Japanese kana
 before its kanji, pinyin, a Korean syllable), `input` fires at every change
 with the composing text in the value, as the DOM's does, on every host that
@@ -2938,7 +3035,8 @@ composition goes on. One that writes a different value (trimmed,
 upper-cased, cut to a length) does not interrupt the person either: on every
 host that composes, the value is held while the text composes and lands when
 the composition ends, committed or cancelled, so the rewrite shows a moment
-later (the last value written, where there were several).
+later. The latest accepted value takes precedence even if the input method
+sends no further `input`.
 
 `setSelectionRange(id, start, end)` and `setSelectionRange(id, start, end,
 direction)` are the field's own method, by its `id`, after the commit's tree
@@ -3214,7 +3312,12 @@ the virtual clock).
   control's, whatever button declares it. A chord's key is one character,
   a named key, or F1–F35; the paste chord (⌘V, Control+V off the Mac) is a
   chord like any other, so a button declaring it takes the driver's `type
-  … paste` too and the paste never lands. On iPadOS a hardware keyboard's
+  … paste` too and the paste never lands. A key that types no Latin letter
+  (Russian's с, Greek's ψ, ㅠ under Korean 2-Set) also takes the chord of the
+  key the US layout puts in its place, as browsers match it: under such a
+  layout Control+C copies in a field and a button declaring Control+K takes
+  the K key. A Latin letter is the key wherever it is (AZERTY's A, German's
+  ö). On iPadOS a hardware keyboard's
   F13–F24 reach `key` handlers but no shortcut (UIKit's key commands name
   F1–F12 only); the driver's reach both, as everywhere.
   `Mod` is the primary modifier in any modifier position. It means `Meta`
@@ -3463,6 +3566,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `showOpenFilePicker(id[, multiple])` | [file-picker corpus](../contract/corpus/file-pickers.contract) |
 | `showDirectoryPicker(id)` | Same corpus |
 | `showSaveFilePicker(id, suggestedName)` | Same corpus |
+| `apple.message=` on the three document pickers takes a string expression, for example `showDirectoryPicker("folder", apple.message=t("choose-project"))`. macOS shows it above the file list. The iOS picker has no message line and other hosts ignore the option. | [picker tests](../contract/cli/tests/it/picker.rs) |
 | `startIn=` on the three pickers and `saveFile`: where the panel opens, the File System Access API's option. A well-known folder, `"desktop"`, `"documents"`, `"downloads"`, `"music"`, `"pictures"`, `"videos"` or `"screenshots"`, or a `doc:/` path the person chose earlier (its folder, or a chosen file's folder). A literal outside the names fails the build (`type-file-picker-argument`, `type-save-file-argument`); at run time a value that is neither, or a handle the session does not hold, is journalled (`<command>: startIn: refused: …`) and the panel opens where it would. macOS opens the folder each time, Linux's portal and Chromium likewise (Chromium's `screenshots` is `pictures`), and iOS opens a handle's folder and ignores a name (LLP 1173 D2) | Same corpus, [picker tests](../contract/cli/tests/it/picker.rs) |
 | `requestPermission(id, path, mode)`: a kept document's access asked for again, `mode` `"read"` or `"readwrite"`, from a press (the web asks the browser under its activation; a native host answers `granted` for a document that resolves); `change` at `id` hears `granted` or `denied` ([documents kept across launches](reference.md#documents-the-person-chose-doc)) | No app fixture; [the web's kept documents test](../host/web/documents-kept.test.mjs) |
 | `cancelReorder(id)` cancels an active reorder from the list with that string id. The ghost springs home, the previews close, and the list receives no `reorderdrop`. With no active reorder from that list, or while a sent drop awaits its answer, the command does nothing. | LLP 1094 D8 |

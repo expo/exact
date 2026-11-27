@@ -131,7 +131,7 @@ package final class ControlHost: NSObject {
         if presenter.menus.inClosedBox(node) { return true }
         let covers = presenter.navigation.covers
         // A bar's hosted item (LLP 1141.004 D2) is in the bar's own view, outside the header it replaced.
-        let replaced = { (cover: HostCover?) in cover == .whole || cover == .bar }
+        let replaced = { (cover: HostCover?) in cover?.hidesContent == true }
         guard covers.values.contains(where: replaced) else { return false }
         var at: UIView? = node
         while let view = at {

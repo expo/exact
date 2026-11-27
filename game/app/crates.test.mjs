@@ -4,6 +4,7 @@ import {resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {compilerPaths, unitDepInfo} from '../../scripts/cargo-dep-info.mjs';
 import {gameCrateKey, keptGameCrates, registryPackages} from './crates.mjs';
+import {gameCargoEnv} from './shells.mjs';
 
 const root = resolve(import.meta.dir,'../..');
 const workspace = () => {
@@ -20,6 +21,25 @@ test('compiler, channel, profile, target and flags cannot share a namespace', ()
     {env:{CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS:'-Copt-level=2'}}])
     expect(gameCrateKey({...facts,...change})).not.toBe(key);
   expect(gameCrateKey({...facts,env:{EXACT_APP_DIR:'/another/game'}})).toBe(key);
+});
+
+test('gameCargoEnv preserves -C llvm-args=-fp-contract=off across Cargo rustflags variables', () => {
+  const untouched = { PATH: '/usr/bin' };
+  expect(gameCargoEnv(untouched)).toBe(untouched);
+  expect(gameCargoEnv({ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: '-C link-arg=-fuse-ld=lld' }))
+    .toEqual({ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: '-C link-arg=-fuse-ld=lld -C llvm-args=-fp-contract=off' });
+  expect(gameCargoEnv({ CARGO_ENCODED_RUSTFLAGS: '' }))
+    .toEqual({ CARGO_ENCODED_RUSTFLAGS: '-C\x1fllvm-args=-fp-contract=off' });
+  expect(gameCargoEnv({ cargo_encoded_rustflags: '--cfg=ci' }))
+    .toEqual({ cargo_encoded_rustflags: '--cfg=ci\x1f-C\x1fllvm-args=-fp-contract=off' });
+  expect(gameCargoEnv({ RUSTFLAGS: '--remap-path-prefix=/tmp/llvm-args=-fp-contract=off=/src' }))
+    .toEqual({ RUSTFLAGS: '--remap-path-prefix=/tmp/llvm-args=-fp-contract=off=/src -C llvm-args=-fp-contract=off' });
+  expect(gameCargoEnv({ RUSTFLAGS: '-C llvm-args=-fp-contract=off -C llvm-args=-fp-contract=fast' }))
+    .toEqual({ RUSTFLAGS: '-C llvm-args=-fp-contract=off -C llvm-args=-fp-contract=fast -C llvm-args=-fp-contract=off' });
+  expect(gameCargoEnv({ RUSTFLAGS: '-C\tllvm-args=-fp-contract=off' }))
+    .toEqual({ RUSTFLAGS: '-C\tllvm-args=-fp-contract=off' });
+  expect(gameCargoEnv({ CARGO_BUILD_RUSTFLAGS: '-Cllvm-args=-fp-contract=off' }))
+    .toEqual({ CARGO_BUILD_RUSTFLAGS: '-Cllvm-args=-fp-contract=off' });
 });
 
 test('registry-only eligibility excludes path crates, git crates and all their dependants', () => {

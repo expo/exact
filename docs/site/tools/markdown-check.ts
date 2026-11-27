@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { marked } from 'marked';
 import { site } from '../constants/site.ts';
 import { proseLines } from '../markdown-fences.ts';
 
@@ -54,18 +55,26 @@ for (const p of pages) {
   const body = text.slice(front[0].length);
   if (!body.includes(`> Fetch the complete documentation index at: ${ORIGIN}/llms.txt`)) fail(where, 'no llms.txt pointer');
   const lines = prose(where, body);
-  if (!lines.some(line => /^# \S/.test(line))) fail(where, 'no H1');
-  let instructions = false;
+  // The generated index and feedback headings sit outside the article's outline.
+  const article = body.replace(/^\n*> ## Documentation index\n> Fetch the complete documentation index at: .*\n(?:> .*\n)*/, '');
+  const feedbackBlock = /^(\n*# .*\n)(?<gap>\n?)<AgentInstructions>\n(?<instructions>[\s\S]*?)\n<\/AgentInstructions>\n/;
+  const feedback = article.match(feedbackBlock)?.groups;
+  const instructions = feedback?.gap ? feedback.instructions : undefined;
+  const tokens = marked.lexer(article.replace(feedbackBlock, '$1\n'), { gfm: true });
+  if (!tokens.some(token => token.type === 'heading' && token.depth === 1 && token.text.trim())) fail(where, 'no H1');
   let above = 0;
-  for (const line of lines) {
-    if (line === '<AgentInstructions>' || line === '</AgentInstructions>') { instructions = line === '<AgentInstructions>'; continue; }
-    const level = instructions ? 0 : (line.match(/^ {0,3}(#{1,6})[ \t]+\S/)?.[1].length ?? 0);
-    if (!level) continue;
-    if (level > above + 1) fail(where, `a level ${level} heading below a level ${above} heading: ${line.slice(0, 80)}`);
+  marked.walkTokens(tokens, token => {
+    if (token.type !== 'heading') return;
+    const heading = token.raw.split('\n', 1)[0].slice(0, 80);
+    if (!token.text.trim()) {
+      fail(where, `an empty heading: ${heading}`);
+      return;
+    }
+    const level = token.depth;
+    if (level > above + 1) fail(where, `a level ${level} heading below a level ${above} heading: ${heading}`);
     above = level;
-  }
-  const feedback = body.match(/^# .*\n\n<AgentInstructions>\n([\s\S]*?)\n<\/AgentInstructions>\n/m)?.[1];
-  if (!feedback?.includes(`Exact docs: ${ORIGIN + p.path}:`) || !feedback.includes('bun exact.mjs feedback status') || !feedback.includes('bun exact.mjs feedback note') || !feedback.includes('never')) fail(where, 'no policy-aware feedback block naming this page below the H1');
+  });
+  if (!instructions?.includes(`Exact docs: ${ORIGIN + p.path}:`) || !instructions.includes('bun exact.mjs feedback status') || !instructions.includes('bun exact.mjs feedback note') || !instructions.includes('never')) fail(where, 'no policy-aware feedback block naming this page below the H1');
   if (lines.filter(line => line.trim()).length < 3) fail(where, 'nothing below the pointer and the H1');
   lines.forEach(line => {
     const html = line.match(LEAKED_HTML);

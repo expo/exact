@@ -464,18 +464,23 @@ is not a regular file, and creates `.exact-<hex>.partial` beside the target thro
 pinned parent. `publish` syncs it and renames it over the target; a `Staged` dropped
 unpublished removes it. The stub for other platforms refuses. Replay on a refresh.
 
-## Local patch 20, the `local-network` grant source
+## Local patch 20, the `local-network` and `loopback` grant sources
 
-`grant.rs` adds `fetch.local-network` and `websocket.local-network` (exact2 LLP
+`grant.rs` adds `FetchLocalNetwork` / `WebSocketLocalNetwork` (exact2 LLP
 1133.036 D5, ruled 2026-10-26), written `net.fetch local-network` and
-`net.websocket local-network`, with the word `development` for loopback too. It
-admits a host the URL writes as an RFC 1918, link-local or unique-local
-address (an IPv4-mapped IPv6 address by its IPv4), a link-local IPv6 address,
-or a `.local` name; never a name that merely resolves to one, and never the
-cloud metadata service, 169.254.169.254 (its IPv4-mapped spelling included)
-or `fd00:ec2::254`. exact2's `grants` crate holds the same rule, and its
-`tests/parity.rs` holds the two to `host/web/tests/fixtures/grants.json`.
-Replay on a refresh.
+`net.websocket local-network`, with the word `development` for loopback too,
+and `FetchLoopback` / `WebSocketLoopback` (exact2 LLP 1016 D6, 2026-11-27,
+expo/exact#1988), written `net.fetch loopback` and `net.websocket loopback`
+with no trailing modifier. `local-network` admits a host the URL writes as an
+RFC 1918, link-local or unique-local address (an IPv4-mapped IPv6 address by
+its IPv4), a link-local IPv6 address, or a `.local` name; never a name that
+merely resolves to one, and never the cloud metadata service, 169.254.169.254
+(its IPv4-mapped spelling included) or `fd00:ec2::254`. `loopback` admits
+`http:`/`https:` or `ws:`/`wss:` at any port on `is_loopback`: `127.0.0.0/8`,
+`[::1]`, IPv4-mapped IPv6 carrying `127.0.0.0/8`, or exact `localhost`
+(case-insensitive, at most one trailing dot). exact2's `grants` crate holds the
+same rules, and its `tests/parity.rs` holds both to
+`host/web/tests/fixtures/grants.json`. Replay on a refresh.
 
 ## Local patch 21, a host's check at every fetch hop and WebSocket open
 
@@ -1272,11 +1277,14 @@ refresh.
 `build_support.rs` selects Xcode's `lipo` on a Mac and `llvm-lipo` off a Mac to
 inspect and thin Apple Simulator archives. Off a Mac it looks in
 `EXACT_APPLE_LLVM_BIN` when set and nonempty, otherwise on `PATH`. Launch errors
-name the executable path tried and give the remedy for the missing tool. Failed
-`-archs` and `-thin` commands name the executable that ran. `build.rs` emits
+name the executable path tried and give the remedy for the missing tool.
+Diagnostics for failed `-archs` and `-thin` commands, empty `-archs` output, and
+an unexpected architecture after thinning name the executable that ran. `build.rs` emits
 `cargo:rerun-if-env-changed=EXACT_APPLE_LLVM_BIN` only when linking Hermes for a
 Simulator off a Mac. `tests/build_support.rs` covers tool selection, archive staging
-off a Mac, and the launch and command errors. Replay on a refresh.
+off a Mac, and the launch and command errors. `tests/build_support/simulator_cargo.rs`
+checks on Linux that changing the override reruns archive preparation in Cargo.
+Replay on a refresh.
 
 ## Windows recursive removal
 
@@ -1305,3 +1313,74 @@ including a pending Winsock connect. This lets rustls and `write_all` finish
 on cancellation. Fetch checks the signal after I/O and returns its
 `AbortError` to the caller. Replay on refresh in `transport/rustls_http.rs`
 and `transport/windows_connect.rs` (expo/exact#1578).
+
+## Windows replacement while a reader holds the target
+
+A rename that replaces its target (`fs.atomicWriteFile`, `fs.rename`, a staged
+download or capture) asks for POSIX semantics with `FileRenameInformationEx`,
+so a reader that shares deletion keeps the old file and the name takes the new
+one. A filesystem that refuses the class or flag, such as FAT, gets the legacy
+replace, which fails while another handle holds the target open.
+## Local patch 54, staging in a directory per launch
+
+`stdlib/app_fs_staging.rs` gives each app root one `.exact-staging/` directory
+holding a directory per launch, which keeps an exclusive lock on its `.lock` for
+the life of its process (`flock` on Unix, `LockFileEx` on Windows). A staged
+file (local patch 19), `fs.atomicWriteFile` on an app path and the atomic write
+`prepare_atomic` hands out create their temporary file there and rename it into
+place, so a process that ends during a write leaves it only there.
+
+A launch's first use of a root, or `app_fs::claim_staging` (which Exact's
+painted and Apple hosts call for their roots as storage is configured, each
+root once), removes the launch directories whose lock no live process holds,
+considering only names of 24 hex digits. The sweep opens a lock without making
+one: a launch directory with no `.lock` is removed, since its launch ended
+between making the two, and one whose lock cannot be opened otherwise is left.
+Once made, a launch directory is made again only when it is gone or replaced;
+any other error reopening it keeps it and its lock, and that write stages
+beside its target.
+
+Making a launch directory and sweeping hold `.namespace.lock`, which also
+marks the staging directory as the host's: a path of that name the app made
+before (a file, a link, or a folder without the mark that is not empty) is
+left untouched, and that root stages beside the target as before, as does a
+root whose staging directory cannot be made. `.exact-staging` is refused as the
+first component of an app path, in any case, and a root's listing leaves it
+out as it reads, so it spends none of the listing's budget. On Windows an
+atomic write refuses a target that is not a regular file before the staging
+directory is made.
+
+Not covered: document, native and known-folder writes still stage beside their
+targets. On a case-insensitive APFS volume a name that folds to
+`.exact-staging` only under Unicode case folding (`ſ`, U+017F, for `s`) still
+reaches the directory, as an 8.3 short name can on Windows. A temporary file
+takes the root's permissions, not its destination folder's, which differs only
+where a folder below a root has its own inheritable ACL. Replay on a refresh
+(expo/exact#1692).
+
+## A path-only app file on Linux
+
+`AppDirectories::open_path` opens a granted regular file as `O_PATH`, through
+the same retained roots and link refusals as `open_file`. Closing that
+descriptor drops none of the process's POSIX locks on the file, so a drag's
+copy helper process reopens it (`/proc/self/fd`) and the app's SQLite keeps
+its locks on a database dragged out (LLP 1094.000 D13).
+
+## Local patch 55, omitting `Content-Length` on bodiless portable HTTP methods
+
+`send()` in `transport/rustls_http.rs` takes `Option<&[u8]>` and sends `()`
+instead of `&[][..]` when no body is present on a method other than `POST`,
+`PUT`, or `PATCH`, or when `GET`/`HEAD` has an empty slice. Explicit empty
+bodies on methods such as `DELETE` and `OPTIONS` still send `Content-Length: 0`,
+matching RFC 9110 §8.6 and Fetch §4.6. Replay on refresh (expo/exact#1934).
+
+## Local patch 56, URL setters are the `url` crate's quirks setters
+
+`stdlib/url.rs`'s `set()` calls `url::quirks` for every field, the crate's
+URL Standard setters with their state overrides, checked against WPT's
+`setters_tests.json`. The hand-written host, port and pathname setters ignored
+`host = 'example.com/stuff'`, accepted a hostname with a port, dropped a lone
+`?` or `#`, and emptied the host of `sc://test:12/`, which panicked inside the
+crate and, with `panic = "abort"`, ended the app. A refusal still leaves the
+URL unchanged and only `href` throws. `url.rs` tests the WPT cases that
+differed. Replay on a refresh unless upstream calls `url::quirks` itself.

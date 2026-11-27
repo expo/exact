@@ -84,9 +84,9 @@ const router = {
     if (!host) throw Object.assign(new Error(`surface ${name}: module unavailable`), {kind:3});
     return host.surfaceWork(name, mode, bytes, active);
   },
-  async settled() {
+  async settled(wakes = false) {
     await Promise.all(loading.values());
-    return (await Promise.all([...hosts.values()].map(host => host.settled()))).flat();
+    return (await Promise.all([...hosts.values()].map(host => host.settled(wakes)))).flat();
   },
   decorate(request, reply) {
     for (const host of hosts.values()) reply = host.decorate(request, reply);
@@ -115,6 +115,7 @@ const router = {
   swap(version, module) { return hosts.get(module ? `gpu/${module}` : "gpu")?.swap(version) ?? { ms: 0, errors: [] }; },
   // A lost device is one artifact's; the others answer "healthy" and keep theirs.
   deviceLost: () => each("deviceLost"),
+  wake: () => each("wake"),
   finishRestart: () => each("finishRestart"),
   drainRecords: () => each("drainRecords"),
   syncPerformance: () => each("syncPerformance"),

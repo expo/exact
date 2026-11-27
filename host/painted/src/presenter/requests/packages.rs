@@ -7,10 +7,29 @@
 //! `NotSupportedError`. So a shell and the packages never replace each
 //! other's handler.
 
-use super::Inbox;
 use crate::package::{Context, Entry, Json, Package, Reply, Slot};
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+
+/// A call whose `admit` status probe is in flight or queued for the next turn.
+struct PendingAdmit {
+    extension: String,
+    name: String,
+    origin: String,
+    request: Option<u64>,
+    args: Json,
+    preferred: Option<Json>,
+    reply: Reply,
+}
+
+#[derive(Default)]
+struct Admitting {
+    next: u64,
+    pending: BTreeMap<u64, PendingAdmit>,
+    ready: Vec<u64>,
+}
 
 /// The composed packages and their instances in this session.
 #[derive(Default)]
@@ -25,7 +44,8 @@ pub(in crate::presenter) struct Packages {
     /// The runner's native slot, which every instance announces into.
     native: Slot,
     publisher: std::sync::Weak<crate::image::Publisher>,
-    pictures: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pictures: Arc<Mutex<Vec<String>>>,
+    admitting: Arc<Mutex<Admitting>>,
 }
 
 /// The extension a body names.
@@ -92,19 +112,64 @@ impl Packages {
         std::mem::take(&mut *self.pictures.lock().unwrap())
     }
 
+    /// Admitted calls whose status probe succeeded and are ready for this turn.
+    pub(super) fn take_ready(&self) -> Vec<u64> {
+        std::mem::take(
+            &mut self
+                .admitting
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .ready,
+        )
+    }
+
+    /// Dispatch admitted calls snapshotted at the start of this turn, skipping
+    /// any cancelled before reaching this point.
+    pub(super) fn dispatch_admitted(
+        &mut self,
+        ready: Vec<u64>,
+        now: f64,
+        wake: &Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.now.set(now);
+        for ticket in ready {
+            let entry = self
+                .admitting
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pending
+                .remove(&ticket);
+            let Some(entry) = entry else {
+                continue;
+            };
+            let Some(at) = self.instance(&entry.extension, wake) else {
+                entry.reply.error("NotSupportedError", None);
+                continue;
+            };
+            let (_, package, context) = &mut self.made[at];
+            *context.0.origin.borrow_mut() = entry.origin;
+            context.0.request.set(entry.request);
+            package.later(
+                &entry.name,
+                &entry.args,
+                entry.preferred.as_ref(),
+                entry.reply,
+            );
+        }
+    }
+
     /// Body `body` of a composed package's extension, at `now` on the
     /// session's clock: its instance (made now if this is the session's
     /// first call) is called. A call that the runner asks to admit first
     /// (`admit`: a tool's or a wake's call that would ask) reads the
-    /// instance's own status, and comes back through `inbox` without
-    /// `admit` unless that status reads `prompt`.
+    /// instance's own status, and runs on the next turn only if status proves
+    /// a non-prompting state and the request was not cancelled meanwhile.
     pub(super) fn dispatch(
         &mut self,
         body: &[u8],
         reply: exact_runner::Reply,
         now: f64,
-        inbox: &Inbox,
-        wake: &std::sync::Arc<dyn Fn() + Send + Sync>,
+        wake: &Arc<dyn Fn() + Send + Sync>,
     ) {
         self.now.set(now);
         let Ok(request) = serde_json::from_slice::<Json>(body) else {
@@ -131,7 +196,9 @@ impl Packages {
             package.dispose(&ids);
             reply.send(Json::Object(Default::default()));
         } else if let Some(n) = request["cancel"].as_u64() {
-            package.cancel(n);
+            if !cancel_admitting(&self.admitting, extension, n) {
+                package.cancel(n);
+            }
             reply.send(Json::Object(Default::default()));
         } else if let Some(shown) = request["foreground"].as_bool() {
             context.0.foreground.set(shown);
@@ -142,35 +209,56 @@ impl Packages {
             // one's (LLP 1133.023 D7a).
             let origin = request["origin"].as_str().unwrap_or("none");
             *context.0.origin.borrow_mut() = origin.to_owned();
-            context.0.request.set(request["request"].as_u64());
+            let req_id = request["request"].as_u64();
             let args = args.cloned().unwrap_or(Json::Object(Default::default()));
             match admission(&request) {
                 Some((status, field, denied)) => {
                     // The instance's own status first (LLP 1133.002 D12):
                     // only a person may answer its prompt.
-                    let (inbox, wake) = (inbox.clone(), wake.clone());
-                    let mut again = request.clone();
-                    again.as_object_mut().map(|o| o.remove("admit"));
+                    context.0.request.set(None);
+                    let ticket = {
+                        let mut state = self.admitting.lock().unwrap_or_else(|e| e.into_inner());
+                        let ticket = state.next;
+                        state.next += 1;
+                        state.pending.insert(
+                            ticket,
+                            PendingAdmit {
+                                extension: extension.to_owned(),
+                                name: name.to_owned(),
+                                origin: origin.to_owned(),
+                                request: req_id,
+                                args,
+                                preferred: request.get("preferred").cloned(),
+                                reply,
+                            },
+                        );
+                        ticket
+                    };
+                    let (admitting, wake) = (self.admitting.clone(), wake.clone());
                     let asked = exact_runner::Reply::new(move |outcome| {
-                        let state = match &outcome {
-                            exact_runner::Outcome::Response(r) => {
-                                serde_json::from_slice::<Json>(&r.body).unwrap_or_default()
-                                    [field.as_str()]
-                                .clone()
-                            }
-                            _ => Json::Null,
-                        };
-                        if state == "prompt" {
-                            return reply.error(&denied, Some("person-required"));
+                        let mut state = admitting.lock().unwrap_or_else(|e| e.into_inner());
+                        if !state.pending.contains_key(&ticket) {
+                            return;
                         }
-                        (inbox.lock().unwrap_or_else(|e| e.into_inner()))
-                            .push((again.to_string().into_bytes(), reply.0));
+                        if !admitted(&outcome, &field) {
+                            let entry = state.pending.remove(&ticket);
+                            drop(state);
+                            if let Some(entry) = entry {
+                                entry.reply.error(&denied, Some("person-required"));
+                            }
+                            return;
+                        }
+                        state.ready.push(ticket);
+                        drop(state);
                         wake();
                     });
                     let empty = Json::Object(Default::default());
                     package.later(&status, &empty, None, Reply::new(asked));
                 }
-                None => package.later(name, &args, request.get("preferred"), reply),
+                None => {
+                    context.0.request.set(req_id);
+                    package.later(name, &args, request.get("preferred"), reply);
+                }
             }
         } else {
             // A view's or a surface's report, a wake's outcome: nothing
@@ -218,11 +306,62 @@ impl Packages {
     /// The session ends: each instance's `destroy`, in the order they were
     /// made, and none called again.
     pub(super) fn destroy(&mut self) {
+        let pending = {
+            let mut state = self.admitting.lock().unwrap_or_else(|e| e.into_inner());
+            state.ready.clear();
+            std::mem::take(&mut state.pending)
+        };
+        for (_, entry) in pending {
+            entry.reply.error("AbortError", None);
+        }
         for (_, mut package, context) in std::mem::take(&mut self.made) {
             package.destroy();
             context.end();
         }
     }
+}
+
+/// Cancel pending admission entries matching `(extension, request)`, replying
+/// `AbortError`. Returns whether any pending admission matched.
+fn cancel_admitting(admitting: &Arc<Mutex<Admitting>>, extension: &str, request: u64) -> bool {
+    let cancelled: Vec<PendingAdmit> = {
+        let mut state = admitting.lock().unwrap_or_else(|e| e.into_inner());
+        let tickets: Vec<u64> = state
+            .pending
+            .iter()
+            .filter(|(_, p)| p.extension == extension && p.request == Some(request))
+            .map(|(t, _)| *t)
+            .collect();
+        tickets
+            .into_iter()
+            .filter_map(|t| state.pending.remove(&t))
+            .collect()
+    };
+    let found = !cancelled.is_empty();
+    for entry in cancelled {
+        entry.reply.error("AbortError", None);
+    }
+    found
+}
+
+/// Whether a status probe proved permission is in a non-prompting state.
+fn admitted(outcome: &exact_runner::Outcome, field: &str) -> bool {
+    let exact_runner::Outcome::Response(r) = outcome else {
+        return false;
+    };
+    if !(200..300).contains(&r.status) {
+        return false;
+    }
+    let Ok(body) = serde_json::from_slice::<Json>(&r.body) else {
+        return false;
+    };
+    if body.get("error").is_some() {
+        return false;
+    }
+    matches!(
+        body.get(field).and_then(Json::as_str),
+        Some("granted" | "limited" | "denied")
+    )
 }
 
 /// What a call's `admit` asks: the status source's name, the field that

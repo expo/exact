@@ -1,14 +1,15 @@
 // Deployment classification and source capture admission (LLP 1091 §11).
 // The build fixtures use Cargo; no native host process is needed here.
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import { DirectoryOrigin, sha256 } from './origin.mjs';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assertCapturedContractSources, assertCapturedPackageDependencies, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePaths, unrelocatableContractDependency } from './deploy.mjs';
+import { unitDepInfo } from './cargo-dep-info.mjs';
 import { streamHead } from './publisher.mjs';
 import { bakeOutput, bakeTarget, buildBake } from './app.mjs';
 import * as asyncLane from './async.mjs';
@@ -18,6 +19,11 @@ import { packageSpecifier } from './exact.mjs';
 import { pathFrom } from './paths.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
 
+beforeAll(() => {
+  const built = spawnSync('cargo', ['build', '-q', '-p', 'contract', '--bin', 'contract'], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8' });
+  if (built.status !== 0) throw new Error(`building the Contract compiler failed:\n${built.stderr}`);
+}, 600_000);
+
 test('identical deploy bakes reuse compilation and retain each run receipt', () => {
   const dir = pinned(realpathSync(mkdtempSync(join(tmpdir(), 'exact-deploy-receipts-'))));
   const target = bakeTarget('linux'), id = 'com.exact.receipts';
@@ -26,6 +32,13 @@ test('identical deploy bakes reuse compilation and retain each run receipt', () 
   const inputs = {app:id, platform:'linux', store:{L:'A'}, trust:'production'};
   const compat = () => ({target, inputs, id:sha256(`exact2 compatibility id v1\n${canonicalBytes(inputs)}`).slice(0,32),
     embedded:{plan:{sha256:sha256(plan),bytes:plan.length},assets:[]}});
+  const savedFlags = [];
+  for (const key of Object.keys(process.env)) {
+    if (key === 'RUSTFLAGS' || /^CARGO_(ENCODED_RUSTFLAGS|BUILD_RUSTFLAGS|TARGET_.+_RUSTFLAGS)$/.test(key)) {
+      savedFlags.push([key, process.env[key]]);
+      delete process.env[key];
+    }
+  }
   try {
     write('Cargo.toml', '[workspace]\nmembers=["linux"]\nresolver="2"\n');
     write('linux/Cargo.toml', '[package]\nname="receipts-linux"\nversion="0.1.0"\nedition="2021"\n');
@@ -101,7 +114,10 @@ test('identical deploy bakes reuse compilation and retain each run receipt', () 
     writeFileSync(configured.products[0].path,'incomplete product');
     expect(()=>copyBake(app,join(dir,'run-corrupt'),configured,cache)).toThrow('product changed');
     expect(existsSync(join(dir,'run-corrupt','bake',`${stem}.build.json`))).toBe(false);
-  } finally { rmSync(dir,{recursive:true,force:true}); }
+  } finally {
+    for (const [key, value] of savedFlags) process.env[key] = value;
+    rmSync(dir,{recursive:true,force:true});
+  }
 }, 60_000);
 
 test('web deploys copy completed receipts and generated entries from a stable cache', () => {
@@ -1027,3 +1043,26 @@ test('unchanged production web roots stay current and source edits publish', asy
     expect(await classifyRoot(build('changed'))).toMatchObject({ action: 'publish' });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 300000);
+
+test('unitDepInfo uses hard-link identity when two Cargo units produce identical bytes', () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exact-unit-dep-')));
+  try {
+    const target = join(dir, 'target'), debug = join(target, 'debug'), deps = join(debug, 'deps');
+    mkdirSync(deps, { recursive: true });
+    const bytes = Buffer.from('same-binary-bytes');
+    const src = join(dir, 'src/main.rs');
+    const first = join(deps, 'bin_pkg-aaaa1111'), second = join(deps, 'bin_pkg-bbbb2222');
+    const firstDep = `${first}.d`, secondDep = `${second}.d`, copied = join(debug, 'bin-pkg');
+    writeFileSync(first, bytes);
+    writeFileSync(second, bytes);
+    writeFileSync(firstDep, `${firstDep}: ${src}\n`);
+    writeFileSync(secondDep, `${secondDep}: ${src}\n`);
+    linkSync(second, copied);
+    const message = { package_id: 'bin-pkg', target: { name: 'bin-pkg', kind: ['bin'], src_path: src }, filenames: [copied], executable: copied };
+    const metadata = { target_directory: target, build_directory: target, packages: [{ id: 'bin-pkg', name: 'bin-pkg' }] };
+    expect(unitDepInfo(message, dir, metadata)).toBe(secondDep);
+    rmSync(copied);
+    writeFileSync(copied, bytes);
+    expect(() => unitDepInfo(message, dir, metadata)).toThrow(/ambiguous rustc unit dep-info for bin-pkg/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

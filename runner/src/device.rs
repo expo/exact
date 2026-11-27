@@ -292,6 +292,25 @@ pub const DEVICES: &[Device] = &[
         conflicts: Some("geolocation-approximate"),
         ..ROW
     },
+    // Host-owned foreground location service (LLP 1156.008.001 B2): derives
+    // Android's `ForegroundService.Location` (`FOREGROUND_SERVICE_LOCATION`)
+    // and iOS's `location` background mode for a person-started tracking
+    // session, without forcing `ACCESS_BACKGROUND_LOCATION` or changing
+    // `geolocation-background` (geofencing).
+    Device {
+        name: "geolocation-service",
+        sandbox: Some(Sandbox::Keys(&["personal-information.location"])),
+        ios_modes: &["location"],
+        android: &[
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_LOCATION",
+        ],
+        android_services: &["location:location"],
+        tvos: false,
+        needs: Some("geolocation"),
+        conflicts: Some("geolocation-approximate"),
+        ..ROW
+    },
     // iOS's prompt text is fixed and the web's is not policy-controlled; the
     // grant still gates the request. Android asks `POST_NOTIFICATIONS` from 13
     // and grants it at install before; a timed post is armed again after a
@@ -1305,5 +1324,42 @@ mod tests {
             assert!(policy.contains(&format!("{feature}=(self)")), "{policy}");
         }
         assert!(policy.contains("microphone=()"), "{policy}");
+    }
+
+    /// LLP 1156.008.001 B2: host-owned foreground location service grant row.
+    #[test]
+    fn geolocation_service_derives_host_foreground_location_service() {
+        let alone = device_grants("device.geolocation-service purpose.track").unwrap_err();
+        assert!(alone[0].contains("grant-needs"), "{alone:?}");
+        let conflict = device_grants(
+            "device.geolocation purpose.loc\ndevice.geolocation-approximate purpose.approx\ndevice.geolocation-service purpose.track",
+        )
+        .unwrap_err();
+        assert!(
+            conflict.iter().any(|e| e.contains("grant-conflict")),
+            "{conflict:?}"
+        );
+        let ok = device_grants(
+            "device.geolocation purpose.loc\ndevice.geolocation-service purpose.track",
+        )
+        .unwrap();
+        let row = ok[1].device;
+        assert_eq!(row.name, "geolocation-service");
+        assert_eq!(
+            row.android,
+            [
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_LOCATION"
+            ]
+        );
+        assert_eq!(row.android_services, ["location:location"]);
+        assert_eq!(row.ios_modes, ["location"]);
+        assert!(!row.tvos);
+        // `geolocation-background` remains geofencing-only without FGS-location.
+        let bg = device_grants(
+            "device.geolocation purpose.loc\ndevice.geolocation-background purpose.geo",
+        )
+        .unwrap();
+        assert!(bg[1].device.android_services.is_empty());
     }
 }

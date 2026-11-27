@@ -72,6 +72,7 @@ pub use properties::{
 pub use properties::{check_test_substitutes, resolve_test_states_path};
 mod tests_json;
 pub use tests_json::{authored_json, tests_json};
+pub mod forma_gen;
 pub mod forma_levels;
 pub mod forma_params;
 /// `uses` (LLP 1121 stage 4, commit 6): where the app reads a token.
@@ -435,7 +436,7 @@ fn read_source(path: &Path) -> Result<String, CompileError> {
 /// resolution. Unlike [`compile_path`], this never re-reads the root file;
 /// callers that watch a file can compile the exact snapshot they observed.
 pub fn compile_path_source(path: &Path, src: &str) -> Result<Plan, CompileError> {
-    compile_path_output(path, src, false)
+    compile_path_source_all(path, src, false)
         .map(|(plan, _)| plan)
         .map_err(first)
 }
@@ -453,7 +454,7 @@ pub fn compile_path_all(
     mapped: bool,
 ) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
     let src = read_source(path).map_err(|e| vec![e])?;
-    compile_path_output(path, &src, mapped)
+    compile_path_source_all(path, &src, mapped)
 }
 
 /// [`compile_path_all`] over the exact observed root source snapshot, as
@@ -464,7 +465,7 @@ pub fn compile_path_source_all(
     src: &str,
     mapped: bool,
 ) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
-    compile_path_output(path, src, mapped)
+    compile_path_checked(path, src, mapped, true, contract_lower::Profile::Web)
 }
 
 fn first(mut all: Vec<CompileError>) -> CompileError {
@@ -477,7 +478,7 @@ pub fn compile_path_source_mapped(
     path: &Path,
     src: &str,
 ) -> Result<(Plan, SourceMap), CompileError> {
-    compile_path_output(path, src, true)
+    compile_path_source_all(path, src, true)
         .map(|(plan, map)| (plan, map.expect("map requested")))
         .map_err(first)
 }
@@ -852,6 +853,7 @@ fn compile_path_all_warned_with(
             contract_lower::Profile::Web,
             Some(&mut warned),
             frame,
+            None,
         )
     });
     warned.sort_by_key(warning_rank);
@@ -875,14 +877,6 @@ pub(crate) fn app_root(path: &Path) -> Result<PathBuf, Vec<CompileError>> {
     })
 }
 
-fn compile_path_output(
-    path: &Path,
-    src: &str,
-    mapped: bool,
-) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
-    compile_path_checked(path, src, mapped, true, contract_lower::Profile::Web)
-}
-
 fn compile_path_checked(
     path: &Path,
     src: &str,
@@ -890,9 +884,10 @@ fn compile_path_checked(
     surfaces: bool,
     profile: contract_lower::Profile,
 ) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
-    compile_path_warned(path, src, mapped, surfaces, profile, None, None)
+    compile_path_warned(path, src, mapped, surfaces, profile, None, None, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_path_warned(
     path: &Path,
     src: &str,
@@ -901,6 +896,7 @@ fn compile_path_warned(
     profile: contract_lower::Profile,
     warned: Option<&mut Vec<CompileError>>,
     frame: Option<&Path>,
+    swift: Option<&mut Option<String>>,
 ) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
     let app_root = app_root(path)?;
     // A file's syntax refusals do not stop the passes after it: they check
@@ -909,6 +905,9 @@ fn compile_path_warned(
     let loaded = sources::load_partial_with(path, src, &app_root, &mut refused, None, frame);
     let mut own = Vec::new();
     let compiled = loaded.and_then(|(file, sources)| {
+        if let Some(output) = swift {
+            *output = forma_gen::swift_names(&file);
+        }
         let warned = warned
             .is_some()
             .then_some((contract_lower::MAX_WARNINGS, &mut own));
@@ -936,7 +935,7 @@ fn compile_loaded(
     warned: Option<(usize, &mut Vec<CompileError>)>,
 ) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
     let app_root = app_root.to_path_buf();
-    let views = native::check(&file, &app_root).map_err(|all| {
+    let views = native::check(&file, &app_root, profile).map_err(|all| {
         all.into_iter()
             .map(|e| sources.resolve(e))
             .collect::<Vec<_>>()
@@ -1187,7 +1186,7 @@ pub fn bake_with_warnings<D: DataSource>(
     }
     let mut b = PlanBuilder::from_plan(plan);
     let pending: Vec<String> = runner.pending().into_iter().map(|(n, _)| n).collect();
-    let dated = runner.resources_reading_clock();
+    let dated = runner.resources_tainted_for_bake();
     // A resource over a list compiles nothing: its elements are the
     // launch's to ask (LLP 1017.000 P4c), and they follow the plan's rows.
     for i in 0..runner.declared_resources().len() {

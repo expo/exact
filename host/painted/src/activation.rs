@@ -8,9 +8,10 @@ impl<D: DataSource> Host<D> {
         let Some(([data, cache, temporary], _)) = crate::picker::app_dirs(&app_id)? else {
             return Ok(());
         };
+        let grants = self.runner.data().grants();
         // An authored test's store starts empty every run (`agent --test`):
         // emptied at the boot that read it, so this is a no-op unless that failed.
-        crate::picker::empty_fresh_tree(&app_id)?;
+        crate::picker::empty_fresh_tree(&app_id, grants)?;
         // What `app:/` names for the picker and an image's source (LLP
         // 1069.002 D4, D7); the last launch's picks go.
         crate::picker::set_roots(data.clone(), cache.clone(), temporary.clone());

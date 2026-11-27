@@ -619,11 +619,9 @@ impl Kernel {
             return false;
         }
         let role = node.props.str(PropId::AccessibilityRole).unwrap_or("");
-        // A member tag names the element the web makes of the node
-        // (`host/web/src/element.rs`, `element`): a pressable or an inline
-        // run with an `href` is an `a`; any other pressable, and a native
-        // button, a `button`.
-        let link = node.props.str(PropId::Href).is_some()
+        // Member tags follow the web's element and attributes (host/web/src/element.rs).
+        // An empty href keeps the anchor's box but supplies no destination.
+        let link = node.props.link().is_some()
             && (node.node_type == NodeType::Pressable || node.is_inline_run());
         row.member_roles.iter().any(|member| {
             member

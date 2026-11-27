@@ -83,22 +83,27 @@ export function substitutesScript(values, origin, restore) {
   return `if (window === window.top && location.origin === ${JSON.stringify(origin)}) globalThis.__exactLaunchSubstitutes = JSON.parse(${JSON.stringify(JSON.stringify({ values, restore }))});`;
 }
 
-/** Install the first launch's settings in the namespace the app actually opens. */
+/** Install the first launch's settings and plain `secret.keep` fixtures in the namespace the app opens (LLP 1018.000 D2/D3). */
 export function storedScript(env, origin) {
   if (env?.EXACT_AGENT_STORAGE_FRESH !== '1' || !env.EXACT_AGENT_STORED) return '';
   const entries = JSON.parse(env.EXACT_AGENT_STORED);
   const install = (origin, entries) => {
     if (window !== window.top || location.origin !== origin) return;
-    globalThis.__exactSeedStored = (prefix, secret) => {
+    globalThis.__exactSeedStored = (prefix, secret, plainSecrets) => {
+      delete globalThis.__exactSeedStored;
+      const allowed = Array.isArray(plainSecrets) ? new Set(plainSecrets) : null;
       for (const [name, json] of entries) {
-        if (name.startsWith('#oauth.')) {
-          localStorage.setItem(secret + name.slice('#oauth.'.length), json);
+        if (name.startsWith('#oauth.') || name.startsWith('#secret.')) {
+          const key = name.startsWith('#oauth.') ? name.slice('#oauth.'.length) : name.slice('#secret.'.length);
+          if (allowed && !allowed.has(key)) {
+            throw new Error(`stored: secret "${key}" requires a plain secret.keep grant`);
+          }
+          localStorage.setItem(secret + key, json);
           continue;
         }
         const storage = name.startsWith('#window.') ? sessionStorage : localStorage;
         storage.setItem(prefix + name, json);
       }
-      delete globalThis.__exactSeedStored;
     };
   };
   return `(${install})(${JSON.stringify(origin)},${JSON.stringify(entries)})`;
@@ -1050,6 +1055,7 @@ async function openWebUnlocked({
           );
         const tags = await readPicture();
         if (tags.error) throw new Error(tags.error);
+        const heldFirst = typeof tags.moving === 'number' ? tags.moving : 0;
         delete tags.moving;
         await frame();
         // Images in the viewport finish loading first, up to 3 s: a picture
@@ -1069,14 +1075,20 @@ async function openWebUnlocked({
         // Frame and image callbacks can start GPU work after the first read.
         const settled = await readPicture();
         if (settled.error) throw new Error(settled.error);
+        const held = film ? 0 : Math.max(heldFirst, typeof settled.moving === 'number' ? settled.moving : 0);
         // A viewport-only capture can retain a rounded background painted before its image became opaque.
-        const { cssVisualViewport: v } = await call('Page.getLayoutMetrics');
+        const { cssVisualViewport: v, cssLayoutViewport: l, cssContentSize: c } = await call('Page.getLayoutMetrics');
+        // That capture's origin is the left edge of the page's scrollable overflow, which a right-to-left page has
+        // left of 0. The body's direction is the page's (CSS Writing Modes 4 §8) and inherits the root's.
+        const rtl = await evaluate("getComputedStyle(document.body).direction === 'rtl'");
+        const left = rtl ? Math.max(0, c.width - l.clientWidth) : 0;
         const { data } = await call('Page.captureScreenshot', {
           format: 'png', captureBeyondViewport: true,
-          clip: { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: v.scale },
+          clip: { x: v.pageX + left, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: v.scale },
         });
         writeFileSync(path, Buffer.from(data, 'base64'));
-        return { ...tags, screenshot: path, w: size[0], h: size[1], ...(pending ? { imagesPending: pending } : {}) };
+        const note = held > 0 ? `held ${held} finite animation${held === 1 ? '' : 's'} at end for this still screenshot (LLP 1116.003 D8); use \`screenshot <png> over <ms> every <ms>\` to capture mid-flight motion` : undefined;
+        return { ...tags, screenshot: path, w: size[0], h: size[1], ...(pending ? { imagesPending: pending } : {}), ...(note ? { note } : {}) };
       },
       close,
     };

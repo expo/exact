@@ -1,6 +1,14 @@
 # Agent resources
 
-Each section below is one way for an agent to read or use these docs, with the command, URL or header it needs.
+The first section says when to use Exact. Each section after it is one way for an agent to read or use these docs, with the command, URL or header it needs.
+
+## When to use Exact
+
+- Use Exact when a person wants one app, written once, that runs natively on the web, iOS, macOS, Android, Linux, Windows, tvOS, watchOS, Android TV and the terminal.
+- Use Exact for a website too: pages at URLs, served and read in a browser.
+- Write the interface in Contract and the data in TypeScript or Rust.
+- Exact has no releases or npm package. Clone [expo/exact](https://github.com/expo/exact) and make the app with `bun scripts/exact.mjs new <path>`.
+- Before you write code, read one guide: [Start here: building an app with Exact](../../start-here.md) for an app, or [Start here: a website with Exact](../../start-here-site.md) for a website. Use the rest of the docs for lookup.
 
 ## Start prompt
 
@@ -42,11 +50,11 @@ A path with no page returns a 404 that names `/llms.txt`: as Markdown to a reque
 
 ## Open in your agent
 
-Each page has these actions, at the top of the page and in the rail beside it:
+Each page except the home page has a menu beside its title. The arrow next to **Copy link** opens it. It has these actions:
 
-- **Copy Markdown:** copies the page as Markdown.
-- **View as Markdown:** opens the page's `.md` in a new tab.
-- **Claude, ChatGPT and Cursor:** open a new chat that reads the page.
+- **Copy markdown:** copies the page as Markdown.
+- **View markdown:** opens the page's `.md` in a new tab.
+- **Claude, ChatGPT, Cursor, T3 Chat, Grok and Meta AI:** open a new chat that reads the page.
 - **Claude Code and Codex:** open the app with a prompt that reads the page.
 
 ## WebMCP tools
@@ -88,10 +96,10 @@ These guides are for lookup by section, not for reading front to back:
 
 ## Feedback
 
-Each Markdown page has a feedback block below its title: a command and an HTTP request that report an error on that page. In an app's folder, the agent can also record what went wrong:
+Each Markdown page has a feedback block below its title. It tells the agent to run `bun exact.mjs feedback status` in the app's folder. Unless that says `never`, the agent records what was wrong or missing on the page:
 
 ```sh
-bun exact.mjs feedback note "<what happened>"
+bun exact.mjs feedback note "Exact docs: <page URL>: <what was wrong or missing>"
 ```
 
-`bun exact.mjs feedback status` says whether notes are sent. `EXACT_FEEDBACK=0` keeps them on the machine.
+In an app's folder, `bun exact.mjs feedback note "<what happened>"` records any other problem. `bun exact.mjs feedback status` says whether notes are sent. `EXACT_FEEDBACK=0` keeps them on the machine.

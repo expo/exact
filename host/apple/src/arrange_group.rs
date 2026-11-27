@@ -57,7 +57,7 @@ impl<D: DataSource> Host<D> {
                     published: None,
                     dropped: false,
                 });
-                self.group_reply(start.receipt.into_iter().collect(), None)
+                self.group_reply_with_inputs(start.receipt.into_iter().collect(), None)
             }
             Ok(None) => self.group_refused(None),
             Err(e) => self.group_refused(Some(format!("{e:?}"))),
@@ -105,9 +105,9 @@ impl<D: DataSource> Host<D> {
             .preview_reorder_into(token, target, geometry, content_y)
         {
             Ok(exact_runner::ReorderProgress::Accepted { receipt }) => {
-                self.group_reply(receipt.into_iter().collect(), None)
+                self.group_reply_with_inputs(receipt.into_iter().collect(), None)
             }
-            Ok(_) => self.group_reply(Vec::new(), None),
+            Ok(_) => self.group_reply_with_inputs(Vec::new(), None),
             Err(e) => self.group_reply(Vec::new(), Some(format!("{e:?}"))),
         }
     }
@@ -127,7 +127,7 @@ impl<D: DataSource> Host<D> {
         };
         self.now_ms = now_ms.max(self.now_ms);
         match self.runner.reorder_step(token, step) {
-            Ok(receipts) => self.group_reply(receipts, None),
+            Ok(receipts) => self.group_reply_with_inputs(receipts, None),
             Err(e) => self.group_reply(Vec::new(), Some(format!("{e:?}"))),
         }
     }
@@ -184,7 +184,10 @@ impl<D: DataSource> Host<D> {
                 Err(e) => error = error.or(Some(format!("{e:?}"))),
             }
         }
-        self.group_reply_timed(&receipts, error)
+        // Flush any queued Input::ReorderTarget(list, false) before returning (LLP 1156.008.000 D6.4).
+        let (extra, extra_err) = self.advance_for_input(self.now_ms);
+        receipts.extend(extra);
+        self.group_reply_timed(&receipts, error.or(extra_err))
     }
 
     /// The ghost has landed or faded: the session ends, its pin retires and
@@ -202,7 +205,7 @@ impl<D: DataSource> Host<D> {
         // Once the runner has no frame for it, the reply says `finished`
         // and the session is gone here too (`group_op`).
         match self.runner.finish_reorder(token) {
-            Ok(receipt) => self.group_reply(receipt.into_iter().collect(), None),
+            Ok(receipt) => self.group_reply_with_inputs(receipt.into_iter().collect(), None),
             Err(e) => self.group_reply(Vec::new(), Some(format!("{e:?}"))),
         }
     }
@@ -264,6 +267,23 @@ impl<D: DataSource> Host<D> {
             .map(|receipt| Timed { at_ms, receipt })
             .collect();
         self.group_reply_timed(&timed, error)
+    }
+
+    /// Commit reorder receipts and immediately advance queued runner inputs
+    /// (such as `Input::ReorderTarget`, LLP 1156.008.000 D6.4).
+    fn group_reply_with_inputs(
+        &mut self,
+        receipts: Vec<CommitReceipt>,
+        error: Option<String>,
+    ) -> String {
+        let at_ms = self.now_ms;
+        let mut timed: Vec<Timed> = receipts
+            .into_iter()
+            .map(|receipt| Timed { at_ms, receipt })
+            .collect();
+        let (extra, extra_err) = self.advance_for_input(self.now_ms);
+        timed.extend(extra);
+        self.group_reply_timed(&timed, error.or(extra_err))
     }
 
     fn group_reply_timed(&mut self, timed: &[Timed], error: Option<String>) -> String {

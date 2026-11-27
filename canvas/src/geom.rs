@@ -130,9 +130,23 @@ pub fn angles(start: f64, end: f64, anticlockwise: bool) -> (f64, f64) {
     (s, e)
 }
 
+/// The multiples of π/2 strictly between `s` and `e`, from `s` toward `e`.
+fn quarter_turns(s: f64, e: f64) -> impl Iterator<Item = f64> {
+    let q = s / FRAC_PI_2;
+    let (first, step) = if e > s {
+        (q.floor() as i64 + 1, 1)
+    } else {
+        (q.ceil() as i64 - 1, -1)
+    };
+    (0..)
+        .map(move |i| (first + i * step) as f64 * FRAC_PI_2)
+        .take_while(move |&t| if e > s { t < e } else { t > e })
+}
+
 /// An ellipse arc as segments: the start point (joined to the path by the
 /// caller) and what follows it. Radii are non-negative; a zero radius is the
-/// degenerate case, lines through the start and end points.
+/// degenerate case, lines through the start point, each quarter turn and the
+/// end point.
 #[allow(clippy::too_many_arguments)]
 pub fn ellipse(
     cx: f64,
@@ -161,6 +175,14 @@ pub fn ellipse(
     let first = at(start);
     let mut out = Vec::new();
     if rx == 0.0 || ry == 0.0 {
+        // Blink's `DegenerateEllipse`: the flat ellipse is lines through
+        // each quarter turn the sweep crosses, so it reaches the axis ends.
+        if rx != ry && e != s {
+            for t in quarter_turns(s, e) {
+                let p = at(trig(t));
+                out.push(Seg::Line(p.0, p.1));
+            }
+        }
         let last = at(trig(e));
         out.push(Seg::Line(last.0, last.1));
         return (first, out);
@@ -342,6 +364,7 @@ fn reverse(start: (f64, f64), segs: &[Seg]) -> ((f64, f64), Vec<Seg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f64::consts::FRAC_PI_4;
 
     fn end(segs: &[Seg]) -> (f64, f64) {
         match *segs.last().unwrap() {
@@ -373,6 +396,46 @@ mod tests {
         assert!(near(end(&segs), (0.0, 10.0)));
         let (_, full) = ellipse(0.0, 0.0, 10.0, 10.0, 0.0, 0.0, TAU, false);
         assert_eq!(full.len(), 4);
+    }
+
+    fn points(segs: &[Seg]) -> Vec<(f64, f64)> {
+        segs.iter()
+            .map(|s| match *s {
+                Seg::Line(x, y) => (x, y),
+                Seg::Cubic(..) => panic!("a flat ellipse is lines"),
+            })
+            .collect()
+    }
+
+    fn reaches(segs: &[Seg], p: (f64, f64)) -> bool {
+        points(segs).iter().any(|&q| near(q, p))
+    }
+
+    #[test]
+    fn a_flat_ellipse_reaches_both_ends_of_its_axis() {
+        for ac in [false, true] {
+            let (start, segs) = ellipse(50.0, 50.0, 0.0, 20.0, 0.0, 0.0, TAU, ac);
+            assert!(near(start, (50.0, 50.0)));
+            assert!(reaches(&segs, (50.0, 70.0)) && reaches(&segs, (50.0, 30.0)));
+            assert!(near(end(&segs), start));
+        }
+        // A partial arc past a quarter turn reaches that turn's extreme.
+        let (_, segs) = ellipse(0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 3.0, false);
+        assert_eq!(segs.len(), 2);
+        assert!(near(points(&segs)[0], (0.0, 10.0)));
+        // Anticlockwise from π/4 to -π/4 crosses 0 only (ry is 0: x only).
+        let (_, segs) = ellipse(0.0, 0.0, 10.0, 0.0, 0.0, FRAC_PI_4, -FRAC_PI_4, true);
+        assert_eq!(segs.len(), 2);
+        assert!(near(points(&segs)[0], (10.0, 0.0)));
+        // Rotated a quarter turn, rx's axis is vertical.
+        let (_, segs) = ellipse(0.0, 0.0, 10.0, 0.0, FRAC_PI_2, 0.0, TAU, false);
+        assert!(reaches(&segs, (0.0, 10.0)) && reaches(&segs, (0.0, -10.0)));
+        // Within one quarter, and with both radii zero, it is one line.
+        assert_eq!(
+            ellipse(0.0, 0.0, 0.0, 10.0, 0.0, 0.1, 1.0, false).1.len(),
+            1
+        );
+        assert_eq!(ellipse(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, TAU, false).1.len(), 1);
     }
 
     #[test]

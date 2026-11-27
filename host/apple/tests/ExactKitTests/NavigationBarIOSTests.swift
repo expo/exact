@@ -103,14 +103,14 @@ final class NavigationBarIOSTests: XCTestCase {
     /// How many times the authored Back control's action ran.
     private func backs(_ session: ExactSession) -> Int { journal(session).components(separatedBy: "(back)").count - 1 }
 
-    private func state(_ session: ExactSession, _ slot: String) -> Any? {
+    func state(_ session: ExactSession, _ slot: String) -> Any? {
         let text = session.agent(#"{"op":"state"}"#)
         let json = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
         return (json?["slots"] as? [String: Any])?[slot] ?? json?[slot]
     }
 
     /// What a tap on a bar item does: its action, sent to its target.
-    private func tap(_ item: UIBarButtonItem?) throws {
+    func tap(_ item: UIBarButtonItem?) throws {
         let item = try XCTUnwrap(item)
         let target = try XCTUnwrap(item.target as? NSObject, "the item's target is retained")
         _ = target.perform(try XCTUnwrap(item.action), with: item)

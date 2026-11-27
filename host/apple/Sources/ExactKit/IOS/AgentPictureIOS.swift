@@ -98,7 +98,7 @@ extension Agent {
         // A device capture has the macOS shape: hide every live WKWebView
         // and compose only the arm's takeSnapshot at the owning node.
         Capture.web = preparation.guests
-        let hidden = (presenter.views.values.compactMap(\.web) + session.natives.snapshotViews).map { ($0, $0.isHidden) }
+        let hidden = (presenter.views.values.compactMap(\.web) + session.natives.snapshotViews.values).map { ($0, $0.isHidden) }
         hidden.forEach { $0.0.isHidden = true }
         #endif
         Capture.capturing = true

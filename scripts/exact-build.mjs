@@ -16,6 +16,7 @@ export const SERVICE = 'https://exact.appdrop.app';
 /** Never source: the app's build outputs and dependencies, at its top level (client.py's SKIP). */
 const SKIP = new Set(['node_modules', '.exact', 'target', 'dist', '.git']);
 const SDK_PATCH = '.exact-sdk.patch', MAX_PATCH = 8 * 1024 * 1024;
+const COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, BUILD_ID = /^[A-Za-z0-9._-]+$/;
 /** Each service's own token and pending login, so a token goes only to the service that issued it: Exact Build's in
  *  ~/.exact-build-token, another's (EXACT_BUILD_URL) in a file named by a digest of its URL. */
 const ownFile = (env, name, ext = '') => {
@@ -130,6 +131,7 @@ export async function sdkSource(checkout, app, lookup) {
   const sdk = changed ? await lookup(commit) : null;
   if (!changed) return { commit, patch: null };
   if (!sdk) throw new Error('this Exact checkout has changes of its own, and the build service takes no SDK patch: share from an unchanged checkout');
+  if (typeof sdk.upstream !== 'string' || !COMMIT.test(sdk.upstream)) throw new Error(`Exact Build returned an invalid SDK snapshot commit: ${String(sdk.upstream)}`);
   if (git(root, ['cat-file', '-e', `${sdk.upstream}^{commit}`]).status !== 0) {
     const fetched = git(root, ['fetch', '-q', remote ?? 'origin', sdk.upstream]);
     if (fetched.status !== 0) refuseGit(`fetch of the SDK snapshot's commit ${sdk.upstream}`, fetched);
@@ -194,6 +196,9 @@ export async function buildIpa(app, ipa, { checkout, options = {}, env = process
   if (patch) { const id = createHash('sha1').update(`blob ${patch.length}\0`).update(patch).digest('hex'); files[`${name}/${SDK_PATCH}`] = [id, '100644']; blobs.set(id, patch); }
   say(`share: building on Exact Build (${base}) with Exact ${commit.slice(0, 9)}${patch ? `, and this checkout's changes (${patch.length >> 10} KiB)` : ''}`);
   const accepted = await (await request(`/build?${query}`, { body: JSON.stringify({ format: 1, files }), type: 'application/json' })).json();
+  if (typeof accepted?.id !== 'string' || !BUILD_ID.test(accepted.id) || accepted.id === '.' || accepted.id === '..') {
+    throw new Error(`Exact Build returned an invalid build id: ${String(accepted?.id)}`);
+  }
   if (accepted.warning) say(`share: Exact Build: ${accepted.warning}`);
   // The blobs it lacks, in batches of about 16 MB: `<id> <size>\n<bytes>` each, gzipped.
   let batch = [], size = 0;

@@ -242,6 +242,26 @@ package final class OwnerBlocks {
     /// Each block's rectangle in its root's coordinates (`BatchOp.blockRect`),
     /// as the last layout sent it: what an open popover is reported by.
     private(set) var blockRects: [UInt32: CGRect] = [:]
+    #if os(iOS)
+    /// Whether each take also samples the shown owners' updates in the pass that takes their blocks,
+    /// after UIKit's layout, so a resize step's blocks, placements, bands and targets describe one
+    /// native layout, taken when it is told and never while a report waits (LLP 1123 D2,
+    /// "Windows"): activation turns it on and sends the updates with the blocks (stage 5); tests
+    /// turn it on now.
+    package var samplesOwners = false
+    /// Each shown owner's update as last taken, by its node.
+    package private(set) var toldUpdates: [UInt32: OwnerUpdateIOS] = [:]
+    /// The updates taken since a sender last took them, each owner's latest, each compared whole with
+    /// the one before, so a band or a target that moves at an unchanged size is one; an owner whose
+    /// block is taken back has none. What activation sends with the blocks (`takeUpdates`).
+    package private(set) var pending: [UInt32: OwnerUpdateIOS] = [:]
+
+    /// The pending updates, taken.
+    package func takeUpdates() -> [UInt32: OwnerUpdateIOS] {
+        defer { pending = [:] }
+        return pending
+    }
+    #endif
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     /// The batch's `block` op; one with no size takes the block away.
@@ -366,6 +386,19 @@ package final class OwnerBlocks {
     /// `exact_host_covers` takes and `exact_view` refuses; without, a change
     /// of it is told at the next publication.
     func takeChanges(shown withShown: Bool = false) -> Data {
+        #if os(iOS)
+        // Exact's reactions to the owners' ledgers, which sampling applies, wait until the take has
+        // recorded what it sampled, so one that publishes takes again after it, never within it
+        if samplesOwners {
+            var records = Data()
+            SafeAreaSteps.stepping { records = take(shown: withShown) }
+            return records
+        }
+        #endif
+        return take(shown: withShown)
+    }
+
+    private func take(shown withShown: Bool) -> Data {
         guard !resetting, !presenter.resetting, !presenter.applying,
               !Owner.shared.isServingMain, let session = presenter.session,
               session.state != .destroyed, !session.fillInFlight else { return Data() }
@@ -374,6 +407,12 @@ package final class OwnerBlocks {
         for (id, block) in presenter.navigation.barItemBlocks { now[id] = (block, nil) }
         for (id, block) in presenter.dialogs.containingBlocks { now[id] = (block, nil) }
         var sideBars: [UInt32: UIEdgeInsets] = [:]
+        #if os(iOS)
+        var sampled: [UInt32: OwnerUpdateIOS] = [:]
+        let sample = { (id: UInt32, controller: UIViewController, view: UIView) in
+            if self.samplesOwners { sampled[id] = OwnerUpdateIOS.sample(controller: controller, view: view, session: session.view) }
+        }
+        #endif
         for (route, view, block, shown, presented) in routes {
             let id = route.node.id
             guard shown else {
@@ -393,11 +432,16 @@ package final class OwnerBlocks {
             }
             #endif
             now[id] = (.size(block.size), presented ? nil : placement(of: route, block: block, in: view))
+            #if os(iOS)
+            sample(id, route, view)
+            #endif
         }
         #if os(iOS)
         if #available(iOS 27.1, *) {
+            let panes = samplesOwners ? presenter.arrangements.shownPanes : [:]
             for (id, pane) in presenter.arrangements.blocks {
                 now[id] = pane
+                if let holder = panes[id] { sample(id, holder, holder.view) }
                 guard pane.placement?.rect.isEmpty == false, !ExactEnv.authoredChrome,
                       let tabs = presenter.navigation.tabController, let view = presenter.views[id]?.superview else { continue }
                 let insets = tabs.barInsets(beside: view)
@@ -410,6 +454,13 @@ package final class OwnerBlocks {
             if told[id]?.block != entry.block { blocks.append((id, entry.block)) }
             if told[id]?.placement != entry.placement { placements.append((id, entry.placement)) }
         }
+        #if os(iOS)
+        if samplesOwners {
+            for (id, update) in sampled where toldUpdates[id] != update { pending[id] = update }
+            for id in Array(pending.keys) where now[id] == nil { pending[id] = nil }
+            toldUpdates = sampled
+        }
+        #endif
         // A block taken back forgets its placement with it
         blocks += told.keys.filter { now[$0] == nil && presenter.views[$0] != nil }.map { ($0, nil) }
         // How a route shows is told of its block only: one given again starts

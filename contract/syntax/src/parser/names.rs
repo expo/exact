@@ -218,6 +218,17 @@ impl Parser {
     /// word but the sixteen reserved ones.
     pub(super) fn ident(&mut self) -> R<(String, Span)> {
         match self.peek_kind().clone() {
+            TokenKind::Ident(w)
+                if w.starts_with("data-")
+                    && w.split('-')
+                        .skip(1)
+                        .any(|part| !part.starts_with(|c: char| c.is_ascii_alphabetic())) =>
+            {
+                self.err(
+                    "syntax-expected-name",
+                    "a binding name's hyphens must precede letters; data attributes admit digits and repeated or trailing hyphens",
+                )
+            }
             TokenKind::Ident(w) if !is_reserved(&w) => {
                 let t = self.next();
                 Ok((w, t.span))

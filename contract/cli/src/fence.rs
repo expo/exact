@@ -230,6 +230,8 @@ const PERSON_EVENTS: &[&str] = &[
     "pointercancel",
     "pan",
     "panrelease",
+    "pinch",
+    "pinchrelease",
     "wheel",
     "scroll",
     "scrollend",
@@ -316,6 +318,19 @@ fn attr_moves(name: &str) -> Option<&'static str> {
         "navigationSelectedDetent",
         "navigationSizing",
         "navigationEdgeAttachedInCompactHeight",
+        "navigationWidthFollowsPreferredContentSize",
+        "navigationPopoverAnchor",
+        "navigationPopoverMargins",
+        "navigationPopoverArrows",
+        "navigationPopoverOverlapsSource",
+        "navigationPopoverAdaptation",
+        "navigationFullSizeContent",
+        "navigationSplitItemAdjustsForOverlays",
+        "navigationSplitItemFullHeight",
+        "navigationSplitItemTopAccessory",
+        "navigationSplitItemBottomAccessory",
+        "navigationAccessoryContentInsets",
+        "navigationAccessoryScrollEdgeEffect",
         "navigationSource",
         "sharedElement",
         "popover",
@@ -334,6 +349,8 @@ fn attr_moves(name: &str) -> Option<&'static str> {
     ];
     if PRESENTS.contains(&name) {
         Some(PRESENTATION)
+    } else if name == "-exact-safe-area-aspect-fit" {
+        Some(WINDOW)
     } else if SCROLLS.contains(&name)
         || ["scroll-snap-", "scroll-padding", "scroll-margin"]
             .iter()
@@ -355,7 +372,10 @@ fn mounted_moves(name: &str) -> Option<&'static str> {
         "toolbarPlacement" => Some(TOOLBAR),
         "autofocus" => Some(FOCUS),
         "system-bars-hidden" => Some("the system bars"),
-        "orientationlock" | "viewport-fit" | "interactive-widget" => Some(WINDOW),
+        "orientationlock"
+        | "viewport-fit"
+        | "interactive-widget"
+        | "-exact-safe-area-aspect-fit" => Some(WINDOW),
         _ => None,
     }
 }

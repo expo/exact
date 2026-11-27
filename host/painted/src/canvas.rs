@@ -81,22 +81,22 @@ use tiny_skia::{Pixmap, Transform};
 
 const MATRIX: u32 = 1;
 const MATRIX3: u32 = 48;
-const RRECT: u32 = 2;
-const PATH: u32 = 3;
-const CLIP_RRECT: u32 = 4;
+pub(crate) const RRECT: u32 = 2;
+pub(crate) const PATH: u32 = 3;
+pub(crate) const CLIP_RRECT: u32 = 4;
 const CLIP_PATH: u32 = 5;
 const RESTORE: u32 = 6;
-const LAYER: u32 = 7;
+pub(crate) const LAYER: u32 = 7;
 const IMAGE: u32 = 8;
-const GLYPHS: u32 = 9;
+pub(crate) const GLYPHS: u32 = 9;
 const FONT: u32 = 10;
 /// `FONT` with variation settings: key, index, weight, count and (tag
 /// value) pairs, then the path.
 const FONT_AXES: u32 = 41;
-const IMAGE_DEF: u32 = 11;
+pub(crate) const IMAGE_DEF: u32 = 11;
 const IMAGE_FREE: u32 = 12;
 const STROKE: u32 = 13;
-const IMAGE_RRECT: u32 = 14;
+pub(crate) const IMAGE_RRECT: u32 = 14;
 /// The next STROKE's dash: phase, count, lengths.
 const DASH: u32 = 25;
 /// A picture's animated file: id, length, path.
@@ -212,6 +212,8 @@ pub mod presence;
 #[path = "canvas/present.rs"]
 mod present;
 #[cfg(target_os = "android")]
+pub use present::StreamDedup;
+#[cfg(target_os = "android")]
 #[path = "canvas/secrets.rs"]
 pub mod secrets;
 #[cfg(target_os = "android")]
@@ -265,7 +267,7 @@ mod shared;
 #[path = "canvas/slot.rs"]
 mod slot;
 #[path = "canvas/stream.rs"]
-mod stream;
+pub(crate) mod stream;
 #[path = "canvas/undrawn.rs"]
 mod undrawn;
 use undrawn::{path_bounds, undrawn};
@@ -281,6 +283,8 @@ mod svg;
 pub(crate) use filter::filtered_row_draws;
 pub use picture::Picture;
 use picture::WeakPicture;
+#[cfg(test)]
+pub(crate) use picture::SURFACE_IMAGE_BASE;
 #[cfg(target_os = "android")]
 use reader::{monotonic_ns, Section};
 pub use stream::drawing;
@@ -336,12 +340,16 @@ pub struct Recorder {
     images: HashMap<usize, (u32, WeakPicture, u64)>,
     /// Frames begun: when a picture was last drawn.
     frames: u64,
-    /// The scroller whose rows are being drawn, if any.
-    group: Option<u32>,
+    /// Scrollers whose rows are currently being drawn, outermost first.
+    /// Active scroll-row groups, innermost last, each with the clip depth outside it.
+    groups: Vec<(u32, usize)>,
     /// Frames a picture goes undrawn before the reader's copy is freed
     /// (`EXACT_IDLE_FRAMES`, else [`IDLE_FRAMES`]).
     idle: u64,
     next_image: u32,
+    /// Whether this recorder writes an auxiliary surface/bar stream whose
+    /// `IMAGE_DEF` ids come from the disjoint surface id pool.
+    surface: bool,
     /// The clips pushed and not popped, pending until a drawing needs them.
     clips: Vec<clip::Clip>,
     /// The recording row's origin (viewport points): what its ops are
@@ -423,8 +431,9 @@ impl Recorder {
             optical: HashMap::new(),
             images: HashMap::new(),
             next_image: 1,
+            surface: false,
             frames: 0,
-            group: None,
+            groups: Vec::new(),
             idle: std::env::var("EXACT_IDLE_FRAMES")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -447,6 +456,23 @@ impl Recorder {
             shared: Default::default(),
             blur: 0.0,
         }
+    }
+
+    /// An empty recorder for an auxiliary surface or bar stream whose image
+    /// ids come from the disjoint surface pool so they cannot collide with the
+    /// page's stream.
+    pub(crate) fn for_surface() -> Recorder {
+        let mut r = Recorder::new();
+        r.surface = true;
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_surface(scale: f32, paint: impl FnOnce(&mut Recorder)) -> Vec<u32> {
+        let mut r = Recorder::for_surface();
+        r.scale = scale;
+        paint(&mut r);
+        std::mem::take(&mut r.ops)
     }
 
     fn f(&mut self, v: f32) {
@@ -556,7 +582,7 @@ impl Backend for Recorder {
         self.clips.clear();
         self.origin = (0.0, 0.0);
         self.row = None;
-        self.group = None;
+        self.groups.clear();
         self.slot = None;
         self.again = None;
         self.slot_sets.clear();
@@ -1000,10 +1026,18 @@ impl Backend for Recorder {
     fn row_culled(&self, bounds: Rect4) -> bool {
         // A scroller's rows all draw so a move needs no paint, unless its
         // clips leave nothing (a page out of view): no move shows them.
-        match self.group {
+        match self.groups.last() {
             None => self.culled(Some(bounds)),
             Some(_) => self.clipped_out(),
         }
+    }
+
+    fn can_group(&self) -> bool {
+        self.row.is_none()
+            && self.layers.unlayered()
+            && !self.shared.opened()
+            && self.slot.is_none()
+            && self.again.is_none()
     }
 
     fn group_begin(&mut self, id: ViewId, scroll: (f32, f32)) {
@@ -1012,7 +1046,7 @@ impl Backend for Recorder {
         if !self.clips.is_empty() {
             self.materialize(self.clips.len() - 1);
         }
-        self.group = Some(id);
+        self.groups.push((id, self.clips.len()));
         self.ops.extend([GROUP_BEGIN, id]);
         // The group records on a fresh Canvas, independently of the outer matrix.
         self.matrix = None;
@@ -1020,7 +1054,7 @@ impl Backend for Recorder {
     }
 
     fn group_end(&mut self) {
-        self.group = None;
+        self.groups.pop();
         self.ops.push(GROUP_END);
         // The reader returns to the outer Canvas, whose matrix may differ.
         self.matrix = None;
@@ -1316,6 +1350,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let now = self.now();
         if let Some(e) = self.p.pump(now) {
             eprintln!("exact: {e}");
+        }
+        #[cfg(target_os = "android")]
+        if agent::clock(&self.p).is_none() && self.p.has_pending_window_canvas() {
+            self.surfaces = true;
         }
         // Read on an idle screen too, or its level-triggered descriptor
         // wakes the looper forever (LLP 1030.006 D5); a line asks for a

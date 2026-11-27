@@ -110,6 +110,7 @@ impl<D: DataSource> Presenter<D> {
     /// `id` glides from `from` to `to`, replacing a glide it had.
     pub(super) fn begin_glide(&mut self, id: ViewId, from: (f32, f32), to: (f32, f32)) {
         let now = self.host.now();
+        self.snap_requested(id, from, to);
         self.glides.begin(id, from, to, now);
     }
 
@@ -168,6 +169,13 @@ impl<D: DataSource> Presenter<D> {
             };
             if at != g.last || (id != PAGE && self.host.kernel().node(id).is_none()) {
                 self.glides.running.remove(&id);
+                if at != g.last {
+                    for (vertical, intended) in [(false, g.to.0), (true, g.to.1)] {
+                        self.snap_destination(id, vertical, intended, intended);
+                    }
+                    self.snap_motion_landed(id);
+                    self.dirty |= self.snap_probe_needed();
+                }
                 // A list reports where its port is, no longer animating.
                 landed_list |= id != PAGE && self.host.collection(id).is_some();
                 continue;
@@ -199,6 +207,10 @@ impl<D: DataSource> Presenter<D> {
                 g.last = next;
             }
             if next == at {
+                if finished && id != PAGE {
+                    self.snap_motion_landed(id);
+                    self.dirty |= self.snap_probe_needed();
+                }
                 continue;
             }
             self.dirty = true;
@@ -211,6 +223,10 @@ impl<D: DataSource> Presenter<D> {
                 self.scroll.insert(id, next);
                 self.scroll_end_moved(id, scroll_end::Completion::Glide);
                 self.collection_scrolled_or_deferred(id, at);
+            }
+            if finished && id != PAGE {
+                self.snap_motion_landed(id);
+                self.dirty |= self.snap_probe_needed();
             }
         }
         // A list that landed reports where it is, no longer animating.

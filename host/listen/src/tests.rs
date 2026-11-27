@@ -297,3 +297,224 @@ fn a_replaced_directory_is_watched_at_its_path() {
     std::fs::remove_dir_all(&d).unwrap();
     std::fs::remove_dir_all(&away).unwrap();
 }
+
+/// Build an unbound `Loop` with its own wake pipe for deterministic turn tests.
+struct LoopHarness {
+    looped: Loop,
+    wake_write: RawFd,
+    events: mpsc::Receiver<Seen>,
+}
+
+impl LoopHarness {
+    fn new(config: Config) -> Self {
+        let (read, write) = pipe().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let signal = Arc::new(hold::Signal::new(move || wake(write)));
+        let shared = Arc::new(Shared {
+            out: Mutex::default(),
+            signal,
+            wake: write,
+        });
+        let sink: Sink = Box::new(move |event: Event| {
+            let seen = match event {
+                Event::Listening => Seen::Listening,
+                Event::Connection(id) => Seen::Connection(id),
+                Event::Line(id, line) => Seen::Line(id, String::from_utf8_lossy(line).into()),
+                Event::End(id, reason) => Seen::End(id, reason),
+                Event::Standing(word) => Seen::Standing(word),
+                Event::Error(failure) => Seen::Error(failure.kind()),
+            };
+            let _ = tx.send(seen);
+            Taken::Queued
+        });
+        let looped = Loop {
+            config,
+            sink,
+            shared,
+            wake: read,
+            bound: None,
+            ever_bound: false,
+            hold: None,
+            watch: None,
+            conns: HashMap::new(),
+            next: 1,
+            stopped: false,
+        };
+        LoopHarness {
+            looped,
+            wake_write: write,
+            events: rx,
+        }
+    }
+}
+
+impl Drop for LoopHarness {
+    fn drop(&mut self) {
+        self.looped.teardown();
+        // SAFETY: `wake` and `wake_write` belong to this harness and are closed once.
+        unsafe {
+            libc::close(self.looped.wake);
+            libc::close(self.wake_write);
+        }
+    }
+}
+
+#[test]
+#[ignore = "async lane: binds real unix sockets"]
+fn displaced_before_initial_bind_never_overwrites_new_holder() {
+    let d = dir("prebind");
+    let path = d.join("a.sock");
+    let mut a = LoopHarness::new(config(&path, true));
+    let mut b = LoopHarness::new(config(&path, true));
+
+    // A enters first, then pauses before calling `bind`. B takes over and binds.
+    let (hold_a, start_a) = hold::enter(&path, true, a.looped.shared.signal.clone());
+    assert_eq!(start_a, hold::Start::Bind);
+    a.looped.hold = Some(hold_a);
+
+    let (hold_b, start_b) = hold::enter(&path, true, b.looped.shared.signal.clone());
+    assert_eq!(start_b, hold::Start::TakeOver);
+    b.looped.hold = Some(hold_b);
+    assert!(b.looped.bind(true));
+    let id_b = b.looped.bound.as_ref().unwrap().identity;
+    assert_eq!(bind::identity(&path), Some(id_b));
+
+    // A now attempts its delayed initial bind: it must skip binding and keep B intact.
+    assert!(!a.looped.bind(false));
+    assert!(a.looped.bound.is_none());
+    assert_eq!(bind::identity(&path), Some(id_b));
+    b.looped.look();
+    assert!(b.looped.bound.is_some());
+    assert!(UnixStream::connect(&path).is_ok());
+
+    drop(a);
+    drop(b);
+    assert!(!path.exists());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+#[ignore = "async lane: binds real unix sockets"]
+fn concurrent_takeover_opens_leave_a_live_holder_and_no_orphaned_socket() {
+    let d = dir("race-open");
+    let path = d.join("a.sock");
+    for round in 0..20 {
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let spawn = |p: PathBuf, b: Arc<std::sync::Barrier>| {
+            std::thread::spawn(move || {
+                b.wait();
+                open(config(&p, true))
+            })
+        };
+        let t1 = spawn(path.clone(), start.clone());
+        let t2 = spawn(path.clone(), start);
+        let (l1, rx1) = t1.join().unwrap();
+        let (l2, rx2) = t2.join().unwrap();
+
+        // Drain each listener's startup/takeover events until one has taken over
+        // and the other is waiting or displaced.
+        let mut s1 = Vec::new();
+        let mut s2 = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let settled = |a: &[Seen], b: &[Seen]| {
+            let took = |s: &[Seen]| s.contains(&Seen::Standing("took over"));
+            let yielded = |s: &[Seen]| {
+                s.contains(&Seen::Standing("waiting")) || s.contains(&Seen::Standing("displaced"))
+            };
+            (took(a) && yielded(b)) || (took(b) && yielded(a))
+        };
+        while !settled(&s1, &s2) {
+            assert!(
+                Instant::now() < deadline,
+                "round {round} did not settle: {s1:?} / {s2:?}"
+            );
+            while let Ok(ev) = rx1.try_recv() {
+                s1.push(ev);
+            }
+            while let Ok(ev) = rx2.try_recv() {
+                s2.push(ev);
+            }
+            if !settled(&s1, &s2) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        assert!(
+            !s1.iter().any(|e| matches!(e, Seen::Error(_)))
+                && !s2.iter().any(|e| matches!(e, Seen::Error(_))),
+            "round {round} unexpected error: {s1:?} / {s2:?}"
+        );
+
+        let winner_rx = if s1.contains(&Seen::Standing("took over")) {
+            &rx1
+        } else {
+            &rx2
+        };
+        let mut client = UnixStream::connect(&path).expect("winning holder accepts connections");
+        client.write_all(b"ping\n").unwrap();
+        loop {
+            match next(winner_rx) {
+                Seen::Connection(_) | Seen::End(_, "peer") => {}
+                Seen::Line(_, line) => {
+                    assert_eq!(line, "ping");
+                    break;
+                }
+                other => panic!("round {round} unexpected winner event: {other:?}"),
+            }
+        }
+        drop(client);
+        l1.close();
+        l2.close();
+        assert!(!path.exists(), "round {round} left an orphaned socket");
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+#[ignore = "async lane: binds real unix sockets"]
+fn waiting_loop_with_both_acquire_and_displaced_never_steals_or_fails() {
+    for takeover in [false, true] {
+        let d = dir(if takeover { "seq2-to" } else { "seq2-no" });
+        let path = d.join("a.sock");
+        let mut l1 = LoopHarness::new(config(&path, false));
+        let mut l2 = LoopHarness::new(config(&path, takeover));
+        let mut l3 = LoopHarness::new(config(&path, true));
+
+        let (h1, s1) = hold::enter(&path, false, l1.looped.shared.signal.clone());
+        assert_eq!(s1, hold::Start::Bind);
+        l1.looped.hold = Some(h1);
+        assert!(l1.looped.bind(false));
+
+        let (h2, s2) = hold::enter(&path, false, l2.looped.shared.signal.clone());
+        assert_eq!(s2, hold::Start::Wait);
+        l2.looped.hold = Some(h2);
+
+        // L1 closes -> raises `acquire` on L2. Before L2 turns, L3 takes over -> raises `displaced`.
+        drop(l1);
+        let (h3, s3) = hold::enter(&path, true, l3.looped.shared.signal.clone());
+        assert_eq!(s3, hold::Start::TakeOver);
+        l3.looped.hold = Some(h3);
+        assert!(l3.looped.bind(true));
+        let id_l3 = l3.looped.bound.as_ref().unwrap().identity;
+        assert!(l2.looped.shared.signal.acquire.load(Ordering::SeqCst));
+        assert!(l2.looped.shared.signal.displaced.load(Ordering::SeqCst));
+
+        // L2 turns while `!holding()`: must neither bind over L3 nor fail with AddressInUse.
+        l2.looped.turn();
+        assert!(l2.looped.bound.is_none());
+        assert!(!l2.looped.stopped);
+        assert!(l2.events.try_recv().is_err());
+        assert_eq!(bind::identity(&path), Some(id_l3));
+        assert!(UnixStream::connect(&path).is_ok());
+
+        // When L3 leaves, L2 now holds and binds cleanly on its next turn.
+        drop(l3);
+        l2.looped.turn();
+        assert!(l2.looped.bound.is_some());
+        assert_eq!(next(&l2.events), Seen::Listening);
+        assert!(UnixStream::connect(&path).is_ok());
+
+        drop(l2);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+}

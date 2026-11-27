@@ -179,6 +179,10 @@ fn a_bound_accent_role_leaves_the_inherited_accent_unset() {
             (
                 "--exact-accent",
                 serde_json::json!([null, null, "#5856d6", "AccentColor", "inherit"])
+            ),
+            (
+                "--exact-accent-said",
+                serde_json::json!([null, null, null, "var(--exact-accent-design)", null])
             )
         ]
     );
@@ -814,6 +818,8 @@ fn llp_1123_rows_write_nothing_on_the_js_target() {
         "ScrollHorizontalIndicatorInsets",
         "ScrollInsetAdjustment",
         "ScrollIndicatorAdjustment",
+        "SafeAreaTrack",
+        "SafeAreaAspectFit",
         "ScrollEdgeEffectSoft",
         "ScrollEdgeEffectHard",
         "ScrollEdgeEffectHidden",
@@ -824,7 +830,7 @@ fn llp_1123_rows_write_nothing_on_the_js_target() {
         .iter()
         .filter(|id| prefixes.iter().any(|p| format!("{id:?}").starts_with(p)))
         .collect();
-    assert_eq!(rows.len(), 44);
+    assert_eq!(rows.len(), 46);
     for id in rows {
         assert!(
             style_writes(*id as u16, false, true).unwrap().is_empty(),

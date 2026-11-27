@@ -1,0 +1,19 @@
+component App
+  state bright = false
+  action toggle
+    bright = not bright
+  view
+    column background-color="#fff"
+      row -exact-mode=(bright ? "ink=bright" : "ink=plain")
+        canvas testId="board" width=80 height=80 surface=board(color("surface.board"), color("board.dot"))
+        view testId="face" width=80 height=80 background-color="surface.board"
+      row color-scheme="light"
+        canvas testId="pinned" width=80 height=80 surface=board(color("board.dot"), color("surface.board"))
+        view testId="dot" width=80 height=80 background-color="board.dot"
+      row
+        canvas testId="float" width=80 height=80 surface=boardFloat(color("board.dot"), color("surface.board"))
+        view testId="float-face" width=80 height=80 background-color="board.dot"
+      row
+        canvas testId="literal" width=80 height=80 surface=literal()
+        view testId="literal-face" width=80 height=80 background-color="board.dot"
+      button "Change pin" testId="change" press=toggle

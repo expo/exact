@@ -287,3 +287,55 @@ test('wasm structural reads scan modal layers once regardless of the candidate c
     closed: { count: 0, scans: 1 }, restored: { count: 100, scans: 1 }, later: { count: 100, scans: 1 },
   });
 }), 30000);
+
+test('keyboard shortcuts respect open modal dialogs when focus is outside them and ignore visibility:hidden aria-modal', () => inBrowser(async page => {
+  const result = await page.evaluate(async () => {
+    const { createInputHandlers } = await import('/input-glue.js');
+    const { inertAncestor } = await import('/navigation.js');
+    const root = document.getElementById('exact-root');
+    const pageBtn = document.getElementById('page');
+    const insideBtn = document.getElementById('inside');
+    const dialog = document.getElementById('upper');
+    const outerPop = document.getElementById('outer-pop');
+    const popBtn = document.createElement('button');
+    popBtn.id = 'pop-btn'; popBtn.textContent = 'Pop'; popBtn.setAttribute('aria-keyshortcuts', 'Control+P');
+    outerPop.append(popBtn);
+    const hiddenSheet = document.createElement('div');
+    hiddenSheet.setAttribute('aria-modal', 'true');
+    hiddenSheet.style.cssText = 'width:100px;height:100px;visibility:hidden';
+    root.append(hiddenSheet);
+    pageBtn.setAttribute('aria-keyshortcuts', 'Control+D');
+    insideBtn.setAttribute('aria-keyshortcuts', 'Control+S');
+    const clicks = [];
+    for (const b of [pageBtn, insideBtn, popBtn]) b.addEventListener('click', () => clicks.push(b.id));
+    createInputHandlers({ root, views: new Map(), retiredViews: new WeakSet(), ready: () => true, inertAncestor, dispatch() {} });
+    const press = (key, code) => document.dispatchEvent(new KeyboardEvent('keydown', { key, code, ctrlKey: true, bubbles: true, cancelable: true }));
+
+    // A visibility:hidden aria-modal must not block visible page shortcuts.
+    press('d', 'KeyD');
+    const afterHiddenSheet = clicks.splice(0);
+
+    // Open modal dialog, drop focus to document.body: background shortcut must stay blocked; dialog shortcut fires.
+    dialog.showModal();
+    document.activeElement?.blur?.();
+    press('d', 'KeyD');
+    press('s', 'KeyS');
+    const afterBlurredModal = clicks.splice(0);
+
+    // Popover opened above the modal dialog: background still blocked; popover shortcut fires.
+    outerPop.showPopover();
+    popBtn.focus();
+    press('d', 'KeyD');
+    press('p', 'KeyP');
+    const afterPopover = clicks.splice(0);
+
+    outerPop.hidePopover();
+    dialog.close();
+    return { afterHiddenSheet, afterBlurredModal, afterPopover };
+  });
+  expect(result).toEqual({
+    afterHiddenSheet: ['page'],
+    afterBlurredModal: ['inside'],
+    afterPopover: ['pop-btn'],
+  });
+}), 30000);

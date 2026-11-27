@@ -50,7 +50,7 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
         /** Every post's id: its tag tells posts apart, as the web's does, and Firebase posts a tagged notification
          * with id 0 too, so a local post and `closeNotification` meet one it showed (LLP 1133.004.000 D7). */
         const val ID = 0
-        /** The group a silent post joins (the key AndroidX's `setSilent` uses). */
+        /** The fallback group for a silent post (the key AndroidX's `setSilent` uses). */
         const val SILENT_GROUP = "silent"
         /** The actions Android shows on one notification ([Notification.Builder.addAction]). */
         const val SHOWN = 3
@@ -103,16 +103,28 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
             val tap = ExtensionContext.activation(app, "notifications", "notificationclick", args, navigate)
             val open = PendingIntent.getActivity(app, 0, distinct(tap, identifier, 0), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val channel = record.getString("channel")
-            val builder = Notification.Builder(app, channel)
-            builderHatch?.invoke(builder)
+            // getGroupAlertBehavior() cannot distinguish the default from an
+            // app explicitly choosing GROUP_ALERT_ALL in its builder hatch.
+            val builder = object : Notification.Builder(app, channel) {
+                var choseAlerts = false
+                override fun setGroupAlertBehavior(value: Int): Notification.Builder {
+                    choseAlerts = true
+                    return super.setGroupAlertBehavior(value)
+                }
+            }
+            val silent = record.optBoolean("silent")
+            if (silent && !record.has("group")) builder.setGroup(SILENT_GROUP)
+            val hatch = builderHatch
+            hatch?.invoke(builder)
+            val defaultAlerts = silent || !builder.choseAlerts
             // An empty title is the web's too: the platform then shows the app's name.
             val title = record.optString("title").ifEmpty { app.applicationInfo.loadLabel(app.packageManager).toString() }
             builder.setSmallIcon(smallIcon(app)).setContentTitle(title).setContentIntent(open).setAutoCancel(true).setChannelId(channel)
             if (body != null) builder.setContentText(body).setStyle(Notification.BigTextStyle().bigText(body))
-            // Android has no per-post silence on the platform's builder: a child of a group whose summary alone alerts
-            // makes no sound and does not peek, whatever its channel plays (`GROUP_ALERT_SUMMARY`), which is how
-            // AndroidX's `NotificationCompat.Builder.setSilent` silences one post (API 26, below the floor).
-            if (record.optBoolean("silent")) builder.setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY).setGroup(SILENT_GROUP)
+            if (record.has("group")) builder.setGroup(record.getString("group"))
+            if (record.has("groupSummary")) builder.setGroupSummary(record.getBoolean("groupSummary"))
+            if (record.optBoolean("groupSummary") && defaultAlerts) builder.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+            else if (silent) builder.setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
             if (record.has("category")) builder.setCategory(record.getString("category"))
             if (record.has("number")) builder.setNumber(record.getInt("number"))
             val actions = record.optJSONArray("actions") ?: JSONArray()
@@ -125,7 +137,21 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
             val enabled = posted != null && manager.areNotificationsEnabled()
                 && posted.importance != NotificationManager.IMPORTANCE_NONE
                 && posted.group?.let { manager.getNotificationChannelGroup(it)?.isBlocked } != true
-            manager.notify(identifier, ID, builder.build())
+            var notification = builder.build()
+            if (hatch != null) {
+                // A hatch can clear a silent post's group or turn a child into a summary.
+                // The builder exposes the resulting key and flags only after build().
+                val fallback = silent && notification.group.isNullOrEmpty()
+                val muteSummary = defaultAlerts && notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
+                    && (fallback || notification.group != null)
+                    && notification.groupAlertBehavior != Notification.GROUP_ALERT_CHILDREN
+                if (fallback || muteSummary) {
+                    if (fallback) builder.setGroup(SILENT_GROUP)
+                    if (muteSummary) builder.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+                    notification = builder.build()
+                }
+            }
+            manager.notify(identifier, ID, notification)
             if (enabled) ExtensionContext.emitWhileVisible("notifications", "notificationshow", args, hold = 16)
         }
     }
@@ -166,6 +192,12 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
 
     private fun show(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         val words = args.optJSONObject("android") ?: JSONObject()
+        if (words.has("group") && (words.opt("group") as? String).isNullOrEmpty())
+            return reply(refused("TypeError", "android.group must be a non-empty string"))
+        if (words.has("groupSummary") && words.opt("groupSummary") !is Boolean)
+            return reply(refused("TypeError", "android.groupSummary must be a boolean"))
+        if (words.has("groupSummary") && !words.has("group"))
+            return reply(refused("TypeError", "android.groupSummary requires android.group"))
         val channel = if (words.isNull("channelId")) Channels.DEFAULT else words.optString("channelId")
         if (Channels.declared(app)?.none { it.id == channel } != false) return reply(refused("TypeError", "android.channelId \"$channel\" is not a channel host.android.notificationChannels declares"))
         val category = if (words.isNull("category")) null else words.optString("category")
@@ -205,6 +237,9 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
         val record = JSONObject().put("tag", tag).put("identifier", tag.ifEmpty { java.util.UUID.randomUUID().toString() })
             .put("title", args.optString("title")).put("channel", channel).put("silent", args.optBoolean("silent", false))
         for (key in listOf("body", "data", "navigate")) if (!args.isNull(key)) record.put(key, args.optString(key))
+        args.optJSONObject("android")?.let { words ->
+            for (key in listOf("group", "groupSummary")) if (!words.isNull(key)) record.put(key, words.get(key))
+        }
         category?.let { record.put("category", it) }
         number?.let { record.put("number", it.toInt()) }
         if (actions.length() > 0) record.put("actions", actions)

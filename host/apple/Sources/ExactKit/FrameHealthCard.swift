@@ -344,8 +344,8 @@ enum FrameHealthCardText {
         guard exact.running else { return long ? "idle" : "Exact's clock idle" }
         guard exact.rates.requestedHz > 0 else { return long ? "running at the default rate" : "Exact's clock at the default rate" }
         let requested = Int(exact.rates.requestedHz.rounded()), limit = Int(exact.rates.scheduleHz.rounded())
-        guard exact.rates.limited else { return long ? "asks for \(requested) FPS" : "Exact asks \(requested) FPS" }
-        return long ? "asks for \(requested) FPS, limited by the system to \(limit) FPS" : "Exact asks \(requested) FPS, limit \(limit)"
+        guard exact.rates.limited else { return long ? "requesting \(requested) FPS" : "Exact asks \(requested) FPS" }
+        return long ? "requesting \(requested) FPS, limited by the system to \(limit) FPS" : "Exact asks \(requested) FPS, limit \(limit)"
     }
 
     /// The table's caption: the deadline Exact's frames have, or what makes the screen's frames late.
@@ -353,9 +353,9 @@ enum FrameHealthCardText {
         source.screen ? "Late: sent after UIKit's deadline" : deadline(rates, varied: varied)
     }
 
-    /// The summary Share gives, in three parts: what was measured and what was not; every figure with its window,
-    /// leaving out windows without one; then Details' results, from `clock`, the reader of Exact's own frames, where the
-    /// face measures the screen, each with what it assesses.
+    /// The summary Share gives, in Markdown, in three parts: what was measured and what was not; every figure with its
+    /// window, leaving out windows without one; then Details' results, from `clock`, the reader of Exact's own frames, where
+    /// the face measures the screen, each with what it assesses.
     static func summary(reader: FrameHealthCardReader, clock: FrameHealthCardReader? = nil, rates: Rates, display: Display,
                         source: Source = .exact, health: FrameHealth) -> String {
         let windows = [(0.5, reader.window(0.5)), (5, reader.window(5)), (30, reader.window(30))]
@@ -363,26 +363,27 @@ enum FrameHealthCardText {
         let windowFigures = windows.map { figures($0.1, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) }) }
         let measured: [String]
         if case .screen(_, let exact) = source {
-            measured = ["Every UI update of this app on its screen, each one a frame. There is one only when something changes, so "
-                + "a frame rate below the display's is normal while little moves.",
-                "Exact's frame clock, the display link that drives Exact's own drawing: " + Self.clock(exact, long: true),
+            measured = ["Frames: every time the app updated the screen. The app only updates the screen when something changes, "
+                + "so a low frame rate is normal when little is moving.",
+                "Exact's frame clock, which drives Exact's own drawing: " + Self.clock(exact, long: true),
                 "Display: \(display.name), \(display.detail)",
-                "A frame is late when the app finishes its changes after UIKit's deadline, the time by which the system needs the "
-                    + "changes to show the frame on time.",
-                "Not measured: the time between the screen's frames (the card cannot tell a pause in drawing from a stall; "
-                    + "the second report gives Exact's own frame times), when pictures actually appeared on screen, compositor and "
-                    + "GPU time, Core Animation's own animations, and input latency"]
+                "A frame is late if the app finishes it after UIKit's deadline, too late to show it on time.",
+                "Not measured: the time between frames (the card can't tell a pause in drawing from a stall, but the report on "
+                    + "Exact's frames below has their frame times), when frames actually appeared on screen, GPU and compositor "
+                    + "time, Core Animation's own animations, and input latency"]
         } else {
             let varied = windows[2].1.counts.epochs > 0
             let limit = rates.limited ? ", limited by the system to \(Int(rates.scheduleHz.rounded())) FPS" : ""
-            measured = ["Exact's frames", rates.requestedHz > 0 ? "Requested rate: \(Int(rates.requestedHz.rounded())) FPS" + limit
-                : "Requested rate: none", "Display: \(display.name), \(display.detail)",
+            measured = ["Frames: the frames Exact drew", rates.requestedHz > 0
+                ? "Requested rate: \(Int(rates.requestedHz.rounded())) FPS" + limit : "Requested rate: none",
+                "Display: \(display.name), \(display.detail)",
                 !FrameHealthAssessment.deadlinesObserved
-                    ? "Lateness is not known on the simulator, whose frame deadlines carry no information."
-                    : "A frame is late when its work ends after its deadline, which is one refresh after the frame starts"
+                    ? "The simulator can't tell whether frames are late, because its frame deadlines aren't meaningful."
+                    : "A frame is late if its work isn't done within one refresh of its start"
                         + (rates.periodMs > 0 ? " (\(varied ? "now " : "")\(ms(rates.periodMs)) at \(Int(rates.scheduleHz.rounded())) FPS)."
                             : "."),
-                "Not measured: when pictures appeared on screen, Core Animation's commit, compositor and GPU time, and input latency"]
+                "Not measured: when frames actually appeared on screen, Core Animation's commit, GPU and compositor time, and "
+                    + "input latency"]
         }
         var figureLines: [String] = rows(source).map { name, key in
             let values = zip(windowFigures, windows).filter { $0.0[keyPath: key] != "—" }.map { "\($0.0[keyPath: key]) (\($0.1.0))" }
@@ -395,28 +396,37 @@ enum FrameHealthCardText {
                 "Frames (\(windows[2].0)): \(windows[2].1.frames)"]
         }
         let assessed = clock ?? reader
-        let results = zip(details(reader: assessed, health: health).prefix(3), ["whether every frame kept to the display's schedule",
-            "whether frames came at the requested rate", "whether frames showed the latest content without delay"]).map { detail, meaning in
-            "\(detail.name), \(meaning): \(detail.value)" + (detail.reason.map { ", " + $0 } ?? "")
+        let results = zip(details(reader: assessed, health: health).prefix(3), ["did every frame keep to the display's schedule?",
+            "did frames come at the requested rate?", "did frames show the latest content without delay?"]).map { detail, question in
+            let because = detail.code.flatMap { sharedReasons[$0] } ?? detail.reason
+            return "\(detail.name) (\(question)): \(detail.value)" + (because.map { " (\($0))" } ?? "")
         }
-        let reach = "These come from frame timing only, and nothing here sees what reached the screen. So a problem shows as Fail, "
-            + "but nothing can confirm the screen was smooth: the best cadence can read is Pass by proxy, a pass on timing alone, "
-            + "and the best the others can read is Not enough evidence."
+        let reach = "These checks only see frame timing, not what actually reached the screen. They can find problems (Fail), "
+            + "but they can't prove the screen was smooth: the best possible result is Pass by proxy for cadence and Not enough "
+            + "evidence for the other two."
         let span = window(assessed.window(5), nominal: 5).lowercased()
-        let heading = source.screen ? "Results for Exact's frame clock, \(span)" : "Results for the \(span)"
         let legend = source.screen
-            ? "Work time is the main thread's time to make a frame, less any waits. Main thread, longest is its longest stretch "
-                + "of work without waiting, and Main thread over \(ms(source.refreshMs)) counts the stretches longer than one "
-                + "refresh, which would hold up a frame."
-            : "Frame rate leaves out idle time. Work time is how long a frame took to make, from its start until its work was "
-                + "applied. Frame time is the time from one frame to the next. A missed frame was asked for but not made in time. "
-                + "Pacing changes count frames that came a different number of refreshes after the one before."
-        return (["What was measured"] + measured + ["", "Figures", legend] + figureLines + ["", heading, reach] + results)
-            .joined(separator: "\n")
+            ? "Work time is how long the main thread spent making a frame, not counting waits. \"Main thread, longest\" is the "
+                + "longest stretch the main thread worked without a break, and \"Main thread over \(ms(source.refreshMs))\" counts "
+                + "stretches longer than one refresh, which are long enough to delay a frame."
+            : "Frame rate doesn't count idle time. Work time is how long a frame took to make. Frame time is the time from one "
+                + "frame to the next. A missed frame is one that was requested but not made in time. Pacing changes count how "
+                + "often the gap between frames changed by a refresh or more."
+        func list(_ lines: [String]) -> String { lines.map { "- " + $0 }.joined(separator: "\n") }
+        return ["## What was measured", list(measured), source.screen ? "## Figures (all screen updates)" : "## Figures (Exact's frames)",
+            legend, list(figureLines), "## Checks (Exact's frames, \(span))", reach, list(results)].joined(separator: "\n\n")
     }
 
+    /// A result's reason in Share's text, where it has room for a sentence the card's Details row does not; other reasons
+    /// read as the card gives them.
+    private static let sharedReasons = ["presentation-unobserved": "nothing here sees what reached the screen",
+        "content-lateness-unobserved": "nothing here sees what each frame showed", "callback-proxy": "from timing only",
+        "callback-and-owner-work-proxies": "from timing only", "simulator-deadlines": "the simulator's frame deadlines aren't meaningful",
+        "no-frame-intervals": "no frame times", "out-of-order": "some frame times were out of order",
+        "schedule-changed": "the frame schedule changed"]
+
     /// A row of Details: a result with its reason, or a count.
-    struct Detail: Equatable { var name: String, value: String, reason: String? = nil }
+    struct Detail: Equatable { var name: String, value: String, reason: String? = nil, code: String? = nil }
 
     /// Details: the collector's three results over the last 5s, each with its reason, by the
     /// collector's own rules (`FrameHealthAssessment`), then the counts behind them.
@@ -431,7 +441,8 @@ enum FrameHealthCardText {
             stale: reader.stale), health: health)
         let results = [("Cadence", "cadence"), ("Target rate", "target"), ("Content latency", "contentLatency")].map { name, key in
             let r = reply[key] as? [String: Any] ?? [:]
-            return Detail(name: name, value: result(r["result"] as? String), reason: reason(r["reason"] as? String))
+            let code = r["reason"] as? String
+            return Detail(name: name, value: result(r["result"] as? String), reason: reason(code), code: code)
         }
         // Where deadlines carry no information, lateness is unknown, not zero
         let late = FrameHealthAssessment.deadlinesObserved ? String(c.late) : "—"
@@ -593,23 +604,34 @@ struct FrameHealthCardPresentation {
 }
 
 extension FrameHealthCardText {
-    /// What Share gives, one text for a person and an agent alike: what it holds, the summary, then each agent report
-    /// under a heading naming its source. Where the face shows the screen's frames there are two reports, the screen's
-    /// and Exact's frames': an app drawn by GPU surfaces has frame times only on Exact's clock, and each report keeps to
-    /// its own 4000 bytes (LLP 1079.000 §7.4).
+    /// What Share gives, one Markdown text for a person and an agent alike: the card's status, the summary, then each agent
+    /// report, a JSON block under a heading naming its source and a line saying what it covers. Where the face shows the
+    /// screen's frames there are two reports, the screen's and Exact's frames': an app drawn by GPU surfaces has frame times
+    /// only on Exact's clock, and each report keeps to its own 4000 bytes (LLP 1079.000 §7.4).
     static func shared(summary: String, status: FrameHealthCardFace.Status, reports: [(source: String, report: Data)]) -> String {
-        let names = [FrameHealth.screenSource: "the screen's frames", "exact-app-display-link": "Exact's frame clock",
-            "native-scroll-ui-update": "native scrolling"]
         let state = switch status { case .live: "live"; case .paused: "paused"; case .idle: "idle" }
-        let intro = ["Frame health, " + state,
-            "A summary, then the full data for an AI agent as \(reports.count == 1 ? "one JSON report" : "\(reports.count) JSON reports")."]
-            + (status == .paused ? ["Paused: the summary's figures end when the card was paused; the reports are from now."] : [])
-            + ["Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2."]
-        let sections = reports.enumerated().map { index, item in
-            let name = names[item.source].map { "\($0) (\(item.source))" } ?? item.source
-            return "Agent report" + (reports.count > 1 ? " \(index + 1) of \(reports.count)" : "") + ", \(name):\n"
-                + String(decoding: item.report, as: UTF8.self)
+        let intro = "A summary of how smoothly this app is drawing, followed by detailed data for an AI agent."
+            + (status == .paused ? " The card is paused, so the summary shows the numbers from when it was paused. The detailed "
+                + "data is current." : "")
+        let schema = "The JSON format is described in Exact's docs/contract-for-agents.md (search for exact.frame-health/2)."
+        let about = reports.count > 1
+            ? "There are two reports covering the same period. The first covers every screen update, whether it came from Exact "
+                + "or UIKit. The second covers only the frames drawn by Exact's own frame clock, and includes frame times. " + schema
+            : "There is one report, because on the Mac and on iOS before 18 the card can't measure all screen updates. " + schema
+        let sections = reports.map { item in
+            let (name, covers): (String?, String) = switch item.source {
+            case FrameHealth.screenSource: ("All screen updates", "Every time the app updated the screen, from Exact or UIKit, "
+                + "checked against UIKit's deadlines. For each recent late update it shows how long the work took, what "
+                + "triggered it, and how the work split between Exact, the card itself and everything else. It has no frame times.")
+            case "exact-app-display-link": ("Exact's frames", "The frames drawn by Exact's own frame clock, with frame times, "
+                + "work times and details for each recent late frame.")
+            case "native-scroll-ui-update": ("Native scrolling", "Frames of UIKit scroll views while they scroll (development "
+                + "builds only), with details for each recent late frame.")
+            default: (nil, "")
+            }
+            return "### " + (name.map { "\($0) (`\(item.source)`)" } ?? "`\(item.source)`") + "\n\n" + (covers.isEmpty ? "" : covers + "\n\n")
+                + "```json\n" + String(decoding: item.report, as: UTF8.self) + "\n```"
         }
-        return ([intro.joined(separator: "\n"), summary] + sections).joined(separator: "\n\n")
+        return (["# Frame health, " + state, intro, summary, "## Data for an AI agent", about] + sections).joined(separator: "\n\n")
     }
 }

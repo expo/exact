@@ -320,6 +320,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         w.backgroundColor = launchColor
         adapter.window = w
         exactView = ExactView(session: ExactIOS.session)
+        exactView.standaloneWindow = true
         // The root's background into the safe areas (`Presenter.paintCanvas`).
         exactView.onCanvasColor = { [weak w] color in w?.backgroundColor = color; w?.rootViewController?.view.backgroundColor = color }
         // The head's title is the scene's (LLP 1048.003 D1): the app switcher's name for it.
@@ -344,6 +345,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window = w
         DevMenu.install(on: w, session: ExactIOS.session, controller: c, planPath: devPlanPath ?? environment["EXACT_PLAN"], frameHealthContainer: c.view)
         w.makeKeyAndVisible()
+        ScreenshotMode.install()
         // A cold development connection needs the mounted session and window.
         for url in incoming where ExactDevelopmentLink.claims(url) {
             DispatchQueue.main.async { ExactDevelopmentLink.open(url) }

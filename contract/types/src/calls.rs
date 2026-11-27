@@ -123,7 +123,10 @@ fn arg_types(
         if !checks::accepts_expr(pt, arg, &t, scope, shapes) {
             return err(
                 "type-argument",
-                format!("`{callee}` expects `{pt}`, given `{t}`"),
+                format!(
+                    "`{callee}` expects `{pt}`, given `{t}`{}",
+                    super::enums::rejection(pt, arg)
+                ),
                 arg.span(),
             );
         }
@@ -419,6 +422,9 @@ pub(super) fn unknown_function(
     shapes: &Shapes,
     span: Span,
 ) -> TypeError {
+    if name == "color" {
+        return TypeError { id: "type-surface-color", message: "color() belongs in a surface argument and takes one literal design colour token name".into(), span };
+    }
     if name == "now" {
         return TypeError {
             id: "type-now-renamed",

@@ -95,6 +95,23 @@ await each('stop', async (s) => {
   check('stop', 'Stop cancels the queue', !voice.speaking && voice.queue.length === 0 && !(await ids(s)).has('spoken-word'), JSON.stringify(voice));
 });
 
+await each('stop-early', async (s) => {
+  await s.tap('listen');
+  await s.tap('stop');
+  await s.clock('settle');
+  const voice = await read(s, 'resources.voice');
+  check('stop-early', 'Stop before cancel settles never starts speaking', !(await read(s, 'slots.listening')) && !voice.speaking && voice.queue.length === 0 && !(await ids(s)).has('spoken-word'), JSON.stringify(voice));
+});
+
+await each('switch-early', async (s) => {
+  await s.tap('listen');
+  await s.type('open-file', 'other.md');
+  await s.type('open-file', { key: 'Enter' });
+  await s.clock('settle');
+  const voice = await read(s, 'resources.voice');
+  check('switch-early', 'Switching documents before cancel settles never starts speaking', !(await read(s, 'slots.listening')) && !voice.speaking && voice.queue.length === 0 && !(await ids(s)).has('spoken-word'), JSON.stringify(voice));
+});
+
 await each('fails', async (s) => {
   // The second paragraph speaks from 7.1 s to 14.1 s: the third, the next to begin, fails.
   await s.tap('listen');

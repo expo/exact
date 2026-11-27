@@ -47,7 +47,8 @@ impl<D: DataSource> Bridge<D> {
     /// What native containers cover of boxes (LLP 1075.003 §3.5), from the
     /// input buffer's first `len` bytes: LE records of (u32 view, u32 kind —
     /// 0 clears, 1 edges, 2 whole, 3 a scroller's platform inset (top and
-    /// bottom) — and f32 top, right, bottom, left), one layout. And the
+    /// bottom), 30 the room a native bar keeps (its height first) — and f32
+    /// top, right, bottom, left), one layout. And the
     /// containing blocks they give subtrees (LLP 1115.002 D8.2): kind 4
     /// with f32 width, height and, for each, 0 for a size, 1 for a maximum,
     /// 2 for a content-fit limit that an authored size may exceed, 3 for a
@@ -142,6 +143,7 @@ impl<D: DataSource> Bridge<D> {
                     }
                     2 => covers.push((view, Some(exact_kernel::HostCover::Whole))),
                     26 => covers.push((view, Some(exact_kernel::HostCover::Bar))),
+                    30 => covers.push((view, Some(exact_kernel::HostCover::Room(edge(8))))),
                     12 => covers.push((
                         view,
                         Some(exact_kernel::HostCover::Gutter([edge(12), edge(16)])),

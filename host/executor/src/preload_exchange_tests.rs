@@ -193,7 +193,8 @@ fn two_post_holds_keep_both_bodies_in_either_completion_order() {
                 }
                 ready(&core, 2);
                 if prefetch {
-                    for expected in 1..=2 {
+                    let order = if reverse { [2, 1] } else { [1, 2] };
+                    for expected in order {
                         let (ticket, outcome, timing) = collect(&core, &woke);
                         assert_eq!(ticket, expected);
                         assert!(timing.cached);
@@ -285,9 +286,9 @@ fn a_failed_or_cancelled_post_hold_leaves_the_other_body_held_and_its_reader_sen
                     core.run(job(10, requests[1].clone()), None).unwrap();
                     wait(&core, |s| s.completed[0].iter().any(|d| d.ticket == 10));
                     fallback.send(()).unwrap();
-                    for expected in [1, 2, 10] {
+                    let mut got = Vec::new();
+                    for _ in 0..3 {
                         let (ticket, outcome, timing) = collect(&core, &woke);
-                        assert_eq!(ticket, expected);
                         assert_eq!(timing.cached, ticket != 1);
                         let body = if ticket == 1 {
                             b"fallback".as_slice()
@@ -295,7 +296,10 @@ fn a_failed_or_cancelled_post_hold_leaves_the_other_body_held_and_its_reader_sen
                             &[1]
                         };
                         assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
+                        got.push(ticket);
                     }
+                    got.sort_unstable();
+                    assert_eq!(got, [1, 2, 10]);
                     assert_eq!(server.count(), 3);
                 }
             }
@@ -536,19 +540,15 @@ fn refreshing_a_prefetch_leaves_http_entries_to_the_cache_rules() {
                     Plan::new(200, &[("Cache-Control", "no-store")], b"after"),
                 );
                 core.run(job(3, server.request("/a")), None).unwrap();
-                wait(&core, |s| s.completed[0].iter().any(|d| d.ticket == 3));
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 3);
+                assert!(!timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"after"));
                 release.send(()).unwrap();
-                for expected in 2..=3 {
-                    let (ticket, outcome, timing) = collect(&core, &woke);
-                    assert_eq!(ticket, expected);
-                    assert!(!timing.cached);
-                    let body = if ticket == 2 {
-                        b"refreshed".as_slice()
-                    } else {
-                        b"after"
-                    };
-                    assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
-                }
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert!(!timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"refreshed"));
                 let (reply, cached) = read(&core, &woke, &server, 4, "/a");
                 assert!(cached);
                 assert_eq!(reply.body, b"refreshed");
@@ -892,12 +892,15 @@ fn closing_a_failed_coordinator_drops_complete_and_concurrent_holds_and_stays_cl
         };
         assert!(gone);
         assert_eq!(bytes, 0);
-        for ticket in 2..=3 {
-            let (got, outcome, timing) = collect(&core, &woke);
-            assert_eq!(got, ticket);
+        let mut got = Vec::new();
+        for _ in 2..=3 {
+            let (ticket, outcome, timing) = collect(&core, &woke);
             assert!(!timing.cached);
             assert!(matches!(outcome, Outcome::Response(r) if r.body == b"own"));
+            got.push(ticket);
         }
+        got.sort_unstable();
+        assert_eq!(got, [2, 3]);
         let count = core
             .shared
             .state
@@ -972,12 +975,15 @@ fn a_coordinator_panic_releases_pending_launch_and_prefetch_waiters() {
             server.plan("/panic", Plan::new(200, &[], b"fallback"));
             server.plan("/also", Plan::new(200, &[], b"fallback"));
             release.send(()).unwrap();
-            for ticket in 1..=2 {
-                let (got, outcome, timing) = collect(&core, &woke);
-                assert_eq!(got, ticket);
+            let mut got = Vec::new();
+            for _ in 1..=2 {
+                let (ticket, outcome, timing) = collect(&core, &woke);
                 assert!(!timing.cached);
                 assert!(matches!(outcome, Outcome::Response(r) if r.body == b"fallback"));
+                got.push(ticket);
             }
+            got.sort_unstable();
+            assert_eq!(got, [1, 2]);
             server.plan("/later", Plan::new(200, &[], b"fallback"));
             assert!(!ask(&core, &woke, job(3, server.request("/later").prefetch())).1);
             assert_eq!(server.count(), 3);

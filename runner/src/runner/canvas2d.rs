@@ -1175,6 +1175,7 @@ impl<D: DataSource> Runner<D> {
     /// (mount or arguments), the rest to the GPU module's side-output.
     pub(super) fn publish_surfaces(&mut self, updates: Vec<crate::SurfaceUpdate>) {
         if updates.is_empty() {
+            self.refresh_surface_colors();
             return;
         }
         let now = self.now_ms;
@@ -1189,7 +1190,7 @@ impl<D: DataSource> Runner<D> {
             None => updates,
         };
         self.fed_canvases(&rest);
-        self.surfaces.extend(rest);
+        self.bind_gpu_inputs(rest);
     }
 
     /// The size limits this host enforces; the web's by default.

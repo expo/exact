@@ -1,7 +1,7 @@
 // Filesystem path comparisons that hold on Windows. A test against `dir + '/'`
 // never matches a path `resolve` made there, whose separator is `\`; these take
 // the platform's path module, a parameter so a test can pass `path.win32`.
-import nodePath, { basename, delimiter, dirname, relative, resolve, sep } from 'node:path';
+import nodePath, { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -105,6 +105,22 @@ export const slashRelative = (from, to, path = nodePath) => path.relative(from, 
 
 /** A Cargo binary's file name: `.exe` on Windows. */
 export const EXE = process.platform === 'win32' ? '.exe' : '';
+
+/** Make a path absolute as written, keeping `..` and Windows drive-relative paths. */
+export function writtenPath(path) {
+  if (isAbsolute(path)) return path;
+  const { root } = parse(path);
+  const base = resolve(root || '.');
+  return base + (base.endsWith(sep) ? '' : sep) + path.slice(root.length);
+}
+
+/** Preserve the caller's LLVM directory before a child starts in another directory. */
+export function resolveAppleLLVM(env) {
+  const bin = env.EXACT_APPLE_LLVM_BIN;
+  if (bin && !isAbsolute(bin)) env.EXACT_APPLE_LLVM_BIN = writtenPath(bin);
+}
+
+resolveAppleLLVM(process.env);
 
 /** Resolve through the nearest existing ancestor, including an absent main-worktree app. */
 function resolvedPath(path) {

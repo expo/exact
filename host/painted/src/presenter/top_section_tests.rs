@@ -70,7 +70,7 @@ fn a_group_in_a_menu_is_a_section_headed_by_its_label() {
         let kernel = p.host().kernel();
         kernel.node_by_key(kernel.find_by_id("m")[0]).unwrap().id
     };
-    let Some(Plan::Menu(entries)) = p.surface_plan(menu, true) else {
+    let Some(Plan::Menu { entries, .. }) = p.surface_plan(menu, true) else {
         panic!("m is a menu");
     };
     let lines: Vec<String> = (entries.iter())

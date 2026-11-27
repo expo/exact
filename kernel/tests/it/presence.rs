@@ -460,6 +460,92 @@ fn a_box_closing_to_zero_presents_the_size_it_closes_from() {
     assert_eq!(presented(&engine), [0.0; 4]);
 }
 
+/// A native button takes its laid-out size at once and moves by its centre
+/// (LLP 1069.011 D6): no size shows while an underdamped spring overshoots,
+/// and one whose centre stays does not move.
+#[test]
+fn a_native_button_moves_by_its_centre_alone() {
+    use exact_kernel::motion::{layout_presented, LayoutMotion};
+    use exact_kernel::{Offer, StyleValue};
+
+    let place = |left: &str, width: &str| {
+        let mut s = StyleProps::default();
+        for (row, value) in [
+            (StyleId::PositionType, "absolute"),
+            (StyleId::Left, left),
+            (StyleId::Width, width),
+            (StyleId::Height, "44px"),
+            (StyleId::LayoutTransition, "-exact-spring(100, 2, 1)"),
+        ] {
+            s.set_dynamic(row, &StyleValue::Text(value.into())).unwrap();
+        }
+        Op::SetStyle {
+            id: 5,
+            patch: Box::new(s),
+        }
+    };
+    let mut k = kernel();
+    let receipt = k
+        .apply(
+            0,
+            2,
+            &[
+                Op::CreateView {
+                    id: 5,
+                    node_type: NodeType::Control,
+                },
+                Op::SetProp {
+                    id: 5,
+                    prop: PropId::Type,
+                    value: PropValue::Str("button".into()),
+                },
+                place("0px", "200px"),
+                Op::SetChildren {
+                    id: 1,
+                    children: vec![2, 4, 5],
+                },
+            ],
+        )
+        .unwrap();
+    let key = k.node(5).unwrap().key;
+    let node = motion_node(key);
+    let mut engine = Engine::new();
+    let mut layout = LayoutMotion::default();
+    k.motion_sync(&receipt).apply(&mut engine).unwrap();
+    k.compute_layout(1, Offer::definite(400.0, 600.0)).unwrap();
+    layout.adopt(&k, [key]);
+    layout.observe_all(&k, &mut engine, false);
+    let mut go = |engine: &mut Engine, at: u64, left: &str, width: &str| {
+        let receipt = k.apply(0, at, &[place(left, width)]).unwrap();
+        k.motion_sync(&receipt).apply(engine).unwrap();
+        layout.seed(&k, &receipt, engine);
+        k.compute_layout(1, Offer::definite(400.0, 600.0)).unwrap();
+        layout.observe_all(&k, engine, false);
+    };
+    let presented =
+        |e: &Engine| layout_presented(e, node, e.value(node, Property::Layout).unwrap());
+    go(&mut engine, 3, "90px", "20px");
+    assert!(
+        !engine.is_active(node, Property::Layout),
+        "its centre stays at 100"
+    );
+    assert_eq!(presented(&engine), [0.0; 4]);
+    go(&mut engine, 4, "200px", "100px");
+    assert_eq!(
+        presented(&engine),
+        [-150.0, 0.0, 0.0, 0.0],
+        "from 100 to 250"
+    );
+    let mut passed = false;
+    for step in 1..60 {
+        engine.advance(f64::from(step) / 60.0).unwrap();
+        let [x, y, w, h] = presented(&engine);
+        passed |= x > 0.0;
+        assert_eq!([y, w, h], [0.0; 3], "no size shows");
+    }
+    assert!(passed, "the spring passes its centre's place");
+}
+
 /// A box a list moved for no author (rows built or measured before it, LLP
 /// 1010) takes its place with no transition when idle; one already moving
 /// goes on moving toward the new place.

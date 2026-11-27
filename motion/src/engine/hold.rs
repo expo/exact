@@ -149,6 +149,7 @@ impl Engine {
             slot.set_presented(values[i]);
             slot.set_running(None);
             self.running.remove(&key);
+            self.pending.remove(&key);
             self.played.remove(&key);
             slot.set_owner(Some(Owner::Held(serial + i as u64)));
             self.dirty.insert(key);
@@ -270,6 +271,7 @@ impl Engine {
         slot.set_presented(value);
         slot.set_running(None);
         self.running.remove(&key);
+        self.pending.remove(&key);
         slot.set_owner(Some(Owner::Held(serial)));
         self.dirty.insert(key);
         let token = HoldToken {

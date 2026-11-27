@@ -347,8 +347,9 @@ try {
     const answer=(source,args=[])=>call({op:'answer',id:module.id,source,args,store:[['token','old']],grants:['token']});
     const results=[];
     for(const name of ['alias','random','constructor','intl'])results.push(await checkpoint(answer(name)));
-    // Each refused with its way out (Math.random's names crypto.getRandomValues since 24bf4fc341).
-    if(!results.every(r=>r.kind==='Unavailable'&&r.message?.includes('is unavailable in data sources')&&/pass (time or )?a (random )?seed/.test(r.message)))throw new Error(JSON.stringify(results));
+    // Virtualized clock and Math.random() succeed and report clock/entropy taint (LLP 1195.000 D2).
+    if(!results.every(r=>r.tag===0))throw new Error(JSON.stringify(results));
+    if(!results[0].clockRead||!results[1].entropy||!results[2].clockRead||!results[3].clockRead)throw new Error('missing taint flags: '+JSON.stringify(results));
     if((await checkpoint(answer('explicit',[0]))).value!==1970)throw new Error('explicit date arithmetic changed');
     const written=await checkpoint(answer('write'));
     if(written.value!=='old'||written.reads[0]!=='token'||written.writes[0][1]!=='next')throw new Error('store seam changed');
@@ -406,17 +407,29 @@ try {
         if (!init.value?.includes('during module initialization')) throw new Error(`${placement}: host read during initialization`);
       } finally { realm.dispose(); }
     }
-    const forms=['now','new','call','call-with-arg','random','alias-now','alias-random','alias-date','prototype-constructor','computed-now','computed-random','bound-now','bound-new','reflect','intl-format','intl-format-undefined','intl-parts','intl-parts-undefined','intl-format-alias','intl-format-alias-undefined','intl-parts-alias','intl-parts-alias-undefined','intl-format-getter','intl-format-computed','intl-parts-prototype'];
-    for(const form of forms){
+    const virtualForms=['now','new','call','call-with-arg','random','alias-now','alias-random','alias-date','prototype-constructor','computed-now','computed-random','bound-now','bound-new','reflect','intl-format','intl-format-undefined','intl-parts','intl-parts-undefined','intl-format-alias','intl-format-alias-undefined','intl-parts-alias','intl-parts-alias-undefined','intl-format-getter','intl-format-computed','intl-parts-prototype'];
+    for(const form of virtualForms){
       const initial=await invoke(inputs,'atInit',[form]);
       const direct=await invoke(inputs,'ambient',[form]);
       const pending=await invoke(inputs,'ambientLater',[form]);
       if(pending.request?.url!=='https://fixture.exact.test/value')throw new Error('missing ambient request');
       const resumed=await invoke(inputs,'ambientLater',[form],[],[],response());
-      if(!initial.value?.includes('as an argument')||direct.tag!==2||direct.message!==initial.value||resumed.tag!==2||resumed.message!==initial.value)throw new Error(`guard parity ${form}: ${JSON.stringify({initial,direct,resumed})}`);
+      if(!initial.value?.startsWith('UNGUARDED: ')||direct.tag!==0||resumed.tag!==0)throw new Error(`virtualized parity ${form}: ${JSON.stringify({initial,direct,resumed})}`);
     }
-    let initRefused=false;try{await prepare(await payload(fixtures['ambient-init'],inputsIdentity),inputsIdentity);}catch{initRefused=true;}
-    if(!initRefused)throw new Error('uncaught init did not refuse');
+    for(const form of ['interval','computed-interval','frame']){
+      const initial=await invoke(inputs,'atInit',[form]);
+      const direct=await invoke(inputs,'ambient',[form]);
+      const pending=await invoke(inputs,'ambientLater',[form]);
+      if(pending.request?.url!=='https://fixture.exact.test/value')throw new Error('missing ambient request');
+      const resumed=await invoke(inputs,'ambientLater',[form],[],[],response());
+      if(!initial.value?.includes('as an argument')||direct.tag!==2||direct.message!==initial.value||resumed.tag!==2||resumed.message!==initial.value)throw new Error(`timer guard parity ${form}: ${JSON.stringify({initial,direct,resumed})}`);
+    }
+    // Module-level Date.now() loads cleanly and latches moduleClock taint (LLP 1195.000 D2.5).
+    const ambientInit=await prepare(await payload(fixtures['ambient-init'],inputsIdentity),inputsIdentity);
+    try {
+      const check=await invoke(ambientInit,'explicit',[0,7]);
+      if(check.tag!==0||!check.moduleClock)throw new Error(`expected moduleClock taint: ${JSON.stringify(check)}`);
+    } finally { ambientInit.dispose(); }
     for(const [ms,year] of [[0,'1970'],[1709210096789,'2024'],[-1,'1969']])if((await invoke(inputs,'intl',[ms])).value!==Array(4).fill(year).join('/'))throw new Error('Intl explicit parity');
     if((await invoke(inputs,'utc')).value!=='2024-02-29T12:34:56.789Z/12/1709210096789/true')throw new Error('UTC parity');
     const argumentsList=[[0,7],[1000,8]];
@@ -602,7 +615,7 @@ try {
     const wrote=await run(turn.continuation);
     if(wrote.value!=='committed'||wrote.reads[0]!=='token'||wrote.writes[0][1]!=='next')throw new Error(`worker turn read the answer-time store: ${JSON.stringify(wrote)}`);
     const guarded=await checkpoint(call({op:'answer',id:placed.id,source:'alias',args:[],store:[],grants:[]}));
-    if(!guarded.message?.includes('pass time or a random seed'))throw new Error('worker realm lost the ambient guards');
+    if(guarded.tag!==0||!guarded.clockRead)throw new Error('worker realm lost the virtual clock: '+JSON.stringify(guarded));
     const discarded=call({op:'answer',id:placed.id,source:'write',args:[],store:[],grants:['token']});
     call({op:'discard',id:placed.id,token:discarded.continuation});
     let gone=false;try{await run(discarded.continuation);}catch{gone=true;}
@@ -999,7 +1012,7 @@ try {
       if(canonical(actual)!==canonical(test.expected))throw new Error(`Caltrain parity ${test.source}: ${JSON.stringify({actual,expected:test.expected})}`);
     }
     train.dispose();
-    return {ecdsa:globalThis.ecdsaResult,guards:forms.length,caltrain:fixtures.oracle.length,store:true,isolated:true,refusals:true,async:true,storage:true,sqliteReload:{coldMs,warmMs}};
+    return {ecdsa:globalThis.ecdsaResult,guards:virtualForms.length,caltrain:fixtures.oracle.length,store:true,isolated:true,refusals:true,async:true,storage:true,sqliteReload:{coldMs,warmMs}};
   };
   // Its busy-storage steps each wait out a lock's 10 s bound (storage-fs.js `lockPaths`, since 837ecf4360): past CDP's 15 s.
   const result=await cdp.send('Runtime.evaluate',{expression:`(${probe.toString()})(${JSON.stringify(fixtures)})`,returnByValue:true,awaitPromise:true},sessionId,240000);

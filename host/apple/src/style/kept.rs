@@ -1,9 +1,11 @@
 //! The layout rows a node's style keeps though its frame carries them
 //! (`style_json_presented`).
+use exact_kernel::props::Presentation;
 use exact_kernel::{BoxSizing, NodeRef, NodeType, PropId, StyleId, StyleMask};
 
 /// The layout rows a node's style sends though its frame carries them: a
-/// video's size, which its box waits on; a bar item's drawn face's
+/// video's size, which its box waits on; a popover route's, its popover's
+/// preferred size (`PopoverRoute.size(of:)`); a bar item's drawn face's
 /// (BarFaceIOS.swift), the authored size in points of a filled childless
 /// box (a status dot) and an authored `column-gap`, since a header the bar
 /// replaces is laid out as `display: none` and gives them no frame; and an
@@ -15,6 +17,10 @@ pub(super) fn kept_geometry(node: &NodeRef<'_>) -> StyleMask {
     let size = StyleMask::of(StyleId::Width).union(StyleMask::of(StyleId::Height));
     if node.node_type == NodeType::Video {
         return size;
+    }
+    // A popover route's own size, in literal points, is its popover's preferred size (LLP 1123 D7)
+    if node.props.presentation() == Some(Presentation::Popover) {
+        return node.style.written.intersect(size);
     }
     let mut authored = node
         .style

@@ -1000,10 +1000,10 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
         selectedKey = row?.sectionKey ?? row?.node.props["listItemKey"]
         selectedNode = selectedKey == nil ? row?.node.id : nil
     }
-    /// Whether a row's press is known to show another screen of the app:
-    /// its root is a link to one of the app's routes. A row whose `press`
-    /// is an action is not known to (the action may push, or delete): the
-    /// compiler knows which writes the router and no host is told yet.
+    /// Whether a row's press shows another screen of the app as a link
+    /// does: its root is a root-relative link, which the keyboard presses
+    /// as it selects the row. A row whose `press` is an action is pressed
+    /// by the mouse alone.
     private func navigates(_ row: Row) -> Bool {
         guard let url = pressing(row)?.defaultLink else { return false }
         return url.hasPrefix("/") && !url.hasPrefix("//")
@@ -1109,10 +1109,7 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     func pressRow(_ row: Int) -> Bool {
         guard let pressing = self.row(at: row).flatMap(pressing), !pressing.disabled, !pressing.inert else { return false }
         // The list of a split (SplitMac.swift): a route this press brings is this row's detail.
-        let split = presenter?.navigation.stackSplit
-        if let split, split.table == id { split.pressing = pressing.id }
-        defer { if let split { split.pressing = nil } }
-        presenter?.press(pressing.id)
+        presenter?.press(pressing.id, splitList: presenter?.navigation.stackSplit.table == id ? id : nil)
         return true
     }
 

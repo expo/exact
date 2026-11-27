@@ -496,49 +496,6 @@ impl Parser {
         })
     }
 
-    /// A JSON value from its tokens, as JSON text. Its
-    /// brackets may span lines.
-    fn json_value(&mut self) -> R<String> {
-        let token = self.next();
-        Ok(match token.kind {
-            TokenKind::Json(raw) => raw,
-            TokenKind::Punct(open @ ("{" | "[")) => {
-                let close = if open == "{" { "}" } else { "]" };
-                let mut out = String::from(open);
-                while !self.eat_punct(close) {
-                    if out.len() > 1 {
-                        self.expect_punct(",")?;
-                        out.push(',');
-                    }
-                    if open == "{" {
-                        out.push_str(&json_string(&self.str_lit("a key")?));
-                        self.expect_punct(":")?;
-                        out.push(':');
-                    }
-                    out.push_str(&self.json_value()?);
-                }
-                out.push_str(close);
-                out
-            }
-            TokenKind::Str(s) => json_string(&s),
-            TokenKind::Number(n) => format!("{n}"),
-            TokenKind::Punct("-") if matches!(self.peek_kind(), TokenKind::Number(_)) => {
-                format!("-{}", self.step_number("a number")?)
-            }
-            TokenKind::Ident(w) if w == "true" || w == "false" || w == "null" => w,
-            other => {
-                return Err(SyntaxError {
-                    id: "syntax-expected-step",
-                    message: format!(
-                    "expected a JSON object, list, string, number, true, false or null, found {}",
-                    describe(&other)
-                ),
-                    span: token.span,
-                })
-            }
-        })
-    }
-
     pub(super) fn step(&mut self) -> R<Step> {
         let (word, span) = match self.peek_kind().clone() {
             TokenKind::Ident(w) => (w, self.peek().span),
@@ -604,10 +561,12 @@ impl Parser {
             },
             "tap" => {
                 let target = self.str_lit("a testId")?;
-                if self.at_ident("drag") {
+                if target.starts_with('@') {
+                    self.ticket_step(&target, span, false)?
+                } else if self.at_ident("drag") {
                     self.next();
                     return self.drag_step(target, span);
-                }
+                } else {
                 let form = match self.peek_kind().clone() {
                     TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "swipe" || w == "wheel" => {
                         self.next();
@@ -720,10 +679,13 @@ impl Parser {
                     modifiers,
                     span,
                 }
+                }
             }
             "type" => {
                 let target = self.str_lit("a testId")?;
-                if self.at_ident("key") {
+                if target.starts_with('@') {
+                    self.ticket_step(&target, span, true)?
+                } else if self.at_ident("key") {
                     self.next();
                     let key = self.str_lit("the key's name")?;
                     // `down` / `up` / `for <ms>`: one of them, on the virtual clock (platformer R7).
@@ -1004,6 +966,12 @@ impl Parser {
             "signed-in" => Step::SignedIn {
                 key: self.launch_str("signed-in", "the provider's secret.keep name")?,
                 account: self.json_value()?,
+                span,
+            },
+            // @ref LLP 1018.000 D1 — `secret "<name>" "<value>"`: a plain secret.keep seed.
+            "secret" => Step::Secret {
+                name: self.launch_str("secret", "a plain secret.keep grant name")?,
+                value: self.launch_str("secret", "the seeded secret text")?,
                 span,
             },
             "stored" => Step::Stored {
@@ -1299,7 +1267,7 @@ impl Parser {
                 return Err(SyntaxError {
                     id: "syntax-expected-step",
                     message: format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `fold`, `rotate`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`), found `{other}`"
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `fold`, `rotate`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `secret`, `stored`, `fresh`, `before data`), found `{other}`"
                 ),
                     span,
                 })
@@ -1311,7 +1279,7 @@ impl Parser {
 }
 
 /// A string as JSON writes it.
-fn json_string(s: &str) -> String {
+pub(super) fn json_string(s: &str) -> String {
     let mut out = String::from('"');
     for c in s.chars() {
         match c {
@@ -1340,7 +1308,7 @@ pub(super) fn during_read(op: &str) -> bool {
 
 /// The words of a test's launch lines, which a test file may also write at
 /// its top level for every test in it (habits F7, calendar F13).
-pub(super) const LAUNCH: [&str; 13] = [
+pub(super) const LAUNCH: [&str; 14] = [
     "size",
     "at",
     "epoch",
@@ -1348,6 +1316,7 @@ pub(super) const LAUNCH: [&str; 13] = [
     "locale",
     "seed",
     "signed-in",
+    "secret",
     "stored",
     "fresh",
     "before",
@@ -1368,6 +1337,7 @@ pub(super) fn launch_word(step: &Step) -> &'static str {
         Step::Locale { .. } => "locale",
         Step::Seed { .. } => "seed",
         Step::SignedIn { .. } => "signed-in",
+        Step::Secret { .. } => "secret",
         Step::Stored { .. } => "stored",
         Step::Fresh { .. } => "fresh",
         Step::BeforeData { .. } => "before data",
@@ -1393,13 +1363,20 @@ pub fn same_launch(a: &Step, b: &Step) -> bool {
             _ => None,
         }
     }
+    fn secret_slot(step: &Step) -> Option<&str> {
+        match step {
+            Step::SignedIn { key, .. } => Some(key),
+            Step::Secret { name, .. } => Some(name),
+            _ => None,
+        }
+    }
     if let (Some(x), Some(y)) = (fetch_rule(a), fetch_rule(b)) {
         return x == y;
     }
     if let (Step::AnswerSource { source: x, .. }, Step::AnswerSource { source: y, .. }) = (a, b) {
         return x == y;
     }
-    if let (Step::SignedIn { key: x, .. }, Step::SignedIn { key: y, .. }) = (a, b) {
+    if let (Some(x), Some(y)) = (secret_slot(a), secret_slot(b)) {
         return x == y;
     }
     if let (Step::Stored { name: x, .. }, Step::Stored { name: y, .. }) = (a, b) {
@@ -1456,6 +1433,7 @@ fn prefer_key(name: &str) -> &str {
         "safe-area",
         "display-scale",
         "gpu-tier",
+        "ask-siri",
         "posture",
         "segments",
         "gap",

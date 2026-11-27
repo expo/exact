@@ -32,7 +32,7 @@ class FieldsTest {
          * (x, y, width, height; none when null). */
         data class Told(val id: Int, val x: Float, val y: Float, val w: Float, val h: Float, val state: Int, val flags: Int = 0,
             val value: String = "$id", val features: String = "", val align: Int = 0, val revision: Int = 0, val caret: Int = 0,
-            val clip: FloatArray? = null)
+            val clip: FloatArray? = null, val edit: Int = 0)
 
         fun statement(told: List<Told>): IntArray {
             val words = mutableListOf(told.size)
@@ -45,7 +45,7 @@ class FieldsTest {
             }
             for (t in told) {
                 val clip = t.clip ?: floatArrayOf(0f, 0f, -1f, -1f)
-                words.addAll(listOf(t.id, 0, t.state, 0, t.x.toBits(), t.y.toBits(), t.w.toBits(), t.h.toBits()) + clip.map(Float::toBits) + 0)
+                words.addAll(listOf(t.id, 0, t.state, 0, t.x.toBits(), t.y.toBits(), t.w.toBits(), t.h.toBits()) + clip.map(Float::toBits) + t.edit)
                 string(t.value)
                 words.addAll(listOf(t.flags, 0, 0, 0, -1, t.align, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, t.revision, t.caret, t.caret))
                 for (s in listOf("", "", family, "", t.features)) string(s)
@@ -64,6 +64,30 @@ class FieldsTest {
         assertEquals("1111x", text.text.toString())
         assertEquals(5, text.selectionStart)
         assertEquals(5, text.selectionEnd)
+    }
+
+    @Test fun aFilteredValueCarriesTheEndpointsOfTheNativeSelection() {
+        val fields = Fields(RuntimeEnvironment.getApplication())
+        var edit = 0
+        fun show(value: String) {
+            fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, value = value, edit = edit))))
+        }
+        show("")
+        val text = (fields.getChildAt(0) as FrameLayout).getChildAt(0) as EditText
+        fun check(typed: String, start: Int, end: Int, accepted: String, afterStart: Int, afterEnd: Int) {
+            text.text.replace(0, text.length(), typed)
+            edit++
+            text.setSelection(start, end)
+            show(accepted)
+            assertEquals(accepted, text.text.toString())
+            assertEquals(afterStart, text.selectionStart)
+            assertEquals(afterEnd, text.selectionEnd)
+        }
+        check("40a", 3, 3, "40", 2, 2)
+        check("4a0", 2, 2, "40", 1, 1)
+        check("a0", 1, 1, "0", 0, 0)
+        check("47x0", 3, 3, "470", 2, 2)
+        check("hello", 4, 1, "HELLO", 4, 1)
     }
 
     @Test fun fieldsApplyDirectionWithoutReversingPhysicalAlignment() {

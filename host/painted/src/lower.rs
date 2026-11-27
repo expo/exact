@@ -197,10 +197,12 @@ impl<D: DataSource> Host<D> {
                     .iter()
                     .flat_map(|p| p.animation.keyframes.properties())
                     .collect();
-                self.runner
-                    .kernel()
-                    .node_by_key(exact_kernel::motion::node_key(*node))
-                    .is_none_or(|n| !playable(self.runner.kernel(), &n, &props))
+                self.engine.timeline_bound(*node)
+                    || self
+                        .runner
+                        .kernel()
+                        .node_by_key(exact_kernel::motion::node_key(*node))
+                        .is_none_or(|n| !playable(self.runner.kernel(), &n, &props))
             })
             .collect();
         for node in reclaim {
@@ -240,6 +242,30 @@ impl<D: DataSource> Host<D> {
                 self.lowered_changed.insert(*node, self.lowered_epoch);
             }
         }
+    }
+
+    /// Reclaim lowered animations whose `animation-timeline` was bound by
+    /// `place_timelines()` during `layout()` (LLP 1156.008.001 B6).
+    pub(crate) fn reclaim_timeline_bound(&mut self) -> bool {
+        if !self.lowering || self.lowered.is_empty() {
+            return false;
+        }
+        let reclaim: Vec<_> = self
+            .lowered
+            .keys()
+            .copied()
+            .filter(|node| self.engine.timeline_bound(*node))
+            .collect();
+        if reclaim.is_empty() {
+            return false;
+        }
+        for node in reclaim {
+            self.engine.set_node_sampled(node, true);
+            self.lowered.remove(&node);
+            self.lowered_epoch += 1;
+            self.lowered_changed.insert(node, self.lowered_epoch);
+        }
+        true
     }
 
     /// The [`Presented::lowered`] bits of a node: what its reader plays.
@@ -857,4 +883,42 @@ fn playable(
         return true;
     }
     !props.contains(&Property::R)
+}
+
+#[cfg(test)]
+mod timeline_reclaim_tests {
+    use crate::{presenter::PainterChoice, Presenter};
+    use std::path::PathBuf;
+
+    #[test]
+    fn reclaim_timeline_bound_clears_lowered_mask_after_layout_binds_scroll_timeline() {
+        const SRC: &str = r#"keyframes fade
+  from opacity=0.2
+  to opacity=1
+component App
+  view
+    scroll width=200 height=200
+      box testId="target" width=100 height=400 animation-name="fade" animation-duration="1s" animation-timeline="scroll()"
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(SRC),
+            (),
+            (200., 200.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host_mut().lowering = true;
+        let key = p.host().kernel().find_by_test_id("target")[0];
+        // Even if an animation was optimistically lowered before layout bound its scroll timeline,
+        // `reclaim_timeline_bound()` reclaims it so Rust samples the timeline-driven value.
+        let node = ((key.generation as u64) << 32) | (key.index as u64);
+        assert!(p.host().engine.timeline_bound(node));
+        p.host_mut().lowered.insert(node, 1);
+        p.host_mut().engine.set_node_sampled(node, false);
+        assert!(p.host_mut().reclaim_timeline_bound());
+        assert_eq!(p.host().lowered_mask(key), 0);
+    }
 }

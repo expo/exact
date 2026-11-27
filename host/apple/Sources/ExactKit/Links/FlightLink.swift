@@ -63,6 +63,8 @@ package protocol FlightHosting: AnyObject {
     func landInside(_ view: PlatformView)
     func reset()
     func isFlying(_ view: NodeView) -> Bool
+    /// Whether `view` or any ancestor is currently in an active flight.
+    func hasFlyingAncestor(_ view: PlatformView) -> Bool
     /// Each flight's slot placed on the pixel grid.
     func regridSlots()
     /// The slot a flying `view` lands in, while it flies.
@@ -101,6 +103,7 @@ package final class NoFlights: FlightHosting {
     package func landInside(_ view: PlatformView) {}
     package func reset() {}
     package func isFlying(_ view: NodeView) -> Bool { false }
+    package func hasFlyingAncestor(_ view: PlatformView) -> Bool { false }
     package func regridSlots() {}
     package func slot(of view: NodeView) -> PlatformView? { nil }
     package func owns(_ view: PlatformView) -> Bool { false }

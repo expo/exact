@@ -77,7 +77,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// between turns: its answer, -1 when refused. A view hosted or let go
     /// paints again.
     pub fn hatch_act(&mut self, node: u32, kind: i32, text: Option<&str>) -> i64 {
-        self.p.reader_hatch_act(node, kind, text)
+        let now = self.now();
+        self.p.reader_hatch_act(node, kind, text, now)
     }
 
     /// Preferred content sizes the reader collected during a display frame (LLP 1024).
@@ -114,6 +115,20 @@ impl<D: DataSource + Default> CanvasHost<D> {
         focused: bool,
     ) {
         self.p.reader_frame_focused(id, key, session, focused);
+    }
+
+    /// An unpartitioned iframe's `window.postMessage` string (LLP 1156.008.001 B1).
+    pub fn frame_message(&mut self, id: u32, key: exact_kernel::NodeKey, session: u64, text: &str) {
+        self.force |= self.p.reader_frame_message(id, key, session, text);
+    }
+
+    /// Immutable boot-time media grants (`device.camera` bit 0, `device.microphone` bit 1)
+    /// for Android-only grant-gated `WebChromeClient.onPermissionRequest` (LLP 1156.008.001 B1b).
+    pub fn frame_media_grants(&self) -> i32 {
+        let grants = self.p.host.runner().data().grants();
+        let cam = i32::from(exact_runner::device::granted(grants, "camera"));
+        let mic = i32::from(exact_runner::device::granted(grants, "microphone"));
+        cam | (mic << 1)
     }
 
     /// The reader's iframe's `FrameNavigation` record (LLP 1020.002 D2).

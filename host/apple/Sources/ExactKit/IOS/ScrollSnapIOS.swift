@@ -19,6 +19,11 @@ extension NodeView {
         }
         var start = dragStart(scrollView)
         #if os(iOS)
+        if PinchLift.consume(for: scrollView) {
+            targetContentOffset.pointee = scrollView.contentOffset
+            listVelocity = .zero
+            return
+        }
         if let list = (heightRecognizer as? SheetScrollGesture)?.listDrag(in: scrollView) {
             start.y = list.start
             if list.atStart {
@@ -42,18 +47,19 @@ extension NodeView {
 
     /// UIKit's paging (`isPagingEnabled`, SwiftUI's `.paging`) for a scroller
     /// whose snap it is (LLP 1008 §9, as amended for #219): one mandatory
-    /// axis, a snapport that is the whole scrollport (no inset, border or
-    /// `scroll-padding`), every snap position (alignment and `scroll-margin`
-    /// applied) at a multiple of the snapport, every area
-    /// `scroll-snap-stop: always`, and a position at every multiple UIKit
+    /// axis, a snapport that is the whole scroll view along it (no inset,
+    /// border or `scroll-padding`), no inset above or below it whichever its
+    /// axis, every snap position (alignment and `scroll-margin` applied) at a
+    /// multiple of the snapport, every area `scroll-snap-stop: always`, and a position at every multiple UIKit
     /// pages to, from the start to the content's end: UIKit rests only at
     /// those, so a missing page would be a rest with no area (a virtualized
     /// list's unmounted pages are missing, and it snaps by the rule). UIKit
     /// then moves one page a flick and settles as its pagers do. Set as a
     /// drag begins.
     func pagesByViewport(_ scrollView: UIScrollView) -> Bool {
+        let inset = scrollView.adjustedContentInset
         guard let kind = ScrollSnap.Kind(style["scroll_snap_type"]?.string), kind.mandatory, kind.x != kind.y,
-              scrollView.adjustedContentInset == .zero else { return false }
+              inset.top == 0, inset.bottom == 0, kind.y || inset.left == 0 && inset.right == 0 else { return false }
         let vertical = kind.y, port = vertical ? scrollView.bounds.height : scrollView.bounds.width
         let sides = vertical ? ["top", "bottom"] : ["left", "right"]
         guard port > 0, sides.allSatisfy({ number("border_width_\($0)", number("border_width")) == 0 && (style["scroll_padding_\($0)"]?.length(basis: port) ?? 0) == 0 }) else { return false }
@@ -87,10 +93,12 @@ extension NodeView {
         return
         #else
         guard scrollView === self.scrollView, scrollView.isPagingEnabled else { return }
-        let pan = scrollView.panGestureRecognizer.velocity(in: scrollView)
+        let suppressed = PinchLift.consume(for: scrollView)
+        if suppressed { scrollView.setContentOffset(scrollView.contentOffset, animated: false) }
+        let pan = suppressed ? .zero : scrollView.panGestureRecognizer.velocity(in: scrollView)
         let velocity = CGPoint(x: -pan.x / 1000, y: -pan.y / 1000), reach = 0.99 / (1 - 0.99), at = scrollView.contentOffset
-        let rest = snappedOffset(CGPoint(x: at.x + velocity.x * reach, y: at.y + velocity.y * reach), in: scrollView, release: at,
-                                 drag: (dragStart(scrollView), velocity))
+        let rest = suppressed ? at : snappedOffset(CGPoint(x: at.x + velocity.x * reach, y: at.y + velocity.y * reach), in: scrollView, release: at,
+                                  drag: (dragStart(scrollView), velocity))
         // The rule's rest is recorded either way, for a re-snap after layout (`resnap`).
         guard handlers.contains("scrolldragend") else { return }
         presenter?.scrollDrag(id, (velocity, CGPoint(x: rest.x + scrollLeftInset(scrollView), y: rest.y + scrollTopInset(scrollView))))

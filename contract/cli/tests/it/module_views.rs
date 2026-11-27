@@ -74,6 +74,30 @@ impl Drop for App {
 }
 
 #[test]
+fn a_package_views_own_navigation_split_prop_is_the_modules() {
+    // LLP 1024 D1, LLP 1127 D1: a prop the package declares is the module's, which no stack reads, so it earns no
+    // placement warning, whatever each use passes
+    let interface = INTERFACE.replace(
+        r#""caption": "option<string>" }"#,
+        r#""caption": "option<string>", "navigationSplit": "option<string>" }"#,
+    );
+    assert_ne!(interface, INTERFACE, "the fixture moved");
+    let source = "component App\n  view\n    column\n      Wrap(mode=\"placeholder\")\n      Wrap(mode=\"none\")\ncomponent Wrap\n  props\n    mode: string\n  view\n    swatch-box navigationSplit=mode testId=\"box\"\n";
+    let app = App::new("split-prop", source, &[]);
+    std::fs::write(
+        app.0.join("node_modules/@fixture/swatch/exact.json"),
+        interface,
+    )
+    .unwrap();
+    let (result, warnings) = contract::compile_path_all_warned(&app.0.join("app.contract"), false);
+    result.unwrap();
+    assert!(
+        warnings.iter().all(|w| w.id != "lower-navigation-split"),
+        "{warnings:?}"
+    );
+}
+
+#[test]
 fn a_package_gpu_surface_checks_its_positional_arity() {
     let declaration = r#"{"kind":"interface","name":"@fixture/sky","version":"1.0.0",
         "gpu":{"crate":"rust","exactGpu":"0.4","surfaces":{"sky":{"arity":1,"factory":"sky::surface"}}}}"#;
@@ -686,4 +710,84 @@ fn the_bake_refuses_a_tag_declared_twice_or_by_no_one() {
     let (id, message) = refused(&app);
     assert_eq!(id, "bake-unknown-module");
     assert!(message.contains("did you mean `swatch-box`"), "{message}");
+}
+
+#[test]
+fn local_view_factories_and_guards_share_one_roster() {
+    let app = App::new("hosts", "", &[]);
+    let manifest = app.0.join("app.json");
+    let write_roster = |items: Json| {
+        std::fs::write(
+            &manifest,
+            json!({"app":{"id":"dev.test.hosts","name":"Hosts"},"modules":items}).to_string(),
+        )
+        .unwrap();
+    };
+    write_roster(
+        json!(["shared-view", {"tag":"other-view"}, {"tag":"apple-view","hosts":["ios","macos"]}, {"tag":"phone-view","hosts":["android"]}]),
+    );
+    let read = contract::Manifest::read(&app.0).unwrap();
+    let roster = contract::native::roster(&read).unwrap();
+    assert_eq!(
+        roster.tags_on("ios"),
+        ["shared-view", "other-view", "apple-view"]
+    );
+    assert_eq!(roster.tags_on("tvos"), ["shared-view", "other-view"]);
+    let path = app.0.join("app.contract");
+    let compile = |body: &str| {
+        std::fs::write(&path, format!("shape Page\n  platform: string\ncomponent App\n  resource page = exactPage() as shape Page\n  state enabled = true\n  view\n    column\n{body}\ncomponent Wrap\n  slot\n  view\n    column\n      children\n")).unwrap();
+        contract::compile_path(&path)
+    };
+    for body in [
+        r#"      if "android" == page.platform || false
+        phone-view"#,
+        "      if page.platform == \"ios\" || page.platform == \"macos\"\n        apple-view",
+        "      if enabled && page.platform == \"android\"\n        Wrap()\n          phone-view",
+        "      if page.platform != \"android\"\n        shared-view\n      else\n        phone-view",
+    ] {
+        compile(body).unwrap_or_else(|e| panic!("{body}: {e:?}"));
+    }
+    compile("      match page.platform\n        case \"android\"\n          phone-view testId=\"phone\"\n        case \"macos\"\n          apple-view testId=\"apple\"").unwrap();
+    use exact_runner::page::Platform;
+    for (platform, phone, apple) in [
+        (Platform::Android, 1, 0),
+        (Platform::Macos, 0, 1),
+        (Platform::Web, 0, 0),
+    ] {
+        let (runner, _) = platform.boot(|| boot(&app));
+        assert_eq!(runner.kernel().find_by_test_id("phone").len(), phone);
+        assert_eq!(runner.kernel().find_by_test_id("apple").len(), apple);
+    }
+    for body in [
+        "      phone-view",
+        "      if page.platform == \"ios\"\n        phone-view",
+        "      if enabled || page.platform == \"android\"\n        phone-view",
+        "      if enabled && page.platform != \"android\"\n        shared-view\n      else\n        phone-view",
+        "      for page in [Page(platform=\"android\")] key=page.platform\n        if page.platform == \"android\"\n          phone-view",
+    ] {
+        let e = compile(body).err().expect(body);
+        assert_eq!(e.id, "bake-module-host", "{e}");
+        let page = if body.contains("for page") { "hostPage" } else { "page" };
+        assert!(e.message.contains("phone-view") && e.message.contains(&format!("if {page}.platform == \"android\"")));
+        assert_eq!(e.span.line as usize, 7 + body.lines().count());
+    }
+    write_roster(
+        json!([{"tag":"wide-view","hosts":["ios","tvos","macos","web","linux","windows"]}]),
+    );
+    compile("      if page.platform == \"android\"\n        text \"phone\"\n      else\n        wide-view").unwrap();
+    write_roster(json!([{"tag":"wide-view","hosts":contract_syntax::MODULE_PLATFORMS}]));
+    compile("      wide-view").unwrap();
+    let terminal = contract::compile_path_terminal(&path).unwrap_err();
+    assert!(terminal.iter().any(|e| e.id == "bake-module-host"));
+    for items in [
+        json!(["phone-view", {"tag":"phone-view"}]),
+        json!([{"tag":"phone-view","hosts":[]}]),
+        json!([{"tag":"phone-view","hosts":["phone"]}]),
+        json!([{"tag":"phone-view","slots":[]}]),
+    ] {
+        write_roster(items);
+        let e = compile("      shared-view").err().unwrap();
+        assert_eq!(e.id, "app-manifest");
+        assert!(e.message.contains("modules[") && e.message.contains("phone-view"));
+    }
 }

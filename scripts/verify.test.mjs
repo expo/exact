@@ -471,7 +471,7 @@ test.skipIf(!!chromium().unavailable).each([true, false])('owned servers start e
       }
       await running.stop(); running = null;
       assert.equal(await fetch(`http://127.0.0.1:${port}`).then(() => true, () => false), false);
-      assert.equal(existsSync(resolve(dir, '.exact/test/owner')), false);
+      assert.equal(existsSync(resolve(dir, `.exact/test/p${port}/owner`)), false);
       for (const verb of ['test', 'verify']) {
         const r = spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), verb, 'web', ...(verb === 'verify' ? ['--json'] : [])],
           { cwd: dir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, EXACT_FEEDBACK: '0' } });
@@ -509,18 +509,18 @@ test.skipIf(!!chromium().unavailable)('verify on a server app: its own server on
     const verify = () => { const r = spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), 'verify'], { cwd: dir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, EXACT_FEEDBACK: '0' } }); return { ...r, lines: r.stdout.trim().split('\n') }; };
     const clean = verify();
     assert.equal(clean.status, 0, clean.stdout + clean.stderr);
-    assert.equal(clean.lines[0], `server: bun server.ts at http://127.0.0.1:${port}, on an empty database for each test (.exact/verify/db.sqlite, removed after)`, clean.stdout);
+    assert.equal(clean.lines[0], `server: bun server.ts at http://127.0.0.1:${port}, on an empty database for each test (.exact/verify/p${port}/db.sqlite, removed after)`, clean.stdout);
     assert.ok(clean.lines.includes('tests: 3 passed, 0 failed'), clean.stdout);
     // The rest pattern's test ends on an empty list as Grace: the relaunch holds its persona, not new rows.
     assert.match(clean.stdout, /^relaunch on .*: its state holds what the test left/m);
     assert.doesNotMatch(clean.stdout, /^ +lost /m);
     assert.ok(readFileSync(resolve(dir, 'data.db')).equals(before), 'the builder\'s data.db is as it was');
-    assert.deepEqual(['data.db-wal', '.exact/verify/db.sqlite'].filter((f) => existsSync(resolve(dir, f))), []);
+    assert.deepEqual(['data.db-wal', `.exact/verify/p${port}/db.sqlite`].filter((f) => existsSync(resolve(dir, f))), []);
     // LLP 1116.007 D2: test and an app's API-test wrapper share the server the wrapper starts.
     const plain = (verb = 'test') => spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), verb, 'web'], { cwd: dir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, EXACT_FEEDBACK: '0' } });
     const tested = plain();
     assert.equal(tested.status, 0, tested.stdout + tested.stderr);
-    assert.match(tested.stderr, new RegExp(`^test: bun server\\.ts at http://127\\.0\\.0\\.1:${port}, on an empty database for each test \\(\\.exact/test/db\\.sqlite, removed after\\)$`, 'm'));
+    assert.match(tested.stderr, new RegExp(`^test: bun server\\.ts at http://127\\.0\\.0\\.1:${port}, on an empty database for each test \\(\\.exact/test/p${port}/db\\.sqlite, removed after\\)$`, 'm'));
     assert.match(tested.stdout, /^3 passed, 0 failed$/m);
     assert.ok(readFileSync(resolve(dir, 'data.db')).equals(before), 'test leaves the builder\'s data.db as it was');
     writeFileSync(resolve(dir, 'test.mjs'), "const { withAppServer } = await import(`${process.env.EXACT}/scripts/verify.mjs`);\nconst built = await Bun.spawn(['bun', 'exact.mjs', 'web-build'], { cwd: import.meta.dir, stdio: ['inherit', 'inherit', 'inherit'] }).exited;\nif (built) process.exit(built);\nprocess.exit(await withAppServer(import.meta.dir, () =>\n  Bun.spawn(['bun', 'exact.mjs', 'test', ...process.argv.slice(2)], { cwd: import.meta.dir, stdio: ['inherit', 'inherit', 'inherit'] }).exited));\n");
@@ -529,7 +529,7 @@ test.skipIf(!!chromium().unavailable)('verify on a server app: its own server on
     const old = plain('api-test');
     assert.equal(old.status, 0, old.stdout + old.stderr);
     assert.match(old.stdout, /^1 passed, 0 failed$/m);
-    assert.deepEqual(['data.db-wal', '.exact/test/db.sqlite', '.exact/api-test/db.sqlite', '.exact/api-test/owner'].filter((f) => existsSync(resolve(dir, f))), []);
+    assert.deepEqual(['data.db-wal', `.exact/test/p${port}/db.sqlite`, `.exact/api-test/p${port}/db.sqlite`, `.exact/api-test/p${port}/owner`].filter((f) => existsSync(resolve(dir, f))), []);
     // Their dev server (started here, so this test may stop it) holds the port: one line naming it, and it runs on.
     const dev = Bun.spawn([process.execPath, 'server.ts'], { cwd: dir, stdout: 'ignore', stderr: 'ignore' });
     try {
@@ -537,7 +537,7 @@ test.skipIf(!!chromium().unavailable)('verify on a server app: its own server on
       const refused = verify();
       assert.equal(refused.status, 1, refused.stdout + refused.stderr);
       assert.deepEqual([refused.stdout, refused.stderr.trim().split('\n').length], ['', 1], refused.stdout + refused.stderr); // one line, on stderr
-      assert.match(refused.stderr, new RegExp(`^verify: http://127\\.0\\.0\\.1:${port} already answers \\(pid ${dev.pid}: .*server\\.ts\\), and the tests would write into that server's database: stop it \\(kill ${dev.pid}\\) and run this again, which starts server\\.ts itself on an empty one$`, 'm'));
+      assert.match(refused.stderr, new RegExp(`^verify: http://127\\.0\\.0\\.1:${port} already answers \\(pid ${dev.pid}: .*server\\.ts\\), and the tests would write into that server's database: run on an alternate port \\(PORT=<free> or --backend http://127\\.0\\.0\\.1:<free>\\), or stop it \\(kill ${dev.pid}\\) and run this again, which starts server\\.ts itself on an empty one$`, 'm'));
       assert.equal(dev.exitCode, null, 'the dev server runs on');
       const held = plain();
       assert.equal(held.status, 1, held.stdout + held.stderr);
@@ -553,7 +553,7 @@ test.skipIf(!!chromium().unavailable)('verify on a server app: its own server on
       assert.equal(r.status, 1, r.stdout + r.stderr);
       assert.deepEqual([r.stdout, line.test(r.stderr)], ['', true], r.stdout + r.stderr);
     }
-    assert.deepEqual(['.exact/test/db.sqlite', '.exact/verify/db.sqlite'].filter((f) => existsSync(resolve(dir, f))), []); // nothing started
+    assert.deepEqual([`.exact/test/p${port}/db.sqlite`, `.exact/verify/p${port}/db.sqlite`].filter((f) => existsSync(resolve(dir, f))), []); // nothing started
   } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 300_000);
 
@@ -1345,6 +1345,11 @@ test.each(['moved clock', 'resource date', 'pinned date', 'duplicate names', 'ex
     }}));
   `);
   try {
+    const evidence = resolve(dir, '.exact', 'verify');
+    if (authoredShot) {
+      mkdirSync(evidence, { recursive: true });
+      for (const name of ['web-stale.png', 'android-stale.png', 'web-notes.txt']) writeFileSync(resolve(evidence, name), 'previous run');
+    }
     const r = spawnSync(process.execPath, ['--preload', preload, resolve(import.meta.dir, 'verify.mjs'), 'web', '--app', dir, '--json', '--shots', resolve(dir, 'shots')],
       {encoding:'utf8',timeout:30000});
     const verdict = JSON.parse(r.stdout);
@@ -1362,6 +1367,8 @@ test.each(['moved clock', 'resource date', 'pinned date', 'duplicate names', 'ex
     } else if (!['end screenshot','first screen crash'].includes(scenario)) assert.ok(verdict.relaunch.problems?.some(p=>p.includes('lost')), r.stdout + r.stderr);
     const captures = JSON.parse(readFileSync(resolve(dir, 'captures.json'), 'utf8'));
     if (authoredShot) {
+      assert.equal(existsSync(resolve(evidence, 'web-stale.png')), false);
+      for (const name of ['android-stale.png', 'web-notes.txt']) assert.equal(readFileSync(resolve(evidence, name), 'utf8'), 'previous run');
       assert.equal(captures[authoredShot],1,'replay must not overwrite an authored screenshot, even if replay fails');
       assert.equal(readFileSync(resolve(dir,'shots','web-t1-authored.png'),'utf8'),'1');
       assert.ok(Object.keys(captures).some(p=>p.includes('/replay/')), 'replay writes its own screenshot');
@@ -1403,6 +1410,7 @@ test.each(['ios', 'windows'])('verify %s captures a fresh server after replay', 
     }}));
     const capture=()=>writeFileSync(dir+'/capture.json',JSON.stringify({rows,passes}));
     mock.module(at('../host/windows/build.mjs'),()=>({openOnDesktop:async()=>{capture();return {error:'captured'};}}));
+    mock.module(at('../host/apple/feel/probe.mjs'),()=>({recorderEnv:()=>({}),play:async()=>({}),finish:()=>({}),summary:()=>''}));
     mock.module(at('agent-check.mjs'),()=>({checkOp:async()=>({text:'check ios · light: no findings (text fits)',check:[{viewport:{w:390,h:844},scheme:'light',findings:[]}]})}));
     mock.module(at('agent.mjs'),()=>({open:async(o)=>{
       if(o.touch){capture();throw new Error('captured');}
@@ -1445,7 +1453,7 @@ test('verify retains an earlier tour server crash after a later tour test succee
       let say, out, end;
       const group={alive:true,exit(status){if(!group.alive)return;group.alive=false;say(new TextEncoder().encode(JSON.stringify(status)+'\\n'));}};
       child={pid:65000,exitCode:null,signalCode:null,stdout:new ReadableStream({start(c){out=c;say=b=>c.enqueue(b);say(new TextEncoder().encode('{"started":true,"group":65000}\\n'));}}),stderr:new ReadableStream({start(c){c.close();}}),
-        exited:new Promise(done=>{end=done;}),kill(){group.exit({exitCode:null,signalCode:'SIGKILL'});writeFileSync(dir+'/.exact/verify/ended-65000',JSON.stringify({group:65000,token}));out.close();child.exitCode=0;end(0);}};
+        exited:new Promise(done=>{end=done;}),kill(){group.exit({exitCode:null,signalCode:'SIGKILL'});writeFileSync(dir+'/.exact/verify/p1/ended-65000',JSON.stringify({group:65000,token}));out.close();child.exitCode=0;end(0);}};
       return group;
     };
     const spawnServer=Bun.spawn;

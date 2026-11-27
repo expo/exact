@@ -12,11 +12,8 @@ import java.nio.IntBuffer
  * paints with in place of its colour. `[43, len, kind, spread, g×6, m×6, n, (offset, ARGB)×n]`.
  */
 internal object Shaders {
-    private val local = Matrix()
-    private val values = FloatArray(9)
-
     /** The shader the op at [i] describes, or null for a malformed one. */
-    fun read(b: IntBuffer, i: Int): Shader? {
+    fun read(b: IntBuffer, i: Int, local: Matrix = Matrix(), values: FloatArray = FloatArray(9)): Shader? {
         fun f(k: Int) = java.lang.Float.intBitsToFloat(b.get(i + k))
         val n = b.get(i + 16)
         if (n < 1) return null

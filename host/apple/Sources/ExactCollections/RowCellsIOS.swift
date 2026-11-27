@@ -342,7 +342,7 @@ final class RowCells: RowCellsHosting {
 
     #if os(iOS)
     private func usesGround(_ node: NodeView, in row: NodeView) -> Bool {
-        node.platformPressDims && row.rowPress === node && !row.hasOwnGround(pressing: node)
+        node.platformOwnsPress && row.rowPress === node && !row.hasOwnGround(pressing: node)
     }
     #endif
 

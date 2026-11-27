@@ -46,6 +46,10 @@ component App
 "#;
 
 fn boot() -> Presenter<()> {
+    boot_from(APP)
+}
+
+fn boot_from(template: &str) -> Presenter<()> {
     let rows: String = (0..100)
         .map(|r| {
             format!(
@@ -53,7 +57,7 @@ fn boot() -> Presenter<()> {
             )
         })
         .collect();
-    let source = APP.replace("                ROWS\n", &rows);
+    let source = template.replace("                ROWS\n", &rows);
     let (mut p, error) = Presenter::boot_with(
         &crate::test_plan(&source),
         (),
@@ -126,6 +130,57 @@ fn a_list_under_a_full_screen_route_keeps_its_place() {
     press(&mut p, "close");
     assert_eq!(p.scroll_of(port), (0., 800.));
     assert_eq!(row_y(&mut p, "row40"), shown, "the same row where it was");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_hidden_routes_saved_offset_does_not_block_the_shown_routes_ahead_frame() {
+    let source = APP.replace(
+        "            button \"Close\" testId=\"close\" press=close",
+        "            button \"Close\" testId=\"close\" press=close\n            scroll testId=\"photo-port\" width=400 height=300\n              box width=400 height=1200",
+    );
+    let mut p = boot_from(&source);
+    attach(&mut p);
+    let home = named(&p, "port");
+    assert_eq!(p.scroll_to(home, (0., 800.)), Some((0., 800.)));
+    attach(&mut p);
+    let before = row_y(&mut p, "row40");
+    commit(&mut p, "open");
+    let cover = p.panel_frame_ahead(true).unwrap();
+    assert!(
+        !p.panel_can_prepare_ahead(),
+        "home disappears in the pending picture"
+    );
+    assert!(p.panel_complete(&cover));
+    assert!(p.display_presented(&cover, 0.).is_none());
+    assert!(p.host.route_visibility(home).0);
+    assert_eq!(p.scroll_of(home), (0., 800.));
+    assert!(!p.boxes().iter().any(|b| b.id == home));
+
+    let photo = named(&p, "photo-port");
+    p.wheel(photo, 0., 40.).unwrap();
+    let b = p.panel_frame_ahead(true).unwrap();
+    p.wheel(photo, 0., 40.).unwrap();
+    assert!(
+        p.panel_can_prepare_ahead(),
+        "home is absent from both pictures"
+    );
+    let c = p.panel_frame_ahead(true).unwrap();
+    assert!(p.panel_complete(&b));
+    assert_eq!(p.scroll_of(photo), (0., 80.));
+    assert!(p.panel_complete(&c));
+    assert_eq!(p.scroll_of(home), (0., 800.));
+
+    commit(&mut p, "close");
+    let uncover = p.panel_frame_ahead(true).unwrap();
+    assert!(
+        !p.panel_can_prepare_ahead(),
+        "home returns in the pending picture"
+    );
+    assert!(p.panel_complete(&uncover));
+    attach(&mut p);
+    assert_eq!(p.scroll_of(home), (0., 800.));
+    assert_eq!(row_y(&mut p, "row40"), before);
 }
 
 #[test]

@@ -18,13 +18,13 @@ export function createTimerScheduler({ now, advance, present = null, release = n
   function schedule() {
     if (running || disposed) return;
     if (timeout !== null) clearDelay(timeout); timeout = null;
-    const wake = timerWake(due, now(), agentMode, tolerance), each = presenting();
+    const time = now(), wake = timerWake(due, time, agentMode, tolerance), each = presenting();
     if (requested || each || wake.kind === 'frame') {
       if (frame === null) frame = raf(onFrame);
     } else {
       if (frame !== null) cancel(frame); frame = null;
     }
-    if (wake.kind === 'timeout' && (each || frame === null)) timeout = delay(onTimeout, wake.ms);
+    if (wake.kind !== 'none') timeout = delay(onTimeout, wake.kind === 'timeout' ? wake.ms : Math.min(Math.max(0, due - time), 2147483647));
   }
   function advanceDue() {
     const time = now();

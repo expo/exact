@@ -25,6 +25,7 @@ mod boot;
 #[path = "canvas2d.rs"]
 mod canvas2d;
 mod complete;
+mod facts;
 pub mod fonts;
 mod mode;
 mod outcome;
@@ -902,6 +903,13 @@ impl<D: DataSource> Host<D> {
                     let id = node.id;
                     self.update(id, batch);
                 }
+            }
+            if let Some(node) = r
+                .reconcile_field
+                .and_then(|k| self.runner.kernel().node_by_key(k))
+            {
+                let value = exact_kernel::control::bound_field_value(node.props);
+                batch.props(node.id, &[("value", value.into_owned())], &[]);
             }
             self.reveal_animations(r, batch);
             // This commit's springs, at its own time: the style (the target)

@@ -8,6 +8,7 @@
 
 pub use exact_svg_filter::{
     CompositeOp, Convolve, Filter, Input, Light, Lighting, Op, Primitive, Transfer, BLEND_MODES,
+    MAX_CONVOLVE_ORDER, MAX_OCTAVES, MAX_PRIMITIVES, MAX_TABLE_VALUES,
 };
 
 use crate::gradient::ColorText;
@@ -101,6 +102,9 @@ impl FilterList {
         let mut out = Vec::new();
         let mut rest = t;
         while !rest.is_empty() {
+            if out.len() >= MAX_PRIMITIVES {
+                return None;
+            }
             let open = rest.find('(')?;
             // A function's name meets its parenthesis: `saturate (2)` is
             // not a function.

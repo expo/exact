@@ -30,6 +30,20 @@ mod packages;
 #[cfg(test)]
 mod packages_tests;
 
+/// A package's synchronous form is installed even in an APK with no app module.
+#[cfg(any(target_os = "android", test))]
+fn install_android_handlers(
+    slot: &exact_runner::Native,
+    handler: &exact_runner::NativeHandler,
+    app: bool,
+    call: Option<exact_runner::NativeCall>,
+) {
+    if app {
+        slot.host(Some(handler.clone()));
+    }
+    slot.host_call(call);
+}
+
 /// What the presenter asks of its shell. The number is the kind on the wire.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -122,6 +136,8 @@ pub enum Request {
     /// activities the reader shows, never by this request's id, as Apple's
     /// arm answers (`host/apple/src/activities.rs`).
     Activity(String),
+    /// Pin the activity for a video allocation, or expand it.
+    VideoPictureInPicture(Option<(ViewId, exact_kernel::NodeKey, u64)>),
 }
 
 /// What a picker is opened with, each value as HTML writes it and empty
@@ -175,6 +191,7 @@ impl Request {
             Request::WindowTitle(_) => 22,
             Request::Drag(_) => 23,
             Request::Activity(_) => 24,
+            Request::VideoPictureInPicture(_) => 25,
         }
     }
 }
@@ -352,6 +369,17 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
             string(out, callback);
             string(out, state);
             out.push(i32::from(*logout));
+        }
+        Request::VideoPictureInPicture(target) => {
+            if let Some((id, key, session)) = target {
+                out.extend([
+                    *id as i32,
+                    key.index as i32,
+                    key.generation as i32,
+                    *session as i32,
+                    (*session >> 32) as i32,
+                ]);
+            }
         }
         Request::AuthEnd(id) => out.push(*id as i32),
         Request::Haptic(haptic) => out.push(*haptic as i32),
@@ -645,10 +673,12 @@ impl<D: DataSource> Presenter<D> {
         });
         let slot = self.host.runner().native_slot();
         #[cfg(target_os = "android")]
-        if let Some(call) = self.requests.app_module.call() {
-            slot.host(Some(handler.clone()));
-            slot.host_call(Some(call));
-        }
+        install_android_handlers(
+            &slot,
+            &handler,
+            self.requests.app_module.hosts(),
+            self.requests.app_module.call(),
+        );
         slot.host_packages(Some(handler));
     }
 
@@ -659,6 +689,7 @@ impl<D: DataSource> Presenter<D> {
         for source in self.requests.packages.take_pictures() {
             self.picture_changed(&source, false);
         }
+        let ready = self.requests.packages.take_ready();
         let calls = std::mem::take(
             &mut *self
                 .requests
@@ -666,7 +697,7 @@ impl<D: DataSource> Presenter<D> {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()),
         );
-        if calls.is_empty() {
+        if calls.is_empty() && ready.is_empty() {
             return;
         }
         let mut queued = false;
@@ -676,8 +707,7 @@ impl<D: DataSource> Presenter<D> {
             if self.requests.packages.serves(&extension) {
                 crate::desktop::surface(self.viewport, self.brush.scale, self.pointer);
                 let now = self.host.now();
-                let inbox = self.requests.inbox.clone();
-                (self.requests.packages).dispatch(&body, reply, now, &inbox, &wake);
+                (self.requests.packages).dispatch(&body, reply, now, &wake);
             } else if self.requests.shell {
                 let id = self.queue(Request::Module(String::from_utf8_lossy(&body).into_owned()));
                 self.requests.modules.insert(id, reply);
@@ -688,6 +718,11 @@ impl<D: DataSource> Presenter<D> {
             } else {
                 crate::package::Reply::new(reply).error("NotSupportedError", None);
             }
+        }
+        if !ready.is_empty() {
+            crate::desktop::surface(self.viewport, self.brush.scale, self.pointer);
+            let now = self.host.now();
+            self.requests.packages.dispatch_admitted(ready, now, &wake);
         }
         self.package_lines();
         if queued {

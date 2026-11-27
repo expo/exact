@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fragmentPermissions, manifestFragment } from './android-manifest.mjs';
 import { androidImplementations, appleImplementations, webImplementations } from '../js/bake/src/typescript.mjs';
+import { composedModule } from '../host/apple/compose.mjs';
 import { packageConfig } from '../js/bake/src/package-config.mjs';
 
 test('package implementation filters use the supplied identities and ignore unused source text', () => {
@@ -63,6 +64,26 @@ test('only the selected interface supplies an implementation and configuration w
     assert.ok(androidImplementations(app, extensions)[0].dirs.every(p => p.includes('/@a/swatch/')));
     assert.ok(webImplementations(app, extensions).get('swatch').includes('/@a/swatch/'));
     assert.deepEqual([...packageConfig(app, 'web', { extensions })], [['swatch', { key: 'selected' }]]);
+  } finally { rmSync(app, { recursive: true, force: true }); }
+});
+
+test('geofencing and background declare start=load for Android and Apple composition', () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-start-at-load-'));
+  try {
+    mkdirSync(resolve(app, 'node_modules/@exact'), { recursive: true });
+    symlinkSync(resolve(import.meta.dir, '../packages/geofencing'), resolve(app, 'node_modules/@exact/geofencing'), 'dir');
+    symlinkSync(resolve(import.meta.dir, '../packages/background'), resolve(app, 'node_modules/@exact/background'), 'dir');
+    writeFileSync(resolve(app, 'app.contract'), 'component App\n  view\n    text "plain"\n');
+    const extensions = { geofencing: '@exact/geofencing', background: '@exact/background' };
+    const android = androidImplementations(app, extensions);
+    assert.deepEqual(android.filter(b => b.start).map(b => b.extension).sort(), ['background', 'geofencing']);
+    for (const target of ['ios', 'macos']) {
+      const apple = appleImplementations(app, target, extensions);
+      assert.deepEqual(apple.filter(b => b.start).map(b => b.extension).sort(), ['background', 'geofencing']);
+      const swift = composedModule(apple, false);
+      assert.match(swift, /let exactStartAtLoad: \[String\] = \[[^\]]*"background"/);
+      assert.match(swift, /let exactStartAtLoad: \[String\] = \[[^\]]*"geofencing"/);
+    }
   } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
@@ -510,4 +531,114 @@ test('background transfers export only their imported Android implementation', (
     assert.match(fragment, /android.intent.action.BOOT_COMPLETED/);
     assert.match(fragment, /android.intent.action.MY_PACKAGE_REPLACED/);
   } finally { rmSync(app, { recursive: true, force: true }); }
+});
+
+test('NORMAL_PERMISSIONS admits MODIFY_AUDIO_SETTINGS', () => {
+  const impl = { extension: 'audio', className: 'exact.audio.Module', manifest: { permissions: ['android.permission.MODIFY_AUDIO_SETTINGS'] } };
+  expect(fragmentPermissions([impl])).toEqual(['android.permission.MODIFY_AUDIO_SETTINGS']);
+  expect(manifestFragment([impl])).toBe('');
+});
+
+test('package-private unexported activities emit fixed translucent/opaque entries and stay isolated from rationale/aliases (LLP 1133.030 D9)', () => {
+  const checkout = (manifest, opts) => manifestFragment([{ extension: 'checkout', className: 'com.acme.checkout.CheckoutModule', manifest }], opts);
+  // Default theme is translucent (`@style/ExactTranslucent`), unexported, no intent filter, tools:node="replace".
+  assert.equal(checkout({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }] }, { privacyPolicy: 'https://example.com/privacy' }), [
+    '    <application>',
+    '        <activity android:name="com.acme.checkout.SheetActivity" android:exported="false" android:theme="@style/ExactTranslucent" tools:node="replace" />',
+    '    </application>',
+  ].join('\n'));
+  // Explicit translucent and opaque themes.
+  const both = checkout({
+    activities: [
+      { name: 'com.acme.checkout.SheetActivity', private: true, theme: 'translucent' },
+      { name: 'com.acme.checkout.ScreenActivity', private: true, theme: 'opaque' },
+    ],
+  }, { privacyPolicy: 'https://example.com/privacy' });
+  assert.match(both, /<activity android:name="com\.acme\.checkout\.SheetActivity" android:exported="false" android:theme="@style\/ExactTranslucent" tools:node="replace" \/>/);
+  assert.match(both, /<activity android:name="com\.acme\.checkout\.ScreenActivity" android:exported="false" android:theme="@style\/ExactLaunch" tools:node="replace" \/>/);
+  assert.doesNotMatch(both, /exact\.privacy_policy|exported="true"|<intent-filter/);
+
+  // Coexistence with a rationale activity: only the rationale activity triggers `exact.privacy_policy` and can be an alias target.
+  const mixed = checkout({
+    activities: [
+      { name: 'com.acme.checkout.SheetActivity', private: true },
+      { name: 'com.acme.checkout.RationaleActivity', actions: ['androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE'] },
+    ],
+    aliases: [{
+      name: 'com.acme.checkout.UsageAlias',
+      targetActivity: 'com.acme.checkout.RationaleActivity',
+      action: 'android.intent.action.VIEW_PERMISSION_USAGE',
+      category: 'android.intent.category.HEALTH_PERMISSIONS',
+    }],
+  }, { privacyPolicy: 'https://example.com/privacy' });
+  assert.match(mixed, /<meta-data android:name="exact\.privacy_policy" android:value="https:\/\/example\.com\/privacy" \/>/);
+  assert.match(mixed, /<activity android:name="com\.acme\.checkout\.SheetActivity" android:exported="false" android:theme="@style\/ExactTranslucent" tools:node="replace" \/>/);
+  assert.match(mixed, /<activity android:name="com\.acme\.checkout\.RationaleActivity" android:exported="true" android:theme="@android:style\/Theme\.NoDisplay">/);
+
+  const refuses = (manifest, what) => assert.throws(() => checkout(manifest), (e) => e.message.includes(what) && e.message.includes("checkout's Android implementation"));
+  // Bare activity without `actions` or `private: true` stays refused.
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity' }] }, 'no actions');
+  // Non-true `private` values are refused.
+  for (const bad of [false, 'true', 1, null]) {
+    refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: bad }] }, 'private=');
+  }
+  // Private activity forbids `actions` (even empty).
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, actions: [] }] }, 'takes no intent filter');
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, actions: ['androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE'] }] }, 'takes no intent filter');
+  // Theme allow-list enforcement and refusal on rationale activities.
+  for (const theme of ['dark', '@style/AppCompat', '', null, 1, '__proto__']) {
+    refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, theme }] }, 'not on the list');
+  }
+  refuses({ activities: [{ name: 'com.acme.checkout.RationaleActivity', actions: ['androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE'], theme: 'translucent' }] }, 'only a private activity names a theme');
+  // Disallowed attributes on private activities.
+  for (const extra of [
+    { exported: true }, { exported: false }, { process: ':sheet' }, { launchMode: 'singleTask' },
+    { taskAffinity: '' }, { configChanges: 'orientation' }, { directBootAware: true }, { permission: 'x' },
+  ]) {
+    const key = Object.keys(extra)[0];
+    refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true, ...extra }] }, `"${key}"`);
+  }
+  // Namespace (exact package, rejecting subpackages and lookalike prefixes) and duplicate enforcement.
+  refuses({ activities: [{ name: 'other.pkg.SheetActivity', private: true }] }, 'not a class in com.acme.checkout');
+  refuses({ activities: [{ name: 'com.acme.checkout.sub.SheetActivity', private: true }] }, 'not a class in com.acme.checkout');
+  refuses({ activities: [{ name: 'com.acme.checkout2.SheetActivity', private: true }] }, 'not a class in com.acme.checkout');
+  assert.throws(() => checkout({ carAppService: { name: 'com.acme.checkout.sub.Car', category: 'POI', minCarApiLevel: 1 } }), /must name a class in com\.acme\.checkout/);
+  assert.throws(() => checkout({ carAppService: { name: 'com.acme.checkout2.Car', category: 'POI', minCarApiLevel: 1 } }), /must name a class in com\.acme\.checkout/);
+  refuses({ activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }, { name: 'com.acme.checkout.SheetActivity', private: true }] }, 'twice');
+  refuses({ activities: [{ name: 'com.acme.checkout.Same', private: true }], services: [{ name: 'com.acme.checkout.Same' }] }, 'twice');
+  // Inherited prototype keys are refused as fragment kinds and ignored on activity entries.
+  refuses({ constructor: [] }, 'names "constructor"');
+  const inheritedPrivate = Object.assign(Object.create({ private: true }), { name: 'com.acme.checkout.SheetActivity' });
+  refuses({ activities: [inheritedPrivate] }, 'no actions');
+  // WorkManager's deduplication exception never hides a collision with a non-service component in either order.
+  const wm = 'androidx.work.impl.foreground.SystemForegroundService';
+  const wmActivity = { extension: 'wm-act', className: 'androidx.work.impl.foreground.Module', manifest: { activities: [{ name: wm, private: true }] } };
+  const wmService = { extension: 'wm-svc', className: 'exact.transfer.Module', manifest: { services: [{ name: wm, foregroundServiceType: 'dataSync' }] } };
+  assert.throws(() => manifestFragment([wmActivity, wmService]), /twice/);
+  assert.throws(() => manifestFragment([wmService, wmActivity]), /twice/);
+  assert.equal((manifestFragment([wmService, wmService]).match(/SystemForegroundService/g) ?? []).length, 1);
+  // An exported `<activity-alias>` cannot target a private activity.
+  refuses({
+    activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }],
+    aliases: [{
+      name: 'com.acme.checkout.UsageAlias',
+      targetActivity: 'com.acme.checkout.SheetActivity',
+      action: 'android.intent.action.VIEW_PERMISSION_USAGE',
+      category: 'android.intent.category.HEALTH_PERMISSIONS',
+    }],
+  }, 'not an activity it declares');
+  // Non-object entry in activities list.
+  refuses({ activities: [null] }, 'not an object');
+});
+
+test('HTTPS auth callbacks containing $\' compose literally beside a private activity', async () => {
+  const { withAuthCallbacks } = await import('./android-manifest.mjs');
+  const fragment = manifestFragment([{
+    extension: 'checkout', className: 'com.acme.checkout.CheckoutModule',
+    manifest: { activities: [{ name: 'com.acme.checkout.SheetActivity', private: true }] },
+  }]);
+  const xml = withAuthCallbacks(fragment, ["https://app.test/cb/$'/done"]);
+  assert.equal((xml.match(/<\/application>/g) ?? []).length, 1);
+  assert.ok(xml.includes(`android:path="/cb/$'/done"`));
+  assert.ok(xml.includes('android:name="com.acme.checkout.SheetActivity"'));
 });

@@ -40,12 +40,12 @@ package struct FlatPaint: Equatable {
         "margin_top", "margin_right", "margin_bottom", "margin_left",
         "flex_direction", "flex_wrap", "justify_content", "align_items", "align_self", "align_content",
         "flex_grow", "flex_shrink", "flex_basis", "top", "right", "bottom", "left",
-        "row_gap", "column_gap", "aspect_ratio", "box_sizing", "overflow_x", "overflow_y",
+        "row_gap", "column_gap", "aspect_ratio", "box_sizing",
         "grid_auto_flow", "grid_template_columns", "grid_template_rows", "grid_column", "grid_row", "justify_items",
         "direction", "font_size", "font_weight", "font_style", "font_stretch", "font_variation_settings", "font_family", "line_height", "letter_spacing",
         "font_variant_numeric", "font_variant_ligatures", "font_feature_settings", "line_clamp", "white_space", "text_wrap_style", "font_smoothing", "field_sizing", "overflow_wrap",
         "border_style_top", "border_style_right", "border_style_bottom", "border_style_left", "text_transform",
-        "text_color", "text_shadow", "text_stroke_width", "text_stroke_color", "text_align", "text_overflow", "text_decoration_line", "interpolate_size", "touch_action",
+        "text_color", "text_shadow", "text_stroke_width", "text_stroke_color", "text_align", "text_overflow", "text_decoration_line", "interpolate_size",
         "border_radius_top_left", "border_radius_top_right", "border_radius_bottom_right", "border_radius_bottom_left",
         // A fixed fill paints alike in either scheme (LLP 1034 §8).
         "color_scheme",
@@ -82,6 +82,14 @@ package struct FlatPaint: Equatable {
                 continue // painted only with a width, which is refused above
             case "display":
                 guard value.string != "none" else { return nil }
+            case "overflow_x", "overflow_y":
+                // Scroll containers (`auto`, `scroll`, `hidden`) bound `touch-action`
+                // intersection (Pointer Events §9.2), so the box stays a NodeView.
+                guard !["auto", "scroll", "hidden"].contains(value.string ?? "visible") else { return nil }
+            case "touch_action":
+                // A non-auto touch-action participates in hit-chain gesture
+                // policy (Pointer Events §9.2), so the box stays a NodeView.
+                guard (value.string ?? "auto") == "auto" else { return nil }
             default:
                 return nil
             }

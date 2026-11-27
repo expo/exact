@@ -148,6 +148,7 @@ mod tests {
         let strings = Strings::with_constants(&plan, Arc::clone(&pool));
         let environment = env(&plan, &strings);
         let mut run = vm::Run::<false> {
+            observer: None,
             env: &environment,
             code: plan.code(code),
             allowed_writes: &[],

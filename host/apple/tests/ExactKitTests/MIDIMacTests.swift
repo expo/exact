@@ -538,6 +538,76 @@ final class MIDIMacTests: XCTestCase {
         output.shutdown()
     }
 
+    func testBootClearsOpenInputsAndSubsequentRequestRedeliversPorts() {
+        final class FakeArm {
+            var openedInputs: [Int32] = []
+            var onPorts: MIDITextCallback?
+            var onInput: MIDIInputCallback?
+            var context: UnsafeMutableRawPointer?
+            nonisolated(unsafe) static var current: FakeArm?
+            func makeLibrary() -> MIDILibrary {
+                FakeArm.current = self
+                return MIDILibrary(
+                    open: { ctx, _, ports, input in
+                        guard let arm = FakeArm.current else { return nil }
+                        arm.context = ctx
+                        arm.onPorts = ports
+                        arm.onInput = input
+                        let json = #"{"state":"granted","inputs":[{"id":"101","name":"Keys","manufacturer":"Test","state":"connected"}],"outputs":[]}"#
+                        json.utf8CString.withUnsafeBufferPointer { buf in
+                            buf.baseAddress?.withMemoryRebound(to: UInt8.self, capacity: json.utf8.count) {
+                                ports?(ctx, $0, json.utf8.count)
+                            }
+                        }
+                        return Unmanaged.passUnretained(arm).toOpaque()
+                    },
+                    op: { _, _, _, _, _, _, _ in },
+                    inputs: { _, ptr, count in
+                        guard let arm = FakeArm.current else { return }
+                        arm.openedInputs = ptr.map { Array(UnsafeBufferPointer(start: $0, count: count)) } ?? []
+                    },
+                    refresh: { _ in },
+                    close: { _ in }
+                )
+            }
+            func sendNote(uid: Int32) {
+                let bytes: [UInt8] = [0x90, 60, 100]
+                bytes.withUnsafeBufferPointer { onInput?(context, uid, CACurrentMediaTime(), $0.baseAddress, $0.count) }
+            }
+        }
+
+        let arm = FakeArm()
+        let fakeLib = arm.makeLibrary()
+        var delivered: [String] = []
+        let output = MIDIOutput(log: { _ in }, deliver: { delivered.append($0) }, library: { fakeLib })
+        defer { output.shutdown(); FakeArm.current = nil }
+
+        output.apply(["ops": [["op": "request"], ["op": "open", "inputs": ["101"], "clock": ["101"]]]])
+        wait(1) { delivered.contains { $0.contains("\"state\":\"granted\"") } }
+        XCTAssertEqual(arm.openedInputs, [101])
+        delivered.removeAll()
+
+        // Reload: boot clears open/clock inputs so old sources stop delivering, and a new request re-delivers ports.
+        output.apply(["boot": true, "ops": []])
+        XCTAssertEqual(arm.openedInputs, [], "boot closes previously opened inputs")
+        arm.sendNote(uid: 101)
+        wait(0.1)
+        XCTAssertTrue(delivered.isEmpty, "messages from previously opened inputs are dropped after boot")
+
+        output.apply(["ops": [["op": "request"]]])
+        XCTAssertEqual(delivered.count, 1)
+        XCTAssertTrue(delivered[0].contains("\"state\":\"granted\""), "subsequent request immediately re-delivers cached ports")
+
+        // A library whose open returns nil reports unavailable instead of staying in prompt.
+        let nilLib = MIDILibrary(open: { _, _, _, _ in nil }, op: { _, _, _, _, _, _, _ in },
+                                 inputs: { _, _, _ in }, refresh: { _ in }, close: { _ in })
+        var nilDelivered: [String] = []
+        let nilOut = MIDIOutput(log: { _ in }, deliver: { nilDelivered.append($0) }, library: { nilLib })
+        nilOut.apply(["ops": [["op": "request"]]])
+        XCTAssertEqual(nilDelivered, [#"{"ports":{"state":"unavailable"}}"#])
+        nilOut.shutdown()
+    }
+
     private static let timebase: mach_timebase_info_data_t = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)

@@ -376,7 +376,7 @@ export function heldTicket(pending, target) {
   const named = holds.filter((p) => p.name === name || p.device.args?.id === name);
   const found = named.length ? named : holds.filter((p) => p.device.capability === name);
   const listed = holds.map((p) => `@${p.ticket} ${p.device.capability} at "${p.name}"`).join(', ') || 'none';
-  if (found.length !== 1) throw new Error(`${target}: ${found.length ? `${found.length} holds match; name one by its ticket` : 'no held device request answers at that node or has that capability'} (held: ${listed})${holds.length ? '' : '; nothing is asking yet: tap the control that asks first (a picker, a share, an export), then answer it (`state` lists held requests)'}`);
+  if (found.length !== 1) throw new Error(`${target}: ${found.length ? `${found.length} holds match; name one by its ticket` : 'no held device request answers at that node or has that capability'} (held: ${listed})${holds.length ? '' : '; nothing is asking yet: tap the control that asks first (a picker, browser, composer, share, export or permission), then answer it (`state` lists held requests)'}`);
   return found[0].ticket;
 }
 

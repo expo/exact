@@ -68,13 +68,15 @@ extension MenuHost {
     /// `UIContextMenuInteraction.dismissMenu()` dismisses only a menu its
     /// interaction presents.
     private static func dismissMenus(of bar: UIView) {
+        for interaction in menuInteractions(of: bar) { interaction.dismissMenu() }
+    }
+    /// The interactions that may show the menu of an item in `bar`: its own
+    /// views' and those beside it (`dismissMenus`).
+    static func menuInteractions(of bar: UIView) -> [UIContextMenuInteraction] {
         let controller = (bar as? UINavigationBar)?.delegate as? UINavigationController, page = controller?.topViewController?.viewIfLoaded
         let beside = [controller, controller?.tabBarController].compactMap { $0?.viewIfLoaded }.flatMap(\.subviews)
-        for view in [bar] + beside where page?.isDescendant(of: view) != true { dismissMenus(in: view) }
-    }
-    private static func dismissMenus(in view: UIView) {
-        for case let interaction as UIContextMenuInteraction in view.interactions { interaction.dismissMenu() }
-        for sub in view.subviews { dismissMenus(in: sub) }
+        func found(in view: UIView) -> [UIContextMenuInteraction] { view.interactions.compactMap { $0 as? UIContextMenuInteraction } + view.subviews.flatMap(found) }
+        return ([bar] + beside).filter { page?.isDescendant(of: $0) != true }.flatMap(found)
     }
     /// A bar item's popover that is no menu, opened (or closed, a second
     /// tap) from the item as a native button in the page opens one: lifted,

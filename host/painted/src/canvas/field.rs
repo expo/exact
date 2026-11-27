@@ -126,6 +126,8 @@ const MEASURE: (&std::ffi::CStr, &std::ffi::CStr) = (
 /// # Safety
 /// `env` is the JNI call's.
 pub unsafe fn attach(env: *mut JNIEnv, scale: f32) {
+    #[cfg(target_os = "android")]
+    crate::text::android_advances::attach(env);
     super::time::attach(env);
     super::codec::attach(env);
     let found = READER.get_or_init(|| {

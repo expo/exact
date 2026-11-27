@@ -93,6 +93,7 @@ final class NodeLayer: CALayer {
         node.applyExtension()
         if node.drawsPaint { super.display(); return }
         contents = nil
+        node.drewFallbackText = false
         if node.isParagraph {
             // Text's pixels are the raster layer's; this one keeps none, and
             // the Numerals capability, which drew it on one line, lets go.

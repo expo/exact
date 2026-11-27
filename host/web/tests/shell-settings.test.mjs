@@ -182,3 +182,67 @@ check(`the small ones: a control's image is not dragged out, the chevron and the
   expect(await css(evaluate, 'dialog', 'padding')).toBe('0px');
   expect(await css(evaluate, 'alert', 'padding')).toBe('24px');
 }), 60000);
+
+check('accent-color:auto resets --exact-accent-said for spinners across static, SSR and dynamic styles', () => inChrome(async (evaluate) => {
+  const result = await evaluate(`(() => {
+    const root = document.getElementById('exact-root');
+    const probe = document.createElement('div');
+    probe.innerHTML = \`
+      <div id="probe-default" data-exact-progress style="display:grid;width:20px;height:20px"></div>
+      <div style="accent-color:#ff0000;--exact-accent:#ff0000;--exact-accent-said:#ff0000">
+        <div id="probe-authored" data-exact-progress style="display:grid;width:20px;height:20px"></div>
+        <div style="accent-color:auto;--exact-accent:AccentColor;--exact-accent-said:var(--exact-accent-design)">
+          <div id="probe-auto-explicit" data-exact-progress style="display:grid;width:20px;height:20px"></div>
+        </div>
+        <div style="accent-color:auto;--exact-accent:AccentColor;">
+          <div id="probe-auto-ssr" data-exact-progress style="display:grid;width:20px;height:20px"></div>
+        </div>
+        <div id="probe-auto-dyn-host">
+          <div id="probe-auto-dyn" data-exact-progress style="display:grid;width:20px;height:20px"></div>
+        </div>
+      </div>
+      <div style="accent-color:auto;--exact-accent:AccentColor;">
+        <div id="probe-ssr-bare" data-exact-progress style="display:grid;width:20px;height:20px"></div>
+      </div>
+    \`;
+    root.append(probe);
+    const dyn = document.getElementById('probe-auto-dyn-host');
+    dyn.style.setProperty('accent-color', 'auto');
+    dyn.style.setProperty('--exact-accent', 'AccentColor');
+    const bg = id => getComputedStyle(document.getElementById(id), '::before').backgroundImage;
+    const withoutDesign = {
+      defaultBg: bg('probe-default'),
+      authored: bg('probe-authored'),
+      autoExplicit: bg('probe-auto-explicit'),
+      autoSsr: bg('probe-auto-ssr'),
+      autoDyn: bg('probe-auto-dyn'),
+      ssrBare: bg('probe-ssr-bare'),
+    };
+    document.documentElement.style.setProperty('--exact-accent-design', 'rgb(0, 128, 0)');
+    document.documentElement.style.setProperty('--exact-accent-said', 'var(--exact-accent-design)');
+    const withDesign = {
+      defaultBg: bg('probe-default'),
+      authored: bg('probe-authored'),
+      autoExplicit: bg('probe-auto-explicit'),
+      autoSsr: bg('probe-auto-ssr'),
+      autoDyn: bg('probe-auto-dyn'),
+      ssrBare: bg('probe-ssr-bare'),
+    };
+    document.documentElement.style.removeProperty('--exact-accent-design');
+    document.documentElement.style.removeProperty('--exact-accent-said');
+    probe.remove();
+    return { withoutDesign, withDesign };
+  })()`);
+  expect(result.withoutDesign.authored).toContain('rgb(255, 0, 0)');
+  expect(result.withoutDesign.authored).not.toBe(result.withoutDesign.defaultBg);
+  expect(result.withoutDesign.autoExplicit).toBe(result.withoutDesign.defaultBg);
+  expect(result.withoutDesign.autoSsr).toBe(result.withoutDesign.defaultBg);
+  expect(result.withoutDesign.autoDyn).toBe(result.withoutDesign.defaultBg);
+  expect(result.withoutDesign.ssrBare).toBe(result.withoutDesign.defaultBg);
+  expect(result.withDesign.defaultBg).toContain('rgb(0, 128, 0)');
+  expect(result.withDesign.authored).toContain('rgb(255, 0, 0)');
+  expect(result.withDesign.autoExplicit).toBe(result.withDesign.defaultBg);
+  expect(result.withDesign.autoSsr).toBe(result.withDesign.defaultBg);
+  expect(result.withDesign.autoDyn).toBe(result.withDesign.defaultBg);
+  expect(result.withDesign.ssrBare).toBe(result.withDesign.defaultBg);
+}), 60000);

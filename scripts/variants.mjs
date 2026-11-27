@@ -70,7 +70,7 @@ export function resolveVariant(manifest, name) {
   if (!name || manifest.variant) return manifest;
   const variant = manifest.variants?.[name];
   if (!variant) {
-    const known = Object.keys(manifest.variants ?? {});
+    const known = Object.keys(manifest.variants ?? {}).sort();
     throw new Error(`variant ${name}: app.json has no variants.${name} (${known.length ? `it declares ${known.join(', ')}` : 'it declares none'})`);
   }
   const base = manifest.app.id, id = base + variant.idSuffix, host = { ...manifest.host };

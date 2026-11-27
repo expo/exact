@@ -39,7 +39,7 @@ final class UIKitTabAccessoryFactsIOSTests: XCTestCase {
         }
         XCTAssertEqual(Set(boxes.map(\.size)).count, 1, "one box whatever the content asks for: \(boxes)")
         XCTAssertGreaterThan(boxes[0].height, 0)
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        if UIDevice.current.userInterfaceIdiom == .phone, barAlongBottom {
             XCTAssertLessThanOrEqual(boxes[0].maxY, tabs.tabBar.frame.minY, "above the bar on the iPhone")
         }
         tabs.selectedIndex = 1
@@ -53,6 +53,7 @@ final class UIKitTabAccessoryFactsIOSTests: XCTestCase {
         guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("an iPhone's bottom tab bar") }
         guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
         build(scene)
+        guard barAlongBottom else { throw XCTSkip("UIKit sets this iPhone's tab bar in its vertical bar (an iPhone Duo), so no bar's place along the bottom is left for the accessory") }
         let content = Sized(height: nil)
         tabs.setBottomAccessory(UITabAccessory(contentView: content), animated: false)
         settle("the accessory is laid out") { content.window != nil && content.bounds.height > 0 }
@@ -71,6 +72,9 @@ final class UIKitTabAccessoryFactsIOSTests: XCTestCase {
         settle("the route that hides the bar shows") { pushed.viewIfLoaded?.window != nil && nav.transitionCoordinator == nil && content.convert(content.bounds, to: nil) == inline }
         XCTAssertEqual(content.convert(content.bounds, to: nil), inline, "a route that hides the bar keeps it inline too")
     }
+
+    /// Whether UIKit sets the tab bar along the window's bottom, as on an iPhone; an iPhone Duo sets it in its vertical bar.
+    private var barAlongBottom: Bool { tabs.tabBar.frame.minY > tabs.view.bounds.midY }
 
     private func build(_ scene: UIWindowScene) {
         let window = UIWindow(windowScene: scene)

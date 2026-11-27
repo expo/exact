@@ -8,6 +8,7 @@
 import ExactKit
 import CExact
 import Foundation
+import os
 #if os(macOS)
 import AppKit
 #else
@@ -15,6 +16,7 @@ import UIKit
 #endif
 
 enum Updates {
+    fileprivate static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "exact", category: "update")
     /// A check's line, and its download facts when it staged fetched files.
     static var completed: ((String, [String: Any]?) -> Void)?
     private static let api = exact_delivery_api()
@@ -61,21 +63,36 @@ enum Updates {
             return len == 0 ? nil : read(len)
         }
         guard let refusal else { return true }
-        FileHandle.standardError.write(Data("exact update: \(String(decoding: refusal, as: UTF8.self))\n".utf8))
+        let message = String(decoding: refusal, as: UTF8.self)
+        log.error("store open failed: \(message, privacy: .public); booting entry zero")
+        FileHandle.standardError.write(Data("exact update: \(message)\n".utf8))
         return false
     }
 
     /// The selection `select` or `prepare` answered; the caller holds `buffers`.
-    private static func selection(_ len: UInt32) -> Selection? {
+    private static func selection(_ len: UInt32, logLaunch: Bool = false) -> Selection? {
         let obj = (try? JSONSerialization.jsonObject(with: read(len)) as? [String: Any]) ?? [:]
+        let seq = (obj["seq"] as? NSNumber)?.uint64Value ?? 0
         guard let token = (obj["token"] as? NSNumber)?.uint64Value, token != 0,
-              let entry = obj["entry"] as? String else { return nil }
+              let entry = obj["entry"] as? String else {
+            if logLaunch {
+                if let note = obj["note"] as? String, !note.isEmpty {
+                    log.error("launch entry zero seq=\(seq): \(note, privacy: .public)")
+                } else {
+                    log.notice("launch entry zero seq=\(seq)")
+                }
+            }
+            return nil
+        }
         let plan = read(api!.pointee.plan(token))
-        return Selection(token: token, entry: entry, seq: (obj["seq"] as? NSNumber)?.uint64Value ?? 0,
-                         plan: plan, assets: obj["assets"] as? [String] ?? [])
+        let assets = obj["assets"] as? [String] ?? []
+        if logLaunch {
+            log.notice("launch selected seq=\(seq) entry=\(String(entry.prefix(12)), privacy: .public) assets=\(assets.count)")
+        }
+        return Selection(token: token, entry: entry, seq: seq, plan: plan, assets: assets)
     }
 
-    static func selection() -> Selection? { buffers.withLock { selection(api!.pointee.select()) } }
+    static func selection() -> Selection? { buffers.withLock { selection(api!.pointee.select(), logLaunch: true) } }
     static func prepare() -> Selection? { buffers.withLock { selection(api!.pointee.prepare()) } }
     static func commit(_ selection: Selection) -> Bool {
         let refusal: Data? = buffers.withLock {
@@ -83,7 +100,9 @@ enum Updates {
             return len == 0 ? nil : read(len)
         }
         guard let refusal else { return true }
-        fputs("exact update: \(String(decoding: refusal, as: UTF8.self))\n", stderr)
+        let message = String(decoding: refusal, as: UTF8.self)
+        log.error("commit seq=\(selection.seq) failed: \(message, privacy: .public)")
+        fputs("exact update: \(message)\n", stderr)
         return false
     }
     static func discard(_ selection: Selection) { api!.pointee.discard(selection.token) }
@@ -148,7 +167,10 @@ public final class ExactUpdates: ExactAppLifecycle {
         storeOpen = Updates.open(assets: app.assetRoot)
         if storeOpen, let selected = Updates.selection() {
             do { app.installInitial(try generation(selected, app: app)) }
-            catch { Updates.refuse(selected.token, reason: error.localizedDescription) }
+            catch {
+                Updates.log.error("initial generation seq=\(selected.seq) entry=\(String(selected.entry.prefix(12)), privacy: .public) failed: \(error.localizedDescription, privacy: .public); booting entry zero")
+                Updates.refuse(selected.token, reason: error.localizedDescription)
+            }
         }
         Updates.completed = { [weak self] line, download in
             guard let self else { return }
@@ -156,6 +178,11 @@ public final class ExactUpdates: ExactAppLifecycle {
                 ExactEvents.journal("update.download", ["seq": d["seq"] ?? 0, "files": d["files"] ?? 0,
                                                         "seconds": ((d["ms"] as? NSNumber)?.doubleValue ?? 0) / 1000,
                                                         "entry": d["entry"] ?? ""])
+            }
+            if line.hasPrefix("refused") {
+                Updates.log.error("check: \(line, privacy: .public)")
+            } else if !self.immediate || (line != self.status && line != "current") {
+                Updates.log.notice("check: \(line, privacy: .public)")
             }
             // Repeated automatic checks report each outcome once.
             if !self.immediate || (line != self.status && line != "current") { FileHandle.standardError.write(Data("exact update: \(line)\n".utf8)) }
@@ -229,6 +256,7 @@ public final class ExactUpdates: ExactAppLifecycle {
         status = "replacement \(outcome): \(reason)"
     }
     public func initialGenerationRefused(_ app: ExactApp, token: UInt64, reason: String) {
+        Updates.log.error("initial generation token=\(token) refused: \(reason, privacy: .public); booting entry zero")
         if storeOpen { Updates.refuse(token, reason: reason) }
     }
     public func firstPixel(_ app: ExactApp, token: UInt64) {
@@ -252,14 +280,20 @@ public final class ExactUpdates: ExactAppLifecycle {
         guard storeOpen, let app, let selected = Updates.prepare() else { return false }
         let result: ExactApplyResult
         do { result = app.applyGeneration(try generation(selected, app: app), label: "update", commit: { Updates.commit(selected) }) }
-        catch { status = error.localizedDescription; Updates.discard(selected); return false }
+        catch {
+            Updates.log.error("activate seq=\(selected.seq) failed: \(error.localizedDescription, privacy: .public)")
+            status = error.localizedDescription; Updates.discard(selected); return false
+        }
         switch result {
-        case .applied: return true
+        case .applied:
+            Updates.log.notice("activated seq=\(selected.seq) entry=\(String(selected.entry.prefix(12)), privacy: .public)")
+            return true
         case .held(let reason):
             heldSelections[selected.token] = selected
             status = "replacement held: " + reason
             return false
         case .refused(let reason):
+            Updates.log.error("activate seq=\(selected.seq) refused: \(reason, privacy: .public)")
             status = reason; Updates.discard(selected)
             return false
         }

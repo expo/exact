@@ -211,3 +211,254 @@ fn desktop_presence_writes_and_forgets_without_secret_lease_durability() {
     assert_eq!(vault(&root, Locked::Agent).plain("token").unwrap(), None);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn removing_last_presence_policy_tears_down_keystore_and_agent_vaults() {
+    const CHILD: &str = "EXACT_TEST_PRESENCE_TEARDOWN";
+    const APP: &str = "dev.exact.presence.teardown";
+    let Some(mode) = std::env::var(CHILD).ok() else {
+        for mode in ["keystore", "agent"] {
+            let root = scratch(&format!("teardown-{mode}"));
+            let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+            cmd.arg("removing_last_presence_policy_tears_down_keystore_and_agent_vaults")
+                .env(CHILD, mode)
+                .env("HOME", &root)
+                .env("XDG_DATA_HOME", root.join("share"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env_remove("EXACT_AGENT_STORAGE_FRESH");
+            if mode == "agent" {
+                cmd.env("EXACT_AGENT", "1")
+                    .env("EXACT_AGENT_STORAGE", "teardown")
+                    .env_remove("EXACT_STORE");
+            } else {
+                cmd.env_remove("EXACT_AGENT")
+                    .env_remove("EXACT_AGENT_STORAGE")
+                    .env("EXACT_STORE", "real");
+            }
+            let output = cmd.output().unwrap();
+            let _ = std::fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "{mode}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    if mode == "keystore" {
+        on_keystore(keystore);
+    }
+    let mut v1 = backend(APP, "secret.keep token biometry-any").unwrap();
+    v1.backend
+        .enqueue("token", Op::Write(Some(b"secret-v1".to_vec())), None);
+    pump(&mut v1.backend, true);
+    assert_eq!(v1.backend.occupancy("token"), Some(Occupancy::Locked));
+
+    let root = crate::picker::secret_root(APP).unwrap().unwrap();
+    let kv = ibex2::kv::FileStore::new(root.join("kv"));
+    assert!(kv.get(RECORDS, "token").unwrap().is_some());
+    let locked_file = PathBuf::from(std::env::var_os("HOME").unwrap())
+        .join("exact-presence")
+        .join(APP)
+        .join("token#1");
+    if mode == "keystore" {
+        assert!(locked_file.exists());
+    } else {
+        assert!(kv.get(LOCKED, "token#1").unwrap().is_some());
+    }
+
+    // Version 2 removes the last presence policy.
+    assert!(backend(APP, "secret.keep token").is_none());
+    assert_eq!(kv.get(RECORDS, "token").unwrap(), None);
+    if mode == "keystore" {
+        assert!(!locked_file.exists(), "locked keystore file was orphaned");
+    } else {
+        assert!(
+            kv.keys(LOCKED).unwrap().is_empty(),
+            "locked agent item orphaned"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn uncommitted_candidates_and_validation_do_not_mutate_presence_vault() {
+    const CHILD: &str = "EXACT_TEST_PRESENCE_UNCOMMITTED";
+    const APP: &str = "dev.exact.presence.uncommitted";
+    let Some(_) = std::env::var_os(CHILD) else {
+        let root = scratch("uncommitted");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("uncommitted_candidates_and_validation_do_not_mutate_presence_vault")
+            .env(CHILD, "1")
+            .env("HOME", &root)
+            .env("XDG_DATA_HOME", root.join("share"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("EXACT_AGENT", "1")
+            .env("EXACT_AGENT_STORAGE", "uncommitted")
+            .env_remove("EXACT_AGENT_STORAGE_FRESH")
+            .env_remove("EXACT_STORE")
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    #[derive(Clone)]
+    struct PresenceSource {
+        fail_boot: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl exact_runner::DataSource for PresenceSource {
+        fn app_id(&self) -> &str {
+            APP
+        }
+        fn grants(&self) -> &str {
+            GRANTS
+        }
+        fn query(
+            &mut self,
+            name: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<exact_runner::Value, exact_runner::DataError> {
+            Err(exact_runner::DataError::UnknownSource(name.into()))
+        }
+        fn replacement(
+            &self,
+            _: &[u8],
+            _: &str,
+            _: Vec<u8>,
+        ) -> Result<Self, exact_runner::DataError> {
+            Ok(self.clone())
+        }
+        fn configure_secrets(
+            &mut self,
+            _: std::sync::Arc<dyn exact_runner::SharedSecrets>,
+        ) -> Result<(), exact_runner::DataError> {
+            let left = self.fail_boot.load(std::sync::atomic::Ordering::SeqCst);
+            if left == 1 {
+                self.fail_boot.store(0, std::sync::atomic::Ordering::SeqCst);
+                return Err(exact_runner::DataError::Unavailable("refused".into()));
+            }
+            if left > 1 {
+                self.fail_boot
+                    .store(left - 1, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(())
+        }
+    }
+
+    let ok_plan = crate::test_plan("component App\n  view\n    text \"ok\"\n");
+    let bad_plan =
+        crate::test_plan("component App\n  derive boom = 1 / 0\n  view\n    text `${boom}`\n");
+    let fail_boot = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let source = || PresenceSource {
+        fail_boot: fail_boot.clone(),
+    };
+    let (mut presenter, error) = crate::Presenter::boot_with(
+        &ok_plan,
+        source(),
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        crate::presenter::PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    presenter.first_pixel_unshown();
+    assert!(presenter.first_pixel_told());
+
+    let root = crate::picker::secret_root(APP).unwrap().unwrap();
+    let kv = ibex2::kv::FileStore::new(root.join("kv"));
+    let plain = plain_backend(&root);
+    // (a) pending Op::Move: plain copy + locked intent record
+    plain.write("key", Some("pending-secret")).unwrap();
+    kv.set(RECORDS, "key", b"locked biometry-any android.strongBox")
+        .unwrap();
+    // (b) in-flight unprotect step 2: plain copy beside locked copy + plain record
+    plain.write("token", Some("unprotect-plain")).unwrap();
+    kv.set(LOCKED, "token#1", b"locked-copy").unwrap();
+    kv.set(RECORDS, "token", b"plain").unwrap();
+
+    let assert_untouched = |stage: &str| {
+        assert_eq!(
+            plain.read("key").unwrap().as_deref(),
+            Some("pending-secret"),
+            "{stage}: pending plain copy mutated"
+        );
+        assert_eq!(
+            kv.get(LOCKED, "key#1").unwrap(),
+            None,
+            "{stage}: Op::Move ran before commit"
+        );
+        assert_eq!(
+            plain.read("token").unwrap().as_deref(),
+            Some("unprotect-plain"),
+            "{stage}: in-flight unprotect plain copy deleted"
+        );
+        assert_eq!(
+            kv.get(LOCKED, "token#1").unwrap().as_deref(),
+            Some(&b"locked-copy"[..]),
+            "{stage}: locked copy mutated"
+        );
+        assert_eq!(
+            kv.get(RECORDS, "token").unwrap().as_deref(),
+            Some(&b"plain"[..]),
+            "{stage}: record mutated"
+        );
+    };
+
+    // Uncommitted cold candidate must only read occupancy and never mutate the vault.
+    let (candidate, err) = crate::Host::boot_candidate(
+        &ok_plan,
+        source(),
+        Box::new(exact_kernel::MonospaceMeasurer::default()),
+        200.,
+        200.,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(err.is_none(), "{err:?}");
+    drop(candidate);
+    assert_untouched("cold boot_candidate");
+
+    // Candidate failing in prepare_logic disposable validation must not mutate.
+    let module = Some(crate::delivery::Module {
+        receipt: String::new(),
+        bytes: Vec::new(),
+    });
+    assert!(presenter
+        .reload_module(&bad_plan, source(), module.clone(), true)
+        .is_err());
+    assert_untouched("failed prepare_logic validation");
+
+    // Validation succeeds (1st candidate boot), real candidate boot refuses (2nd): still no mutation.
+    fail_boot.store(2, std::sync::atomic::Ordering::SeqCst);
+    assert!(presenter
+        .reload_module(&ok_plan, source(), module.clone(), true)
+        .is_err());
+    assert_eq!(fail_boot.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_untouched("accepted validation + refused real candidate");
+
+    // Committing a reload reconciles and pumps the pending move.
+    assert!(matches!(
+        presenter.reload_module(&ok_plan, source(), module, true),
+        Ok(crate::presenter::ReloadResult::Applied(None))
+    ));
+    assert_eq!(plain.read("key").unwrap(), None);
+    assert_eq!(
+        kv.get(LOCKED, "key#1").unwrap().as_deref(),
+        Some(&b"pending-secret"[..])
+    );
+    assert_eq!(plain.read("token").unwrap(), None);
+    assert_eq!(
+        kv.get(RECORDS, "token").unwrap().as_deref(),
+        Some(&b"locked user-presence optional"[..])
+    );
+}

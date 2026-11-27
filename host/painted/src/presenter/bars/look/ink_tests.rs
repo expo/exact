@@ -28,7 +28,7 @@ fn edit_uses_the_counterpart_primary_on_a_cross_scheme_header() {
         p.set_system_scheme(dark);
         p.sync_bars();
         let bar = &p.bars.top.as_ref().unwrap().layout;
-        let Item::Text(_, _, ink, _) = &bar.items[0] else {
+        let Item::Text(_, _, ink, _, _) = &bar.items[0] else {
             panic!("missing Edit")
         };
         assert_eq!(
@@ -64,7 +64,7 @@ fn a_translucent_header_checks_the_window_and_keeps_a_buttons_explicit_colour() 
         p.sync_bars();
         let bar = &p.bars.top.as_ref().unwrap().layout;
         assert_eq!(bar.container, [255, 255, 255, 8]);
-        assert!(matches!(&bar.items[0], Item::Text(_, _, c, _) if *c == expected));
+        assert!(matches!(&bar.items[0], Item::Text(_, _, c, _, _) if *c == expected));
     }
 }
 
@@ -83,7 +83,7 @@ fn a_fractional_palette_tone_reads_where_tones_one_and_ninety_nine_miss() {
     let (mut p, _) = barred(&source);
     p.sync_bars();
     let bar = &p.bars.top.as_ref().unwrap().layout;
-    let Item::Text(_, _, ink, _) = &bar.items[0] else {
+    let Item::Text(_, _, ink, _, _) = &bar.items[0] else {
         panic!("missing Edit")
     };
     assert!(*ink != [0, 0, 0, 255] && *ink != [255; 4]);
@@ -135,13 +135,16 @@ fn enabled_bar_ink_reads_on_the_fill_behind_each_glyph() {
                 assert_eq!(top.items.len(), 5, "Up, Edit, Delete, More and title");
                 for item in &top.items {
                     match item {
-                        Item::Text(_, _, ink, _) => check(*ink, top.container, 4.5, "header text"),
+                        Item::Text(_, _, ink, _, _) => {
+                            check(*ink, top.container, 4.5, "header text")
+                        }
                         Item::Symbol(_, _, ink) => check(*ink, top.container, 3., "header symbol"),
                         Item::Fill(..) => panic!("unexpected header fill"),
+                        Item::Badge(..) => panic!("unexpected header badge"),
                     }
                 }
                 let nav = &p.bars.bottom.as_ref().unwrap().layout;
-                let [Item::Fill(_, pill), Item::Symbol(_, _, selected), Item::Text(_, _, label, _), Item::Symbol(_, _, inactive), Item::Text(_, _, other, _)] =
+                let [Item::Fill(_, pill), Item::Symbol(_, _, selected), Item::Text(_, _, label, _, _), Item::Symbol(_, _, inactive), Item::Text(_, _, other, _, _)] =
                     &nav.items[..]
                 else {
                     panic!("expected two destinations")
@@ -181,7 +184,7 @@ fn device_ink_uses_a_reported_swatch_and_a_palette_edit_keeps_the_held_tab() {
     let top = &p.bars.top.as_ref().unwrap().layout;
     assert!(matches!(
         top.items[0],
-        Item::Text(_, _, [0xf9, 0xf9, 0, 255], _)
+        Item::Text(_, _, [0xf9, 0xf9, 0, 255], _, _)
     ));
     let target = p.bars.bottom.as_ref().unwrap().layout.targets[1].rect;
     p.bar_event(super::super::BOTTOM, 0, target.0 + 5., target.1 + 5., 0.);
@@ -225,7 +228,7 @@ fn a_transparent_indicator_puts_its_symbol_or_lone_label_on_the_authored_bar() {
         let bottom = &p.bars.bottom.as_ref().unwrap().layout;
         assert!(matches!(bottom.items[0], Item::Fill(_, c) if c[3]==0));
         let ink = match &bottom.items[1] {
-            Item::Symbol(_, _, ink) | Item::Text(_, _, ink, _) => *ink,
+            Item::Symbol(_, _, ink) | Item::Text(_, _, ink, _, _) => *ink,
             _ => panic!("expected selected content"),
         };
         assert!(ratio(ink, bottom.container) >= threshold);

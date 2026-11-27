@@ -1378,4 +1378,46 @@ fn json_at(element: &Value, place: &Value) -> Value {
     at
 }
 
+#[test]
+fn resource_gate_each_mutation_refreshes_and_sequence_references_resolve() {
+    let source = r#"component App
+  state flag = true
+  state ids = ["a"]
+  resource gated = loadGated() when flag as shape string
+  resource perItem = loadOne(it) for it in ids key=it as shape string[]
+  mutation save as shape string refreshes gated
+  action finished
+    flag = false
+  sequence beat when flag
+    play([], bpm=120, ended=finished)
+  view
+    text gated
+"#;
+    let f = Fixture::new("resource-gate-symbols");
+    let graph = f.query(source);
+
+    let gate_refs = at_line(&graph, "flag", line(source, "resource gated"));
+    assert_eq!(gate_refs.len(), 1, "{graph}");
+    assert_eq!(target(&graph, gate_refs[0])["kind"], "state");
+
+    let each_line = line(source, "resource perItem");
+    let ids_refs = at_line(&graph, "ids", each_line);
+    assert_eq!(ids_refs.len(), 1, "{graph}");
+    assert_eq!(target(&graph, ids_refs[0])["kind"], "state");
+    let it_refs = at_line(&graph, "it", each_line);
+    assert_eq!(it_refs.len(), 2, "{graph}");
+    assert!(it_refs.iter().all(|r| target(&graph, r)["kind"] == "local"));
+
+    let refresh_refs = at_line(&graph, "gated", line(source, "mutation save"));
+    assert_eq!(refresh_refs.len(), 1, "{graph}");
+    assert_eq!(target(&graph, refresh_refs[0])["kind"], "resource");
+
+    let seq_flag = at_line(&graph, "flag", line(source, "sequence beat"));
+    assert_eq!(seq_flag.len(), 1, "{graph}");
+    assert_eq!(target(&graph, seq_flag[0])["kind"], "state");
+    let seq_ended = at_line(&graph, "finished", line(source, "play([]"));
+    assert_eq!(seq_ended.len(), 1, "{graph}");
+    assert_eq!(target(&graph, seq_ended[0])["kind"], "action");
+}
+
 mod lookup;

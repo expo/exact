@@ -133,6 +133,7 @@ impl Painter {
         let fit = Fit::of(kernel, node)?;
         Some(ScrollBounds {
             axes: effective_overflow(node),
+            min: (0., 0.),
             max: fit.max(z),
         })
     }

@@ -948,6 +948,7 @@ final class NavigationMoreIOSTests: XCTestCase {
         waitForMainQueue()
         XCTAssertTrue(more.topViewController === full, "More keeps Full: More holds \(routeKeys(more))")
         XCTAssertEqual(navigation.selectedKey, full.key, "and the router stays on it")
+        if #available(iOS 18.0, *) { XCTAssertTrue(tabs.isTabBarHidden, "and the bar's kept state, with More selected, hides it") }
         XCTAssertNil(navigation.restDifference, "UIKit and the router agree")
     }
 
@@ -1465,7 +1466,7 @@ final class NavigationMoreIOSTests: XCTestCase {
     }
 
     /// How many times the session's journal holds `line`.
-    private func journal(_ session: ExactSession, _ line: String) -> Int {
+    func journal(_ session: ExactSession, _ line: String) -> Int {
         session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: line).count - 1
     }
 }

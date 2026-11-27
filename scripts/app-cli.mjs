@@ -7,6 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realp
 import { constants, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { noteBunLoaded } from '../js/bake/src/__exact_env.mjs';
+import './paths.mjs';
 
 /** The hosts a `test`, `agent` or `verify` may name first. */
 const APP_HOSTS = ['web', 'ios', 'macos', 'mac', 'linux', 'windows', 'android'];
@@ -241,6 +242,7 @@ export const windowsWindow = (manifest) => [manifest?.host?.windows?.window?.wid
  * first arguments. `host` is a drive's (`test ios`); a game has its own and no `verify` or `pattern`. */
 export function appVerbs(name, dir, { host = 'web', game = false, os = process.platform } = {}) {
   return {
+    dev: ['host/web/dev.mjs', '--app', name],
     web: ['host/web/dev.mjs', '--app', name],
     'web-build': ['host/web/build.mjs', name],
     serve: ['host/web/serve.mjs'],
@@ -286,7 +288,7 @@ export function appVerbs(name, dir, { host = 'web', game = false, os = process.p
  * app, and so read what it makes (a fetched asset, a generated source). A verb whose arguments decide is a test of
  * them; `test` and `agent` prepare in `run`, where they build first. */
 export const beforeBuild = {
-  status: false, web: true, 'web-build': true, serve: true, test: false, agent: false, verify: true, ios: true, mac: true, share: true,
+  status: false, dev: true, web: true, 'web-build': true, serve: true, test: false, agent: false, verify: true, ios: true, mac: true, share: true,
   linux: true, windows: true, android: true, update: false, lock: false, hatch: false, snapback: true, backend: false, docs: false,
   feedback: false, add: false, deploy: true, push: true,
   contract: ([command, ...rest]) => ['build', 'types', 'rust', 'verify', 'test', 'lean', 'symbols', 'gallery'].includes(command)
@@ -384,11 +386,11 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     if (asked === '' && code === 0) console.log(`\n${checkoutLine(exact2)}`);
     return code;
   }
-  if (verb === 'web' && rest.includes('--ready') && !game) {
-    console.error('web --ready waits for a game\'s dev loop, which serves while it builds; an app\'s web prints its URL once it serves');
+  if ((verb === 'web' || verb === 'dev') && rest.includes('--ready') && !game) {
+    console.error(`${verb} --ready waits for a game's dev loop, which serves while it builds; an app's ${verb} prints its URL once it serves`);
     return 2;
   }
-  if (verb === 'status' && game || verb === 'web' && rest.includes('--ready')) {
+  if (verb === 'status' && game || (verb === 'web' || verb === 'dev') && rest.includes('--ready')) {
     const {readStatus, formatStatus, waitReady} = await import(resolve(exact2, 'game/status.mjs'));
     if (verb === 'status') { console.log(formatStatus(readStatus(dir))); return 0; }
     try { const row = await waitReady(dir, {timeout:Number(rest.includes('--timeout') ? rest[rest.indexOf('--timeout') + 1] : 600)}); console.log(`READY ${row.url}`); return 0; }
@@ -429,7 +431,7 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   const backend = rest.indexOf('--backend'), driven = backend < 0 ? rest : rest.filter((_, i) => i !== backend && i !== backend + 1);
   const builtSite = (verb === 'test' || verb === 'agent') && host === 'web'
     && driven.some((a, i) => (a === '--url' && !driven[i + 1]?.startsWith('/')) || a === '--web-dist');
-  const builds = ['web', 'web-build', 'test', 'agent', 'verify', 'ios', 'mac', 'linux', 'windows', 'android'].includes(verb) && !builtSite;
+  const builds = ['dev', 'web', 'web-build', 'test', 'agent', 'verify', 'ios', 'mac', 'linux', 'windows', 'android'].includes(verb) && !builtSite;
   if (builds && !['rolldown', 'rolldown.exe'].some((bin) => existsSync(resolve(exact2, 'node_modules/.bin', bin)))) {
     const error = `exact's node_modules is missing: run \`bun install --frozen-lockfile\` in ${exact2} (every build's type check imports rolldown from it)`;
     console.error(`${verb}: ${error}`);
@@ -665,7 +667,7 @@ if (verb === 'contract') {
   const prepares = beforeBuild[verb];
   if (declared.before_build !== undefined && !own[verb] && (typeof prepares === 'function' ? prepares(rest) : prepares)) {
     // The verbs whose scripts refuse a flag they do not take (`guardFlags`)
-    if (['web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share', 'deploy', 'push'].includes(verb)) {
+    if (['dev', 'web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share', 'deploy', 'push'].includes(verb)) {
       const refused = await refusedFlag();
       if (refused != null) return log(refused);
     }

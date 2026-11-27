@@ -136,3 +136,68 @@ for (const storage of ['available', 'absent', 'refused', 'unprepared']) {
     } finally { await browser?.close(); server.stop(true); }
   }, 60_000);
 }
+
+test('describe revokes its video object URL on metadata error and save aborts failed writables', async () => {
+  const prevExact = globalThis.exact;
+  const prevDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevCreate = URL.createObjectURL, prevRevoke = URL.revokeObjectURL;
+  const created = [], revoked = [], removedSrc = [];
+  let serial = 0;
+  globalThis.exact = {};
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      createElement(tag) {
+        if (tag !== 'video') return {};
+        const el = {
+          preload: '', muted: false, videoWidth: 0, videoHeight: 0, duration: NaN,
+          removeAttribute(name) { if (name === 'src') removedSrc.push(true); },
+          set src(_) { queueMicrotask(() => el.onerror?.(new Event('error'))); },
+        };
+        return el;
+      },
+    },
+  });
+  URL.createObjectURL = () => { const url = `blob:video-${++serial}`; created.push(url); return url; };
+  URL.revokeObjectURL = url => { revoked.push(url); };
+  try {
+    await import(`./picker-glue.js?cleanup=${Date.now()}`);
+    const sent = [], logs = [];
+    const picker = globalThis.exact.picker({
+      appId: 'picker-cleanup-test',
+      pickedPath: name => `app:/tmp/picked/${name}`,
+      dispatch: (...args) => sent.push(args),
+      log: line => logs.push(line),
+    });
+    const broken = new File([new Uint8Array([0, 1, 2])], 'broken.mp4', { type: 'video/mp4' });
+    await picker.change({ files: [broken], value: 'broken.mp4' }, 3);
+    expect(created).toEqual(['blob:video-1']);
+    expect(revoked).toEqual(['blob:video-1']);
+    expect(removedSrc).toEqual([true]);
+    expect(sent).toEqual([[3, 26, 'app:/tmp/picked/broken.mp4\tbroken.mp4\tvideo/mp4\t3\t\t\t']]);
+
+    for (const failAt of ['write', 'close']) {
+      let aborted = 0;
+      sent.length = 0; logs.length = 0;
+      const handle = {
+        name: 'out.txt',
+        async createWritable() {
+          return {
+            async write() { if (failAt === 'write') throw new DOMException('full', 'QuotaExceededError'); },
+            async close() { if (failAt === 'close') throw new DOMException('commit failed', 'InvalidStateError'); },
+            async abort() { aborted++; },
+          };
+        },
+      };
+      await picker.save({ present: true, view: 9, text: 'hello' }, Promise.resolve(handle));
+      expect(aborted, failAt).toBe(1);
+      expect(sent, failAt).toEqual([[9, 27, '']]);
+      expect(logs[0], failAt).toStartWith('saveFile: refused:');
+    }
+  } finally {
+    URL.createObjectURL = prevCreate;
+    URL.revokeObjectURL = prevRevoke;
+    if (prevDocument) Object.defineProperty(globalThis, 'document', prevDocument); else delete globalThis.document;
+    if (prevExact === undefined) delete globalThis.exact; else globalThis.exact = prevExact;
+  }
+});

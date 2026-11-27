@@ -39,7 +39,7 @@ class WatchTest {
     private val args = JSONObject().put("android", JSONObject().put("provider", LocationManager.GPS_PROVIDER))
 
     /** What `watchPosition` answers when the runner reads it now (null: it waits for the next answer). */
-    private fun read(): JSONObject? {
+    private fun read(args: JSONObject = this.args): JSONObject? {
         var answer: JSONObject? = null
         ReflectionHelpers.callInstanceMethod<Unit>(module, "watch",
             ClassParameter.from(JSONObject::class.java, args),
@@ -75,5 +75,38 @@ class WatchTest {
         manager.simulateLocation(fix(49.0))
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(49.0, read()!!.getJSONObject("coords").getDouble("latitude"), 0.0)
+    }
+
+    /**
+     * No provider to register with (passive under coarse alone) is held like a disabled one: a re-read gets the error
+     * without announcing the watch again, which the runner would answer by reading it again, endlessly.
+     */
+    @Test fun aWatchWithNoProviderHoldsItsError() {
+        shadowOf(app).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val passive = JSONObject().put("android", JSONObject().put("provider", LocationManager.PASSIVE_PROVIDER))
+        val before = Host.changes
+        assertEquals("POSITION_UNAVAILABLE", read(passive)!!.getString("error"))
+        assertTrue("announced at most once", Host.changes - before <= 1)
+        val once = Host.changes
+        assertEquals("POSITION_UNAVAILABLE", read(passive)!!.getString("error"))
+        assertEquals("a re-read is not announced", once, Host.changes)
+
+        // Released, the next reader asks afresh: with fine granted since, it registers and waits for a fix.
+        module.release("watchPosition")
+        shadowOf(app).grantPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
+        assertNull("registered, no fix yet", read(passive))
+    }
+
+    /** A grant that makes the provider usable drops the held error at resume, and the next read registers. */
+    @Test fun aPreciseGrantDropsTheHeldError() {
+        shadowOf(app).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val passive = JSONObject().put("android", JSONObject().put("provider", LocationManager.PASSIVE_PROVIDER))
+        module.later("geolocationStatus", JSONObject()) {}
+        assertEquals("POSITION_UNAVAILABLE", read(passive)!!.getString("error"))
+
+        shadowOf(app).grantPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
+        module.resumed()
+        assertNull("registered, no fix yet", read(passive))
+        assertNotNull(ReflectionHelpers.getField<Any?>(module, "watch"))
     }
 }

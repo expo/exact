@@ -1,7 +1,7 @@
 // The app server's discovery, scratch databases and process lifetime.
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -126,7 +126,7 @@ function serverEnv(server, db) {
   return env;
 }
 
-export const serverRun = (server, name) => `${(server.command ?? ['bun', server.entry, ...server.args]).join(' ')} at ${server.url}, ${server.database ? `on an empty database${name === 'api-test' ? '' : ' for each test'} (.exact/${name}/db.sqlite, removed after)` : `without a database${name === 'api-test' ? '' : ', restarted empty for each test'}`}${server.note ? `; ${server.note}` : ''}`;
+export const serverRun = (server, name) => `${(server.command ?? ['bun', server.entry, ...server.args]).join(' ')} at ${server.url}, ${server.database ? `on an empty database${name === 'api-test' ? '' : ' for each test'} (.exact/${name}/p${server.port}/db.sqlite, removed after)` : `without a database${name === 'api-test' ? '' : ', restarted empty for each test'}`}${server.note ? `; ${server.note}` : ''}`;
 
 /** Whether anything answers HTTP at `url` (any status). */
 export const answering = (url) => fetch(url, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
@@ -143,7 +143,7 @@ function portHolder(server) {
  * server this did not start is never stopped, nor written to. */
 export function heldLine(server) {
   const { pid, holder } = portHolder(server);
-  return `${server.url}${holder}, and the tests would ${server.database ? "write into that server's database" : 'change that server\'s state'}: stop it (${pid ? `kill ${pid}` : 'Ctrl-C where it runs'}) and run this again, which starts ${server.entry} itself${server.database ? ' on an empty one' : ''}${server.note ? `; ${server.note}` : ''}`;
+  return `${server.url}${holder}, and the tests would ${server.database ? "write into that server's database" : 'change that server\'s state'}: run on an alternate port (PORT=<free> or --backend http://127.0.0.1:<free>), or stop it (${pid ? `kill ${pid}` : 'Ctrl-C where it runs'}) and run this again, which starts ${server.entry} itself${server.database ? ' on an empty one' : ''}${server.note ? `; ${server.note}` : ''}`;
 }
 
 /** Keep the URL appServer accepted, including its path and explicit default port, for exact record comparisons. */
@@ -376,13 +376,13 @@ async function stopGroup(group, server) {
 
 async function started(dir, server, name, forward, give, takeOwnership) {
   if (await answering(server.url)) throw new Error(heldLine(server));
-  const runDir = resolve(dir, '.exact', name), db = server.database ? resolve(runDir, 'db.sqlite') : null, owner = resolve(runDir, 'owner');
+  const verbDir = resolve(dir, '.exact', name), runDir = resolve(verbDir, `p${server.port}`), db = server.database ? resolve(runDir, 'db.sqlite') : null, owner = resolve(runDir, 'owner');
   const clearDB = () => { if (db) for (const end of ['', '-wal', '-shm', '-journal']) rmSync(`${db}${end}`, { force: true }); };
   mkdirSync(runDir, { recursive: true });
   clearDB();
   // Its keepers' records of their ends; one left by a run that ended, its server with it, vouches for no later keeper.
   for (const file of readdirSync(runDir)) if (file.startsWith('ended-')) rmSync(resolve(runDir, file), { force: true });
-  writeFileSync(owner, `${process.pid}\n`);
+  writeFileSync(owner, `${process.pid}\n${server.url}\n`);
   takeOwnership();
   let child = null, group = null, said = { text: '' }, used = false, stopped = false, recorded = false;
   const deaths = [];
@@ -411,38 +411,38 @@ async function started(dir, server, name, forward, give, takeOwnership) {
     await endChild();
     clearDB(); rmSync(owner, { force: true }); give();
     stopped = true; off();
-    if (name !== 'verify') try { rmdirSync(runDir); } catch {}
+    try { rmdirSync(runDir); } catch {}
+    if (name !== 'verify') try { rmdirSync(verbDir); } catch {}
   };
   const fresh = async () => { await endChild(); clearDB(); used = false; await launch(); };
   try { await launch(); } catch (e) { await stop(); throw e; }
   return {
-    stop, fresh, tail, exited: () => exitStatus(child),
+    url: server.url, stop, fresh, tail, exited: () => exitStatus(child),
     exits: () => { rememberExit(); return [...deaths]; },
     beforeTest: async () => { if (used || !child || exitStatus(child) != null) await fresh(); used = true; },
     check: () => { rememberExit(); if (group) groupAlive(group); if (exitStatus(child) != null) throw new Error(`${server.entry} exited (${exitReason(child)}) during the test${tail() ? `: ${tail()}` : ''}`); },
   };
 }
 
-/** The app's server for one `agent` drive (LLP 1116.008 D1): null when the app has none, or the URL it calls already answers
- * (another drive's: used, said only when on another database; one no drive started, the builder's or another program's:
- * used, and one line names its pid and command); else started where app.ts calls it, on a database of the
- * drive's own, `.exact/agent/<storage>/db.sqlite` kept for the `--storage` name so a second drive on it sees the first's data
- * (without one, an empty database removed after; `fresh`, a drive that starts its store empty, empties it first, and is
- * refused while another drive or the builder's server is using the app server), and one line says so. `{ stop() }` ends it. Drives that overlap share the
- * server: each is a `drive-<pid>` file in `.exact/agent-server/`, the servers a drive started are `server-<pid>` (their
- * database as the file's text), and the last drive out stops them; one that did not start the server stops nothing, and the
- * builder's own is never in the list. With database: false, no database is passed, created or cleared; otherwise an entry
- * that does not read `DB` is refused (`appServer`'s `refusal`), as `test` refuses it. */
-export async function driveServer(dir, storage, say = (line) => console.error(line), { fresh = false } = {}) {
+/** Acquire the app server for an agent drive (LLP 1116.008 D1). Return null without one, otherwise its URL
+ * and a stop method that releases this drive's claim. Overlapping drives share the server until the last
+ * one leaves. A server that was already answering outside a drive stays running.
+ * A named store keeps its database under .exact/agent/<storage>. An unnamed store gets a temporary one.
+ * A fresh drive clears its database before launch and refuses to start while another server is using it.
+ * An app with server.database set to false gets no database. */
+export async function driveServer(dir, storage, say = (line) => console.error(line), { fresh = false, lockTimeoutMs = 15_000 } = {}) {
   const server = appServer(dir);
   if (!server?.url) return null;
   if (server.refusal) throw new Error(`agent: ${server.refusal}`);
   const lease = resolve(dir, '.exact/agent-server'), mine = resolve(lease, `drive-${process.pid}`), starting = resolve(lease, 'starting');
   const db = !server.database ? null : storage ? resolve(dir, '.exact/agent', storage.replace(/[^\w.-]+/g, '-'), 'db.sqlite') : resolve(lease, 'db.sqlite');
   const files = (kind) => { try { return readdirSync(lease).filter((f) => f.startsWith(`${kind}-`)).map((f) => [resolve(lease, f), Number(f.slice(kind.length + 1))]); } catch { return []; } };
-  let spawned = null, spawnedGroup = null;
-  mkdirSync(lease, { recursive: true });
-  writeFileSync(mine, '');
+  let spawned = null, spawnedGroup = null, recorded = false;
+  for (let attempt = 0; ; attempt++) {
+    mkdirSync(lease, { recursive: true });
+    try { writeFileSync(mine, ''); break; }
+    catch (e) { if (e.code !== 'ENOENT' || attempt >= 5) throw e; }
+  }
   // A refused drive may have found a copied record. Ending it must not lend that record authority to stop a process.
   const leave = () => {
     rmSync(mine, { force: true });
@@ -471,13 +471,22 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     });
   };
   const clean = () => {
-    if (files('server').length) return;
-    if (db) rmSync(lease, { recursive: true, force: true });
-    else { for (const [file] of [...files('ended'), [resolve(lease, 'log')]]) rmSync(file, { force: true }); try { rmdirSync(lease); } catch {} }
+    for (const [file, pid] of files('drive')) if (!alive(pid)) rmSync(file, { force: true });
+    if (files('drive').length || files('server').length || existsSync(starting)) return;
+    const extra = db ? ['', '-wal', '-shm', '-journal'].map((end) => [resolve(lease, `db.sqlite${end}`)]) : [];
+    for (const [file] of [...files('ended'), [resolve(lease, 'log')], ...extra]) rmSync(file, { force: true });
+    try { rmdirSync(lease); } catch {}
   };
   // A launch whose supervisor has not said the server runs is ended through it: the keeper ends with its supervisor.
   // A launch in flight keeps the lease: its keeper, ending with its supervisor, may not yet have ended the server.
-  const off = whenEnded(() => { const launching = spawned && !spawnedGroup; if (launching) spawned.kill('SIGKILL'); const ending = leave(); for (const { file, group } of ending ?? []) try { killGroup(group); rmSync(file, { force: true }); } catch {} if (ending && !launching) clean(); });
+  const off = whenEnded(() => {
+    const launching = spawned && !spawnedGroup;
+    if (launching) spawned.kill('SIGKILL');
+    if (spawnedGroup && !recorded) try { killGroup(spawnedGroup); } catch {}
+    const ending = leave();
+    for (const { file, group } of ending ?? []) try { killGroup(group); rmSync(file, { force: true }); } catch {}
+    if (ending && !launching) clean();
+  });
   const stop = async () => {
     const ending = leave();
     for (const { file, group, server } of ending ?? []) {
@@ -487,12 +496,41 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     off();
     if (ending) clean();
   };
+  const running = { url: server.url, stop };
   // One drive starts the server at a time: another waits, then finds it answering.
+  const lockToken = `${process.pid}:${randomUUID()}`;
+  const releaseStarting = () => { if (readIn(lease, 'starting') === lockToken) rmSync(starting, { force: true }); };
+  const pidOf = (text) => Number(/^(\d+)(?::|$)/.exec((text ?? '').trim())?.[1] ?? 0);
   let locked = false;
-  for (let i = 0; i < 150 && !locked; i++) {
-    try { writeFileSync(starting, String(process.pid), { flag: 'wx' }); locked = true; }
-    catch { const owner = Number(readIn(lease, 'starting')); if (owner && !alive(owner)) rmSync(starting, { force: true }); else await Bun.sleep(100); }
-  }
+  const lockDeadline = Date.now() + lockTimeoutMs;
+  try {
+    for (let attempt = 0; !locked; attempt++) {
+      try { writeFileSync(starting, lockToken, { flag: 'wx' }); locked = true; }
+      catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+        if (attempt > 0 && Date.now() >= lockDeadline) throw new Error(`agent: timed out waiting for the app server startup lock (${starting})`);
+        const seen = readIn(lease, 'starting');
+        if (seen === null) continue;
+        const owner = pidOf(seen);
+        if (owner && !alive(owner)) {
+          const takeover = `${starting}.takeover`;
+          let took = false;
+          try { writeFileSync(takeover, lockToken, { flag: 'wx' }); took = true; }
+          catch (te) { if (te.code !== 'EEXIST') throw te; }
+          if (took) {
+            try { if (readIn(lease, 'starting') === seen) rmSync(starting, { force: true }); }
+            finally { rmSync(takeover, { force: true }); }
+            continue;
+          }
+          const tSeen = readIn(lease, 'starting.takeover');
+          const tOwner = pidOf(tSeen);
+          if (tOwner && !alive(tOwner) && readIn(lease, 'starting.takeover') === tSeen) { rmSync(takeover, { force: true }); continue; }
+        }
+        if (Date.now() >= lockDeadline) throw new Error(`agent: timed out waiting for the app server startup lock (${starting})`);
+        await Bun.sleep(100);
+      }
+    }
+  } catch (e) { off(); rmSync(mine, { force: true }); throw e; }
   try {
     // A store asked empty cannot be emptied under a server another drive (or the builder) is using: refused, and this
     // drive's lease given up, never the database deleted or kept as it was.
@@ -510,7 +548,7 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
       const other = db && records.map((r) => r.db).find((was) => was && was !== db);
       if (!records.length) say(`agent: ${server.url}${portHolder(server).holder}, a server no drive started: this drive uses it and its data${server.database ? ', not a database of its own' : ''}; stop it to have the drive start ${server.entry} itself`);
       else if (other) say(`agent: ${server.entry} at ${server.url} is another drive's, on its database (${relative(dir, other)}); this drive uses it`);
-      return { stop };
+      return running;
     }
     if (db) mkdirSync(dirname(db), { recursive: true });
     if (db && (!storage || fresh)) for (const end of ['', '-wal', '-shm', '-journal']) rmSync(`${db}${end}`, { force: true });
@@ -521,12 +559,16 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     spawned = child;
     const failed = async (e) => {
       spawned = null;
-      if (locked) { rmSync(starting, { force: true }); locked = false; }
+      if (spawnedGroup && !recorded) { const group = spawnedGroup; spawnedGroup = null; await stopGroup(group, server); }
+      if (locked) { releaseStarting(); locked = false; }
       await stop(); throw e;
     };
     try { spawnedGroup = await launchedGroup(child); } catch (e) { await failed(e); }
     if (!spawnedGroup) await failed(new Error(`agent: ${await untilAnswers(server, child, () => lastError(readIn(lease, 'log') ?? ''), null)}`));
-    writeFileSync(resolve(lease, `server-${spawnedGroup.pid}`), JSON.stringify({ directory: realpathSync(dir), origin: server.url, db, token: child.token }));
+    try {
+      writeFileSync(resolve(lease, `server-${spawnedGroup.pid}`), JSON.stringify({ directory: realpathSync(dir), origin: server.url, db, token: child.token }));
+      recorded = true;
+    } catch (e) { await failed(e); }
     const why = await untilAnswers(server, child, () => lastError(readIn(lease, 'log') ?? ''), spawnedGroup);
     if (why) { await stop(); throw new Error(`agent: ${why}`); }
     if (server.fixture && !ownsServer(dir, server, spawnedGroup.pid, spawnedGroup)) {
@@ -534,20 +576,34 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
       throw new Error(`agent: ${server.url} answered before this checkout's fixture owned its port; choose another port with --backend or PORT`);
     }
     say(`agent: started ${server.entry} at ${server.url} for this drive (${!db ? 'no database' : storage ? `database ${relative(dir, db)}, kept for --storage ${storage}` : 'an empty database'}); stopped after${server.note ? `; ${server.note}` : ''}`);
-    return { stop };
-  } finally { if (locked) rmSync(starting, { force: true }); }
+    return running;
+  } finally { if (locked) releaseStarting(); }
 }
 
 /** `fn` with the app's server running on an empty database, as verify runs it: its exit code, or 1 when the server cannot
  * run, said in one line. `bun exact.mjs test` runs its tests so (LLP 1116.007 D2: `optional`: an app with no server, or one
  * whose URL app.ts does not say, runs them as they are, the second said once per test file, and the tests use whatever answers there);
  * a server entry that needs a database but does not read `DB` is refused whatever the verb (LLP 1116.008 D1);
- * a server an ancestor process runs (an older app's api-test wrapper) stays shared, said in one line.
+ * an ancestor's server stays shared. The callback receives its URL without a handle that can stop it.
  * `api-test` is the same call without `optional`: it wants a server, and says why it has none. */
 export async function withAppServer(dir, fn, { verb = 'api-test', optional = false } = {}) {
   const server = appServer(dir);
-  const owners = server ? ['api-test', 'test', 'verify'].map((name) => readIn(dir, `.exact/${name}/owner`)?.trim()).filter(Boolean) : [];
-  if (owners.length && ancestors().some((pid) => owners.includes(pid))) { console.error(`${verb}: using an ancestor’s server; tests share its data`); return fn(null); }
+  const ownerEntries = [];
+  if (server) for (const name of ['api-test', 'test', 'verify']) {
+    const base = resolve(dir, '.exact', name);
+    const candidates = [resolve(base, `p${server.port}`, 'owner'), resolve(base, 'owner')];
+    try { for (const entry of readdirSync(base)) if (/^p\d+$/.test(entry)) candidates.push(resolve(base, entry, 'owner')); } catch {}
+    for (const file of new Set(candidates)) {
+      const pair = readIn(dir, file)?.trim().split('\n');
+      if (pair) ownerEntries.push(pair);
+    }
+  }
+  const owners = new Map(ownerEntries);
+  const ancestor = owners.size && ancestors().find(pid => owners.has(pid));
+  if (ancestor) {
+    console.error(`${verb}: using an ancestor’s server; tests share its data`);
+    return fn(null, owners.get(ancestor) ?? server.url);
+  }
   let running;
   try {
     if (server?.refusal) throw new Error(server.refusal);
@@ -560,7 +616,7 @@ export async function withAppServer(dir, fn, { verb = 'api-test', optional = fal
     }
   } catch (e) { console.error(`${verb}: ${e.message}`); return 1; }
   let code;
-  try { code = await fn(running); } finally { await running?.stop(); }
+  try { code = await fn(running, running?.url); } finally { await running?.stop(); }
   const deaths = running?.exits() ?? [];
   for (const death of deaths) console.error(`${verb}: ${death}`);
   return deaths.length ? code || 1 : code;

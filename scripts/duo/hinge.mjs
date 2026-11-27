@@ -1,26 +1,59 @@
-// The tool runs inside the simulator. Each drive builds it in its own temporary directory.
+// The tool runs inside the simulator. The compiled helper binary is cached under target/hinge-helper/.
 import { spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { logEntry } from '../../host/apple/cloak.mjs';
 import { waitAtMost } from '../agent-wire.mjs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
+const cachedToolchain = new Map();
+
 export const hasSimulatorHinge = dev => dev.type === 'iPhone-Duo';
 
-export function hingeHelper(udid, dir) {
-  const helper = resolve(dir, 'hinge_helper');
+function runHingeCommand(command, args, what, timeout = 60000) {
+  const r = spawnSync(command, args, { encoding: 'utf8', timeout });
+  if (r.status !== 0) throw new Error(`${what}: ${r.error?.message || r.stderr?.trim() || r.stdout?.trim() || r.signal || r.status}`);
+  return r.stdout.trim();
+}
+
+function hingeToolchain(run) {
+  const envDevDir = process.env.DEVELOPER_DIR ?? '';
+  if (run === runHingeCommand && cachedToolchain.has(envDevDir)) return cachedToolchain.get(envDevDir);
+  const devDir = envDevDir || run('xcode-select', ['-p'], 'reading active developer directory');
+  const sdkPath = run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path'], 'reading iOS simulator SDK path');
+  const sdkBuild = run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-build-version'], 'reading iOS simulator SDK build version');
+  const clangVersion = run('xcrun', ['-sdk', 'iphonesimulator', 'clang', '--version'], 'reading clang version').split('\n')[0];
+  const info = { devDir, sdkPath, sdkBuild, clangVersion };
+  if (run === runHingeCommand) cachedToolchain.set(envDevDir, info);
+  return info;
+}
+
+/** Compile and ad-hoc sign `hinge_helper.m` once per (source, arch, toolchain, compile/sign recipe) under `cacheDir`. */
+export function compiledHingeHelper({ cacheDir = resolve(ROOT, 'target/hinge-helper'), run = runHingeCommand } = {}) {
   const source = fileURLToPath(new URL('./hinge_helper.m', import.meta.url));
-  const run = (command, args, what, timeout = 60000) => {
-    const r = spawnSync(command, args, { encoding: 'utf8', timeout });
-    if (r.status !== 0) throw new Error(`${what}: ${r.error?.message || r.stderr?.trim() || r.stdout?.trim() || r.signal || r.status}`);
-    return r.stdout.trim();
-  };
-  run('xcrun', ['-sdk', 'iphonesimulator', 'clang', '-arch', process.arch === 'arm64' ? 'arm64' : 'x86_64',
-    '-mios-simulator-version-min=17.0', '-O2', '-fobjc-arc', '-DEXACT_AGENT',
-    '-framework', 'CoreMotion', '-framework', 'Foundation', '-framework', 'IOKit', '-framework', 'CoreFoundation',
-    '-o', helper, source], 'compiling the hinge helper');
-  run('codesign', ['-f', '-s', '-', helper], 'signing the hinge helper');
-  const invoke = (command, args, timeout) => run('xcrun', ['simctl', 'spawn', udid, helper, command, ...args.map(String)], `hinge ${command} ${args.join(' ')}`, timeout);
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+  const toolchain = hingeToolchain(run);
+  const compileArgs = ['-sdk', 'iphonesimulator', 'clang', '-arch', arch, '-mios-simulator-version-min=17.0', '-O2', '-fobjc-arc', '-DEXACT_AGENT',
+    '-framework', 'CoreMotion', '-framework', 'Foundation', '-framework', 'IOKit', '-framework', 'CoreFoundation'];
+  const signArgs = ['-f', '-s', '-'];
+  const key = createHash('sha256').update(JSON.stringify({ source: readFileSync(source, 'utf8'), arch, toolchain, compileArgs, signArgs })).digest('hex').slice(0, 16);
+  const helper = resolve(cacheDir, `hinge_helper-${key}`);
+  if (existsSync(helper)) return helper;
+  mkdirSync(cacheDir, { recursive: true });
+  const stage = `${helper}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+  try {
+    run('xcrun', [...compileArgs, '-o', stage, source], 'compiling the hinge helper');
+    run('codesign', [...signArgs, stage], 'signing the hinge helper');
+    try { renameSync(stage, helper); } catch (e) { if (!['EEXIST', 'ENOTEMPTY'].includes(e.code)) throw e; }
+  } finally { rmSync(stage, { force: true }); }
+  return helper;
+}
+
+export function hingeHelper(udid, _dir) {
+  const helper = compiledHingeHelper();
+  const invoke = (command, args, timeout) => runHingeCommand('xcrun', ['simctl', 'spawn', udid, helper, command, ...args.map(String)], `hinge ${command} ${args.join(' ')}`, timeout);
   return Object.assign((command, ...args) => invoke(command, args), {
     orient: (pose, timeout) => invoke('orient', [pose], timeout),
   });
@@ -62,16 +95,48 @@ export function partialFoldDisplay(udid, since, timeout) {
   const seconds = Math.min(600, Math.max(60, Math.ceil((Date.now() - since) / 1000) + 1));
   const run = spawnSync('xcrun', ['simctl', 'spawn', udid, 'log', 'show', '--last', `${seconds}s`, '--style', 'ndjson',
     '--predicate', predicate], { encoding: 'utf8', timeout });
-  let inner, angle;
+  let inner, angle, fresh = false;
   if (run.status === 0) for (const line of run.stdout.split('\n')) {
     const e = logEntry(line);
     if (!e) continue;
     const pose = /^DCMPose: ([-.\d]+)°/.exec(e.message);
     if (pose && e.t >= since) angle = Number(pose[1]);
     const swap = /^(?:STARTING:|COMPLETED:|transitioning )\s+\.cover:(?:\w+→)?(\w+) \.inner:(?:\w+→)?(\w+)/.exec(e.message);
-    if (swap) inner = swap[2] === 'pri';
+    if (swap) { inner = swap[2] === 'pri'; fresh = e.t >= since; }
   }
-  return { inner, angle };
+  return { inner, angle, fresh };
+}
+
+/** Whether the app took a fold, within `within` milliseconds (LLP 1188 D4). The simulator reports its hinge before UIKit tells
+ * the app of it, moves the scene to the other display and divides the window, each in its own time. `before` is the host's
+ * sample (`layout simulatorRotation`) from before the fold, with the app's `viewport` then, and `still` whether the last fold the
+ * app took was to this angle, if one was. SpringBoard's word (`display`) is of this fold where it is `fresh`. */
+export async function foldTaken({ ask, degrees, display, before, still, within = 5000, quiet = 1000, pause = 50 }) {
+  const partial = degrees > 0 && degrees < 180, since = performance.now(), end = since + within;
+  const left = () => Math.max(1, Math.ceil(end - performance.now())), late = () => performance.now() - since > quiet;
+  const isPartial = (angle) => angle > 0 && angle < 180, near = (a, b) => Math.abs(a - b) < 0.1;
+  const reply = (request) => waitAtMost(ask(request), left() + 1000, () => ({}));
+  for (;;) {
+    const sample = await reply({ op: 'layout', simulatorRotation: true });
+    if (sample.error) throw new Error(sample.error);
+    const springboard = () => display(Math.min(3000, left()));
+    // UIKit's angle at a partial fold is not the hinge's, so it is the new one once it has moved from the last; a first fold can
+    // find the device there already
+    const moved = () => !isPartial(before.angle) || !near(sample.angle, before.angle) || (still ?? (late() && near(springboard().angle ?? sample.angle, sample.angle)));
+    const told = partial ? isPartial(sample.angle) && moved() : Number.isFinite(sample.angle) && Math.abs(sample.angle - degrees) < 1;
+    if (told && sample.ready) {
+      // A partial fold that is nearly closed, or starts on the cover, can leave either display active: SpringBoard says which
+      // as it starts the swap, and the display the app is on stands if it says nothing within `quiet`
+      const word = partial && (degrees < 90 || !before.inner) ? springboard() : { fresh: true, inner: partial || degrees === 180 };
+      const inner = word.fresh ? word.inner : late() ? sample.inner : undefined;
+      const { env, viewport } = sample.inner === inner ? await reply({ op: 'layout' }) : {};
+      // The displays have no size in common
+      const resized = inner === before.inner || viewport?.w !== before.viewport?.w || viewport?.h !== before.viewport?.h;
+      if (env && resized && env['horizontal-viewport-segments'] * env['vertical-viewport-segments'] === (partial && inner ? 2 : 1)) return true;
+    }
+    if (performance.now() >= end) return false;
+    await sleep(pause);
+  }
 }
 
 export async function rotateSimulator({ duo, fold, display, issue, ask, land }, orientation) {

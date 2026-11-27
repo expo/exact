@@ -320,18 +320,28 @@ impl Backend {
     fn reconcile(&mut self, name: &str) -> Result<(), String> {
         let presence = self.names[name].presence.clone();
         let say = |e: String| format!("presence {name}: {e}");
-        let record = self.vault.record(name)?.and_then(|r| Intent::decode(&r));
+        let raw_record = self.vault.record(name)?;
+        let record = raw_record.as_deref().and_then(Intent::decode);
+        // A line that lost its policy: forget every locked item unread,
+        // even when a probe would fail, and clear the record with them (D4).
+        let Some(presence) = presence else {
+            self.vault.delete_all_locked(name)?;
+            if raw_record.is_some() {
+                self.vault.put_record(name, None)?;
+                self.log.push(say(
+                    "its policy changed: the locked value is forgotten".into()
+                ));
+            }
+            self.names.remove(name);
+            return Ok(());
+        };
         let mut generations = self.vault.generations(name)?;
         let plain = self.vault.plain(name)?.is_some();
         generations.sort_unstable();
-        let words = presence.as_ref().map(Presence::line_words);
-        // A line that lost its policy, or changed it: the old items are
-        // forgotten unread, and the record with them (D4).
-        let changed = match (&words, &record) {
-            (None, _) => !generations.is_empty() || record.is_some(),
-            (Some(words), Some(Intent::Locked(old))) => words != old,
-            _ => false,
-        };
+        let words = presence.line_words();
+        // A line that changed its policy: the old items are forgotten unread,
+        // and the record with them (D4).
+        let changed = matches!(&record, Some(Intent::Locked(old)) if *old != words);
         if changed {
             for g in std::mem::take(&mut generations) {
                 self.vault.delete_locked(name, g)?;
@@ -341,10 +351,6 @@ impl Backend {
                 "its policy changed: the locked value is forgotten".into()
             ));
         }
-        let Some(presence) = presence else {
-            self.names.remove(name);
-            return Ok(());
-        };
         // The newest generation wins; a crash between a write's add and its
         // delete leaves the older one (D6).
         let newest = generations.last().copied();
@@ -437,6 +443,31 @@ impl Backend {
                 )
             })
             .collect();
+        if capable {
+            out.push((crate::Store::PRESENCE.to_owned(), b"1".to_vec()));
+        }
+        out
+    }
+
+    /// What a boot snapshot would report for `lines`, without mutating `vault`:
+    /// used when preparing an uncommitted cold candidate so Keychain and KV
+    /// stay untouched until commit.
+    pub fn preview_snapshot_entries(
+        vault: &dyn Vault,
+        lines: &[(String, Option<Presence>)],
+        capable: bool,
+    ) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for (name, presence) in lines {
+            let Some(presence) = presence else {
+                continue;
+            };
+            let occupancy = preview_occupancy(vault, name, presence);
+            out.push((
+                format!("{}{name}", crate::Store::PRESENCE),
+                occupancy.word().as_bytes().to_vec(),
+            ));
+        }
         if capable {
             out.push((crate::Store::PRESENCE.to_owned(), b"1".to_vec()));
         }
@@ -1014,6 +1045,32 @@ impl Backend {
 /// The check of a call let go: it ends as the platform's own cancel does.
 fn let_go() -> Checked {
     Checked::Failed("SYSTEM_CANCEL".into(), "the call was let go".into())
+}
+
+fn preview_occupancy(vault: &dyn Vault, name: &str, presence: &Presence) -> Occupancy {
+    let Ok(raw_record) = vault.record(name) else {
+        return Occupancy::Pending;
+    };
+    let Ok(generations) = vault.generations(name) else {
+        return Occupancy::Pending;
+    };
+    let Ok(plain) = vault.plain(name).map(|v| v.is_some()) else {
+        return Occupancy::Pending;
+    };
+    let record = raw_record.as_deref().and_then(Intent::decode);
+    let words = presence.line_words();
+    let changed = matches!(&record, Some(Intent::Locked(old)) if *old != words);
+    if !changed && !generations.is_empty() {
+        Occupancy::Locked
+    } else if plain {
+        if (!changed && matches!(record, Some(Intent::Locked(_)))) || !presence.optional {
+            Occupancy::Pending
+        } else {
+            Occupancy::Plain
+        }
+    } else {
+        Occupancy::Absent
+    }
 }
 
 /// A vault in memory: a test's, or a host's with nowhere durable to keep

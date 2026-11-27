@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { builtFile } from './content-names.mjs';
+import { renderer } from './render.mjs';
 
 test('known Markdown is compiled before a hidden reader opens; new content alone loads the parser', async () => {
   const root = resolve(import.meta.dirname, '../..'), dir = mkdtempSync(resolve(root, 'target/markdown-agent-test-'));
@@ -132,3 +133,51 @@ export const answer: Answer = (source, args) => {
     expect(requests).toBe(2);
   } finally { release?.(); await suite?.close(); server?.stop(true); api.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 180000);
+
+test('render.markdown disposes its realm timers and in-flight fetches on return and throw', async () => {
+  const realFetch = globalThis.fetch, realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  const shell = '<!doctype html><html lang="en-US"><head><title>T</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="exact-root"></div><script type="module" data-entry src="./app.js"></script></body></html>';
+  for (const mode of ['ok', 'start-throws', 'markdown-rejects']) {
+    const signals = [], activeTimers = new Set();
+    globalThis.fetch = (input, init) => {
+      signals.push(init?.signal ?? input?.signal);
+      return new Promise(() => {});
+    };
+    globalThis.setTimeout = (fn, ms, ...args) => {
+      const id = realSetTimeout(fn, ms, ...args);
+      activeTimers.add(id);
+      return id;
+    };
+    globalThis.clearTimeout = id => {
+      activeTimers.delete(id);
+      return realClearTimeout(id);
+    };
+    try {
+      const serverJs = `
+        globalThis.__start = async () => {
+          setTimeout(() => {}, 60000);
+          fetch('https://example.invalid/stream').catch(() => {});
+          ${mode === 'start-throws' ? 'throw new Error("start boom");' : ''}
+        };
+        globalThis.__markdown = async () => {
+          ${mode === 'markdown-rejects' ? 'throw new Error("markdown boom");' : 'return [["# hi", "", "", "[]"]];'}
+        };
+      `;
+      const files = { 'shell.html': Buffer.from(shell), '.gen/server.js': Buffer.from(serverJs) };
+      const render = renderer('/virtual', { read: p => { if (!(p in files)) throw Object.assign(new Error(p), { code: 'ENOENT' }); return files[p]; } });
+      if (mode === 'ok') {
+        expect(await render.markdown()).toEqual([['# hi', '', '', '[]']]);
+      } else {
+        await expect(render.markdown()).rejects.toThrow(mode === 'start-throws' ? 'start boom' : 'markdown boom');
+      }
+      expect(signals).toHaveLength(1);
+      expect(signals[0].aborted).toBe(true);
+      expect(activeTimers.size).toBe(0);
+    } finally {
+      for (const id of activeTimers) realClearTimeout(id);
+      globalThis.fetch = realFetch;
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
+  }
+});

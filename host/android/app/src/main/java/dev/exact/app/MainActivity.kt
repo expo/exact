@@ -37,7 +37,9 @@ class MainActivity : ExactActivity() {
      * ([AgentDrive]; `bun scripts/agent.mjs android --reader`). The process's one: an activity made again in it
      * keeps the driver the first one attached. This shell is a development build. */
     override fun drive(scroll: (Float) -> Unit): Drive? =
-        agent ?: intent.getStringExtra("agent")?.let { name -> AgentDrive(name).also { agent = it } }
+        agent ?: intent.getStringExtra("agent")?.let { name ->
+            AgentDrive(name, waitSeed = intent.getStringExtra("x_agent_seed_wait") == "1").also { agent = it }
+        }
 
     private companion object {
         var agent: AgentDrive? = null

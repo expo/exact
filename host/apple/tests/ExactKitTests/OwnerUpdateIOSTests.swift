@@ -47,6 +47,18 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let windowTarget = update.relations.first { $0.relation == OwnerUpdateIOS.Relation.window }
         XCTAssertEqual(windowTarget?.target.insets, window.safeAreaInsets)
         XCTAssertEqual(windowTarget?.target.frame, window.bounds)
+        // Its reserved regions from iOS 27.1, each keeping its identity from one sample to the next
+        if #available(iOS 27.1, *) {
+            let regions = try XCTUnwrap(update.regions)
+            let again = OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).regions
+            XCTAssertEqual(again?.map(\.id), regions.map(\.id))
+            // The divisions among them are the view's division regions, from its bounds' origin
+            let origin = view.bounds.origin
+            let divisions = (ReservedRegions.divisions(of: view) ?? []).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
+            XCTAssertEqual(regions.filter { $0.kind == 0 }.map(\.frame), divisions)
+        } else {
+            XCTAssertNil(update.regions)
+        }
         let margins = try XCTUnwrap(update.margins)
         XCTAssertEqual(margins.root, view.layoutMargins)
         XCTAssertEqual(margins.plain, UIView().layoutMargins)
@@ -113,7 +125,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
 
     func testTheKernelTakesARegistrationAndRefusesATruncatedOne() throws {
         let session = try fixture()
-        let target = OwnerUpdateIOS.target(window)
+        let target = OwnerUpdateIOS.wire(OwnerUpdateIOS.target(window))
         let record = ExactNativeTarget.encode(name: "map", target: target)
         XCTAssertNil(session.runtime.ownerReports(registrations: [record]).error)
         XCTAssertNil(session.runtime.ownerReports(registrations: [ExactNativeTarget.encode(name: "map", target: nil)]).error)
@@ -152,7 +164,31 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(update.chain[0].target.frame)
         XCTAssertNil(update.chrome)
         XCTAssertNil(update.windowMap)
+        XCTAssertNil(update.configuration)
+        XCTAssertNil(update.regions)
         XCTAssertEqual(update.keyboard, .unreported)
+    }
+
+    /// D8 and D11: UIKit moves the root's margins one for one with Exact's contribution, which the update takes off, as
+    /// it does the band's.
+    func testTheRootsMarginsAreTheirsLessExactsContribution() throws {
+        let session = try fixture()
+        let (route, _) = try firstRoute(session)
+        let root = try XCTUnwrap(window?.rootViewController)
+        let before = try XCTUnwrap(OwnerUpdateIOS.sample(controller: root, view: root.view, session: nil).margins).root
+        let given = root.view.layoutMargins
+        let ledger = ContributionsIOS.of(root)
+        let identity = ContributionsIOS.Identity(node: route.node.id, operation: .additionalInsets)
+        ledger.set(identity, UIEdgeInsets(top: 0, left: 20, bottom: 10, right: 0), generation: 1)
+        let update = OwnerUpdateIOS.sample(controller: root, view: root.view, session: nil)
+        XCTAssertEqual(root.view.layoutMargins.left, given.left + 20, accuracy: 0.5, "UIKit moves the margin with the contribution")
+        XCTAssertEqual(root.view.layoutMargins.bottom, given.bottom + 10, accuracy: 0.5)
+        let after = try XCTUnwrap(update.margins).root
+        XCTAssertEqual(after.left, before.left, accuracy: 0.5, "the update takes it off")
+        XCTAssertEqual(after.bottom, before.bottom, accuracy: 0.5)
+        XCTAssertEqual(after.top, before.top, accuracy: 0.5)
+        ledger.set(identity, nil, generation: 2)
+        ledger.apply()
     }
 
     func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
@@ -218,6 +254,43 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(top.y, frame.minY, accuracy: 0.01)
     }
 
+    /// A route's configuration stays while nothing of it changes and moves when its navigation bar
+    /// hides, coming back when the bar does (D9, "Moving edges").
+    func testARoutesConfigurationMovesWithItsBars() throws {
+        let session = try fixture()
+        let (route, view) = try firstRoute(session)
+        let navigation = try XCTUnwrap(route.navigationController)
+        let sample = { OwnerUpdateIOS.sample(controller: route, view: view, session: self.sessionView).configuration }
+        let first = try XCTUnwrap(sample())
+        XCTAssertEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertNotEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertEqual(sample(), first)
+    }
+
+    /// A tab's configuration moves when its tab bar hides through `setTabBarHidden`, which on iPadOS's
+    /// floating tab bar leaves `tabBar.isHidden` as it was (D9, "Moving edges").
+    func testATabsConfigurationMovesWithItsTabBar() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a configuration is a window's") }
+        guard #available(iOS 18, *) else { throw XCTSkip("setTabBarHidden is iOS 18's") }
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let tab = UIViewController(), tabs = UITabBarController()
+        tab.tabBarItem = UITabBarItem(title: "One", image: nil, tag: 0)
+        tabs.viewControllers = [tab, UIViewController()]
+        window.rootViewController = tabs
+        window.makeKeyAndVisible()
+        self.window = window
+        tabs.view.layoutIfNeeded()
+        let sample = { OwnerUpdateIOS.sample(controller: tab, view: tab.view, session: nil).configuration }
+        let first = try XCTUnwrap(sample())
+        tabs.setTabBarHidden(true, animated: false)
+        XCTAssertNotEqual(sample(), first, "hidden, tabBar.isHidden \(tabs.tabBar.isHidden)")
+        tabs.setTabBarHidden(false, animated: false)
+        XCTAssertEqual(sample(), first)
+    }
+
     func testATargetsIdentityIsItsViewsForLife() {
         let (a, b) = (UIView(), UIView())
         XCTAssertEqual(TargetIds.id(of: a), TargetIds.id(of: a))
@@ -279,6 +352,8 @@ final class OwnerUpdateIOSTests: XCTestCase {
         update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
         update.chrome = .init(verticalBarEdge: 2, sidebarAvailable: false)
         update.windowMap = CGAffineTransform(a: 0.9, b: 0.1, c: 0.2, d: 0.8, tx: 5, ty: 62)
+        update.configuration = 7
+        update.regions = [.init(id: 11, kind: 0, frame: CGRect(x: 175, y: 0, width: 40, height: 844), margins: UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10), active: false)]
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
@@ -287,18 +362,20 @@ final class OwnerUpdateIOSTests: XCTestCase {
         u32(0)
         u32(1); u64(5); u64(6); w.append(0); w.append(0); w.append(1 << 2)
         u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0); w.append(1); f(0, 0, 402, 874)
-        w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); f(0, 16, 0, 16); f(672)
+        w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); w.append(1); f(0, 16, 0, 16); w.append(1); f(672)
         w.append(2); f(0, 538, 402, 336); w.append(1)
         w.append(0)
         w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
-        w += [1, 1, 2, 1, 0]
+        w += [1, 1, 2, 1, 0, 0, 0]
         w.append(1); f(0.9, 0.1, 0.2, 0.8, 5, 62)
+        w.append(1); u64(7)
+        w.append(1); u32(1); u64(11); w.append(0); f(175, 0, 40, 844); f(0, 10, 0, 10); w.append(0)
         XCTAssertEqual([UInt8](update.encode()), w)
         // The keyboard's state, after an empty update's band, lists and margins: 0 unreported, 1 dismissed
         XCTAssertEqual([UInt8](OwnerUpdateIOS().encode())[14], 0)
         XCTAssertEqual([UInt8](OwnerUpdateIOS(keyboard: .dismissed).encode())[14], 1)
         // A registration: the name's length and bytes, then the target after a presence byte
-        let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
+        let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: .init(top: 30, right: 0, bottom: 0, left: 0), frame: nil))
         w = [3] + Array("map".utf8) + [1]
         u64(9); u64(2); w.append(1); f(30, 0, 0, 0); w.append(0)
         XCTAssertEqual([UInt8](registration), w)

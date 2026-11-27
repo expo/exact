@@ -62,6 +62,42 @@ extension ExactSession {
         runtime.later(calls) { [weak self] batch in self?.publish(.notice, batch) }
     }
 
+    /// Report native bar or tab covers without blocking main while owner work
+    /// or startup data activation is in flight (#1375).
+    func tellCovers(_ covers: [(UInt32, HostCover?)]) {
+        whenIdle(bound: true) { [unowned self] in
+            if ExactEnv.postsLiveWork, clock == nil, ownerInFlight || dataPreparing, !Owner.shared.isServingMain {
+                guard !runtime.holds("coversAsync(_:done:)") else { return }
+                let cause = coversCause
+                coversInFlight += 1
+                runtime.coversAsync(covers) { [weak self] completion in self?.publish(.covers(cause), completion) }
+            } else {
+                applyUnlessEmpty(runtime.covers(covers))
+            }
+        }
+    }
+
+    /// Report content owners' local insets without blocking main while owner
+    /// work or startup data activation is in flight (#1375).
+    func tellLocalInsets(_ changes: [(UInt32?, [CGFloat]?)]) {
+        whenIdle(bound: true) { [unowned self] in
+            if ExactEnv.postsLiveWork, clock == nil, ownerInFlight || dataPreparing, !Owner.shared.isServingMain {
+                guard !runtime.holds("localInsetsAsync(_:done:)") else { return }
+                let cause = coversCause
+                coversInFlight += 1
+                runtime.localInsetsAsync(changes) { [weak self] completion in self?.publish(.covers(cause), completion) }
+            } else {
+                applyUnlessEmpty(runtime.localInsets(changes))
+            }
+        }
+    }
+
+    func landedCovers(stale: Bool = false) {
+        coversLanding -= 1
+        guard stale else { return runWaitingWork() }
+        scheduleWaitingWork()
+    }
+
     /// `tellPage` for a notice; at once unless the data source is activating
     /// and this generation's `onLine` reading is known.
     func tellPageSoon() {
@@ -77,17 +113,17 @@ extension ExactSession {
         tellSoon([{ $0.setPage(bits) }, { $0.setRootFontSize(font) }, { $0.setDisplayScale(scale) }])
     }
 
-    /// @ref LLP 1061 D5 — told after every boot, as the date is, and on each
-    /// change: in the same main-thread turn as the boot batch, so the first
-    /// frame on screen already reads the user's preferences.
+    /// @ref LLP 1061 D5, LLP 1156.008.001 A1 — told after every boot, as the date is, and on each
+    /// change: invalidate both text engines before `setPreferences` triggers re-layout so neither
+    /// paints nor measures with stale fonts or line breaks.
     func tellPreferences() {
         guard booted, state != .destroyed else { return }
+        text.invalidatePreferences()
+        if let measurer = text.measurer { Owner.shared.sync { measurer.invalidatePreferences() } }
         apply(runtime.setPreferences(preferenceBits()))
         // Increased Contrast changes what every platform colour resolves to; the build channel reports it (LLP 1122 D4).
         reportColors(); app.buildFactsMoved()
-        #if os(macOS)
         controlTextChanged()
-        #endif
     }
 
     /// `tellPreferences` for a notice; at once unless the data source is
@@ -96,8 +132,10 @@ extension ExactSession {
     func tellPreferencesSoon() {
         guard booted, state != .destroyed else { return }
         guard dataPreparing, !Owner.shared.isServingMain else { return tellPreferences() }
+        text.invalidatePreferences()
+        let measurer = text.measurer
         let bits = preferenceBits()
-        var calls: [(Runtime) -> Batch] = [{ $0.setPreferences(bits) }]
+        var calls: [(Runtime) -> Batch] = [{ measurer?.invalidatePreferences(); return $0.setPreferences(bits) }]
         #if os(iOS) || os(tvOS)
         let reports = view?.window != nil
         #else
@@ -109,9 +147,7 @@ extension ExactSession {
         }
         tellSoon(calls)
         app.buildFactsMoved()
-        #if os(macOS)
         controlTextChanged()
-        #endif
     }
 
     /// @ref LLP 1095 D9 — the platform's resolution of every reference the kernel paints itself, with the app's tint

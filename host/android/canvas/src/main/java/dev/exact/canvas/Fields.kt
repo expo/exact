@@ -171,6 +171,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
         var look: IntArray? = null
         /** The count of the person's edits here, and the last told to exact2. */
         var edits = 0
+        var answered = 0
         var edited = false
         var moved = false
         /** Whether its text composes, as exact2 was last told. */
@@ -194,6 +195,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
 
     private val fields = HashMap<Int, Field>()
     private val byView = HashMap<View, Field>()
+    private val fieldVis = android.graphics.RectF()
     private val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
     /** The reader is changing a field itself (a value exact2 told, a focus it asked for): nothing to tell back. */
     private var quiet = false
@@ -272,6 +274,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
     fun adopted(by: ExactView) {
         view = by
         away = false
+        by.nativeOrigins.tracksFields = fields.isNotEmpty()
         for (f in fields.values) f.dirty = true
     }
 
@@ -300,7 +303,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             var f = fields[id]
             // A view made for a field exact2 already knows (the activity was made again) starts at exact2's count
             // of its edits, and so takes the value told with it.
-            if (f == null) f = make(id, generation).also { it.edits = w[i + 12] }
+            if (f == null) f = make(id, generation).also { it.edits = w[i + 12]; it.answered = it.edits }
             // Its node is another row's item now (LLP 1078): the view starts over, with nothing of the last one's.
             else if (f.generation != generation) renew(f, generation)
             val placed = w[i + 2] and PLACED != 0
@@ -326,7 +329,10 @@ internal class Fields(context: Context) : FrameLayout(context) {
             position(f)
             // The value answers the field's newest edit, or it is older than what the person has typed since.
             val current = w[i + 12] == f.edits
-            if (current && value != f.text.text.toString()) replace(f, value)
+            if (current) {
+                if (value != f.text.text.toString()) replace(f, value, f.answered != f.edits)
+                if (!f.composing) f.answered = f.edits
+            }
             val rev = w[look + 15]
             if (rev != f.select) {
                 f.select = rev
@@ -336,6 +342,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             i = end
         }
         if (fields.size > seen.size) for (f in fields.values.filter { !seen.contains(it.id) }) release(f)
+        view?.nativeOrigins?.tracksFields = fields.isNotEmpty()
         if (wanted != 0) fields[wanted]?.let { focus(it.id) }
         if (log && fields.size != had) Log.i(TAG, "fields: ${w[0]} told, $had held before, ${(System.nanoTime() - began) / 1000} us")
     }
@@ -468,14 +475,24 @@ internal class Fields(context: Context) : FrameLayout(context) {
      * limits, not the app's: its `maxlength`, and the characters its keyboard's kind admits (a number field's key
      * listener drops a "." the app sets, and the caret was then put past the end of what was left: a crash, seen on
      * a Pixel with Shelf's own test of its pages field). */
-    private fun replace(f: Field, value: String) {
+    private fun replace(f: Field, value: String, filtered: Boolean) {
         val e = f.text.editableText ?: return
         val old = e.toString()
         val start = f.text.selectionStart; val end = f.text.selectionEnd
-        val at = { o: Int ->
-            if (o < 0) value.length
-            else if (o <= old.length && value.endsWith(old.substring(o))) value.length - (old.length - o)
-            else min(o, value.length)
+        var prefix = 0
+        val limit = min(old.length, value.length)
+        while (prefix < limit && old[prefix] == value[prefix]) prefix++
+        var suffix = 0
+        while (suffix < limit - prefix && old[old.lastIndex - suffix] == value[value.lastIndex - suffix]) suffix++
+        val oldEnd = old.length - suffix
+        val newEnd = value.length - suffix
+        fun at(offset: Int) = when {
+            offset < 0 -> value.length
+            !filtered -> if (offset <= old.length && value.endsWith(old.substring(offset)))
+                value.length - (old.length - offset) else min(offset, value.length)
+            offset <= prefix -> offset
+            offset < oldEnd -> min(offset, newEnd)
+            else -> newEnd + (offset - oldEnd)
         }
         quiet = true
         try {
@@ -486,7 +503,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             e.filters = filters
             val n = e.length
             val a = min(at(start), n); val b = min(at(end), n)
-            f.text.setSelection(min(a, b), max(a, b))
+            if (filtered) f.text.setSelection(a, b) else f.text.setSelection(min(a, b), max(a, b))
         } finally { quiet = false }
         if (f.text.isFocused) imm.restartInput(f.text)
         // Where the caret is now, for the app's next `input`.
@@ -503,7 +520,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
 
     private fun renew(f: Field, generation: Int) {
         f.generation = generation
-        f.edits = 0; f.edited = false; f.moved = false; f.select = 0; f.composing = false
+        f.edits = 0; f.answered = 0; f.edited = false; f.moved = false; f.select = 0; f.composing = false
         quiet = true
         // A new text and a new history: nothing of the last item's is undone into this one.
         try { f.text.setText("") } finally { quiet = false }
@@ -625,14 +642,19 @@ internal class Fields(context: Context) : FrameLayout(context) {
             f.text.translationX = 0f; f.text.translationY = 0f
             return
         }
-        val g = if (f.group != 0) view?.group(f.group) else null
-        f.atX = (f.x + (g?.translationX ?: 0f)).roundToInt().toFloat()
-        f.atY = (f.y + (g?.translationY ?: 0f)).roundToInt().toFloat()
+        val gx = if (f.group != 0) view?.groupOffsetX(f.group) ?: 0f else 0f
+        val gy = if (f.group != 0) view?.groupOffsetY(f.group) ?: 0f else 0f
+        f.atX = (f.x + gx).roundToInt().toFloat()
+        f.atY = (f.y + gy).roundToInt().toFloat()
         // The port is the field's box within its clip: Android gives a drag to the frontmost view under it that takes
         // drags, and looks no further than that view's children, so a port larger than its field would keep a drag
         // from the fields under it (LLP 1094.001 D5)
         var left = f.atX; var top = f.atY; var right = f.atX + f.w; var bottom = f.atY + f.h
-        if (f.clipW >= 0f) {
+        if (f.group != 0 && view?.hasParentGroup(f.group) == true &&
+            view?.fieldVisible(f.node, f.w.toFloat(), f.h.toFloat(), fieldVis) == true) {
+            if (fieldVis.isEmpty) { left = 0f; top = 0f; right = 0f; bottom = 0f }
+            else { left = fieldVis.left; top = fieldVis.top; right = fieldVis.right; bottom = fieldVis.bottom }
+        } else if (f.clipW >= 0f) {
             left = max(left, f.clipX); top = max(top, f.clipY)
             right = min(right, f.clipX + f.clipW); bottom = min(bottom, f.clipY + f.clipH)
         }

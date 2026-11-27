@@ -844,6 +844,7 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
             HttpScheduling::Ordered
         },
         continuation: None,
+        local: false,
         storage: None,
         surface: None,
         grants: {

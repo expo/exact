@@ -636,5 +636,120 @@ final class ModalStackIOSTests: XCTestCase {
         XCTAssertEqual(p.navigationHost.selectedKey, "replacement")
     }
 
+    func testModalPresentRefusalRollsBackStateAndUnblocksNavigation() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "modal presentation needs a window scene") }
+        final class RefusingHostController: UIViewController {
+            var refusePresent = true
+            override func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)? = nil) {
+                if refusePresent { return }
+                super.present(viewControllerToPresent, animated: flag, completion: completion)
+            }
+        }
+        let session = ExactApp.shared.makeSession(label: "modal-refusal-rollback")
+        sessions.append(session)
+        XCTAssertNotNil(session.boot(plan: Data(), size: CGSize(width: 402, height: 874)).error)
+        let view = ExactView(session: session), host = RefusingHostController()
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(view)
+        view.frame = host.view.bounds
+        self.window = window
+        self.host = host
+        let p = session.presenter
+        p.viewport.frame = host.view.bounds
+        session.firstDrawMs = ExactEnv.wall()
+        until("mounted") { !p.navigationHost.defersFocus }
+        func frame(_ id: Int) -> [String: Any] { ["op": "frame", "id": id, "x": 0.0, "y": 0.0, "w": 402.0, "h": 874.0] }
+
+        // canPresent rejects an off-window controller before even attempting present.
+        let detached = UIViewController()
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["navigationBack": "back", "navigationKey": "home"]], frame(1),
+            ["op": "create", "id": 2, "kind": "view", "props": ["navigationKey": "home"]], frame(2),
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+        ]))
+        XCTAssertFalse(p.modalHost.canPresent(from: detached, route: try XCTUnwrap(p.views[2])))
+
+        // Navigate to a modal route while host.present refuses without invoking completion.
+        p.apply(wireBatch([
+            ["op": "create", "id": 3, "kind": "view", "props": ["navigationKey": "sheet", "navigationPresentation": "modal"]], frame(3),
+            ["op": "children", "id": 1, "ids": [2, 3]],
+            ["op": "props", "id": 1, "set": ["navigationKey": "sheet"]],
+        ]))
+        XCTAssertFalse(p.modalHost.inTransition, "refused present must not wedge inTransition")
+        XCTAssertFalse(p.modalHost.defersFocus, "refused present must not wedge defersFocus")
+        XCTAssertTrue(p.modalHost.controllers.isEmpty, "refused layer is rolled back")
+        XCTAssertTrue(p.navigationHost.presentedNavigations.isEmpty, "refused navigation is retired")
+        XCTAssertTrue(p.navigationHost.modalWaiting, "refused modal stays waiting for retry")
+        XCTAssertFalse(p.navigationHost.pendingSync, "waiting modal does not hold pendingSync")
+        XCTAssertFalse(p.navigationHost.defersFocus, "waiting modal does not defer focus")
+        XCTAssertTrue(try XCTUnwrap(p.navigationHost.primaryOwner?.view).isUserInteractionEnabled, "background stays interactive")
+        XCTAssertFalse(try XCTUnwrap(p.navigationHost.primaryOwner?.view).accessibilityElementsHidden, "background stays accessible")
+
+        // Navigating elsewhere while refused is not frozen by the failed modal.
+        p.apply(wireBatch([
+            ["op": "props", "id": 1, "set": ["navigationKey": "home"]],
+        ]))
+        XCTAssertFalse(p.navigationHost.modalWaiting, "leaving the modal clears modalWaiting")
+        XCTAssertEqual(p.navigationHost.selectedKey, "home")
+
+        // Retry presenting the modal while refused, then clear refusal and verify presentationCleared presents it.
+        p.apply(wireBatch([
+            ["op": "props", "id": 1, "set": ["navigationKey": "sheet"]],
+        ]))
+        XCTAssertTrue(p.navigationHost.modalWaiting)
+        host.refusePresent = false
+        p.navigationHost.presentationCleared()
+        until("the waiting modal route presents after refusal clears") {
+            p.modalHost.routes.last?.node.id == 3 && !p.modalHost.inTransition
+        }
+    }
+
+    func testModalRoutePresentsAutomaticallyAfterDialogDismisses() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "modal presentation needs a window scene") }
+        let session = ExactApp.shared.makeSession(label: "modal-after-dialog")
+        sessions.append(session)
+        XCTAssertNotNil(session.boot(plan: Data(), size: CGSize(width: 402, height: 874)).error)
+        let view = ExactView(session: session), host = UIViewController()
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(view)
+        view.frame = host.view.bounds
+        self.window = window
+        self.host = host
+        let p = session.presenter
+        p.viewport.frame = host.view.bounds
+        session.firstDrawMs = ExactEnv.wall()
+        func frame(_ id: Int, _ height: Double = 874) -> [String: Any] {
+            ["op": "frame", "id": id, "x": 0.0, "y": 0.0, "w": 402.0, "h": height]
+        }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["navigationBack": "back", "navigationKey": "home"]], frame(1),
+            ["op": "create", "id": 2, "kind": "view", "props": ["navigationKey": "home"]], frame(2),
+            ["op": "create", "id": 20, "kind": "view", "props": ["semanticTag": "dialog", "id": "form"]], frame(20, 180),
+            ["op": "children", "id": 1, "ids": [2, 20]], ["op": "roots", "ids": [1]],
+        ]))
+        p.dialogCommand("showModal", "form")
+        until("the dialog is presented on the primary owner") { presented().count == 1 && !p.menus.inTransition }
+
+        // Navigate to a modal route while the dialog owns presentation.
+        p.apply(wireBatch([
+            ["op": "create", "id": 4, "kind": "view", "props": ["navigationKey": "sheet", "navigationPresentation": "modal"]], frame(4),
+            ["op": "children", "id": 1, "ids": [2, 20, 4]],
+            ["op": "props", "id": 1, "set": ["navigationKey": "sheet"]],
+        ]))
+        XCTAssertTrue(p.modalHost.controllers.isEmpty, "deferred while dialog is open")
+        XCTAssertTrue(p.navigationHost.modalWaiting)
+        XCTAssertFalse(p.navigationHost.inTransition)
+
+        // Dismiss the dialog with no further Contract batch: the modal route presents automatically.
+        p.dialogCommand("close", "form")
+        until("the deferred modal route presents automatically after dialog dismissal") {
+            p.modalHost.routes.last?.node.id == 4 && !p.modalHost.inTransition
+        }
+    }
+
 }
 #endif

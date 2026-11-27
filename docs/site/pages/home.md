@@ -1,6 +1,6 @@
 # Exact Documentation
 
-Write an app once. It runs natively on the web, macOS, iOS, and Linux.
+Write an app once. It runs natively on the web, iOS, macOS, Android, Linux, and more.
 
 ## Set up Exact
 

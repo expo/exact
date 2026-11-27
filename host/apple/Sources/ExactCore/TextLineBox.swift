@@ -68,6 +68,13 @@ package enum CSSLineBox {
     /// 1/64 px layout unit, never to a whole point (a chip's width).
     package static func layoutWidth(_ width: CGFloat) -> CGFloat { ceil(width * 64) / 64 }
 
+    /// Round a CGFloat width upward into `Float` so `f32` conversion never
+    /// truncates below `CSSLineBox.layoutWidth` (LLP 1156.008.001 A1).
+    package static func ceilFloatWidth(_ width: CGFloat) -> Float {
+        let d = Double(width), f = Float(d)
+        return Double(f) < d ? f.nextUp : f
+    }
+
     /// A `normal` paragraph's height: its line boxes' sum up to a whole device pixel.
     package static func normalHeight(_ height: CGFloat, scale: CGFloat = 1) -> CGFloat {
         let scale = max(1, scale)

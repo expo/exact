@@ -50,19 +50,36 @@ extension GroupedListView {
         let retains = host.presenter.retainsFocus(node, through: { self.host.logicalParent(of: $0) ?? self.host.presenter.eventParent(of: $0) })
         if !retains { host.presenter.endEditing() }
         // The screen the list is on, read before the press can change it.
-        let screen = sequence(first: owner as UIResponder, next: { $0.next }).lazy.compactMap { $0 as? UIViewController }.first
+        let screen = self.screen
         // A radio's row checks its radio, as a click on the radio does:
         // `input` and `change` carry its value, and the checkmark follows
         // the bound `checked` (LLP 1115.000 D13.2).
         if let row = rows[id], let target = radio(row) { host.presenter.checkRadio(target) }
         guard rows[id]?.pressable == true else { return letGo() }
-        host.presenter.navigation.listPress(id, in: owner) { host.presenter.press(id) }
-        // A sidebar's pressed row keeps UIKit's selection until the press's
-        // batches are applied: then the detail's row is the selected one
-        // again, whatever the press did (opened its detail, a sheet, or nothing)
+        // UIKit selected the cell already
+        pressSelected(id, on: screen) { host.presenter.press(id) }
+    }
+
+    /// The screen the list is on.
+    var screen: UIViewController? {
+        sequence(first: owner as UIResponder, next: { $0.next }).lazy.compactMap { $0 as? UIViewController }.first
+    }
+
+    /// Runs the press of row `id`, its cell selected (by UIKit for a
+    /// standard row, by `GroupedListHost.pressSelected` for a custom one), as
+    /// UIKit's selection of a tapped row does: through the split's record of
+    /// the row whose press made the detail (`listPress`). Then a sidebar's
+    /// selection is the detail's row again once the press's batches are
+    /// applied, whatever the press did (opened its detail, a sheet, or
+    /// nothing); a row whose press pushed a screen over the list's (`screen`,
+    /// read before anything the tap ran) stays selected under it, as a table
+    /// view's does (`clearsSelectionOnViewWillAppear`, `deselect`); any other
+    /// lets go.
+    func pressSelected(_ id: UInt32, on screen: UIViewController?, _ press: () -> Void) {
+        host.presenter.navigation.listPress(id, in: owner, press)
         if sidebar { return host.presenter.afterBatch { [weak self] in self?.selectDetailRow() } }
         if let screen, let stack = screen.navigationController, stack.viewControllers.contains(screen), stack.topViewController !== screen { return }
-        letGo()
+        for selected in collection.indexPathsForSelectedItems ?? [] { collection.deselectItem(at: selected, animated: !ExactEnv.agentFreezes) }
     }
 
     /// The list's screen is coming back into view: its selected rows fade

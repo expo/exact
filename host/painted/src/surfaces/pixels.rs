@@ -24,6 +24,50 @@ impl Surfaces {
             .values()
             .any(|c| self.abis.get(&c.artifact).is_some_and(|a| a.rendered))
     }
+
+    /// Whether any readback-composed GPU canvas has not settled to rest or has
+    /// pending work (including an asynchronous `SurfaceWaker::wake`). Excludes
+    /// the full-window Windows canvas and zero-extent canvases that `pixels` skips.
+    pub(crate) fn has_pending_readback(&self, kernel: &exact_kernel::Kernel) -> bool {
+        #[cfg(windows)]
+        let window_canvas = self.window_canvas();
+        #[cfg(not(windows))]
+        let window_canvas: Option<u32> = None;
+        self.canvases.iter().any(|(&view, c)| {
+            window_canvas != Some(view)
+                && kernel
+                    .node(view)
+                    .is_some_and(|n| n.frame.width > 0.0 && n.frame.height > 0.0)
+                && self.abis.get(&c.artifact).is_some_and(|a| {
+                    a.rendered && (!self.rested_pixels.contains_key(&view) || a.frame_pending(c.id))
+                })
+        })
+    }
+
+    /// Whether any rendered GPU canvas (readback or full-window) wants a frame.
+    pub(crate) fn wants_rendered_frame(&self, kernel: &exact_kernel::Kernel) -> bool {
+        if self.has_pending_readback(kernel) {
+            return true;
+        }
+        #[cfg(windows)]
+        if let Some(view) = self.window_canvas() {
+            if kernel
+                .node(view)
+                .is_some_and(|n| n.frame.width > 0.0 && n.frame.height > 0.0)
+            {
+                if let Some(c) = self.canvases.get(&view) {
+                    if self
+                        .abis
+                        .get(&c.artifact)
+                        .is_some_and(|a| a.rendered && a.frame_pending(c.id))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
     pub(crate) fn pixels<D: DataSource>(
         &mut self,
         host: &mut Host<D>,

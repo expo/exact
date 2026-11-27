@@ -320,11 +320,11 @@ fn every_reconcile_refusal_restores_ownership() {
 }
 
 #[test]
-fn a_sleeping_owned_resource_records_arguments_without_resettling() {
+fn a_sleeping_owned_resource_skips_arguments_without_resettling() {
     let plan = contract::compile(
         r#"component App
   state show = true
-  state number = 1
+  state number = -1
   view
     column
       if show
@@ -332,7 +332,7 @@ fn a_sleeping_owned_resource_records_arguments_without_resettling() {
 component Sleeping
   props
     number: number
-  resource answer = mirror(number) when false as shape number
+  resource answer = mirror(range(number).length) when false as shape number
   view
     text `${answer}`
 "#,
@@ -354,11 +354,180 @@ component Sleeping
     let owners = r.tree.as_ref().unwrap().owners();
     let row = owners[0].storage.borrow().requests[0].row.unwrap();
     assert!(r.resources[row].state.as_ref().unwrap().asleep);
-    assert_eq!(r.owned_row(row).unwrap().want.args, [Value::Number(1.)]);
+    assert!(r.owned_row(row).unwrap().want.args.is_empty());
 
     r.slots[number] = Value::Number(2.);
     assert!(!r.reconcile_owned(&owners).unwrap());
-    assert_eq!(r.owned_row(row).unwrap().want.args, [Value::Number(2.)]);
+    assert!(r.owned_row(row).unwrap().want.args.is_empty());
+}
+
+#[test]
+fn a_sleeping_owned_resource_boots_from_a_checkpoint_without_its_answer() {
+    let plan = contract::compile(
+        r#"routes nav
+  tab home "/"
+  tab discover "/discover"
+
+component App
+  view
+    main
+      for tab in nav.tabs key=tab.name
+        Sleeping(name=tab.name, number=(tab.name == "home" ? -1 : 1), awake=(tab.name == "discover" && nav.tab == "discover"))
+component Sleeping
+  props
+    name: string
+    number: number
+    awake: bool
+  resource answer = mirror(range(number).length) when awake as shape number
+  view
+    text `${answer}:${current(answer)}` testId=`answer-${name}`
+"#,
+    )
+    .unwrap();
+    for (location, answer_count) in [("/", 0), ("/discover", 1)] {
+        let rendered = Runner::boot(
+            plan.clone(),
+            Data::default(),
+            Kernel::with_monospace(),
+            Default::default(),
+            location,
+        )
+        .unwrap();
+        let checkpoint = rendered.document_checkpoint(location);
+        assert_eq!(checkpoint.answers.len(), answer_count);
+        let booted = Runner::boot_checkpoint(
+            plan.clone(),
+            Data::default(),
+            Kernel::with_monospace(),
+            &checkpoint,
+            vec![],
+            Default::default(),
+            Default::default(),
+            location,
+        )
+        .unwrap();
+        for runner in [&rendered, &booted] {
+            let kernel = runner.kernel();
+            let key = kernel.find_first_by_test_id("answer-home").unwrap();
+            let node = kernel.node_by_key(key).unwrap();
+            assert_eq!(node.props.str(exact_kernel::PropId::Text), Some("0:false"));
+        }
+        assert!(booted.data.mirrors.is_empty());
+    }
+}
+
+#[test]
+fn a_sleeping_owned_resource_boots_before_its_dependency_answers() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  view
+    column
+      if show
+        Chain()
+component Chain
+  resource first = immediate() as shape number
+  resource second = mirror(range(first - 1).length + 7) when first > 0 as shape number
+  view
+    text `${first}:${second}` testId="answer"
+"#,
+    )
+    .unwrap();
+    let rendered = Runner::boot(
+        plan.clone(),
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let checkpoint = rendered.document_checkpoint("/");
+    assert_eq!(checkpoint.instances.len(), 2);
+    assert_eq!(checkpoint.instances[0].1, checkpoint.instances[1].1);
+    assert_eq!(owned_answer_text(&rendered), "1:7");
+
+    let booted = Runner::boot_checkpoint(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        &checkpoint,
+        vec![],
+        Default::default(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(owned_answer_text(&booted), "1:7");
+}
+
+#[test]
+fn a_sleeping_owned_resource_discards_an_answer_when_persisted_state_breaks_its_arguments() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  state number = 1 persist
+  state forced = false
+  action wake
+    forced = true
+  action repair
+    number = 2
+  view
+    column
+      if show
+        Sleeping(number=number, awake=(number > 0 || forced))
+component Sleeping
+  props
+    number: number
+    awake: bool
+  resource answer = mirror(range(number).length) when awake as shape number
+  view
+    text `${answer}:${current(answer)}` testId="answer"
+"#,
+    )
+    .unwrap();
+    let rendered = Runner::boot(
+        plan.clone(),
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let checkpoint = rendered.document_checkpoint("/");
+    assert_eq!(checkpoint.instances.len(), 1);
+    assert_eq!(owned_answer_text(&rendered), "1:true");
+
+    let mut booted = Runner::boot_checkpoint(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        &checkpoint,
+        vec![("exact.state.number".into(), b"-1".to_vec())],
+        Default::default(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(owned_answer_text(&booted), "0:false");
+    let err = booted.act("wake", vec![]).unwrap_err();
+    assert!(format!("{err:?}").contains("RangeCount"), "{err:?}");
+    assert_eq!(owned_answer_text(&booted), "0:false");
+    assert!(booted.data.mirrors.is_empty());
+    booted.act("repair", vec![]).unwrap();
+    assert_eq!(owned_answer_text(&booted), "2:true");
+    assert_eq!(booted.data.mirrors, [Value::Number(2.)]);
+}
+
+fn owned_answer_text(r: &Runner<Data>) -> String {
+    let kernel = r.kernel();
+    let key = kernel.find_first_by_test_id("answer").unwrap();
+    kernel
+        .node_by_key(key)
+        .unwrap()
+        .props
+        .str(exact_kernel::PropId::Text)
+        .unwrap()
+        .to_owned()
 }
 
 #[test]
@@ -428,29 +597,21 @@ component Sleeping
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Data>| {
-        let kernel = r.kernel();
-        let key = kernel.find_by_test_id("answer")[0];
-        kernel
-            .node_by_key(key)
-            .unwrap()
-            .props
-            .str(exact_kernel::PropId::Text)
-            .unwrap()
-            .to_owned()
-    };
-    assert_eq!(text(&r), "1:91:false");
+    assert_eq!(owned_answer_text(&r), "1:91:false");
+    r.act("put", vec![Value::Number(-1.)]).unwrap();
+    assert_eq!(owned_answer_text(&r), "-1:91:false");
+
     r.act("put", vec![Value::Number(2.)]).unwrap();
-    assert_eq!(text(&r), "2:91:false");
+    assert_eq!(owned_answer_text(&r), "2:91:false");
 
     r.act("put", vec![Value::Number(3.)]).unwrap();
-    assert_eq!(text(&r), "3:91:false");
+    assert_eq!(owned_answer_text(&r), "3:91:false");
 
     assert!(r.data.mirrors.is_empty());
 
     r.act("wake", vec![]).unwrap();
     assert_eq!(r.data.mirrors, [Value::Number(3.)]);
-    assert_eq!(text(&r), "3:3:true");
+    assert_eq!(owned_answer_text(&r), "3:3:true");
 }
 
 #[test]

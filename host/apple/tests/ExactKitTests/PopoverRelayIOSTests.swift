@@ -579,6 +579,51 @@ final class PopoverRelayIOSTests: XCTestCase {
         XCTAssertNil(reopened.relay, "reset drops each entry too")
         XCTAssertTrue(popover.superview === root)
     }
+
+    /// Reopening an already-open popover from inside a nested popover must not overwrite
+    /// its `agentOpen` entry or form an ancestor cycle, and `drop(_:)` removes its entry
+    /// before recursing so a cycle can never overflow the stack.
+    func testReopeningAnOpenManualPopoverFromInsideANestedPopoverCannotFormACycle() throws {
+        let p = page().presenter
+        p.menus.reset()
+        p.apply(wireBatch([
+            ["op": "create", "id": 10, "kind": "view", "props": ["id": "a", "popover": "manual"]],
+            ["op": "create", "id": 11, "kind": "button", "props": ["id": "open-b", "popovertarget": "b"]],
+            ["op": "create", "id": 20, "kind": "view", "props": ["id": "b", "popover": "manual"]],
+            ["op": "create", "id": 21, "kind": "view", "props": ["id": "ctx-a", "contextPopover": "a"]],
+            ["op": "children", "id": 10, "ids": [11]],
+            ["op": "children", "id": 20, "ids": [21]],
+            ["op": "children", "id": 1, "ids": [10, 20]],
+            ["op": "frame", "id": 10, "x": 10, "y": 10, "w": 180, "h": 120],
+            ["op": "frame", "id": 11, "x": 10, "y": 10, "w": 80, "h": 40],
+            ["op": "frame", "id": 20, "x": 10, "y": 150, "w": 180, "h": 120],
+            ["op": "frame", "id": 21, "x": 10, "y": 10, "w": 80, "h": 40],
+        ]))
+        let popA = try XCTUnwrap(p.views[10]), popB = try XCTUnwrap(p.views[20]), ctxA = try XCTUnwrap(p.views[21])
+        p.menus.agentShow(popA, named: "a", from: nil)
+        p.menus.agentShow(popB, named: "b", from: 11)
+        XCTAssertNil(p.menus.agentOpen["a"]?.ancestor)
+        XCTAssertEqual(p.menus.agentOpen["b"]?.ancestor, "a")
+        let originalLayer = try XCTUnwrap(p.menus.agentOpen["a"]?.layer)
+
+        p.menus.agentShow(popA, named: "a", from: 21, context: true)
+        if ExactEnv.agentPaints { XCTAssertFalse(p.menus.agentContext(ctxA)) }
+        XCTAssertNil(p.menus.agentOpen["a"]?.ancestor, "reopening must not overwrite ancestor into a cycle")
+        XCTAssertTrue(p.menus.agentOpen["a"]?.layer === originalLayer, "reopening must not orphan the open layer")
+
+        p.menus.drop("a")
+        XCTAssertFalse(p.menus.isOpen(popA))
+        XCTAssertFalse(p.menus.isOpen(popB))
+        XCTAssertTrue(p.menus.agentOpen.isEmpty)
+
+        // Direct cycle guard in `drop(_:)`: removing before recursing breaks any 2-cycle.
+        p.menus.agentOpen = [
+            "a": MenuHost.Lifted(source: 21, popover: popA, order: 1, ancestor: "b", context: true, substitutesMenu: false, presenter: p),
+            "b": MenuHost.Lifted(source: 11, popover: popB, order: 2, ancestor: "a", context: false, substitutesMenu: false, presenter: p),
+        ]
+        p.menus.drop("a")
+        XCTAssertTrue(p.menus.agentOpen.isEmpty)
+    }
 }
 private final class PressCanvasProbe: CanvasInput {
     var phases: [String] = []

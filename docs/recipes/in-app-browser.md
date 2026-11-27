@@ -42,6 +42,16 @@ bun exact.mjs agent web "tap checkout" "clock settle" "state pending" "tap @1 di
 This command starts a new drive of the example, whose first ticket is `@1`.
 The final settle fills the mutation with that action. The web drive's `logs`
 records `in-app-browser: dismissed https://example.com` (or `opened`).
+In `app.test.contract`, answer the held ticket by capability name:
+
+```contract-test
+test "checkout dismisses the browser"
+  tap "checkout"
+  tap "@browser" dismissed
+  clock data
+  expect text "result" == "dismissed"
+```
+
 A drive confirms the open request and substituted reply; it cannot see Safari's
 sheet. To inspect the real sheet automatically on a simulator, use XCUITest
 against a normal app launch without the agent.

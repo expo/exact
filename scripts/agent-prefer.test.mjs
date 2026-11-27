@@ -1,7 +1,7 @@
 // `prefer`'s facts by their names (agent-prefer.mjs `preferGroups`): a fact answers to its near spellings
 // (LLP 1116.007 D3.5: `prefer color-scheme dark`), and an unknown fact or value is still refused.
 import { test, expect } from 'bun:test';
-import { PREFERENCES, mediaHeard, preferGroups, preferWeb } from './agent-prefer.mjs';
+import { PREFERENCES, mediaHeard, parsePreferArgs, preferGroups, preferWeb } from './agent-prefer.mjs';
 import { MalformedOperation } from './agent-keys.mjs';
 import { displayMode, pageReporter, preferDisplayMode, preferences } from '../host/web/navigation/environment.js';
 
@@ -22,6 +22,7 @@ test('a near spelling of a fact is that fact', () => {
   }
   expect(preferGroups({ 'reduced-motion': 'reduce', contrast: 'more' }).media).toEqual({ 'prefers-reduced-motion': 'reduce', 'prefers-contrast': 'more' });
   expect(preferGroups({ canShare: 'false', rootFontSize: '20' }).page).toEqual({ 'can-share': false, 'root-font-size': 20 });
+  expect(preferGroups({ askSiri: 'available' }).page).toEqual({ 'ask-siri': 'available' });
   // As its help writes it, `<px>`: `53px` is 53 (LLP 1156.002 D5).
   expect(preferGroups({ 'root-font-size': '53px' }).page).toEqual({ 'root-font-size': 53 });
   expect(preferGroups({ frozen: 'true' }).page).toEqual({ frozen: true });
@@ -109,8 +110,11 @@ test('prefer mode is the app modes group (LLP 1121 D13): each pin, the scheme le
 
 test('page preference refusals omit the malformed property', () => {
   const { prefer } = pageReporter(true);
-  try { prefer({ 'keyboard-navigation': true }); throw new Error('expected a refusal'); }
-  catch (error) { expect(error.message).toContain('not a page fact'); expect(Object.hasOwn(error, 'malformed')).toBe(false); }
+  // Another host's real facts: Tab reaching every control on the Mac, Ask Siri in the iOS simulator's menus.
+  for (const facts of [{ 'keyboard-navigation': true }, { 'ask-siri': 'available' }]) {
+    try { prefer(facts); throw new Error('expected a refusal'); }
+    catch (error) { expect(error.message).toContain('not a page fact'); expect(Object.hasOwn(error, 'malformed')).toBe(false); }
+  }
   try { prefer({ banana: true }); throw new Error('expected malformed input'); }
   catch (error) { expect(error.malformed).toBe(true); }
 });
@@ -202,4 +206,15 @@ test('freeze and resume are document facts; prefer substitutes them under the ag
   expect(agent.read().frozen).toBe(true);
   agent.prefer({ frozen: false }); expect(agent.read().frozen).toBe(false);
   expect(told).toEqual([false, true, false]);
+});
+
+test('parsePreferArgs respects quoted values such as safe-area and preserves extension tails (LLP 1156.008.000 D9.1)', () => {
+  expect(parsePreferArgs('prefer safe-area "47 0 34 0"')).toEqual({ 'safe-area': '47 0 34 0' });
+  expect(preferGroups(parsePreferArgs('prefer safe-area "47 0 34 0" color-scheme dark'))).toMatchObject({
+    page: { 'safe-area': '47 0 34 0' },
+    media: { 'prefers-color-scheme': 'dark' },
+  });
+  expect(parsePreferArgs("prefer safe-area '10 0 20 0'")).toEqual({ 'safe-area': '10 0 20 0' });
+  expect(parsePreferArgs('prefer extension speech.listen={"heard":"pick up milk"}'))
+    .toEqual({ extension: 'speech.listen={"heard":"pick up milk"}' });
 });

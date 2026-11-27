@@ -44,6 +44,10 @@ mod test_steps;
 pub mod tool;
 mod walk;
 
+/// The graphical hosts named by native view declarations and platform cases.
+pub const MODULE_PLATFORMS: [&str; 7] =
+    ["ios", "tvos", "macos", "web", "linux", "windows", "android"];
+
 pub use ast::*;
 pub use clock::{resolve_clock_timelines, resolve_clock_timelines_in};
 pub use inline::{

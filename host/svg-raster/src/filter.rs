@@ -244,9 +244,12 @@ fn primitive(p: &Primitive, source: &Img, results: &[(Img, Rect)], rect: Rect, s
 /// A σ per axis in pixels, as Filter Effects 1 §15.6 says: three box blurs
 /// when σ ≥ 2, else a true Gaussian kernel.
 pub(crate) fn blur(mut img: Img, sx: f32, sy: f32) -> Img {
-    if sx < 0.0 || sy < 0.0 || !(sx.is_finite() && sy.is_finite()) {
+    if !(sx.is_finite() && sy.is_finite()) {
         return Img::clear(img.w, img.h, img.linear);
     }
+    // A negative σ disables the blur (Filter Effects 1 §9.14: the result is
+    // the input); on one axis it is zero there, as Chrome draws it.
+    let (sx, sy) = (sx.max(0.0), sy.max(0.0));
     let (w, h) = (img.w, img.h);
     if sx > 0.0 {
         pass(&mut img.px, w, h, 4, w * 4, sx);
@@ -452,9 +455,9 @@ fn transfer(f: &Transfer, c: f32) -> f32 {
 
 /// Erode (min) or dilate (max) over a box of radius `rx × ry` pixels.
 fn morphology(img: Img, dilate: bool, rx: f32, ry: f32) -> Img {
-    if rx < 0.0 || ry < 0.0 {
-        return Img::clear(img.w, img.h, img.linear);
-    }
+    // A negative radius disables the operation (Filter Effects 1 §9.17: the
+    // result is the input); on one axis it is zero there, as Chrome draws it.
+    let (rx, ry) = (rx.max(0.0), ry.max(0.0));
     let (w, h) = (img.w as isize, img.h as isize);
     // A window wider than the image sees past both edges from every pixel
     // as one exactly as wide does: the same picture, bounded work.
@@ -600,6 +603,15 @@ mod tests {
             Op::Tile,
             Op::Turbulence(0.05, 0.1, 2, 3.0, true, false),
             Op::Displacement(4.0, 0, 1),
+            Op::Convolve(Box::new(exact_svg_filter::Convolve {
+                order: (2, 2),
+                kernel: vec![1.0, 0.0, 0.0, 1.0],
+                divisor: 2.0,
+                bias: 0.0,
+                target: (0, 1),
+                edge: 0,
+                preserve_alpha: false,
+            })),
             Op::Lighting(Box::new(Lighting {
                 specular: true,
                 surface_scale: 2.0,
@@ -623,6 +635,47 @@ mod tests {
         };
         assert_eq!(Filter::decode(&f.encode()), Some(f));
         assert_eq!(Filter::decode(&[0.0, 0.0, 1.0, 1.0, 1.0, 99.0]), None);
+
+        // A hand-crafted malformed Convolve never desynchronizes trailing primitives
+        // and never overflows direct rasterization.
+        let malformed = exact_svg_filter::Convolve {
+            order: (u32::MAX, u32::MAX),
+            kernel: vec![1.0, 2.0],
+            divisor: 1.0,
+            bias: 0.0,
+            target: (0, 0),
+            edge: 0,
+            preserve_alpha: false,
+        };
+        let chain = Filter {
+            region: (0.0, 0.0, 4.0, 4.0),
+            primitives: vec![
+                Primitive {
+                    op: Op::Convolve(Box::new(malformed.clone())),
+                    inputs: [Input::SourceGraphic, Input::None],
+                    subregion: (0.0, 0.0, 4.0, 4.0),
+                    linear: false,
+                },
+                Primitive {
+                    op: Op::Flood([1.0, 0.0, 0.0, 1.0]),
+                    inputs: [Input::None, Input::None],
+                    subregion: (0.0, 0.0, 4.0, 4.0),
+                    linear: false,
+                },
+            ],
+        };
+        let decoded = Filter::decode(&chain.encode()).expect("wire stays aligned");
+        assert_eq!(decoded.primitives[0].op, Op::Flood([0.0; 4]));
+        assert_eq!(decoded.primitives[1].op, Op::Flood([1.0, 0.0, 0.0, 1.0]));
+        let mut px = vec![255u8; 4 * 4 * 4];
+        run(
+            &one(Op::Convolve(Box::new(malformed)), false),
+            &mut px,
+            4,
+            4,
+            SPACE,
+        );
+        assert!(px.iter().all(|&b| b == 0));
     }
 
     /// A blur keeps the total coverage and spreads it; an offset moves it.
@@ -655,6 +708,27 @@ mod tests {
             let i = (10 * 20 + 10) * 4;
             assert_eq!(&px[i..i + 4], &[0, 255, 0, 255]);
         }
+    }
+
+    /// Filter Effects 1 §9.14 and §9.17: a negative `stdDeviation` or
+    /// `radius` disables the primitive (the result is its input), and on one
+    /// axis it acts as zero there, as Chrome draws it; never transparent.
+    #[test]
+    fn negative_blur_and_morphology_values_pass_the_input_through() {
+        let render = |op| {
+            let mut px = square();
+            run(&one(op, false), &mut px, 20, 20, SPACE);
+            px
+        };
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        assert!(render(Op::Blur(-1.0, -1.0)) == square());
+        assert!(render(Op::Blur(-1.0, 2.0)) == render(Op::Blur(0.0, 2.0)));
+        assert!(
+            render(Op::DropShadow(-1.0, -1.0, 3.0, 3.0, blue))
+                == render(Op::DropShadow(0.0, 0.0, 3.0, 3.0, blue))
+        );
+        assert!(render(Op::Morphology(true, -1.0, -1.0)) == square());
+        assert!(render(Op::Morphology(true, -1.0, 3.0)) == render(Op::Morphology(true, 0.0, 3.0)));
     }
 
     #[test]

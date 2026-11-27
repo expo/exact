@@ -292,5 +292,73 @@ final class SessionLeaseTests: XCTestCase {
         let reply = try XCTUnwrap(ExactTools.runner(session)(#"{"op":"called","id":1}"#))
         XCTAssertTrue(reply.contains("error"), "this runner has no call 1: \(reply)")
     }
+
+    // MARK: document & save pickers
+
+    private static let documents = """
+    component App
+      state doc = "none"
+      state docCancels = 0
+      state saved = "none"
+      state saveCancels = 0
+      action onDoc(v: string)
+        doc = v
+      action onDocCancel
+        docCancels = docCancels + 1
+      action onSave(v: string)
+        saved = v
+      action onSaveCancel
+        saveCancels = saveCancels + 1
+      view
+        column
+          input id="doc" change=onDoc cancel=onDocCancel
+          input id="save" change=onSave cancel=onSaveCancel
+
+    """
+
+    func testDocumentAndSavePickersDropStaleCompletionsAfterReloadAndDestroy() throws {
+        let session = try session(Self.documents)
+        let docView = try XCTUnwrap(session.presenter.views.values.first { $0.props["id"] == "doc" }?.id)
+        let saveView = try XCTUnwrap(session.presenter.views.values.first { $0.props["id"] == "save" }?.id)
+        let oldLease = SessionLease(session)
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lease-picker-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = dir.appendingPathComponent("src.txt"), dst = dir.appendingPathComponent("dst.txt")
+        try Data("from-old-gen".utf8).write(to: src)
+        let fh = try FileHandle(forReadingFrom: src)
+        defer { try? fh.close() }
+
+        // Reload replaces the runner while keeping the same view IDs.
+        XCTAssertTrue(session.apply(try compile(Self.documents)))
+        var cleaned = 0
+        session.pickerHost.finishDocument(docView, name: "showOpenFilePicker", urls: [src], issued: oldLease)
+        session.pickerHost.finishDocument(docView, name: "showOpenFilePicker", urls: nil, issued: oldLease)
+        session.pickerHost.finishSave(view: saveView, file: fh, to: dst, issued: oldLease) { cleaned += 1 }
+        session.pickerHost.finishSave(view: saveView, file: fh, to: nil, issued: oldLease) { cleaned += 1 }
+
+        XCTAssertEqual(cleaned, 2, "cleanup closures still run for stale save panels")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dst.path), "stale save must not copy file to disk")
+        let s = try slots(session)
+        XCTAssertEqual(s["doc"] as? String, "none")
+        XCTAssertEqual(s["docCancels"] as? Int, 0)
+        XCTAssertEqual(s["saved"] as? String, "none")
+        XCTAssertEqual(s["saveCancels"] as? Int, 0)
+
+        // Current generation still works; after destroy, completions are dropped with cleanup intact.
+        let currentLease = SessionLease(session)
+        session.pickerHost.finishSave(view: saveView, file: fh, to: dst, issued: currentLease) { cleaned += 1 }
+        XCTAssertEqual(cleaned, 3)
+        XCTAssertEqual(try Data(contentsOf: dst), Data("from-old-gen".utf8))
+        XCTAssertEqual(try slots(session)["saved"] as? String, "dst.txt")
+
+        try FileManager.default.removeItem(at: dst)
+        session.destroy()
+        session.pickerHost.finishDocument(docView, name: "showOpenFilePicker", urls: [src], issued: currentLease)
+        session.pickerHost.finishSave(view: saveView, file: fh, to: dst, issued: currentLease) { cleaned += 1 }
+        XCTAssertEqual(cleaned, 4)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dst.path))
+    }
 }
 #endif

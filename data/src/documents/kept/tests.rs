@@ -311,7 +311,18 @@ fn a_document_renamed_this_launch_and_chosen_again_moves_its_entry() {
         .write(true)
         .open(file.with_extension("lock"))
         .unwrap();
-    other.try_lock().unwrap();
+    // On Linux a concurrent test spawning a child briefly duplicates open FDs
+    // between fork and exec (O_CLOEXEC), so retry transient WouldBlock briefly.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match other.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(e) => panic!("lock file remained held after relaunch: {e:?}"),
+        }
+    }
     open(7562, app, &file);
     assert!(list(7562).is_none());
     drop(other);

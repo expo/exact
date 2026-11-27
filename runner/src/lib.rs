@@ -37,7 +37,8 @@
 //! so an agent seeks instead of waiting — the same clock discipline as
 //! `exact-motion`.
 
-#![forbid(unsafe_code)]
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(test, deny(unsafe_code))]
 #![deny(missing_docs)]
 
 pub mod activation;

@@ -1,0 +1,28 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/sign-in@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [
+    "exact-sign-in-button"
+  ],
+  "hatches": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "androidx.credentials:credentials:1.6.0",
+    "androidx.credentials:credentials-play-services-auth:1.6.0",
+    "com.google.android.libraries.identity.googleid:googleid:1.1.1"
+  ],
+  "artifacts": [],
+  "reader": true,
+  "class": "exact.signin.SignInModule"
+}

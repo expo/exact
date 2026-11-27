@@ -701,14 +701,14 @@ fn run<S: ureq::AsSendBody>(
 fn send(
     lease: &Lease,
     req: ureq::http::Request<()>,
-    body: &[u8],
+    body: Option<&[u8]>,
     reader: &mut Option<Counted<'_>>,
     timeout: Option<Duration>,
     left: Option<Duration>,
 ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
     let (parts, ()) = req.into_parts();
-    match reader.as_mut() {
-        Some(reader) => {
+    match (reader.as_mut(), body) {
+        (Some(reader), _) => {
             let counted = ureq::SendBody::from_reader(reader);
             run(
                 lease,
@@ -717,9 +717,40 @@ fn send(
                 left,
             )
         }
-        None => run(
+        // RFC 9110 §8.6 / Fetch §4.6: omit Content-Length when no body is
+        // present and the method does not anticipate one, or on GET/HEAD with
+        // an empty byte slice; an explicitly empty body on methods such as
+        // DELETE or OPTIONS still sends `Content-Length: 0`.
+        (None, None)
+            if !matches!(
+                parts.method,
+                ureq::http::Method::POST | ureq::http::Method::PUT | ureq::http::Method::PATCH
+            ) =>
+        {
+            run(
+                lease,
+                ureq::http::Request::from_parts(parts, ()),
+                timeout,
+                left,
+            )
+        }
+        (None, Some(b))
+            if b.is_empty()
+                && matches!(
+                    parts.method,
+                    ureq::http::Method::GET | ureq::http::Method::HEAD
+                ) =>
+        {
+            run(
+                lease,
+                ureq::http::Request::from_parts(parts, ()),
+                timeout,
+                left,
+            )
+        }
+        (None, body) => run(
             lease,
-            ureq::http::Request::from_parts(parts, body),
+            ureq::http::Request::from_parts(parts, body.unwrap_or_default()),
             timeout,
             left,
         ),
@@ -893,7 +924,14 @@ impl Transport for RustlsHttpTransport {
                 read: read.clone(),
             }),
         };
-        let mut result = send(&lease, req, body, &mut reader, request.timeout, limit);
+        let mut result = send(
+            &lease,
+            req,
+            request.body.as_deref(),
+            &mut reader,
+            request.timeout,
+            limit,
+        );
         signal.check()?;
         // A request whose pooled connection closed before any of its response
         // arrived may never have reached the server, which can close an idle
@@ -913,7 +951,14 @@ impl Transport for RustlsHttpTransport {
                     reader.rewind().map_err(failed)?;
                 }
                 watch(&lease);
-                result = send(&lease, build()?, body, &mut reader, request.timeout, left);
+                result = send(
+                    &lease,
+                    build()?,
+                    request.body.as_deref(),
+                    &mut reader,
+                    request.timeout,
+                    left,
+                );
             }
         }
         signal.check()?;
@@ -1751,6 +1796,113 @@ mod tests {
         assert_eq!(transport.send(&Request::get(&b)).unwrap().body, b"ok");
         assert_eq!(transport.send(&Request::get(&a)).unwrap().body, b"ok");
         assert_eq!(at_a.load(Ordering::SeqCst), 1);
+    }
+
+    /// RFC 9110 §8.6: bodiless methods omit `Content-Length`, while methods
+    /// that anticipate a body (`POST`, `PUT`, `PATCH`) or carry bytes send it.
+    #[test]
+    fn bodiless_methods_omit_content_length_while_body_methods_send_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let cases: &[(&str, Option<&[u8]>, Option<&str>)] = &[
+            ("GET", None, None),
+            ("GET", Some(b""), None),
+            ("HEAD", None, None),
+            ("HEAD", Some(b""), None),
+            ("DELETE", None, None),
+            ("DELETE", Some(b""), Some("content-length: 0")),
+            ("OPTIONS", None, None),
+            ("OPTIONS", Some(b""), Some("content-length: 0")),
+            ("DELETE", Some(b"ok"), Some("content-length: 2")),
+            ("POST", None, Some("content-length: 0")),
+            ("POST", Some(b""), Some("content-length: 0")),
+            ("PUT", None, Some("content-length: 0")),
+            ("PATCH", None, Some("content-length: 0")),
+            ("POST", Some(b"hello"), Some("content-length: 5")),
+        ];
+        let expected = cases.len() + 2; // plus 303 POST -> GET (2 hops)
+        let peer = std::thread::spawn(move || {
+            let mut heads = Vec::with_capacity(expected);
+            for i in 0..expected {
+                let (mut socket, _) = listener.accept().unwrap();
+                let head = request_head(&mut socket);
+                let length: usize = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; length];
+                socket.read_exact(&mut body).unwrap();
+                if head.starts_with("POST /redirect ") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 303 See Other\r\nLocation: /after\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                } else {
+                    let reply = if head.starts_with("HEAD ") { "" } else { "ok" };
+                    write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .unwrap();
+                }
+                heads.push((i, head, body));
+            }
+            heads
+        });
+        let transport = RustlsHttpTransport::new();
+        for (index, &(method, body, _)) in cases.iter().enumerate() {
+            let mut req = Request::get(&format!("{url}/case-{index}"));
+            req.method = method.into();
+            req.body = body.map(|b| b.to_vec());
+            let reply = transport.send(&req).unwrap();
+            assert_eq!(reply.status, 200, "{method} case {index}");
+        }
+        let grants = crate::grant::GrantSet::parse(&format!("net.fetch {url}")).unwrap();
+        let mut redirect = post(&format!("{url}/redirect"));
+        redirect.body = Some(b"go".to_vec());
+        let reply = crate::stdlib::fetch::fetch(&transport, &grants, redirect).unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.body, b"ok");
+
+        let heads = peer.join().unwrap();
+        for ((_, head, seen_body), &(method, body, want_cl)) in heads.iter().zip(cases.iter()) {
+            let lower = head.to_ascii_lowercase();
+            match want_cl {
+                None => {
+                    assert!(
+                        !lower.contains("content-length:"),
+                        "{method} unexpectedly sent Content-Length:\n{head}"
+                    );
+                    assert!(
+                        !lower.contains("transfer-encoding:"),
+                        "{method} unexpectedly sent Transfer-Encoding:\n{head}"
+                    );
+                }
+                Some(header) => {
+                    assert!(
+                        lower.contains(&format!("{header}\r\n")),
+                        "{method} missing `{header}`:\n{head}"
+                    );
+                }
+            }
+            assert_eq!(seen_body.as_slice(), body.unwrap_or_default(), "{method}");
+        }
+        let redirect_post = heads[cases.len()].1.to_ascii_lowercase();
+        let redirect_get = heads[cases.len() + 1].1.to_ascii_lowercase();
+        assert!(
+            redirect_post.contains("content-length: 2\r\n"),
+            "{redirect_post}"
+        );
+        assert!(
+            !redirect_get.contains("content-length:"),
+            "303 GET unexpectedly sent Content-Length:\n{redirect_get}"
+        );
     }
 }
 

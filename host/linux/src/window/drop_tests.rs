@@ -1,246 +1,132 @@
+use super::received::tests::{read_all, reading};
 use super::*;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-fn types(list: &[&str]) -> Vec<String> {
-    list.iter().map(|t| t.to_string()).collect()
+/// A reading whose URI list names `uris` and whose text is `text`, all
+/// arrived, with the drop's number `id`.
+fn arrived(id: u32, uris: &str, text: &str) -> Reading {
+    let (mut reading, [mut u, link, mut t, key]) = reading();
+    reading.id = id;
+    u.write_all(uris.as_bytes()).unwrap();
+    t.write_all(text.as_bytes()).unwrap();
+    drop((u, link, t, key));
+    read_all(&mut reading, Instant::now() + Duration::from_secs(60), &[]);
+    reading
 }
 
-fn utf16(text: &str) -> Vec<u8> {
-    text.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
-
-#[test]
-fn a_uri_list_gives_local_files_and_its_first_link() {
-    let list = b"# from a file manager\r\nfile:///home/a/Photo%20one.jpg\r\nfile://localhost/home/a/b.pdf\r\nhttps://example.com/fuji\r\nfile://other.example/x\r\nhttps://example.com/second\r\n";
-    let dropped = items(list, b"", b"");
-    assert_eq!(
-        dropped.paths,
-        [
-            PathBuf::from("/home/a/Photo one.jpg"),
-            PathBuf::from("/home/a/b.pdf")
-        ]
-    );
-    assert_eq!(dropped.url, "https://example.com/fuji");
-    assert_eq!(dropped.text, "");
-}
-
-#[test]
-fn a_malformed_entry_is_neither_the_link_nor_a_path() {
-    let list = b"not a uri\r\n1http://example.com/\r\nfile:///tmp/a?b\r\nfile:///tmp/c#d\r\nhttps://example.com/valid\r\n";
-    let dropped = items(list, b"", b"");
-    assert_eq!(dropped.url, "https://example.com/valid");
-    assert!(dropped.paths.is_empty(), "{:?}", dropped.paths);
-    for junk in [
-        "not a uri",
-        "1http://example.com/",
-        "https://exa mple.com/",
-        ":no-scheme",
-    ] {
-        assert_eq!(web_link(junk), None, "{junk}");
+fn reading_stage(reading: Reading) -> Progress {
+    Progress {
+        stage: Stage::Reading(reading),
+        cut: false,
     }
-    for uri in [
-        "http://[::1]:8080/a",
-        "mailto:a@example.com",
-        "https://[broken",
-        "x-app:open",
-    ] {
-        assert_eq!(
-            web_link(uri),
-            Some(uri),
-            "a URI's parts are the app's to check"
-        );
-    }
-    assert_eq!(
-        file_path(b"///tmp/%+1"),
-        None,
-        "an escape is two hex digits"
-    );
-    let junk = items(
-        b"no scheme here\r\n",
-        &utf16("https://example.com/titled\nTitle"),
-        b"",
-    );
-    assert_eq!(
-        junk.url, "https://example.com/titled",
-        "junk leaves the titled link its place"
-    );
 }
 
-#[test]
-fn a_path_keeps_its_bytes_raw_or_percent_encoded() {
-    let encoded = items(b"file:///tmp/caf%E9\r\n", b"", b"");
-    assert_eq!(
-        encoded.paths[0].as_os_str().as_encoded_bytes(),
-        b"/tmp/caf\xe9"
-    );
-    let raw = items(b"file:///tmp/caf\xe9\r\n", b"", b"");
-    assert_eq!(raw.paths[0].as_os_str().as_encoded_bytes(), b"/tmp/caf\xe9");
-    assert_eq!(file_path(b"//host.example/tmp/a"), None);
-    assert_eq!(file_path(b"relative"), None);
-    assert_eq!(file_path(b"///tmp/%4"), None);
-}
-
-#[test]
-fn text_arrives_as_it_came_and_a_link_is_not_made_from_it() {
-    let dropped = items(b"", b"", "Mount Fuji\nhttps://example.com/fuji".as_bytes());
-    assert_eq!(dropped.text, "Mount Fuji\nhttps://example.com/fuji");
-    assert_eq!(dropped.url, "");
-    assert!(dropped.paths.is_empty());
-}
-
-#[test]
-fn a_browsers_titled_link_gives_the_link_the_uri_list_lacks() {
-    let titled = utf16("https://example.com/fuji\nA link to Fuji");
-    let dropped = items(b"", &titled, b"https://example.com/fuji");
-    assert_eq!(dropped.url, "https://example.com/fuji");
-    assert_eq!(
-        dropped.text, "https://example.com/fuji",
-        "the text is the source's own"
-    );
-    let listed = items(b"https://example.com/listed\r\n", &titled, b"");
-    assert_eq!(
-        listed.url, "https://example.com/listed",
-        "a URI list's link comes first"
-    );
-    let file = items(
-        b"file:///tmp/a.jpg\r\n",
-        &utf16("file:///tmp/a.jpg\nA photo"),
-        b"",
-    );
-    assert_eq!(
-        (file.url.as_str(), file.paths.len()),
-        ("", 1),
-        "a file: link is a file"
-    );
-}
-
-#[test]
-fn a_titled_links_encoding_is_read_from_its_bytes() {
-    let big: Vec<u8> = [0xFE, 0xFF]
-        .into_iter()
-        .chain(
-            "https://example.com/b\n"
-                .encode_utf16()
-                .flat_map(u16::to_be_bytes),
-        )
-        .collect();
-    assert_eq!(items(b"", &big, b"").url, "https://example.com/b");
-    let unmarked: Vec<u8> = "https://example.com/be"
-        .encode_utf16()
-        .flat_map(u16::to_be_bytes)
-        .collect();
-    assert_eq!(items(b"", &unmarked, b"").url, "https://example.com/be");
-    assert_eq!(
-        items(b"", b"https://example.com/u8\ntitle", b"").url,
-        "https://example.com/u8"
-    );
-    assert_eq!(
-        items(b"", b"https://example.com/c-string\0", b"").url,
-        "https://example.com/c-string",
-        "UTF-8 ending in a NUL is not UTF-16"
-    );
-}
-
-#[test]
-fn an_offer_is_read_for_its_types_as_it_spells_them() {
-    let wanted = Wanted::of(&types(&["text/plain", "UTF8_STRING", "text/uri-list"])).unwrap();
-    assert_eq!(wanted.uris.as_deref(), Some(URI_LIST));
-    assert_eq!(wanted.link, None);
-    assert_eq!(wanted.text.as_deref(), Some("UTF8_STRING"));
-    assert_eq!(wanted.first(), Some(URI_LIST));
-    let spelled = Wanted::of(&types(&["TEXT/PLAIN;charset=UTF-8"])).unwrap();
-    assert_eq!(spelled.text.as_deref(), Some("TEXT/PLAIN;charset=UTF-8"));
-    assert_eq!(
-        Wanted::of(&types(&["image/png", "application/x-example"])),
-        None
-    );
-    let firefox = Wanted::of(&types(&[
-        "text/x-moz-url",
-        "_NETSCAPE_URL",
-        "text/html",
-        "text/plain",
-    ]))
-    .unwrap();
-    assert_eq!(
-        (firefox.link.as_deref(), firefox.first()),
-        (Some(MOZ_URL), Some(MOZ_URL))
-    );
-}
-
-/// A reading of three pipes, their write ends handed back.
-fn reading() -> (Reading, [PipeWriter; 3]) {
-    let ends = [(); 3].map(|_| std::io::pipe().unwrap());
-    let writers = ends.each_ref().map(|(_, w)| w.try_clone().unwrap());
-    let pipes = ends.map(|(r, _)| {
-        assert!(nonblocking(&r));
-        Some(r)
+/// What `settle` hands over, by place and drop number, with how many files
+/// each carries and whether a check kept them.
+fn settled(
+    drops: &mut [Progress],
+    check: &mut dyn FnMut(Vec<PathBuf>) -> Answer<Checked>,
+) -> (Vec<(usize, u32, usize, bool)>, Vec<String>) {
+    let lines = std::cell::RefCell::new(Vec::new());
+    let landings = settle(drops.iter_mut(), true, check, &|line| {
+        lines.borrow_mut().push(line)
     });
-    let reading = Reading {
-        id: 7,
-        pipes,
-        bytes: Default::default(),
-        largest: 32,
-    };
-    (reading, writers)
+    let landed = landings
+        .into_iter()
+        .map(|(at, l)| {
+            let files = l.checked.as_ref().map_or(l.dropped.paths.len(), Vec::len);
+            (at, l.id, files, l.checked.is_some())
+        })
+        .collect();
+    (landed, lines.into_inner())
 }
 
-fn read_all(reading: &mut Reading, deadline: Instant) {
-    for k in 0..3 {
-        reading.read(k, deadline);
-    }
+/// A file of this test's, checked as a sandbox's drop is.
+fn checked_file(name: &str) -> (tempfile::TempDir, Checked) {
+    let folder = tempfile::tempdir().unwrap();
+    let path = std::fs::canonicalize(folder.path()).unwrap().join(name);
+    std::fs::write(&path, name).unwrap();
+    let checked = Checked::of(&path).unwrap();
+    (folder, checked)
 }
 
+/// A drop whose URI list came and whose portal answer had not when another
+/// drop cut its wait lands at once, its files left out with no check begun,
+/// and the drop released behind it lands after it.
 #[test]
-fn a_drop_lands_each_type_it_finished_sending_by_the_deadline() {
-    let later = Instant::now() + Duration::from_secs(60);
-    let (mut whole, [mut uris, link, mut text]) = reading();
-    uris.write_all(b"file:///tmp/a\r\n").unwrap();
-    text.write_all(b"Mount Fuji").unwrap();
-    drop((uris, link, text));
-    read_all(&mut whole, later);
-    assert!(whole.complete(), "every type arrived");
-    let (id, dropped) = whole.items();
+fn a_cut_drop_still_waiting_on_the_portal_lands_at_once_without_its_files() {
+    let mut first = arrived(1, "file:///home/a.txt\r\n", "Fuji");
+    first.retrieved = Some(Arc::new(Mutex::new(None)));
+    assert!(!first.complete(), "its portal answer is still to come");
+    let mut drops = [reading_stage(first), reading_stage(arrived(2, "", "Etna"))];
+    drops[0].cut(&|_| {});
+    let (landed, lines) = settled(&mut drops, &mut |_| {
+        panic!("no check begins for a cut drop")
+    });
+    assert_eq!(landed, [(0, 1, 0, false), (1, 2, 0, false)]);
     assert_eq!(
-        (id, dropped.paths, dropped.text.as_str()),
-        (7, vec![PathBuf::from("/tmp/a")], "Mount Fuji")
-    );
-
-    let (mut stalled, [mut uris, link, mut text]) = reading();
-    uris.write_all(b"file:///tmp/a\r\n").unwrap();
-    drop((uris, link));
-    text.write_all(b"partial").unwrap();
-    read_all(&mut stalled, later);
-    assert!(!stalled.complete(), "the text is still arriving");
-    let (_, dropped) = stalled.items();
-    assert_eq!(dropped.paths, [PathBuf::from("/tmp/a")]);
-    assert_eq!(
-        dropped.text, "",
-        "a type its source never finished is not delivered"
-    );
-    drop(text);
-
-    let (mut late, [uris, link, mut text]) = reading();
-    drop((uris, link));
-    text.write_all(b"Mount Fuji").unwrap();
-    drop(text);
-    read_all(&mut late, Instant::now());
-    assert!(late.complete());
-    assert_eq!(
-        late.items().1.text,
-        "",
-        "a type whose end the listener observed at the deadline is not delivered"
+        lines,
+        ["drop: 1 files were left out: another drop came before the sandbox's check of them began"]
     );
 }
 
+/// A check that ended before another drop cut the wait keeps its files,
+/// though the listener had not yet heard it; one still running then is cut
+/// short, and a running check holds the drop released after it.
 #[test]
-fn a_type_larger_than_the_limit_is_not_delivered() {
-    let (mut reading, [mut uris, link, mut text]) = reading();
-    uris.write_all(&[b'x'; 32]).unwrap();
-    text.write_all(&[b'x'; 33]).unwrap();
-    drop((uris, link, text));
-    read_all(&mut reading, Instant::now() + Duration::from_secs(60));
-    assert!(reading.complete());
-    assert_eq!(reading.bytes[0].len(), 32, "the limit itself is delivered");
-    assert!(reading.bytes[2].is_empty(), "one byte past it is not");
+fn a_cut_drop_keeps_a_check_that_ended_and_lands_before_the_next() {
+    let (_folder, kept) = checked_file("notes.txt");
+    let answer: Answer<Checked> = Arc::new(Mutex::new(None));
+    let worker = answer.clone();
+    let mut drops = [
+        reading_stage(arrived(1, "file:///home/notes.txt\r\n", "")),
+        reading_stage(arrived(2, "", "Etna")),
+    ];
+    let mut asked = Vec::new();
+    let (landed, _) = settled(&mut drops, &mut |paths| {
+        asked.push(paths);
+        answer.clone()
+    });
+    assert_eq!(asked, [vec![PathBuf::from("/home/notes.txt")]]);
+    assert!(
+        landed.is_empty(),
+        "a running check holds the drop behind it"
+    );
+    *worker.lock().unwrap() = Some(vec![kept]);
+    drops[0].cut(&|line| panic!("a check that ended is not cut: {line}"));
+    let (landed, _) = settled(&mut drops, &mut |_| unreachable!());
+    assert_eq!(landed, [(0, 1, 1, true), (1, 2, 0, false)]);
+
+    let mut drops = [reading_stage(arrived(3, "file:///home/notes.txt\r\n", ""))];
+    let running: Answer<Checked> = Arc::new(Mutex::new(None));
+    let (landed, _) = settled(&mut drops, &mut |_| running.clone());
+    assert!(landed.is_empty());
+    let lines = std::cell::RefCell::new(Vec::new());
+    drops[0].cut(&|line| lines.borrow_mut().push(line));
+    let (landed, _) = settled(&mut drops, &mut |_| unreachable!());
+    assert_eq!(landed, [(0, 3, 0, true)], "cut short, it delivers none");
+    assert_eq!(
+        lines.into_inner().len(),
+        1,
+        "the journal hears of the file left out"
+    );
+    *running.lock().unwrap() = Some(Vec::new());
+}
+
+/// A drag is refused at its enter only when its source names actions and
+/// copy is not among them: an offer before version 3 copies, and no actions
+/// is no answer, as Weston tells a version 3 offer of a source before
+/// version 3.
+#[test]
+fn a_source_that_names_actions_without_copy_is_refused() {
+    let (copy, moves, ask) = (
+        DndAction::Copy.bits(),
+        DndAction::Move.bits(),
+        DndAction::Ask.bits(),
+    );
+    assert!(allows_copy(3, copy) && allows_copy(3, copy | moves));
+    assert!(allows_copy(3, 0), "no actions named");
+    assert!(allows_copy(2, moves), "before version 3 a drop is a copy");
+    assert!(!allows_copy(3, moves) && !allows_copy(3, moves | ask));
 }

@@ -40,7 +40,7 @@ fn motion_is_a_spring_or_a_gesture_that_holds_a_value() {
     );
     assert!(spring.has(Capability::Motion));
     let swipe = used(
-        "component A\n  state n = 0\n  action swipe\n    n = n + 1\n  view\n    text \"a\" swiperight=swipe\n",
+        "component A\n  state n = 0\n  action swipe\n    n = n + 1\n  view\n    text \"a\" swipe=swipe swipe-follow=\"right\"\n",
     );
     assert!(swipe.has(Capability::Motion));
     assert!(

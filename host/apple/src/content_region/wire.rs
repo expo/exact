@@ -14,7 +14,9 @@ fn axis(value: AxisOffer) -> f32 {
     }
 }
 fn metric(style: TextStyle, out: &mut String) {
-    let line = style.line_height.map_or("null".into(), |n| n.to_string());
+    let line = style
+        .used_line_height()
+        .map_or("null".into(), |n| n.to_string());
     let _ = write!(out, "\"size\":{},\"weight\":{},\"family\":{},\"italic\":{},\"lineHeight\":{line},\"spacing\":{}", style.font_size, style.font_weight, style.font_family, style.font_style != FontStyle::Normal, style.letter_spacing);
     let _ = write!(
         out,

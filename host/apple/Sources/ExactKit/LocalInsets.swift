@@ -39,6 +39,6 @@ extension ExactSession {
     /// Tell the kernel `changes` to local insets, between batches.
     package func localInsets(_ changes: [(UInt32?, [CGFloat]?)]) {
         guard !changes.isEmpty else { return }
-        whenIdle(bound: true) { [unowned self] in applyUnlessEmpty(runtime.localInsets(changes)) }
+        tellLocalInsets(changes)
     }
 }

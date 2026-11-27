@@ -878,4 +878,41 @@ mod tests {
             "<rect width=\"5\" height=\"5\" style=\"filter: none\"/>"
         ));
     }
+
+    #[test]
+    fn oversized_and_amplifying_stylesheets_are_refused_within_bounds() {
+        let selectors = vec!["a"; 25_000].join(",");
+        let decls = "f:1;".repeat(12_500);
+        let fanout = format!("<svg><style>{selectors}{{{decls}}}</style><rect/></svg>");
+        assert!(load(&fanout).err().unwrap().message.contains("rules"));
+
+        let many_rules = format!("<svg><style>{}</style></svg>", "a{}".repeat(349_000));
+        assert!(load(&many_rules).err().unwrap().message.contains("rules"));
+
+        let many_matching = format!(
+            "<svg><style>{}{{{}}}</style>{}</svg>",
+            vec!["rect"; 2_000].join(","),
+            "fill:red;".repeat(600),
+            "<rect width=\"1\" height=\"1\"/>".repeat(2),
+        );
+        assert!(load(&many_matching)
+            .err()
+            .unwrap()
+            .message
+            .contains("matching"));
+
+        let inline_many = format!(
+            "<svg><rect width=\"1\" height=\"1\" style=\"{}fill:#0f0\"/></svg>",
+            "fill:#f00;".repeat(5_000)
+        );
+        assert!(load(&inline_many).is_ok());
+
+        // A second `<style>` element overrides an equal-specificity rule from the first.
+        let cascade = load(
+            "<svg viewBox=\"0 0 1 1\"><style>rect{fill:#f00}</style><style>rect{fill:#00f}</style><rect width=\"1\" height=\"1\"/></svg>",
+        )
+        .unwrap();
+        let node = cascade.kernel().node(cascade.svg() + 1).unwrap();
+        assert!(format!("{:?}", node.style.fill).contains("65535"));
+    }
 }

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { exactBuildReason, sdkSource } from './exact-build.mjs';
+import { buildIpa, exactBuildReason, sdkSource } from './exact-build.mjs';
 import { createApp } from '../game/new.mjs';
 
 test('share builds on Exact Build only with EXACT_EXPERIMENTAL=1, and then with EXACT_BUILD=1 or no iOS build here', () => {
@@ -29,7 +29,7 @@ test('share builds on Exact Build only with EXACT_EXPERIMENTAL=1, and then with 
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its build number, and passes the IPA to AppDrop', async () => {
+test.skipIf(!Bun.which('npx') || !Bun.which('node'))('share signs in, builds on Exact Build with its build number, and passes the IPA to AppDrop', async () => {
   const scratch = mkdtempSync(resolve(tmpdir(), 'exact-build-share-'));
   const ipa = Buffer.from('PK\x03\x04 an IPA from the service');
   const builds = [], blobs = new Set(), seen = [], auths = new Set();
@@ -71,6 +71,8 @@ test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its b
     symlinkSync(process.execPath, resolve(bin, 'bun'));
     symlinkSync(Bun.which('git'), resolve(bin, 'git'));
     symlinkSync('/bin/sh', resolve(bin, 'sh'));
+    symlinkSync(Bun.which('npx'), resolve(bin, 'npx'));
+    symlinkSync(Bun.which('node'), resolve(bin, 'node'));
     // AppDrop's CLI, as a package npx runs from this directory (EXACT_APPDROP_CLI): it records the IPA's size.
     const appdrop = resolve(scratch, 'appdrop');
     mkdirSync(appdrop);
@@ -166,4 +168,49 @@ test('the SDK patch is made in a linked worktree, and a failed Git step refuses'
     // A snapshot commit this checkout lacks and cannot fetch (no remote) refuses by name.
     await expect(sdkSource(linked, resolve(dir, 'app'), async () => ({ upstream: 'f'.repeat(40) }))).rejects.toThrow(/git fetch of the SDK snapshot's commit/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('sdkSource rejects option-like or refspec upstream values and buildIpa rejects traversal build ids', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-build-trust-'));
+  const git = (cwd, ...args) => { const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', cwd, ...args], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim(); };
+  let server;
+  try {
+    const remote = resolve(dir, 'origin.git'), checkout = resolve(dir, 'checkout'), appDir = resolve(dir, 'app'), marker = resolve(dir, 'ran');
+    mkdirSync(remote); git(remote, 'init', '-q', '--bare', '-b', 'main');
+    mkdirSync(checkout); git(checkout, 'init', '-q', '-b', 'main');
+    writeFileSync(resolve(checkout, 'sdk.txt'), 'one\n');
+    git(checkout, 'add', '.'); git(checkout, 'commit', '-qm', 'one');
+    git(checkout, 'remote', 'add', 'origin', remote);
+    git(checkout, 'push', '-q', 'origin', 'main');
+    writeFileSync(resolve(checkout, 'sdk.txt'), 'two\n');
+    for (const upstream of [`--upload-pack=sh -c "touch ${marker}; exit 1"`, '+HEAD:refs/heads/injected', 'HEAD', 'abc123', null]) {
+      await expect(sdkSource(checkout, appDir, async () => ({ upstream }))).rejects.toThrow(/invalid SDK snapshot commit/);
+    }
+    expect(existsSync(marker)).toBe(false);
+    expect(git(checkout, 'branch', '--list', 'injected')).toBe('');
+
+    mkdirSync(resolve(appDir, '.exact'), { recursive: true });
+    writeFileSync(resolve(appDir, 'app.contract'), 'component App\n  view\n    text "ok"\n');
+    const seen = [];
+    let badId = '../other-service/secret?k=1#';
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        seen.push(`${request.method} ${url.pathname}${url.search}`);
+        if (url.pathname === '/subpath/sdk') return Response.json({ upstream: git(checkout, 'rev-parse', 'HEAD') });
+        if (url.pathname === '/subpath/build') return Response.json({ id: badId, missing: [] });
+        return Response.json({ error: 'unexpected path' }, { status: 500 });
+      },
+    });
+    const base = `${server.url.origin}/subpath`, env = { HOME: dir, EXACT_BUILD_URL: base };
+    const tokenFile = resolve(dir, `.exact-build-token-${new Bun.CryptoHasher('sha256').update(base).digest('hex').slice(0, 16)}`);
+    writeFileSync(tokenFile, 't'.repeat(40), { mode: 0o600 });
+    for (const id of ['../other-service/secret?k=1#', '..', '.', 'a/b', '']) {
+      badId = id;
+      await expect(buildIpa({ dir: appDir }, resolve(dir, 'out.ipa'), { checkout, env })).rejects.toThrow(/invalid build id/);
+    }
+    expect(seen.some((line) => line.includes('/other-service/'))).toBe(false);
+    expect(seen.every((line) => line.startsWith('GET /subpath/sdk?') || line.startsWith('POST /subpath/build?'))).toBe(true);
+  } finally { server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
 });

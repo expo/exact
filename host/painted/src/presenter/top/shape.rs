@@ -53,8 +53,61 @@ pub struct Row {
     pub cancel: bool,
     /// `aria-checked`.
     pub checked: bool,
+    /// Carries `aria-checked` or a checkable menuitem role, so sibling rows
+    /// reserve the leading check column even when unchecked.
+    pub checkable: bool,
     /// What it opens, for a row that opens a submenu or a dialog.
     pub opens: Option<NodeKey>,
+}
+
+/// Explicitly written container style overrides on a menu popover (LLP
+/// 1115.001 D10, #1956). Populated only for `popover` menus, never `<select>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MenuSurface {
+    /// Explicitly written `background-color` on the menu popover node.
+    pub background: Option<exact_kernel::ColorValue>,
+    /// Nearest authored `accent-color` for resolving `AccentColor` in `background`.
+    pub accent: Option<exact_kernel::ColorValue>,
+    /// Explicitly written `border-radius` corners and resolution environment.
+    pub radii: Option<([exact_kernel::Dimension; 4], exact_kernel::Env)>,
+}
+
+impl MenuSurface {
+    fn read(kernel: &Kernel, pop: &NodeRef<'_>) -> Option<Self> {
+        let written = pop.style.written;
+        let background = written.has(StyleId::BackgroundColor).then(|| {
+            pop.style
+                .background_color
+                .unwrap_or_else(|| pop.text_color())
+        });
+        let radius_written = [
+            StyleId::BorderRadiusTopLeft,
+            StyleId::BorderRadiusTopRight,
+            StyleId::BorderRadiusBottomRight,
+            StyleId::BorderRadiusBottomLeft,
+        ]
+        .into_iter()
+        .any(|id| written.has(id));
+        let radii = radius_written.then(|| {
+            let env = kernel.env_of(pop.id);
+            let corners = [
+                pop.style.border_radius_top_left.clone(),
+                pop.style.border_radius_top_right.clone(),
+                pop.style.border_radius_bottom_right.clone(),
+                pop.style.border_radius_bottom_left.clone(),
+            ]
+            .map(|d| d.resolve(&env));
+            (corners, env)
+        });
+        if background.is_none() && radii.is_none() {
+            return None;
+        }
+        Some(Self {
+            background,
+            accent: crate::paint::accent_of(pop),
+            radii,
+        })
+    }
 }
 
 impl Row {
@@ -87,7 +140,12 @@ pub enum Plan {
         outside: bool,
     },
     /// Material's menu.
-    Menu(Vec<Entry>),
+    Menu {
+        /// The menu's items, headers, and separators.
+        entries: Vec<Entry>,
+        /// Authored container overrides for popover menus (`None` for `<select>`).
+        surface: Option<MenuSurface>,
+    },
 }
 
 /// One line of a menu.
@@ -107,7 +165,7 @@ impl Plan {
     pub fn rows(&self) -> impl Iterator<Item = &Row> {
         match self {
             Plan::Alert { rows, .. } => rows.iter().collect::<Vec<_>>(),
-            Plan::Menu(entries) => (entries.iter())
+            Plan::Menu { entries, .. } => (entries.iter())
                 .filter_map(|e| match e {
                     Entry::Item(row) => Some(row),
                     _ => None,
@@ -213,6 +271,11 @@ pub(in crate::presenter) fn row(kernel: &Kernel, node: &NodeRef<'_>, cancel: boo
         enabled: node.props.bool(PropId::Disabled) != Some(true),
         cancel,
         checked: node.props.bool(PropId::AccessibilityChecked) == Some(true),
+        checkable: node.props.bool(PropId::AccessibilityChecked).is_some()
+            || matches!(
+                node.props.str(PropId::AccessibilityRole),
+                Some("menuitemcheckbox" | "menuitemradio")
+            ),
         opens: None,
     }
 }
@@ -461,7 +524,8 @@ pub fn menu(
     if entries.last() == Some(&Entry::Separator) {
         entries.pop();
     }
-    (!entries.is_empty()).then_some(Plan::Menu(entries))
+    let surface = MenuSurface::read(kernel, &pop);
+    (!entries.is_empty()).then_some(Plan::Menu { entries, surface })
 }
 
 /// Whether a row of a menu is a section of rows (`role="group"`, as

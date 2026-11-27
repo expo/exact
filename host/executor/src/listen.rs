@@ -380,7 +380,7 @@ fn queue(shared: &Shared, ticket: u64, message: Message, bounded: bool) -> u32 {
         outcome: Outcome::Message(message),
         bytes: 0,
         message: true,
-        stream: true,
+        stream: Some(crate::StreamKind::Network),
         light: false,
         again: false,
         reply: false,

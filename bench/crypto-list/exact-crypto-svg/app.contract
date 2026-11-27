@@ -73,17 +73,17 @@ component Crypto
   mutation config as shape Config
   derive live = match config { case some(c) => c.live, case none => false }
   derive freeze = match config { case some(c) => c.freeze, case none => false }
-  // Every 100 ms: the first tick asks for the launch config; when live, each
-  // later tick advances the market.
+  action ask
+    send config = config()
+  // Advances the market.
   action tick
-    match config
-      case none
-        send config = config()
-      case some(c)
-        if c.live
-          send changed = tick()
+    send changed = tick()
 
-  task producer mount
+  task launch mount
+    after(100, ask)
+  // Gated on live mode: outside it no timer is armed, so a still list wakes
+  // nothing.
+  task producer when live
     every(100, tick)
 
   view

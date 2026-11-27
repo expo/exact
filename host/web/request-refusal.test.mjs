@@ -496,6 +496,8 @@ test('the web matcher consumes the Rust grammar corpus', () => {
     const set = normalized(item.spec);
     expect(!grantError(set), item.spec).toBe(item.ok);
     for (const [url, admitted] of item.fetch ?? []) expect(admitsNetwork(set, url, 'fetch'), `${item.spec}: ${url}`).toBe(admitted);
+    if (item.spec === 'net.fetch loopback')
+      for (const [url] of item.fetch ?? []) expect(admitsNetwork(set, url, 'fetch', true), `${item.spec} render: ${url}`).toBe(false);
     for (const [url, admitted] of item.websocket ?? []) expect(admitsNetwork(set, url, 'websocket'), `${item.spec}: socket ${url}`).toBe(admitted);
     if (item.spec.startsWith('net.websocket ') && item.spec.includes('://*.'))
       for (const [url, admitted] of item.websocket ?? []) expect(admittingGrant(set, url, 'websocket'), `${item.spec}: socket line ${url}`).toBe(admitted ? item.spec : null);
@@ -1002,7 +1004,7 @@ export function answer(name, args, store, storage) {
   }
 });
 
-test('the web build retains every ambient diagnostic with its source location', () => {
+test('the web build retains every ambient timer diagnostic with its source location', () => {
   // Diagnostic paths can resemble warnings or Cargo's progress lines.
   for (const file of ['logic clock.ts', 'warning clock.ts', 'Compiling clock.ts']) {
     const dir = mkdtempSync(resolve(tmpdir(), 'exact web diagnostics-'));
@@ -1012,17 +1014,16 @@ test('the web build retains every ambient diagnostic with its source location', 
       writeFileSync(resolve(dir, 'app.ts'), `import { prefix } from './${file}';\nexport const appId = 'test.exact.diagnostics';\nexport const grants = '';\nexport const answer: import('./app.contract.d.ts').Answer = () => prefix;\n`);
       writeFileSync(resolve(dir, file), [
         "export const prefix = 'hello';",
-        'export const a = () => Date.now();',
-        'export const b = () => globalThis.setInterval(() => {}, 1);',
-        "export const c = () => Date['now']();",
-        'export const d = () => Math[`random`]();',
+        'export const a = () => globalThis.setInterval(() => {}, 1);',
+        "export const b = () => globalThis['requestAnimationFrame'](() => {});",
+        'export const c = () => window[`requestIdleCallback`](() => {});',
         '',
       ].join('\n'));
       const built = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), 'diagnostics', '--render', 'none'], {
         cwd: ROOT, encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: dir, EXACT_WEB_DIST: resolve(dir, 'dist') },
       });
       expect(built.status, built.stderr).toBe(1);
-      for (const [line, api] of [[2, 'Date.now()'], [3, 'setInterval()'], [4, 'Date.now()'], [5, 'Math.random()']]) {
+      for (const [line, api] of [[2, 'setInterval()'], [3, 'requestAnimationFrame()'], [4, 'requestIdleCallback()']]) {
         expect(built.stderr, built.stderr).toContain(`${file}:${line}:24: ${api} is unavailable in data sources`);
       }
       expect(built.stderr).toContain('the web build (the JS target) failed');
@@ -1030,10 +1031,9 @@ test('the web build retains every ambient diagnostic with its source location', 
   }
 }, 60_000);
 
-// LLP 1027.000 D3 on the JS target: the app's modules get guarded bindings
-// in place of the page's clock, Math.random and timers, injected as the web
-// build injects them, and Hermes's fixture of aliases refuses with Hermes's words.
-test("the JS target refuses a data module's clock, randomness and timers as Hermes does", async () => {
+// LLP 1195.000 D2 on the JS target: clock and Math.random() virtualize over
+// the host clock/seed, while disallowed timers still refuse with Hermes's words.
+test("the JS target virtualizes clock/random and refuses disallowed timers as Hermes does", async () => {
   const { transformSync } = await import('rolldown/utils');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-inputs-'));
   const build = readFileSync(resolve(ROOT, 'host/web-js/build.mjs'), 'utf8');
@@ -1051,22 +1051,18 @@ test("the JS target refuses a data module's clock, randomness and timers as Herm
   try {
     await import(`${pathToFileURL(resolve(dir, 'app.js')).href}?inputs=${Date.now()}`);
     const { answer } = globalThis.exact;
-    const forms = { now: 'Date.now()', new: 'new Date()', call: 'Date()', 'call-with-arg': 'Date()', random: 'Math.random()',
-      'alias-now': 'Date.now()', 'alias-random': 'Math.random()', 'alias-date': 'new Date()', 'prototype-constructor': 'new Date()',
-      'computed-now': 'Date.now()', 'computed-random': 'Math.random()', 'bound-now': 'Date.now()', 'bound-new': 'new Date()', reflect: 'new Date()',
-      'intl-format': 'Intl.DateTimeFormat.format()', 'intl-format-undefined': 'Intl.DateTimeFormat.format()',
-      'intl-parts': 'Intl.DateTimeFormat.formatToParts()', 'intl-parts-undefined': 'Intl.DateTimeFormat.formatToParts()',
-      'intl-format-alias': 'Intl.DateTimeFormat.format()', 'intl-format-alias-undefined': 'Intl.DateTimeFormat.format()',
-      'intl-parts-alias': 'Intl.DateTimeFormat.formatToParts()', 'intl-parts-alias-undefined': 'Intl.DateTimeFormat.formatToParts()',
-      'intl-format-getter': 'Intl.DateTimeFormat.format()', 'intl-format-computed': 'Intl.DateTimeFormat.format()',
-      'intl-parts-prototype': 'Intl.DateTimeFormat.formatToParts()', interval: 'setInterval()',
-      'computed-interval': 'setInterval()', frame: 'requestAnimationFrame()', performance: 'performance.now()' };
-    for (const [form, api] of Object.entries(forms)) {
+    // Disallowed timers still refuse at init and in answers.
+    for (const [form, api] of [['interval', 'setInterval()'], ['computed-interval', 'setInterval()'], ['frame', 'requestAnimationFrame()']]) {
       const atInit = answer('atInit', [form]);
       expect(atInit.startsWith(api) && atInit.includes('as an argument'), `${form} at initialization: ${atInit}`).toBe(true);
       expect(() => answer('ambient', [form]), form).toThrow(api);
-      // LLP 1116 D8: randomness names its recipe, in Hermes's words too.
-      if (api === 'Math.random()') expect(atInit).toContain('seed from crypto.getRandomValues in a source (docs/recipes/random-and-shuffle.md)');
+    }
+    // Virtualized clock & Math.random() succeed at init and in answers without mutating page globals.
+    for (const form of ['now', 'new', 'call', 'call-with-arg', 'random', 'alias-now', 'alias-random', 'alias-date',
+      'prototype-constructor', 'computed-now', 'computed-random', 'bound-now', 'bound-new', 'reflect',
+      'intl-format', 'intl-format-undefined', 'intl-parts', 'intl-parts-undefined', 'performance']) {
+      expect(answer('atInit', [form]).startsWith('UNGUARDED: '), `${form} at init`).toBe(true);
+      expect(answer('ambient', [form]), form).toBeDefined();
     }
     // Explicit inputs keep the language's behavior.
     expect(answer('explicit', [86_400_000, 7])).toBe('1970-01-02T00:00:00.000Z/' + ((Math.imul(7, 1664525) + 1013904223) >>> 0));
@@ -1080,39 +1076,36 @@ test("the JS target refuses a data module's clock, randomness and timers as Herm
   }
 });
 
-// LLP 1016.000 D3 on the JS target: a data module's own socket, request or
-// event source refuses with the wasm target's words (module-glue.js), in every
-// spelling, so no frame leaves past the grants.
-test("the JS target refuses a data module's own WebSocket, XMLHttpRequest and EventSource as the wasm target does", async () => {
+// LLP 1195.000 D1.4: WebSocket, XMLHttpRequest and EventSource are absent
+// (`typeof WebSocket === "undefined"`) in data modules on web as on Hermes.
+test("the JS target hides WebSocket, XMLHttpRequest and EventSource as undefined", async () => {
   const { transformSync } = await import('rolldown/utils');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-io-'));
   const build = readFileSync(resolve(ROOT, 'host/web-js/build.mjs'), 'utf8');
   const bound = JSON.parse(/const bound = (\[[^\]]*\]);/.exec(build)[1].replaceAll("'", '"').replace(/\s+/g, ''));
+  const absentNames = JSON.parse(/const absent = (\[[^\]]*\]);/.exec(build)[1].replaceAll("'", '"').replace(/\s+/g, ''));
   const guards = resolve(dir, 'ts-fetch.js');
   writeFileSync(guards, runtimeSource('ts-fetch.js'));
   writeFileSync(resolve(dir, 'admission.js'), '' + realHelpers + 'export const fetchWith = () => Promise.reject(new Error("no fetch here")); export class FetchError extends Error {} export const coversPath = () => false; export const overlaying = { on: false }; export const inOverlay = api => new Error(api);\n');
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = null;\n');
   const source = resolve(dir, 'source.js');
-  writeFileSync(source, `const io = { WebSocket, XMLHttpRequest, EventSource };
-const forms = {
-  bare: name => ({ WebSocket: () => new WebSocket('ws://127.0.0.1:9/x'), XMLHttpRequest: () => new XMLHttpRequest(), EventSource: () => new EventSource('http://127.0.0.1:9/x') })[name](),
-  global: name => new globalThis[name]('ws://127.0.0.1:9/x'), window: name => new window[name]('ws://127.0.0.1:9/x'),
-  self: name => new self[name]('ws://127.0.0.1:9/x'), alias: name => new io[name]('ws://127.0.0.1:9/x'),
-  call: name => globalThis[name]('ws://127.0.0.1:9/x'), reflect: name => Reflect.construct(globalThis[name], ['ws://127.0.0.1:9/x']),
-};
-globalThis.exact = { answer: (form, name) => { try { forms[form](name); return 'opened'; } catch (e) { return e.message; } } };
+  writeFileSync(source, `globalThis.exact = { answer: (name) => ({
+  bare: { WebSocket: typeof WebSocket, XMLHttpRequest: typeof XMLHttpRequest, EventSource: typeof EventSource }[name],
+  global: typeof globalThis[name], window: typeof window, self: typeof self,
+}) };
 `);
   const app = transformSync(source, readFileSync(source, 'utf8'), { inject: { ...Object.fromEntries(bound.map(name => [name, [guards, name]])),
-    ...Object.fromEntries(['globalThis', 'window', 'self'].map(name => [name, [guards, 'appGlobal']])) } });
+    ...Object.fromEntries(absentNames.map(name => [name, [guards, 'absent']])),
+    globalThis: [guards, 'appGlobal'] } });
   expect(app.errors).toEqual([]);
   writeFileSync(resolve(dir, 'app.js'), app.code);
   const page = globalThis.WebSocket;
   try {
     await import(`${pathToFileURL(resolve(dir, 'app.js')).href}?io=${Date.now()}`);
     const { answer } = globalThis.exact;
-    for (const name of ['WebSocket', 'XMLHttpRequest', 'EventSource'])
-      for (const form of ['bare', 'global', 'window', 'self', 'alias', 'call', 'reflect'])
-        expect(answer(form, name), `${form} ${name}`).toBe(`${name} is unavailable in data sources`);
+    for (const name of ['WebSocket', 'XMLHttpRequest', 'EventSource']) {
+      expect(answer(name), name).toEqual({ bare: 'undefined', global: 'undefined', window: 'undefined', self: 'undefined' });
+    }
     // The page's own, which the runtime's stream opens, is untouched.
     expect(globalThis.WebSocket).toBe(page);
   } finally {

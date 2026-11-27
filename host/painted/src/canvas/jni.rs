@@ -104,13 +104,9 @@ macro_rules! canvas_jni {
 
             thread_local! {
                 static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
-                /// The op stream the last `frame` returned; the reader reads it in place.
-                static LAST: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-                /// A move of the last stream (op 22), read at once; LAST stays drawn.
-                static MOVE: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-                /// What the reader draws: the last stream's drawing, without its
-                /// definitions (`None` after a move, or unknown).
-                static DRAWN: RefCell<Option<Vec<u32>>> = const { RefCell::new(None) };
+                /// Op streams handed to the reader in place (`StreamDedup`).
+                static STREAM: RefCell<$crate::canvas::StreamDedup> =
+                    const { RefCell::new($crate::canvas::StreamDedup::new()) };
             }
 
             fn with<T>(f: impl FnOnce(&mut Host) -> T) -> Option<T> {
@@ -158,9 +154,7 @@ macro_rules! canvas_jni {
                 if with(|h| h.adopt(size, scale)).is_none() {
                     return false;
                 }
-                LAST.with(|l| l.borrow_mut().clear());
-                MOVE.with(|m| m.borrow_mut().clear());
-                DRAWN.with(|d| *d.borrow_mut() = None);
+                STREAM.with(|s| s.borrow_mut().clear());
                 PRIMED.with(|p| *p.borrow_mut() = None);
                 true
             }
@@ -246,6 +240,18 @@ macro_rules! canvas_jni {
                 );
                 $crate::canvas::window(told);
                 with(|h| h.set_window(told));
+            }
+
+            /// The software keyboard's bottom inset in pixels as its inset
+            /// animation shows it, each frame while one runs, and a negative
+            /// depth once it ends (LLP 1123 D7), on the host's thread.
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_keyboardProgress(
+                _env: *mut JNIEnv,
+                _class: jclass,
+                depth: jint,
+            ) {
+                with(|h| h.set_keyboard_progress(depth));
             }
 
             /// The device's colours (LLP 1115.001 D4): Material 3's colour
@@ -359,34 +365,12 @@ macro_rules! canvas_jni {
                     return std::ptr::null_mut();
                 };
                 let new = (**env).NewDirectByteBuffer.expect("jni");
-                if ops.first() == Some(&22) {
-                    DRAWN.with(|d| *d.borrow_mut() = None);
-                    return MOVE.with(|m| {
-                        let mut m = m.borrow_mut();
-                        *m = ops;
-                        new(env, m.as_mut_ptr().cast(), (m.len() * 4) as i64)
-                    });
-                }
-                LAST.with(|last| {
-                    let mut last = last.borrow_mut();
-                    // The same stream draws the same pixels: no new frame for Android.
-                    if *last == ops {
-                        return std::ptr::null_mut();
+                STREAM.with(|s| {
+                    let mut s = s.borrow_mut();
+                    match s.emit(ops) {
+                        Some(buf) => new(env, buf.as_mut_ptr().cast(), (buf.len() * 4) as i64),
+                        None => std::ptr::null_mut(),
                     }
-                    // What the reader draws already, with nothing to define (a
-                    // touch down after a stream that defined rows): no frame.
-                    let now = $crate::canvas::drawing(&ops);
-                    let same = DRAWN.with(|d| {
-                        let mut d = d.borrow_mut();
-                        let same = matches!((&now, &*d), (Some((n, false)), Some(o)) if n == o);
-                        *d = now.map(|(n, _)| n);
-                        same
-                    });
-                    if same {
-                        return std::ptr::null_mut();
-                    }
-                    *last = ops;
-                    new(env, last.as_mut_ptr().cast(), (last.len() * 4) as i64)
                 })
             }
 
@@ -488,6 +472,7 @@ macro_rules! canvas_jni {
                 let mut fds = with(|h| h.fds()).unwrap_or([-1, -1]).to_vec();
                 fds.push(with(|h| h.acquire_fd()).unwrap_or(-1));
                 fds.push(with(|h| h.update_fd()).unwrap_or(-1));
+                fds.push(with(|h| h.surface_wake_fd()).unwrap_or(-1));
                 let arr = ((**env).NewIntArray.expect("jni"))(env, fds.len() as i32);
                 ((**env).SetIntArrayRegion.expect("jni"))(env, arr, 0, fds.len() as i32, fds.as_ptr());
                 arr

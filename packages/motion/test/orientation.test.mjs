@@ -111,3 +111,26 @@ test('the web answers each deviceOrientation reader from the event its absolute 
     globalThis.removeEventListener = remove;
   }
 });
+
+test('a canvas input in the screen frame turns an orientation quaternion as a reader does', async () => {
+  // A screen turned a quarter (`screen.orientation.angle` 90) and a stand-in sensor with one reading.
+  const screen = globalThis.screen;
+  globalThis.screen = { orientation: { angle: 90 } };
+  globalThis.RelativeOrientationSensor = class extends EventTarget {
+    quaternion = conversions.quaternionFromAngles(30, 10, 0);
+    timestamp = 5;
+    start() { queueMicrotask(() => this.dispatchEvent(new Event('reading'))); }
+    stop() {}
+  };
+  try {
+    const pushed = [];
+    const web = implementation({ changed() {}, surfaces: { input: () => ({ push: v => pushed.push(v), close() {} }) } });
+    web.startSensorInput({ surface: 'canvas', sensor: 'relativeOrientation', referenceFrame: 'screen' });
+    const { quaternion } = await web.relativeOrientationSensor({ referenceFrame: 'screen' });
+    assert.deepEqual(pushed[0].values, quaternion);
+    assert.deepEqual(quaternion, conversions.quaternionToScreen(conversions.quaternionFromAngles(30, 10, 0), 90));
+  } finally {
+    globalThis.screen = screen;
+    delete globalThis.RelativeOrientationSensor;
+  }
+});

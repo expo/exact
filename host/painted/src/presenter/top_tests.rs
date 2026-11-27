@@ -512,7 +512,7 @@ fn the_shape_rule_is_the_one_the_apple_hosts_follow() {
     );
     // A menu: its items, the separator the author wrote, the symbol, the
     // destructive row and the disabled one.
-    let Some(Plan::Menu(entries)) = plan("menu") else {
+    let Some(Plan::Menu { entries, .. }) = plan("menu") else {
         panic!("menu is a menu");
     };
     let rows: Vec<_> = entries

@@ -2,14 +2,18 @@
 // microtask. @ref LLP 1027 D10: host work returns through the data seam.
 import { knownFolderPath } from './grant-admission.js';
 import { agentReads, agentStorageRefusal, directories, emptyRead, storageKey } from './storage-environment.js';
+import { loadOnce } from './load-once.js';
+
 let fileFactory, sqliteFactory, toldAgent = false;
 
 export function createStorage(win, admitted, scope, key = storageKey(admitted.appId), timers = undefined) {
+  const loads = {};
+
   // Once storage has been used, a replacement reserves its owner before the
   // old realm is disposed, retaining the shared SQLite worker across reloads.
   let fs = key && fileFactory?.(key, admitted.grantSet, timers);
   let sqlite = key && sqliteFactory?.(key, admitted.grantSet);
-  let fsLoading, sqliteLoading;
+
   const queues = new Map(), waiters = new Map(), retired = new WeakSet();
   // Each issued operation's owner, in a cell its completion reads when it
   // lands, not at issue (LLP 1097 D7): an answer that replies before its
@@ -51,16 +55,16 @@ export function createStorage(win, admitted, scope, key = storageKey(admitted.ap
   // Keep adapters as shared modules: the Rust request path uses the same
   // filesystem mutation queues and SQLite owners. A module that never calls
   // storage downloads neither adapter.
-  const fileSystem = () => fs ? Promise.resolve(fs) : fsLoading ??= import('./storage-fs.js').then(({ createFileSystem }) => {
+  const fileSystem = () => fs ? Promise.resolve(fs) : loadOnce(loads, "fsLoading", () => import('./storage-fs.js').then(({ createFileSystem }) => {
     fileFactory = createFileSystem;
     if (disposed) throw unavailable();
     return fs = createFileSystem(key, admitted.grantSet, timers);
-  });
-  const databaseSystem = () => sqlite ? Promise.resolve(sqlite) : sqliteLoading ??= import('./storage-sqlite.js').then(({ createSqlite }) => {
+  }));
+  const databaseSystem = () => sqlite ? Promise.resolve(sqlite) : loadOnce(loads, "sqliteLoading", () => import('./storage-sqlite.js').then(({ createSqlite }) => {
     sqliteFactory = createSqlite;
     if (disposed) throw unavailable();
     return sqlite = createSqlite(key, admitted.grantSet);
-  });
+  }));
   // A completion waits in its owner's queue until that owner's checkpoint.
   // One that arrives after the owner was retired rejects the caller, so the
   // prelude's head clears and the next operation can be issued.
@@ -140,10 +144,10 @@ export function createStorage(win, admitted, scope, key = storageKey(admitted.ap
   // page keeps (documents-glue.js), reached as a Rust source's storage
   // request reaches it: under the same grants, with no store key. A module
   // on a worker (LLP 1027.002) has no page to keep them: it is refused.
-  let documents;
-  const documentFiles = () => documents ??= (typeof window === 'undefined'
+
+  const documentFiles = () => loadOnce(loads, "documents", () => (typeof window === 'undefined'
     ? Promise.reject(error({message:'storage: the documents the person chose live in the page; a worker-placed module cannot reach them (placement main reaches them)', code:'unsupported'}))
-    : import('./documents-glue.js').then(() => globalThis.exact.documents.keeping(admitted.appId, admitted.grantSet)).then(() => globalThis.exact.documents.files(admitted.grantSet)));
+    : import('./documents-glue.js').then(() => globalThis.exact.documents.keeping(admitted.appId, admitted.grantSet)).then(() => globalThis.exact.documents.files(admitted.grantSet))));
   const files = {directories};
   for (const method of ['readFile','writeFile','atomicWriteFile','appendFile','readdir','mkdir','rm','stat','rename','copyFile','realpath']) {
     files[method] = (...args) => {

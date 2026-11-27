@@ -107,6 +107,8 @@ abstract class ExactExtension(val context: ExtensionContext) {
     open fun destroyView(view: android.view.View) {}
     /** The hosted view's activity lifecycle, separate from the session's foreground fact (LLP 1133.021). */
     open fun viewLifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {}
+    /** Drag axes this package view claims over an ancestor `pan`, same-axis scroller or sheet (LLP 1133.008 D8 item 6). */
+    open fun dragAxes(view: android.view.View): Int = 0
 
     /**
      * View [id] of [session] was displayed or hidden, by [cause], the commit that did it (LLP 1133.008 D8 item 2).
@@ -155,6 +157,16 @@ interface ExactAuthenticator {
 
     /** A presence name's key builder, before generation: the key hatch (D11). What the backend owns it sets again after. */
     fun configure(builder: android.security.keystore.KeyGenParameterSpec.Builder) {}
+}
+
+/** A package reader returns null for a form or owner it does not serve.
+ * It runs on the calling thread. Use application services or thread-safe published state:
+ * main may be waiting for input, Back, or a lifecycle turn on the presenter. */
+class SynchronousExtension(
+    val read: (Context, JSONObject) -> JSONObject?,
+    private val make: (ExtensionContext) -> ExactExtension,
+) : (ExtensionContext) -> ExactExtension {
+    override fun invoke(context: ExtensionContext) = make(context)
 }
 
 /** The app's bound extensions by name, each with how to make it: what the build writes as `exact.app.ExactExtensions`. */
@@ -274,6 +286,9 @@ class ExtensionContext internal constructor(
 
     /** The session's track table, which its implementations share (LLP 1133.009 D10 item 6). */
     val tracks: Tracks get() = Extensions.tracks
+
+    /** Credential sheets share one queue across the session's packages (LLP 1133.014 D5). */
+    val credentials: CredentialSheets = Extensions.credentials
 
     /** The process's audio focus owner, through which a module that plays or captures claims focus (LLP 1133.012
      * D12 item 2). */
@@ -586,6 +601,89 @@ class SurfaceInput internal constructor(val surface: String) {
 /** A runtime permission's state and the platform's words for it ([ExtensionContext.permission]). */
 class PermissionState(val state: String, val shouldShowRationale: Boolean, val permanentlyDenied: Boolean)
 
+/** Main-thread credential ceremonies, in session order. A newer call replaces passive sign-in and conditional get. */
+class CredentialSheets internal constructor() {
+    private class Entry(val activity: Activity, val replaceable: Boolean, var start: (() -> Unit)?, val abort: () -> Unit, var answered: Boolean = false)
+    private val entries = linkedMapOf<Any, Entry>()
+    private var changing = 0
+    private var uncovering: Activity? = null
+    private var leavingActivity: Activity? = null
+    var ended = false
+        private set
+
+    fun enqueue(key: Any, activity: Activity, replaceable: Boolean, abort: () -> Unit, start: () -> Unit) {
+        if (ended || activity === leavingActivity) return abort()
+        val old = entries.values.filter { it.replaceable || it.activity !== activity || it.activity.isFinishing || it.activity.isDestroyed }
+        entries[key] = Entry(activity, replaceable, start, abort)
+        cancelAll(old.map { it.abort })
+    }
+
+    fun finish(key: Any, reply: () -> Unit) {
+        try { reply() } finally {
+            entries.remove(key)
+            advance()
+        }
+    }
+
+    // The provider has returned. Its credential still belongs to the activity until delivery.
+    fun answered(key: Any) {
+        entries[key]?.answered = true
+        advance()
+    }
+
+    fun cancelingProvider(activity: Activity) {
+        if (!Extensions.resumedNow) uncovering = activity
+    }
+
+    internal fun resumed() {
+        uncovering = null
+        advance()
+    }
+
+    internal fun leaving(activity: Activity) {
+        val previous = leavingActivity
+        leavingActivity = activity
+        try { cancelAll(entries.values.filter { it.activity === activity }.map { it.abort }) }
+        finally {
+            leavingActivity = previous
+            if (uncovering === activity) uncovering = null
+        }
+    }
+
+    fun endSession(cancelOther: () -> Unit = {}) {
+        if (ended) return cancelOther()
+        // Abort replies can submit more requests through either package's existing context.
+        ended = true
+        try {
+            cancelAll(entries.values.map { it.abort })
+            cancelOther()
+        } finally {
+            uncovering = null
+            if (Extensions.credentials === this) Extensions.credentials = CredentialSheets()
+        }
+    }
+
+    fun cancelAll(selected: List<() -> Unit>) {
+        changing++
+        try {
+            for (abort in selected) {
+                try { abort() }
+                catch (e: Throwable) { Log.e("exact", "credential cancellation callback failed", e) }
+            }
+        } finally { changing--; advance() }
+    }
+
+    internal fun advance() {
+        // A provider may answer before onStart. Keep the next sheet until its activity shows.
+        if (ended || changing != 0 || !Extensions.visibleNow) return
+        val first = entries.values.firstOrNull { !it.answered } ?: return
+        if (uncovering === first.activity) return
+        val start = first.start ?: return
+        first.start = null
+        start()
+    }
+}
+
 /** The process's extensions: made at their first call, they outlive the activities that show the app. */
 internal object Extensions {
     private const val RESULTS = 0x5000
@@ -598,12 +696,13 @@ internal object Extensions {
     private val made = HashMap<String, ExactExtension>()
     /** The one session's track table. */
     val tracks = Tracks()
+    var credentials = CredentialSheets()
     /** The events raised so far ([ExtensionContext.emit]). */
     private var emitted = 0
     fun emit(extension: String, event: String, args: JSONArray) {
         Exact.changed("exact-event:" + JSONObject().put("extension", extension).put("event", event).put("args", args).put("seq", ++emitted))
     }
-    private var application: Context? = null
+    @Volatile private var application: Context? = null
     /** The activity is resumed ([resumed], [paused]). */
     private var foreground = false
     /** The activity shows: started and not stopped ([started], [stopped]). */
@@ -619,11 +718,14 @@ internal object Extensions {
     private var told = -1
 
     /** [activity]'s display's rotation in degrees, as the web's `screen.orientation.angle`. */
-    fun angle(activity: Activity?): Int = when (activity?.display?.rotation) {
-        android.view.Surface.ROTATION_90 -> 90
-        android.view.Surface.ROTATION_180 -> 180
-        android.view.Surface.ROTATION_270 -> 270
-        else -> 0
+    fun angle(activity: Activity?): Int {
+        val display = activity?.let { if (android.os.Build.VERSION.SDK_INT >= 30) it.display else Legacy.display(it) }
+        return when (display?.rotation) {
+            android.view.Surface.ROTATION_90 -> 90
+            android.view.Surface.ROTATION_180 -> 180
+            android.view.Surface.ROTATION_270 -> 270
+            else -> 0
+        }
     }
 
     /** A display changed: the extensions made are told a new angle. */
@@ -817,6 +919,15 @@ internal object Extensions {
         written?.startAtLoad?.forEach { extension(it) }
     }
 
+    fun sync(request: JSONObject): String {
+        val name = request.getString("extension")
+        val reader = roster[name] as? SynchronousExtension
+        val app = application
+        val value = if (app != null) reader?.read?.invoke(app, request) else null
+        val answer = value ?: JSONObject().put("error", "NotSupportedError")
+        return "=" + moduleReplyJson(answer)
+    }
+
     private fun extension(name: String): ExactExtension? = made[name]
         ?: roster[name]?.let { make -> application?.let { make(ExtensionContext(it, name)) } }?.also { made[name] = it; webauthn.forEach { f -> it.webauthnField(f, true) } }
 
@@ -850,6 +961,7 @@ internal object Extensions {
         override fun lifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {
             extension(name)?.viewLifecycle(view, event, state)
         }
+        override fun dragAxes(view: android.view.View): Int = extension(name)?.dragAxes(view) ?: 0
         override fun destroy(view: android.view.View) { emits.remove(view); extension(name)?.destroyView(view) }
     }
 
@@ -924,12 +1036,16 @@ internal object Extensions {
     fun permissionsResult(code: Int, names: Array<String>, grants: IntArray) = permissions.result(code, names, grants)
 
     /** [Activity.onStart]. */
-    fun started() { visible = true }
+    fun started() {
+        visible = true
+        credentials.advance()
+    }
 
     /** [Activity.onResume]: the starts and calls that waited for it are made, then a permission result that never came
      * (the activity was made again) is read as the state now. */
     fun resumed() {
         foreground = true
+        credentials.resumed()
         val starts = waiting.toList()
         waiting.clear()
         starts.forEach(::launch)

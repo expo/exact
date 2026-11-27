@@ -63,6 +63,11 @@ impl Pace {
         self.took = self.started.map(|s| now.saturating_duration_since(s));
     }
 
+    #[cfg(test)]
+    pub(super) fn took(&self) -> Option<Duration> {
+        self.took
+    }
+
     /// A place asked for at `asked` and granted at `now`, on a display that
     /// refreshes every `period`: the limit to change to, if it changes.
     pub(super) fn granted(

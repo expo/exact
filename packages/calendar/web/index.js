@@ -36,17 +36,20 @@ const parts = local => {
   return m ? m.slice(1).map(n => Number(n ?? 0)) : null;
 };
 
-/** The instant a local time in IANA zone `zone` names: the offset found by asking the zone what its wall reads. */
+/** The instant a local time in IANA zone `zone` names. The zone's offsets a day either side are the candidates; the
+ * earliest that reads back as the wall time wins, so a time in a fold is its first occurrence, and a time in a gap
+ * takes the offset before the transition (RFC 5545 §3.3.5), whichever side of UTC the zone is on. */
 function zoned(p, zone) {
   const wall = Date.UTC(p[0], p[1] - 1, p[2], p[3], p[4], p[5]);
   const format = new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  let t = wall;
-  for (let i = 0; i < 3; i++) {
+  const seen = t => {
     const f = Object.fromEntries(format.formatToParts(new Date(t)).map(x => [x.type, x.value]));
-    const seen = Date.UTC(+f.year, +f.month - 1, +f.day, +f.hour, +f.minute, +f.second);
-    t += wall - seen;
-  }
-  return t;
+    return Date.UTC(+f.year, +f.month - 1, +f.day, +f.hour, +f.minute, +f.second);
+  };
+  const day = 86400000;
+  const before = wall - (seen(wall - day) - (wall - day));
+  const after = wall - (seen(wall + day) - (wall + day));
+  return [Math.min(before, after), Math.max(before, after)].find(t => seen(t) === wall) ?? before;
 }
 
 const pad = (n, w = 2) => String(n).padStart(w, '0');

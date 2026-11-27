@@ -151,6 +151,8 @@ fn a_further_shadcn_theme_class_is_a_proposed_axis() {
         Op::AddAxis {
             name: "theme".into(),
             values: vec!["default".into(), "blue".into()],
+            before: None,
+            comment: None,
             under_dark: false,
         }
     );

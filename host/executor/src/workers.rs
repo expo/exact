@@ -121,7 +121,10 @@ mod portable {
             for position in 0..6 {
                 let core = core();
                 super::super::FAIL_BASE_SPAWN.with(|failure| failure.set(Some(position)));
-                assert!(core.run(request(), None).is_err());
+                assert_eq!(
+                    core.run(request(), None).unwrap_err(),
+                    "native executor could not start its workers"
+                );
                 wait_for_exit();
                 assert!(
                     core.run(request(), None).is_err(),

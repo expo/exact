@@ -146,7 +146,7 @@ impl Executor {
     /// Called only after the runner has no retained ordered admission refusals.
     /// Admits the ordered requests held behind them; returns any of those
     /// refused at a limit, for the host to record on their tickets.
-    pub fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
+    pub fn resume_ordered(&self) -> Vec<(u64, String)> {
         self.core.resume_ordered()
     }
     /// Let go of the work for tickets the runner no longer holds.
@@ -169,14 +169,14 @@ impl Executor {
     /// Admit, hold behind an earlier ordered refusal until it settles, or
     /// return a terminal refusal without allocating a failure queue.
     /// The caller records refusals on existing runner tickets and wakes a pump.
-    pub fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), &'static str> {
+    pub fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), String> {
         self.core.run_owned(request, work)
     }
     /// Settle a re-ask (`Dispatch::Again`) in its ordered place, with no
     /// work (LLP 1041 §8.4, amended 2026-10-09); kept pending while the
     /// window is full. An error is terminal, for the host to record.
-    pub fn again(&self, request: &RequestOut) -> Result<(), &'static str> {
-        self.core.again(request.ticket)
+    pub fn again(&self, request: &RequestOut) -> Result<(), String> {
+        self.core.again(request.ticket, request.class)
     }
     /// Acknowledge the coalesced wake before choosing a completion or refusal.
     pub fn begin_pump(&self) {
@@ -236,7 +236,7 @@ pub trait Io {
     /// [`Executor::ordered_idle`].
     fn ordered_idle(&self) -> bool;
     /// [`Executor::resume_ordered`].
-    fn resume_ordered(&self) -> Vec<(u64, &'static str)>;
+    fn resume_ordered(&self) -> Vec<(u64, String)>;
     /// [`Executor::forget`].
     fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool);
     /// [`Executor::let_go_started`].
@@ -244,9 +244,9 @@ pub trait Io {
     /// [`Executor::cancel`].
     fn cancel(&self, tickets: &[u64]);
     /// [`Executor::run`].
-    fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), &'static str>;
+    fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), String>;
     /// [`Executor::again`].
-    fn again(&self, request: &RequestOut) -> Result<(), &'static str>;
+    fn again(&self, request: &RequestOut) -> Result<(), String>;
     /// [`Executor::begin_pump`].
     fn begin_pump(&self);
     /// [`Executor::drain`].
@@ -281,7 +281,7 @@ impl Io for Executor {
     fn ordered_idle(&self) -> bool {
         Executor::ordered_idle(self)
     }
-    fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
+    fn resume_ordered(&self) -> Vec<(u64, String)> {
         Executor::resume_ordered(self)
     }
     fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool) {
@@ -293,10 +293,10 @@ impl Io for Executor {
     fn cancel(&self, tickets: &[u64]) {
         Executor::cancel(self, tickets)
     }
-    fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), &'static str> {
+    fn run(&self, request: RequestOut, work: Option<Work>) -> Result<(), String> {
         Executor::run(self, request, work)
     }
-    fn again(&self, request: &RequestOut) -> Result<(), &'static str> {
+    fn again(&self, request: &RequestOut) -> Result<(), String> {
         Executor::again(self, request)
     }
     fn begin_pump(&self) {

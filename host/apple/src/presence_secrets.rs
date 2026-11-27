@@ -16,7 +16,7 @@ pub const RECORDS: &str = "exact.presence";
 /// The kv scope of the agent's locked items, `<name>#<generation>`.
 pub const LOCKED: &str = "exact.presence.agent";
 /// Candidate keychain accounts, with empty values: never secret bytes.
-const INDEX: &str = "exact.presence.items";
+pub const INDEX: &str = "exact.presence.items";
 
 /// The agent's vault over a drive's bindings.
 pub struct AgentVault {
@@ -93,18 +93,80 @@ pub fn lines(grants: &str) -> Vec<(String, Option<exact_runner::presence::Presen
         .collect()
 }
 
-/// The backend under the agent, reconciled before boot, for an app with a
-/// presence line; `None` outside the agent or for an app with none.
+fn stale_names(
+    kv: &Kv,
+    locked_scope: &str,
+) -> Vec<(String, Option<exact_runner::presence::Presence>)> {
+    let mut names = std::collections::BTreeSet::new();
+    for key in kv.keys(RECORDS).unwrap_or_default() {
+        names.insert(key);
+    }
+    for account in kv.keys(locked_scope).unwrap_or_default() {
+        if let Some((name, generation)) = account.split_once('#') {
+            if generation.parse::<u64>().is_ok() {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    names.into_iter().map(|name| (name, None)).collect()
+}
+
+fn with_stale_names(
+    mut lines: Vec<(String, Option<exact_runner::presence::Presence>)>,
+    kv: &Kv,
+    locked_scope: &str,
+) -> Vec<(String, Option<exact_runner::presence::Presence>)> {
+    for (name, _) in stale_names(kv, locked_scope) {
+        if !lines.iter().any(|(existing, _)| existing == &name) {
+            lines.push((name, None));
+        }
+    }
+    lines
+}
+
+/// Read-only occupancy snapshot under the agent for uncommitted cold prepares.
+pub fn agent_snapshot(
+    bindings: Option<&Bindings>,
+    grants: &str,
+    agent: bool,
+) -> Vec<(String, Vec<u8>)> {
+    let Some(bindings) = bindings.filter(|_| agent) else {
+        return Vec::new();
+    };
+    let lines = lines(grants);
+    if !lines.iter().any(|(_, p)| p.is_some()) {
+        return Vec::new();
+    }
+    let vault = AgentVault {
+        secrets: bindings.secrets.clone(),
+        kv: bindings.kv.clone(),
+    };
+    Backend::preview_snapshot_entries(&vault, &lines, true)
+}
+
+/// The backend under the agent, reconciled at commit, for an app with a
+/// presence line; `None` outside the agent or for an app with none (after
+/// tearing down any stale presence records and locked items).
 pub fn agent_backend(bindings: Option<&Bindings>, grants: &str, agent: bool) -> Option<Backend> {
     let bindings = bindings.filter(|_| agent)?;
     let lines = lines(grants);
-    lines.iter().any(|(_, p)| p.is_some()).then(|| {
-        let vault = AgentVault {
-            secrets: bindings.secrets.clone(),
-            kv: bindings.kv.clone(),
-        };
-        Backend::new(Box::new(vault), lines)
-    })
+    if !lines.iter().any(|(_, p)| p.is_some()) {
+        let stale = stale_names(&bindings.kv, LOCKED);
+        if !stale.is_empty() {
+            let vault = AgentVault {
+                secrets: bindings.secrets.clone(),
+                kv: bindings.kv.clone(),
+            };
+            let _ = Backend::new(Box::new(vault), stale);
+        }
+        return None;
+    }
+    let lines = with_stale_names(lines, &bindings.kv, LOCKED);
+    let vault = AgentVault {
+        secrets: bindings.secrets.clone(),
+        kv: bindings.kv.clone(),
+    };
+    Some(Backend::new(Box::new(vault), lines))
 }
 
 /// The kv scopes the backend keeps, granted beside the app's own.
@@ -186,6 +248,7 @@ pub struct KeychainVault {
     secrets: Secrets,
     kv: Kv,
     service: String,
+    prune_index: bool,
 }
 
 impl KeychainVault {
@@ -233,7 +296,9 @@ impl Vault for KeychainVault {
             match call(3, request, &[])? {
                 (0, _) => generations.push(generation),
                 (1, _) => {
-                    let _ = self.kv.delete(INDEX, &account);
+                    if self.prune_index {
+                        let _ = self.kv.delete(INDEX, &account);
+                    }
                 }
                 _ => return Err("the keychain returned an unknown probe status".into()),
             }
@@ -294,24 +359,66 @@ pub fn keychain_capable() -> bool {
     call(5, serde_json::json!({}), &[]).is_ok_and(|(status, _)| status == 0)
 }
 
+/// Read-only occupancy snapshot outside the agent for uncommitted cold prepares.
+pub fn keychain_snapshot(
+    bindings: Option<&Bindings>,
+    grants: &str,
+    app_id: &str,
+) -> Vec<(String, Vec<u8>)> {
+    let Some(bindings) = bindings else {
+        return Vec::new();
+    };
+    if app_id.is_empty() {
+        return Vec::new();
+    }
+    let lines = lines(grants);
+    if !lines.iter().any(|(_, p)| p.is_some()) {
+        return Vec::new();
+    }
+    let vault = KeychainVault {
+        secrets: bindings.secrets.clone(),
+        kv: bindings.kv.clone(),
+        service: locked_service(app_id),
+        prune_index: false,
+    };
+    Backend::preview_snapshot_entries(&vault, &lines, keychain_capable())
+}
+
 /// The backend outside the agent, for an app with a presence line, and the
-/// keychain service its locked items live under.
+/// keychain service its locked items live under. When no presence line remains,
+/// tears down any stale locked items, index entries, and records before
+/// returning `None`.
 pub fn keychain_backend(
     bindings: Option<&Bindings>,
     grants: &str,
     app_id: &str,
 ) -> Option<(Backend, String)> {
     let bindings = bindings?;
-    let lines = lines(grants);
-    if !lines.iter().any(|(_, p)| p.is_some()) || app_id.is_empty() {
+    if app_id.is_empty() {
         return None;
     }
+    let lines = lines(grants);
     let service = locked_service(app_id);
+    if !lines.iter().any(|(_, p)| p.is_some()) {
+        let stale = stale_names(&bindings.kv, INDEX);
+        if !stale.is_empty() {
+            let vault = KeychainVault {
+                secrets: bindings.secrets.clone(),
+                kv: bindings.kv.clone(),
+                service,
+                prune_index: true,
+            };
+            let _ = Backend::new(Box::new(vault), stale);
+        }
+        return None;
+    }
     first_launch(app_id, &service, &bindings.kv);
+    let lines = with_stale_names(lines, &bindings.kv, INDEX);
     let vault = KeychainVault {
         secrets: bindings.secrets.clone(),
         kv: bindings.kv.clone(),
         service: service.clone(),
+        prune_index: true,
     };
     Some((Backend::new(Box::new(vault), lines), service))
 }

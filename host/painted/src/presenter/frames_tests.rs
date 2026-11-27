@@ -282,3 +282,71 @@ fn a_frame_keeps_its_newest_commands() {
         (Some(5), Some(20))
     );
 }
+
+#[test]
+fn post_message_routes_unpartitioned_iframes_and_refuses_partitioned() {
+    // Compiler statically refuses `postMessage` targeting a partitioned iframe.
+    const BAD_SRC: &str = r#"component App
+  action send
+    postMessage("nope", "part")
+  view
+    iframe id="part" src="https://example.com/" partition="persist:a" width=300 height=100
+"#;
+    let err = contract::compile(BAD_SRC).unwrap_err();
+    assert_eq!(err.id, "lower-iframe-partition-message");
+
+    const SRC: &str = r#"component App
+  state got = ""
+  action reply_plain
+    postMessage("hello-guest", "plain")
+  action heard(m: string)
+    got = m
+  view
+    column
+      iframe id="plain" src="https://example.com/" message=heard width=300 height=100 testId="plain"
+      iframe id="part" src="https://example.com/" partition="persist:a" width=300 height=100 testId="part"
+      button press=reply_plain testId="send-plain" height=30
+        text "Send plain"
+      text got testId="got"
+"#;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(SRC),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let node = |p: &Presenter<()>, test_id: &str| {
+        let k = p.host().kernel();
+        let n = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap();
+        (n.id, n.key)
+    };
+    let (plain_id, plain_key) = node(&p, "plain");
+    let (part_id, part_key) = node(&p, "part");
+    let session = p.brush.native_session;
+
+    p.tap(node(&p, "send-plain").0).unwrap();
+    p.run_commands(|| ());
+    let sent = &p.brush.media.frames[&plain_key];
+    assert_eq!(sent.partition, "");
+    assert_eq!(
+        serde_json::Value::from(sent.list.iter().cloned().collect::<Vec<_>>()),
+        serde_json::json!([[1, "postMessage", "hello-guest"]])
+    );
+
+    // Runtime guard also refuses a partitioned iframe target.
+    p.post_frame_message("part", "nope");
+    assert!(!p.brush.media.frames.contains_key(&part_key));
+    let logs = crate::agent::handle(&mut p, r#"{"op":"logs"}"#);
+    assert!(logs.contains("has a partition"), "{logs}");
+
+    // Iframe -> host message dispatches to unpartitioned iframe, rejects partitioned or stale session.
+    assert!(!p.reader_frame_message(part_id, part_key, session, "nope"));
+    assert!(!p.reader_frame_message(plain_id, plain_key, session.wrapping_add(1), "nope"));
+    assert!(p.reader_frame_message(plain_id, plain_key, session, "from-guest"));
+    let tree = crate::agent::handle(&mut p, r#"{"op":"tree"}"#);
+    assert!(tree.contains("from-guest"), "{tree}");
+}

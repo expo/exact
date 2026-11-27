@@ -68,6 +68,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // Give each container a proxy of its own, which holds the app's delegate for that container only
         didSet {
             guard tabController !== oldValue else { return }
+            #if os(iOS)
+            (oldValue as? TabController)?.mark.stop()
+            #endif
             tabProxy?.retire()
             tabProxy = tabController.map { tabs in
                 let proxy = TabDelegateProxy()
@@ -126,9 +129,14 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Where the authored tablist was when its covers were last measured.
     var measuredTablist: CGRect?
     /// The root whose tablist last decided the bar, and whether Exact hid the
-    /// bar for a root's hidden tablist (LLP 1075.003 §3.7, amended).
+    /// bar: for a root's hidden tablist, or as a route that hides it by UIKit's
+    /// flag came on top (iOS 18); Exact shows only a bar it hid (LLP 1075.003
+    /// §3.7, amended).
     weak var tablistRoot: RouteController?
     var tablistHidBar = false
+    /// The route whose wish the bar's kept hidden state last took (`followTabBarWish`). The same route shown again, as
+    /// UIKit shows it after moving its tab between the bar and More, writes nothing, so a hatch's own write stands.
+    weak var tabBarWishRoute: UIViewController?
     /// The transitions whose end runs what they held (`runHeld(after:)`), held weakly so that one gone without completing
     /// leaves the table
     let heldTransitions = NSHashTable<AnyObject>.weakObjects()
@@ -162,7 +170,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var besideIdentity: ContributionsIOS.Identity?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
-    /// whether its press navigated.
+    /// whether its press navigated. A route UIKit dropped as it moved its tab
+    /// comes back without it too (`whileTabsChange`).
     var unanimated = false
     var crossFading = false
     func retires(_ controller: UIViewController) -> Bool { presenter.modalHost.retires(controller) }
@@ -207,6 +216,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var tookWholeView = false
     /// A visible projection waits for a transition or a cover answer.
     var projectionHeld = false
+    /// A modal route waited on a non-transition presentation or refusal and retries when it clears.
+    var modalWaiting = false
     /// A refused write in the visible projection counts while its retry is active.
     var pendingSync: Bool { projectionHeld || stackWriteRefusals.values.contains { $0.visible && !$0.exhausted } }
     /// Whether another tab's stack write waits for a transition or a move UIKit runs there (`writable`, `runHeldSync`).
@@ -245,7 +256,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// A deferred projection, a removed owner or UIKit's disagreement with
     /// the router still owes a sync, even for a batch that only fills list rows.
     var syncOwed: Bool {
-        if heldSync != nil || pendingSync || tabsHeld || stackWritesOwed || changing || windowless
+        if heldSync != nil || pendingSync || modalWaiting || tabsHeld || stackWritesOwed || changing || windowless
             || nativeMove == .ownerRemoved || !settled || splitAskOwed
             || primaryNavigation?.transitionCoordinator != nil || split?.inTransition == true
             || presentedNavigations.contains(where: { $0.transitionCoordinator != nil }) { return true }
@@ -391,7 +402,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             let panel = tabs?.panels[index].id
             var presented = false
             return (index == at ? Array(routes[range]) : routes).map { node -> RouteController in
-                presented = presented || ["modal", "fullscreen"].contains(node.props["navigationPresentation"] ?? "")
+                presented = presented || NavigationRules.presents(node.props["navigationPresentation"])
                 let c = controllers[node.id] ?? RouteController(node)
                 // The projected route keeps the page's scrolling when its root owns overflow.
                 c.pageScrollAxes = root.scroll.map { ($0.scrollsX, $0.scrollsY) }
@@ -440,8 +451,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // title collapsed when the stack was laid out in the window before it
         // had that root.
         tabPanels = []; adoptedTablist = nil; tablistAppearanceNone = false
-        // A stack whose list rows push is the split's at every size (LLP 1127 D2); while the runner cannot
-        // say, the stack is installed pushed, and asked again on the main queue's next turn (`reshape`)
+        // A stack whose root route asks for the split, or on an iPad outside a tab whose list's rows push, is the split's
+        // at every size (LLP 1127 D1, D2, D19); while the runner cannot say, the stack is installed pushed, and asked
+        // again on the main queue's next turn (`reshape`)
         switch splitRule(first.first) {
         case .some(.some(let rule)): return installSplit(p, first: first, rule: rule, in: parent)
         case .none: askSplitNextTurn()
@@ -660,6 +672,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             return
         }
         projectionHeld = false
+        modalWaiting = false
         // The press a deferred sync is owed to: what this sync presents or
         // pushes is that press's work, and it is owed again if this defers too.
         let owed = pendingPress.flatMap { $0 === presenter.pressHandoff ? $0 : nil }
@@ -741,7 +754,15 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         if boundaries.count > mounted.count, let background = modalNavigation ?? primaryOwner, let owner {
             let part = parts[mounted.count + 1], route = wanted[part.lowerBound].node
-            guard presenter.modalHost.canPresent(from: owner, route: route) else { return }
+            func waitForOwner() {
+                modalWaiting = true
+                if let transition = owner.transitionCoordinator ?? owner.presentedViewController?.transitionCoordinator {
+                    transition.animate(alongsideTransition: nil) { [weak self] _ in
+                        DispatchQueue.main.async { self?.presentationCleared() }
+                    }
+                }
+            }
+            guard presenter.modalHost.canPresent(from: owner, route: route) else { waitForOwner(); return }
             // The sheet mounts its own navigation (`ModalHost.present`)
             let nav = makeNavigation(first: route)
             nav.view.frame = root.bounds
@@ -751,10 +772,16 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             presenter.pressShows(wanted[part].last?.node) // a route pushed in the sheet as it opens
             watchPops(nav)
             nav.view.layoutIfNeeded()
-            projectionHeld = held || boundaries.count > mounted.count + 1
             let preceding = part.lowerBound > 0 ? wanted[part.lowerBound - 1].node : nil
-            presenter.modalHost.present(route, navigation: nav, from: background,
-                                     preceding: preceding, owner: owner)
+            guard presenter.modalHost.present(route, navigation: nav, from: background,
+                                              preceding: preceding, owner: owner) else {
+                retireNavigation(nav, preserving: false)
+                nav.setViewControllers([], animated: false)
+                for controller in wanted[part] { controller.held = false }
+                waitForOwner()
+                return
+            }
+            projectionHeld = held || boundaries.count > mounted.count + 1
         }
         // A presented navigation fills its sheet; the primary owner the root,
         // which no presentation resizes (LLP 1123 D1)
@@ -909,6 +936,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func liftAnswered() {
         guard !liftHeld, !syncing, pendingSync else { return }
         projectionHeld = false
+        modalWaiting = false
         resync()
     }
 
@@ -916,8 +944,20 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // A presentation or dismissal ended: run the edge passes that a selection made during it owes, when no sync is pending
         guard pendingSync else { return settleScrollEdges() }
         projectionHeld = false
+        modalWaiting = false
         sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
         presenter.syncModal()
+    }
+
+    func presentationCleared() {
+        guard modalWaiting || pendingSync else { return }
+        modalWaiting = false
+        if pendingSync {
+            modalDidDismiss()
+        } else {
+            sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+            presenter.syncModal()
+        }
     }
 
     /// Retire only the named owner; a late completion cannot remove its
@@ -1100,8 +1140,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Whether a pop recognizer's swipe, starting at `start` in `view` (a
     /// pan's) with `velocity`, may pop: the showing stack's (a tab's, or a
     /// sheet's over it), by its own depth, with an enabled back control in
-    /// its active route (D1), and not a pan a `swiperight` node or a canvas
-    /// owns, nor more vertical than horizontal.
+    /// its active route (D1), and not a pan a `swiperight` node, a canvas, or
+    /// a pointer/pan hit chain whose intersected `touch-action` excludes a
+    /// rightward pan (LLP 1057.001 §1 rules 1–2) owns, nor more vertical than
+    /// horizontal.
     func popMayBegin(_ gestureRecognizer: UIGestureRecognizer, from start: CGPoint?, in view: UIView?, velocity: CGPoint) -> Bool {
         // tvOS has no interactive pop gesture.
         #if os(tvOS)
@@ -1131,18 +1173,68 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             return false
         }
         guard let start, let view else { return true }
-        var overSwipeRight = false
-        var hit = view.hitTest(start, with: nil)
+        let rtl = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let popX: CGFloat = rtl ? -1 : 1
+        let popDirection = CGPoint(x: popX, y: 0)
+        let edgeX = rtl ? view.bounds.width - start.x : start.x
+        let popVelocity = CGPoint(x: popX * velocity.x, y: velocity.y)
+        let hit = view.hitTest(start, with: nil)
         if CanvasInputs.owns(hit) { return false }
-        while let current = hit {
-            // A rightward pan is a `swiperight` node's, and a `swipeleft`
-            // node's while its swipe is caught left of rest, on its way back.
-            if let node = current as? NodeView, node.handlers.contains("swiperight")
-                || (node.handlers.contains("swipeleft") && node.translate.x < -0.5) { overSwipeRight = true; break }
-            if current === view { break }
-            hit = current.superview
+        // Intersect CSS `touch-action` along the placed/authored ancestor chain
+        // through the nearest scroll container inclusive (Pointer Events §9.2;
+        // LLP 1057.001 §1 rule 2), and check UIKit-hierarchy swipe/`pan` owners.
+        var overSwipe = false
+        var hearsPan = false
+        var blocksPopPan = false
+        var intersectPan = true
+        var passedInput = false
+        var current = hit
+        while let cur = current {
+            if let node = cur as? NodeView {
+                if intersectPan {
+                    if !node.allowsTouchPan(popDirection) { blocksPopPan = true }
+                    if Self.isScrollContainer(node) { intersectPan = false }
+                }
+                let action = node.style["touch_action"]?.string ?? "auto"
+                let swipeOwnsDirection = action == "auto" || action == "manipulation" || !node.allowsTouchPan(popDirection)
+                let swipeMatches = rtl
+                    ? (node.handlers.contains("swipeleft") || (node.handlers.contains("swiperight") && node.translate.x > 0.5))
+                    : (node.handlers.contains("swiperight") || (node.handlers.contains("swipeleft") && node.translate.x < -0.5))
+                if !node.disabled, !node.inert, swipeMatches, swipeOwnsDirection {
+                    overSwipe = true
+                }
+                let panActive = node.window != nil ? SwipeInput.allows(node) : (!node.disabled && !node.inert && !node.isHidden && node.isUserInteractionEnabled)
+                if panActive, node.handlers.contains("pan"), swipeOwnsDirection,
+                   !node.hitsNativeEditor(hit), !passedInput {
+                    hearsPan = true
+                }
+                if node.field != nil || node.textArea != nil { passedInput = true }
+            }
+            current = presenter.authoredParent(of: cur) ?? cur.superview
         }
-        return NavigationRules.panMayBegin(startX: start.x, overSwipeRight: overSwipeRight, velocity: velocity)
+        // Pointer handlers bubble along the declared authored chain (`authoredNodes`),
+        // which follows `MountRelay` portals and ignores ancestor `disabled` and
+        // modal-background inertness (matching `PointerRecognizer` in PointerIOS.swift).
+        #if os(iOS)
+        let startNode = hit.flatMap(NodeView.innermost)
+        let hearsPointer = hit.map {
+            presenter.authoredNodes(from: $0).contains { node in
+                !node.disabled && !(node === startNode ? node.inert : node.authoredInert)
+                    && !node.handlers.isDisjoint(with: ["pointerdown", "pointermove", "pointerup", "pointercancel"])
+            }
+        } ?? false
+        #else
+        let hearsPointer = false
+        #endif
+        if (hearsPointer || hearsPan) && blocksPopPan { overSwipe = true }
+        return NavigationRules.panMayBegin(startX: edgeX, overSwipeRight: overSwipe, velocity: popVelocity)
+    }
+
+    private static func isScrollContainer(_ node: NodeView) -> Bool {
+        if node.scrollView != nil { return true }
+        let scrolls: Set<String> = ["auto", "scroll", "hidden"]
+        return scrolls.contains(node.style["overflow_x"]?.string ?? "")
+            || scrolls.contains(node.style["overflow_y"]?.string ?? "")
     }
 
     /// UIKit's push or pop on `nav`, while it runs: its coordinator presents
@@ -1390,6 +1482,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         controllers.removeAll()
         routeIDs = []
         projectionHeld = false
+        modalWaiting = false
         pendingPress?.pending = false; pendingPress?.settle(); pendingPress = nil
         lastTransition = "idle"; reselected = nil; tabsHeld = false
         stackWriteRefusals.removeAll()

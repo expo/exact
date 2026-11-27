@@ -210,7 +210,9 @@ impl<D: DataSource> Runner<D> {
         Ok(())
     }
 
-    pub(super) fn task_action(&mut self, i: usize) -> Result<CommitReceipt, RunnerError> {
+    /// Fire task `i`: its commit, or `None` for an idle firing
+    /// ([`Runner::run_task`]).
+    pub(super) fn task_action(&mut self, i: usize) -> Result<Option<CommitReceipt>, RunnerError> {
         let frames = match &self.timers[i].owner {
             None => Vec::new(),
             Some(weak) => {
@@ -235,7 +237,10 @@ impl<D: DataSource> Runner<D> {
             .collect::<Result<Vec<_>, _>>()?;
         let action = row.action;
         self.as_cause(self.timers[i].cause, |r| {
-            r.traced_action("task", action, args, &frames)
+            let was_poisoned = r.poisoned;
+            let result = r.run_task(action, &args, &frames);
+            r.record_ran("task", r.plan.action(action).name, was_poisoned, &result);
+            result
         })
     }
 }

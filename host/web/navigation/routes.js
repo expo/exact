@@ -1,10 +1,12 @@
-import { viewChildren, unwrapListItem, viewParent } from "./lists.js";
+import { leaving, live, liveChildren, viewChildren, viewParent } from "./lists.js";
 import { placeTabBar, inFlow } from "./tab-bar.js";
 import { fold, foldColumns, launched, onFold, launchLocation, launchVisits } from "./environment.js";
 import { agentParameters } from "./agent-parameters.js";
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
-import { sheetGone, sheetsLeft, stackSheets } from "./sheet-stack.js";
+import { sheetsLeft, slideAway, slidesEnd, stackSheets } from "./sheet-stack.js";
+import { routePopover } from "./route-popovers.js";
+import { misplaced, placeOf, replaces } from "./history-replace.js";
 // @ref LLP 1038 D6/D7/D11 — host projection and the last committed URL.
 const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 // @ref LLP 1047.002 D2.1 — the behaviours that act only on what a plan makes: a tablist's panels and the sidebar, a
@@ -28,7 +30,7 @@ function inspectTestIds(root, log) {
   const seen = new Map();
   for (const el of root.querySelectorAll('[data-testid]')) {
     const route = el.closest('[navigationKey]');
-    if (!route || route.hasAttribute('navigationBack') || el.closest('[data-exiting]')) continue;
+    if (!route || route.hasAttribute('navigationBack') || !live(el)) continue;
     const id = el.getAttribute('data-testid');
     if (!id) continue;
     if (seen.has(id) && seen.get(id) !== route && !inspection.reported.has(id)) {
@@ -50,18 +52,18 @@ function captureLink(event) {
   const press = pressedLink = { event, from: last?.top, url: url.pathname + url.search + url.hash, at: canonicalOf(url.pathname + url.search) };
   setTimeout(() => { if (pressedLink === press) pressedLink = null; }, 0);
 }
-const routesIn = (node) => viewChildren(node).filter((r) => r.hasAttribute("navigationKey") && !r.hasAttribute("data-exiting"));
+const routesIn = (node) => viewChildren(node).filter((r) => r.hasAttribute("navigationKey") && !leaving(r));
 const setInert = (el, on) => {
   if (el.inert !== on) {
     el.inert = on;
   }
 };
 export const liveById = (id, root = document) => {
-  const el = document.getElementById(id), live = (n) => !n.closest("[data-exiting]");
+  const el = document.getElementById(id);
   return !el ? null : live(el) && root.contains(el) ? el : [...root.querySelectorAll("[id]")].find((n) => n.id === id && live(n)) ?? null;
 };
 // a command by id means the live element: one leaving keeps its ids for its own references
-const leavingSheets = new Set(), shownRoutes = new WeakMap();
+const shownRoutes = new WeakMap();
 // @ref LLP 1013.001 D2, D6 — while a route transition plays (shared.js), the route beneath a pushed route stays shown
 // and the pushed route inert; the projection keeps both so until the transition ends.
 const heldRoutes = new Set(), arrivingRoutes = new Set();
@@ -78,45 +80,7 @@ export function holdRoutes(beneath, arriving) {
     navigation.project(root, log);
   };
 }
-export function sheetLeaves(el) {
-  if (!SHEETS || typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || el.getAttribute("navigationPresentation") !== "modal" || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    return false;
-  }
-  if (el.parentElement?.hasAttribute("data-exact-list-item")) {
-    unwrapListItem(el.parentElement);
-  }
-  if (el.contains(document.activeElement)) {
-    document.activeElement.blur();
-  }
-  // It leaves from where it stands, though the stack under it changes (neutral.css lowers a sheet over another).
-  const top = getComputedStyle(el).top;
-  el.setAttribute("navigationKey", "");
-  el.setAttribute("data-exiting", "");
-  el.setAttribute("aria-hidden", "true");
-  el.inert = true;
-  const now = getComputedStyle(el), from = now.translate === "none" ? "0 0" : now.translate;
-  Object.assign(el.style, {
-    transition: "none",
-    pointerEvents: "none"
-  });
-  el.style.setProperty("top", top, "important");
-  // Only `translate`, so the compositor runs it; the scrim fades on its own box as the projection turns it off.
-  const slide = el.animate([{
-    translate: from
-  }, {
-    translate: "0 100vh"
-  }], {
-    duration: 400,
-    easing: "cubic-bezier(.32, .72, 0, 1)"
-  }), done = () => {
-    leavingSheets.delete(slide);
-    el.remove();
-    sheetGone(el);
-  };
-  leavingSheets.add(slide);
-  slide.finished.then(done, done);
-  return true;
-}
+export const sheetLeaves = (el) => SHEETS && slideAway(el);
 // @ref LLP 1115.000 D4.8 — a sheet the look draws (fixed to the window) slides back down as it closes, as it slid up (neutral.css), unless the person asks for less motion. A runtime asks this before it removes a modal route (glue.js's `destroy`; rt.js's `clear`, `each` and presence's `Leave`); a sheet that leaves stays whole until it is off the window, from where it stands, out of input, accessibility and the routes as presence-glue.js's leaving views are (LLP 1063), the focus leaving it as a removed one's would (input-glue.js's `arrive` takes one a blur does not reach). One holding media or a field whose decorations the browser paints closes at once, as its runtime empties those with the commit, and so does one holding an open dialog or popover, which the top layer would leave frozen on the window; a native view slides, showing what its module left in it. It keeps its ids for what it draws, though a command by id passes over it (`liveById`), and its stack's projection ends it on showing a sheet that was not beneath it, which may share them (compared as elements: a replace keeps its key).
 // @ref LLP 1075.003 §3.7 — tabs name their kept panels with aria-controls; each panel holds a route stack.
 // Attribute and parent walks also work in the server renderer's DOM, which has no selector engine.
@@ -126,15 +90,18 @@ const tabsOf = (nav) => {
   }
   const all = [...nav?.getElementsByTagName("*") ?? []];
   const owns = (el) => {
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      if (p.hasAttribute("navigationKey")) {
+    for (let p = el; p; p = p.parentElement) {
+      if (p !== el && p.hasAttribute("navigationKey")) {
         return p === nav;
+      }
+      if (leaving(p)) {
+        return false;
       }
     }
     return false;
   };
   for (const list of all.filter((el) => el.getAttribute("role") === "tablist" && owns(el))) {
-    const panels = viewChildren(list).filter((tab) => tab.getAttribute("role") === "tab" && tab.hasAttribute("aria-controls")).map((tab) => all.find((panel) => panel.getAttribute("id") === tab.getAttribute("aria-controls"))).filter((panel) => panel?.getAttribute("role") === "tabpanel" && owns(panel));
+    const panels = viewChildren(list).filter((tab) => tab.getAttribute("role") === "tab" && tab.hasAttribute("aria-controls") && owns(tab)).map((tab) => all.find((panel) => panel.getAttribute("id") === tab.getAttribute("aria-controls"))).filter((panel) => panel?.getAttribute("role") === "tabpanel" && owns(panel));
     if (panels.length) {
       return [list, panels];
     }
@@ -155,9 +122,11 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
   return cols === 1 || rects.length > 0 && rects.every(([, , width]) => width >= WIDE_WIDTH);
 };
 // Base wide navigation on the space within each horizontal segment
-let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map();
+let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map(), shownPlaceholders = new WeakMap();
 const activationRequired = new WeakSet(), activated = new WeakSet();
-const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
+// @ref LLP 1123 D7 — a popover route is a presentation, the web's sheet until it presents popovers of its own
+const shownAs = (route) => route?.getAttribute("navigationPresentation") === "popover" ? "modal" : route?.getAttribute("navigationPresentation");
+const sheet = (route) => ["modal", "fullscreen"].includes(shownAs(route));
 // @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
 // `navigationInitialDetent` names, else the first, among the detents UIKit keeps (ModalIOS.swift `keptDetents`: a
 // word it cannot read, and one out of order, are dropped). neutral.css sizes it from `data-exact-detent` and
@@ -273,7 +242,7 @@ const sheetAt = (routes, i) => {
     return -1;
   }
   for (let j = i; j > 0; j--) {
-    const p = routes[j].getAttribute("navigationPresentation");
+    const p = shownAs(routes[j]);
     if (p === "modal" || p === "fullscreen") {
       return p === "modal" ? j : -1;
     }
@@ -284,7 +253,7 @@ export const overPage = (route) => {
   if (!SHEETS) {
     return false;
   }
-  const p = route?.getAttribute("navigationPresentation");
+  const p = shownAs(route);
   if (p !== "fullscreen") {
     return p === "modal";
   }
@@ -293,7 +262,7 @@ export const overPage = (route) => {
 };
 // A route that shows the page it covers: a sheet, or a full-screen route whose author wrote its background, which composites over that page as CSS has it (Charlie, 2026-11-10). neutral.css gives a full-screen route a clear colour no author writes, so its computed colour tells whether the author wrote one, `transparent` included; a server render computes none (render.mjs). One that paints nothing hides the page, on the root's ground.
 let pressedRow = null, pendingRow = null;
-const excluded = (el) => el.hasAttribute("popover") || el.hasAttribute("data-exiting") || getComputedStyle(el).display === "none";
+const excluded = (el) => el.hasAttribute("popover") || leaving(el) || el.getAttribute("navigationSplit") === "placeholder" || getComputedStyle(el).display === "none";
 const rowPress = (el) => el.getAttribute("data-exact-router-press");
 const rowHref = (el) => el.getAttribute("href") || null;
 const linked = (href) => href?.startsWith("/") && !href.startsWith("//") && routeMatches(href);
@@ -323,7 +292,7 @@ function listRows(list) {
   return rows;
 }
 /** The root route's pushing list: the first `data-exact-list` in document order reachable from the route (no `navigationKey`,
-* popover, leaving or undisplayed element on the way, itself included), not in a list taken (a sideways list is none) nor sideways,
+* popover, placeholder, leaving or undisplayed element on the way, itself included), not in a list taken (a sideways list is none) nor sideways,
 * whose rows push; else `retained` with no rows. From the lists (`querySelectorAll`, the light DOM `children` walked), each predicate read
 * once an element a search: the walk's answer for a DOM the search leaves alone (`listRows`, `linked` don't change it); one taken out meanwhile is skipped. (Exported for its test.) */
 export function pushingList(route, retained = splitLists.get(route)) {
@@ -367,30 +336,28 @@ export function pushingList(route, retained = splitLists.get(route)) {
   }
   return empty;
 }
+/** The route's own child box written `navigationSplit="placeholder"` (LLP 1127 D1): it asks, and shows while nothing is selected. */
+const ownPlaceholder = (route) => route ? viewChildren(route).find((box) => box.getAttribute("navigationSplit") === "placeholder" && !box.hasAttribute("navigationKey") && !leaving(box)) : undefined;
+/** The list column's width `navigationSplit` names, a whole number of px from 1 to 999999 (exact_kernel `split_width`), else 0. */
+const splitWidth = (said) => /^[1-9]\d{0,5}$/.test(said ?? "") ? Number(said) : 0;
 /** Recheck authored admission even while narrow. Projection's visibility/inert never opt a list out. */
 export function splitOf([route]) {
   // A rendered document has route and handler facts but no browser layout.
   if (!SPLITS || typeof globalThis.getComputedStyle !== "function" || typeof globalThis.matchMedia !== "function") {
-    if (route) {
-      splitLists.delete(route);
-    }
-    return {
-      width: 0,
-      list: null,
-      rows: []
-    };
+    route && splitLists.delete(route);
+    return { width: 0, list: null, rows: [] };
   }
-  const said = route?.getAttribute("navigationSplit"), explicit = Number(said), named = Number.isFinite(explicit) && explicit > 0;
+  // @ref LLP 1127 D1, D22 — the web splits only a stack whose root route asks: "split", a width, or a placeholder box of its own
+  const said = route?.getAttribute("navigationSplit"), explicit = splitWidth(said), named = explicit > 0;
+  const asked = named || said === "split" || !!ownPlaceholder(route);
   const found = route && said !== "none" && !sheet(route) ? pushingList(route) : null;
-  const placed = route && said !== "none" && !sheet(route) && /^(absolute|fixed)$/.test(getComputedStyle(route).position);
-  const atFold = placed && (found || named) ? foldColumns(route) : null;
-  const width = atFold ? atFold.list : placed && wide() ? named ? explicit : found ? 320 : 0 : 0;
-  if (route) {
-    if (found && (width || splitLists.has(route))) {
-      splitLists.set(route, found.list);
-    } else {
-      splitLists.delete(route);
-    }
+  const placed = asked && route && said !== "none" && !sheet(route) && /^(absolute|fixed)$/.test(getComputedStyle(route).position);
+  const atFold = placed ? foldColumns(route) : null;
+  const width = atFold ? atFold.list : placed && wide() ? named ? explicit : 320 : 0;
+  if (route && found && (width || splitLists.has(route))) {
+    splitLists.set(route, found.list);
+  } else if (route) {
+    splitLists.delete(route);
   }
   return {
     width,
@@ -492,7 +459,7 @@ const routesOf = (nav) => stacksOf(nav).find((routes) => routes.some((r) => r.ge
 export function focusStack(nav) {
   const key = nav.getAttribute("navigationKey"), projected = shownRoutes.get(nav), top = projected?.at(-1);
   if (top && top.getAttribute("navigationKey") === key &&
-      projected.every((route) => route.isConnected && nav.contains(route) && !route.hasAttribute("data-exiting"))) {
+      projected.every((route) => route.isConnected && nav.contains(route) && !leaving(route))) {
     return projected;
   }
   const routes = routesOf(nav);
@@ -523,23 +490,26 @@ export function historyURL(path) {
 /** Whether `e` scrolls the page by the person: a wheel, a touch's move, a key that scrolls, or a press on a scrollbar. A
 * `scroll` event cannot say: the page's own scrolls (a fragment's, scroll anchoring, a clamp) are trusted events too. */
 const byPerson = (e, el = e.target) => e.type === "keydown" ? /^(Arrow(Up|Down|Left|Right)|Page(Up|Down)|Home|End| )$/.test(e.key) && !el.closest?.("input, textarea, select, [contenteditable]") : e.type !== "pointerdown" || el instanceof Element && ((b) => e.clientX - b.left >= el.clientLeft + el.clientWidth || e.clientY - b.top >= el.clientTop + el.clientHeight)(el.getBoundingClientRect());
-const stamp = (index, op) => ({ exact: index, id: op.top, url: op.url });
+const stamp = (index, op) => ({ exact: index, id: op.top, url: op.url, ...placeOf(op) });
 /** A route's Back control, the selected route's unless named (1035.001 D1: the `id` the root's `navigationBack` names), pressable or not: the route's own, else one in no route at all (a header the routes share), as iOS resolves it (NavigationBack.control); another route's is that route's. */
 const backControl = (nav, route = selectedRoute(nav), name = nav.getAttribute("navigationBack")) => route && name !== null ? route.querySelector(`[id="${CSS.escape(name)}"]`) ?? [...nav.ownerDocument.querySelectorAll(`[id="${CSS.escape(name)}"]`)].find((control) => [null, nav].includes(control.closest("[navigationKey]"))) ?? null : undefined;
 // LLP 1116.000 D4: Back belongs to the header shadow root; bar items proxy the authored controls.
 const BACK = `<style>button{all:unset;display:inline-flex;align-items:center;gap:6px;flex:none;vertical-align:middle;margin-inline:-6px 6px;padding:4px 8px 4px 4px;border-radius:8px;cursor:pointer;white-space:nowrap;-webkit-user-select:none;user-select:none}button[hidden],span[hidden]{display:none}button:focus-visible{outline:2px solid var(--exact-accent,AccentColor);outline-offset:1px}button:active>*{opacity:var(--exact-back-press,.5)}svg{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}button:dir(rtl) svg{scale:-1 1}</style><button part="back" type="button"><svg viewBox="4 4 16 16" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg><span></span></button><slot></slot>`;
-const headerOf = (route) => viewChildren(route).find((child) => child.localName === "header");
+const headerOf = (route) => liveChildren(route).find((child) => child.localName === "header");
 const authored = "[data-exact-said~=\"appearance\"]";
 // a header or a node in one whose author wrote `appearance: none` (element.rs)
 // @ref LLP 1153 D8 — a route's header holding a `nav` anywhere (a popover's too), or more than one link outside a `popover` or `dialog` in it (a menu's links are its button's, as an app bar's are), is a site's, marked `data-exact-site`: drawn as written (index.html, neutral.css), as one whose author wrote `appearance: none` is, it is no app bar and holds no Back. document_bars.rs `site_header` is the Rust renderer's rule.
 const siteHeader = (header, links = 0) => {
   const holds = (el, menu) => [...el.children].some((child) => {
+    if (leaving(child)) {
+      return false;
+    }
     const inMenu = menu || child.matches("[popover], dialog");
     return child.localName === "nav" || !inMenu && child.matches("a[href], [role=link]") && ++links > 1 || holds(child, inMenu);
   });
   return holds(header, false);
 }, markSites = (route) => {
-  for (const child of viewChildren(route)) {
+  for (const child of liveChildren(route)) {
     if (child.localName === "header") {
       child.toggleAttribute("data-exact-site", siteHeader(child));
     }
@@ -549,11 +519,11 @@ const siteHeader = (header, links = 0) => {
 // ported to the elements both runtimes write alike, since the JS target keeps no kernel to ask. `walk` is `Walk::walk`:
 // a bar's header holds one heading, or none and only what the bar places (`unplaced`: a node that is no box), and an item is a pressable it reaches, not the title's, or a disabled button. A header drawn as written is no bar.
 function barItems(route, header) {
-  if (route.getAttribute("data-navigationbar") === "none" || viewChildren(route)[0] !== header || asWritten(header)) {
+  if (route.getAttribute("data-navigationbar") === "none" || liveChildren(route)[0] !== header || asWritten(header)) {
     return null;
   }
   const heading = "[data-exact-text][role=heading]", press = "[data-exact-on~=\"press\"]", layer = (el) => el.matches("[popover], dialog");
-  const holds = (el) => [...el.children].some((child) => !layer(child) && (child.matches(heading) || holds(child)));
+  const holds = (el) => [...el.children].some((child) => !leaving(child) && !layer(child) && (child.matches(heading) || holds(child)));
   const disabled = (el) => el.matches("button[disabled]") && !el.hasAttribute("role") && root?.getAttribute("aria-busy") !== "true";
   // `fact::DISABLED`, dimmed whether or not it presses; a `button` element carries no `role` unless it has another one (element.rs); until input is ready, the glue disables every control itself (glue.js)
   // `fact::BOX`: a plain box, a `div` that is no text or a semantic box (element.rs `element`)
@@ -561,7 +531,7 @@ function barItems(route, header) {
   let headings = 0, tap = null, placed = 0, unplaced = false, searches = 0, tablists = 0;
   const items = [], walk = (node) => {
     for (const child of node.children) {
-      if (layer(child)) {
+      if (leaving(child) || layer(child)) {
         continue;
       }
       if (child.matches(`[role=tablist], input[type="search"], ${authored}`)) {
@@ -619,7 +589,7 @@ function opens(el) {
 // LLP 1115.000 D4.1: title precedence is authored head, visible route heading, then app name.
 const titleOf = (route) => {
   for (const el of headerOf(route)?.getElementsByTagName("*") ?? []) {
-    if (el.matches("h1, h2, h3, h4, h5, h6, [role=heading]")) return el.textContent.trim();
+    if (el.matches("h1, h2, h3, h4, h5, h6, [role=heading]") && live(el)) return el.textContent.trim();
   }
   return "";
 };
@@ -674,10 +644,13 @@ function clearBar(route) {
   if (!CLEAR_BARS) {
     return;
   }
-  const header = headerOf(route), clear = !!header && route.getAttribute("data-navigationbar") === "transparent" && viewChildren(route)[0] === header && !asWritten(header);
+  const header = headerOf(route), clear = !!header && route.getAttribute("data-navigationbar") === "transparent" && liveChildren(route)[0] === header && !asWritten(header);
   for (const el of viewChildren(route)) {
     if (el.hasAttribute("data-exact-clear") && !(clear && el === header)) {
-      el.removeAttribute("data-exact-clear");
+      // A leaving header keeps its clear paint until it is removed
+      if (!leaving(el)) {
+        el.removeAttribute("data-exact-clear");
+      }
       barResized?.unobserve(el);
       clearBars.delete(el);
     }
@@ -761,9 +734,19 @@ function watchClearBars() {
 function readProjections(root, log) {
   const projections = [...root.querySelectorAll("[navigationBack]")].map((nav) => {
     const [list, panels] = tabsOf(nav);
-    if (TABS) placeTabBar(nav, list, wide());
     return { nav, list, panels, stacks: panels.length ? panels.map(routesIn) : [routesIn(nav)], leaving: [] };
   });
+  // A mark is its header's while that header holds it and is its route's, above the root of a stack this pass projects;
+  // any other (a portal moved the control, a header took its place, the route became the root) goes before any read
+  const declares = ({ stacks }, k) => stacks.some((routes) => routes.some((route) => route.getAttribute("navigationKey") === k));
+  const roots = new Set(projections.filter((p) => declares(p, p.nav.getAttribute("navigationKey")) || (shown.get(p.nav) ?? []).some((k) => declares(p, k))).flatMap(({ stacks }) => stacks.map((routes) => routes[0])));
+  for (const el of BARS ? root.querySelectorAll("[data-exact-bar-back]") : []) {
+    const header = barOwners.get(el), route = header?.parentElement?.closest("[navigationKey]");
+    if (!(header?.contains(el) && route && headerOf(route) === header && !roots.has(route)) && live(el)) {
+      el.removeAttribute("data-exact-bar-back");
+    }
+  }
+  for (const { nav, list } of TABS ? projections : []) placeTabBar(nav, list, wide());
   // Placing a root's bar restyles the page, so every root is placed before any computed style is read.
   for (const projection of projections) {
     const { nav, panels, stacks } = projection, named = (k) => (route) => route.getAttribute("navigationKey") === k;
@@ -810,26 +793,11 @@ function readProjections(root, log) {
   }
   return projections;
 }
-function appBarBack(nav, routes, index, split, shown, headerShown) {
-  if (!BARS) {
-    return;
-  }
-  const route = routes[index], header = headerOf(route);
-  if (!header) {
-    return;
-  }
-  // In a split, a detail its list's row pushed has none: the list beside it is its way back (LLP 1116.004 D1). Nor has a route whose shown header is drawn as written, wherever it stands in the route (LLP 1153 D8): its author wrote `appearance: none`, keeping the bar they drew (HeaderRule.swift `keepsAuthoredHeader`), or it is a site's.
-  const pushed = index > 0 && !sheet(route) && route.getAttribute("data-navigationbar") !== "none" && !(split && (index === 1 || rowOf.has(route))) && !(asWritten(header) && headerShown);
-  // A header iOS makes no bar of draws Back when it does not show a visible Back control (iOS draws it either way).
-  // Discount the bar's own hiding mark. In a header not shown, the Back stays hidden with it.
-  const control = pushed ? backControl(nav, route) : null, inShownHeader = headerShown && !!control && header.contains(control) && !header.contains(control.closest("[popover], dialog"));
-  const items = headerShown && (inShownHeader || shown) ? barItems(route, header) : null;
-  const held = inShownHeader && !!items?.includes(control);
-  for (const el of route.querySelectorAll("[data-exact-bar-back]")) {
-    if (el !== control || !held) {
-      el.removeAttribute("data-exact-bar-back");
-    }
-  }
+function appBarBack(nav, routes, index, shown, headerShown, bar) {
+  if (!bar) return;
+  const route = routes[index], { header, pushed, control, inShownHeader } = bar;
+  // A header iOS makes no bar of draws Back where its Back control does not show, as the settled marks leave it (iOS draws it either way)
+  const items = bar.items !== undefined ? bar.items : headerShown && shown ? barItems(route, header) : null;
   const drawn = pushed && !(inShownHeader && header.contains(control.closest(authored))) && (!inShownHeader || !!items || !control.checkVisibility({ visibilityProperty: true }));
   // a control its author wrote `appearance: none` on, or an item holding it, is their Back, with no bar's beside it (iOS's `authoredBack`)
   if (shown) {
@@ -845,9 +813,6 @@ function appBarBack(nav, routes, index, split, shown, headerShown) {
       event.stopPropagation();
       appBack(viewParent(header));
     });
-  }
-  for (const el of [...route.querySelectorAll("[data-exact-bar-back]"), control]) {
-    el?.toggleAttribute("data-exact-bar-back", el === control && held && !!button);
   }
   // A control the author disabled, or made inert in its route, leaves no Back, as `pressBack` refuses it. The glue's own
   // disabling until the page is interactive (`aria-busy`) and the inert it gives a route a sheet covers are not theirs.
@@ -871,6 +836,34 @@ function appBarBack(nav, routes, index, split, shown, headerShown) {
   } else {
     button.removeAttribute("aria-keyshortcuts");
   }
+}
+/** The header whose bar marked each control (`data-exact-bar-back`), which `readProjections` checks each mark against. */
+const barOwners = new WeakMap();
+/** Settle `routes[index]`'s header to its bar's Back mark before the projection writes or measures anything, and return
+* what the bar does, or null with no header: whether it draws a Back (`pushed`), and the control's mark, `""` where the
+* bar's Back stands for it, `"suppressed"` where it has none. A leaving view keeps what was last written. */
+function settleBar(nav, routes, index, split, headerShown) {
+  const route = routes[index], header = headerOf(route);
+  if (!header) return null;
+  // A route above its stack's root can hold its Back control in its bar, unless its shown header is drawn as written, wherever it stands in the route (LLP 1153 D8): its author wrote `appearance: none`, keeping the bar they drew (HeaderRule.swift `keepsAuthoredHeader`), or it is a site's. Whether the bar holds it is the header's: the control in it and one of its items.
+  const barred = index > 0 && !sheet(route) && route.getAttribute("data-navigationbar") !== "none" && !(asWritten(header) && headerShown);
+  // At the detail column's first route the bar draws no Back: the list beside it is its way back (LLP 1116.004 D1), and the control the bar holds shows nowhere, as iOS's bar draws no Back at N1's root. A deeper detail a row pushed has no bar Back either, but keeps its authored control, since its Back leads to the detail beneath, which nothing shows.
+  const first = barred && split && index === 1, pushed = barred && !(split && (index === 1 || rowOf.has(route)));
+  const control = pushed || first ? backControl(nav, route) : null, inShownHeader = headerShown && !!control && header.contains(control) && !header.contains(control.closest("[popover], dialog"));
+  const items = inShownHeader ? barItems(route, header) : undefined, held = !!items?.includes(control);
+  // The bar's Back stands for a held control where the header has that Back or a shadow root free to hold it
+  const drawable = !!header.shadowRoot?.querySelector("button[part=\"back\"]") || !header.shadowRoot && !!header.attachShadow;
+  const mark = !held ? null : first ? "suppressed" : pushed && drawable ? "" : null;
+  for (const el of header.querySelectorAll("[data-exact-bar-back]")) {
+    if ((el !== control || mark === null) && live(el)) {
+      el.removeAttribute("data-exact-bar-back");
+    }
+  }
+  if (mark !== null) {
+    if (control.getAttribute("data-exact-bar-back") !== mark) control.setAttribute("data-exact-bar-back", mark);
+    barOwners.set(control, header);
+  }
+  return { header, pushed, control, inShownHeader, items };
 }
 /** The app bar's Back on `route`, pressed: the browser's Back from its route (`popped`), applied at once: the route's control
 * pressed, else the root's `navigate` with the location beneath, else the runner's own `back` (LLP 1115 D5). The
@@ -897,7 +890,9 @@ function appBack(route) {
   }
   // without its fragment, which would scroll it again (LLP 1153 D5)
 }
-const closedNone = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation")) && route.getAttribute("closedby") === "none";
+const closedNone = (route) => sheet(route) && route.getAttribute("closedby") === "none";
+// A sheet's Back, as Escape asks it: its named control, else the app bar's way, as iOS's swipe down (`goBack`)
+const sheetBack = (nav, route) => backControl(nav) || closedNone(route) ? pressBack(nav) : appBack(route);
 /** Press the Back control wherever it is, shown or not, as UIKit's Back presses it (NavigationBack.swift `control`),
 * unless it is disabled, or inert (the web's choice: iOS's Back reads no inert); else why it was not pressed. */
 function pressBack(nav) {
@@ -919,14 +914,14 @@ function pressBack(nav) {
 // An opaque frame can stamp a browser entry even when it cannot change its address.
 // If the browser refuses the stamp too, subsequent entries and traversals belong to this mirror.
 function writeEntry(method, entry) {
-  if (memory) return;
+  // The entry as written, which `commit` checks: "memory" where writes go to memory alone, else the browser's id for it
+  // (or "written", where the browser lists none) while its current state is this write's
+  if (memory) { entry.nid = "memory"; return; }
   const url = historyURL(entry.url);
-  try {
-    history[method](entry, "", url);
-  } catch {
-    try { history[method]({ ...entry, address: launchLocation() }, ""); }
-    catch { memory = true; }
+  try { history[method](entry, "", url); } catch {
+    try { history[method]({ ...entry, address: launchLocation() }, ""); } catch { memory = true; }
   }
+  entry.nid = memory ? "memory" : history.state?.exact === entry.exact && history.state.id === entry.id ? globalThis.navigation?.currentEntry?.id ?? "written" : undefined;
 }
 function traverseBrowser(delta) {
   if (memory) return false;
@@ -969,10 +964,8 @@ function commit(op) {
     }
   } else if (written[cursor]?.id === op.top && !(pop === null && written[cursor].url !== op.url && written[cursor].url.split("#")[0] === op.url.split("#")[0])) {
     // another fragment on the visit shown, or none, is one more browser entry of it, as a same-document link's is (LLP 1153 D5)
-    if (written[cursor].url !== op.url) {
-      written[cursor] = stamp(cursor, op);
-      writeEntry("replaceState", written[cursor]);
-    }
+    // and one whose visit now stands elsewhere (a restored router can mint its id again there) is stamped again
+    if (written[cursor].url !== op.url || misplaced(written[cursor], op)) { writeEntry("replaceState", written[cursor] = stamp(cursor, op)); }
   } else {
     let j = cursor;
     while (j > first && gone.has(written[j]?.id)) {
@@ -981,19 +974,19 @@ function commit(op) {
         const from = cursor;
         cursor = j;
         // The entry gone back to takes the top's url when that changed in the same commit (`replace(back(r), u)`).
-        // An entry a reload left holds the state of the page before it, which is stamped again.
+        // An entry a reload left, or one whose visit a commit placed elsewhere, holds a stale stamp: stamped again.
         return go(j, from, () => {
-          if (written[j].url !== op.url || !memory && (history.state?.exact !== j || history.state.id !== written[j].id)) {
-            writeEntry("replaceState", written[j] = stamp(j, op));
-          }
+          if (written[j].url !== op.url || misplaced(written[j], op) || !memory && (history.state?.exact !== j || history.state.id !== written[j].id)) { writeEntry("replaceState", written[j] = stamp(j, op)); }
         });
       }
     }
-    for (const index of Object.keys(written)) {
-      if (Number(index) > cursor) {
-        delete written[index];
-      }
+    // A new visit in the place of the one shown takes its entry (history-replace.js)
+    if (replaces(op, { written, cursor, memory, traversing: waiters.size > 0 }, canonicalOf)) {
+      writeEntry("replaceState", written[cursor] = stamp(cursor, op));
+      globalThis.exact?.fragment?.forget(cursor);
+      return;
     }
+    for (const index of Object.keys(written)) { if (Number(index) > cursor) { delete written[index]; } }
     written.length = Math.max(0, cursor + 1);
     op.pushed = written[cursor]?.id === op.top;
     written[++cursor] = stamp(cursor, op);
@@ -1202,15 +1195,11 @@ export const navigation = {
         // A route pushed inside a sheet goes Back to the route before it in the sheet, as Android's Back does there.
         for (const nav of [...root.querySelectorAll("[navigationBack]")].reverse()) {
           const route = selectedRoute(nav), routes = routesOf(nav), inSheet = route && sheetAt(routes, routes.indexOf(route)) >= 0;
-          if (!(inSheet || ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"))) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
+          if (!(inSheet || sheet(route)) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
             continue;
           }
           event.preventDefault();
-          if (backControl(nav) || closedNone(route)) {
-            pressBack(nav);
-          } else {
-            appBack(route);
-          }
+          sheetBack(nav, route);
           return;
         }
       });
@@ -1256,7 +1245,7 @@ export const navigation = {
       reportedLinkPop = true;
       log(`navigation: link ${JSON.stringify(link.url)} popped the stack to a retained visit`);
     }
-    visits = new Map((op.visits ?? []).map(([id, url]) => [String(id), url]));
+    [op.held, visits] = [visits, new Map((op.visits ?? []).map(([id, url]) => [String(id), url]))]; // `held`: those before it
     pendingRow = SPLITS && pressedRow && pressedRow.event.eventPhase !== 0 && op.url !== pressedRow.from ? {
       row: pressedRow.row,
       list: pressedRow.list,
@@ -1297,17 +1286,31 @@ export const navigation = {
       document.activeElement.blur();
       projections = readProjections(root, log);
     }
+    // Each projected stack's rows and bars, settled before the pass writes, so what it reads (an anchor, a control) is this pass's
+    const bars = new Map();
+    for (const { nav, stacks, facts } of projections.filter(({ key }) => key !== undefined)) {
+      for (const [stack, routes] of stacks.entries()) {
+        const { found, headers } = facts[stack];
+        detailRows(routes, found);
+        for (const index of BARS ? routes.keys() : []) {
+          bars.set(routes[index], settleBar(nav, routes, index, found.width > 0, headers[index]));
+        }
+      }
+    }
+    const marked = SPLITS ? new Map() : null; // each box a root route marked in this projection, and that root
     for (const { nav, key, at, list, panels, stacks, facts } of projections) {
       if (TABS) {
         const previous = managed.get(nav) ?? [];
         if (SHEETS && panels.length && !previous.length) {
           setScrim(nav, false);
         }
+        // A panel no tab names any more is released, unless it is leaving: that one stays as the last projection showed it
         for (const panel of previous) {
-          if (!panels.includes(panel)) {
+          if (!panels.includes(panel) && live(panel)) {
             SHEETS && setScrim(panel, false);
             panel.style.visibility = "";
             setInert(panel, !!panel.authoredInert);
+            panel.removeAttribute("data-exact-split-empty");
           }
         }
         managed.set(nav, panels);
@@ -1340,21 +1343,17 @@ export const navigation = {
           shownRoutes.set(nav, showing);
           shown.set(nav, showing.map((route) => route.getAttribute("navigationKey")));
           if (SHEETS && sheet(routes[selected]) && !before.includes(routes[selected])) {
-            for (const slide of leavingSheets) {
-              if (viewParent(slide.effect.target) === viewParent(routes[selected])) {
-                slide.finish();
-                slide.effect.target.remove();
-              }
-            }
+            slidesEnd(viewParent(routes[selected]));
           }
         }
         const modal = over[presented], beneath = routes.findLastIndex((r, i) => i < presented && !over[i]);
+        // a popover route the browser presents is nonmodal: the page under it stays live, with no scrim
+        const popover = SHEETS && stack === at && routePopover(nav, routes, presented, selected, { back: (route) => sheetBack(nav, route), project: () => navigation.project(root, log), find: liveById });
         if (SHEETS) {
-          setScrim(panels[stack] ?? nav, routes[presented]?.getAttribute("navigationPresentation") === "modal");
+          setScrim(panels[stack] ?? nav, shownAs(routes[presented]) === "modal" && !popover);
         }
-        detailRows(routes, found);
         if (stack === at && list) {
-          setInert(list, sheet(routes[presented]) || !!list.authoredInert);
+          setInert(list, sheet(routes[presented]) && !popover || !!list.authoredInert);
         }
         // a sheet is modal: the root's tab bar is inert beneath it, as the route it covers is (LLP 1115.000 D4.5)
         // The sheet each route shows in, and the sheets something shown is in.
@@ -1365,8 +1364,8 @@ export const navigation = {
           const covered = modal && (index >= beneath && index < presented || split > 0 && index === 0);
           // a sheet shows what it sits over: the page (in the strip above a narrow sheet) and any sheets between, which only the top one dims
           route.style.visibility = active || covered || heldRoutes.has(route) ? "" : "hidden";
-          route.toggleAttribute("data-exact-covered", covered);
-          setInert(route, !active || arrivingRoutes.has(route) || !!route.authoredInert);
+          route.toggleAttribute("data-exact-covered", covered && !popover);
+          setInert(route, !active && !(popover && covered) || arrivingRoutes.has(route) || !!route.authoredInert);
           const column = !split ? null : index === 0 ? "list" : sheet(route) || shownIn[index] >= 0 ? null : "detail";
           if (route.getAttribute("data-exact-split") !== column) {
             column ? route.setAttribute("data-exact-split", column) : route.removeAttribute("data-exact-split");
@@ -1374,7 +1373,7 @@ export const navigation = {
           route.style.setProperty("--exact-split", column ? `${split}px` : "");
           route.style.setProperty("--exact-split-detail", column ? `${found.detail}px` : "");
           sheetFrame(routes, index, shownIn, inUse, selected);
-          appBarBack(nav, routes, index, split > 0, active || covered, headers[index]);
+          appBarBack(nav, routes, index, active || covered, headers[index], bars.get(route));
           clearBar(route);
         }
         if (!SPLITS) {
@@ -1399,9 +1398,11 @@ export const navigation = {
           }
         }
         row?.toggleAttribute("data-exact-split-row", true);
-        // @ref LLP 1116.006 D2 — a split showing no detail fills the detail pane, as an iPad's split view does: the platform's placeholder (the shell draws `data-exact-split-empty`), or the author's, a box of the root route marked `navigationSplit="placeholder"` (which the lowerer hides everywhere else), at the pane's width.
-        const empty = split > 0 && detail < 0, own = routes[0]?.querySelector("[navigationSplit=\"placeholder\"]"), box = viewParent(routes[0]);
-        own?.toggleAttribute("data-exact-split-placeholder", empty);
+        // @ref LLP 1116.006 D2 — a split showing no detail fills the detail pane, as an iPad's split view does: the platform's placeholder (the shell draws `data-exact-split-empty`), or the author's, a box of the root route marked `navigationSplit="placeholder"` (which the lowerer hides everywhere else), at the pane's width. Only the route's own box is marked: one a page module moved anywhere else is shown no more. A stack does not clear a box it marked before when another root has marked it in this projection and still holds it as its own (`marked`), so a box moved from one root to another is marked by the root that holds it, whichever projects first.
+        const empty = split > 0 && detail < 0, own = ownPlaceholder(routes[0]), box = viewParent(routes[0]);
+        const was = routes[0] && shownPlaceholders.get(routes[0]);
+        if (routes[0]) { if (was && was !== own && ownPlaceholder(marked.get(was)) !== was) { was.removeAttribute("data-exact-split-placeholder"); } shownPlaceholders.set(routes[0], own); }
+        if (own) { own.toggleAttribute("data-exact-split-placeholder", empty); marked.set(own, routes[0]); }
         box?.toggleAttribute("data-exact-split-empty", empty && !own);
         if (empty) {
           box.style.setProperty("--exact-split", `${split}px`);
@@ -1484,7 +1485,7 @@ export const navigation = {
         url: last?.url ?? null,
         route: key,
         stack: index >= 0 ? routes.slice(0, index + 1).map((r) => r.getAttribute("navigationKey")) : [],
-        presentation: ["modal", "fullscreen"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
+        presentation: ["modal", "fullscreen", "popover"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
         source: selected?.getAttribute("navigationSource") ?? null,
         closedby: selected?.getAttribute("closedby") ?? null,
         transition: {

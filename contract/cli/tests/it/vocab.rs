@@ -450,6 +450,11 @@ fn json_lists_everything_and_one_entry() {
 #[test]
 fn contextual_attributes_are_refused_elsewhere() {
     let cases = [
+        (
+            "audiovisualBackgroundPlaybackPolicy",
+            "view",
+            "audiovisualBackgroundPlaybackPolicy=\"continue\"",
+        ),
         ("datetime", "view", "datetime=0"),
         ("format", "view", "format=\"relative\""),
         ("start", "view", "start=0"),
@@ -503,6 +508,7 @@ fn contextual_attributes_are_refused_elsewhere() {
             "view",
             "apple.allowsMagnification=true",
         ),
+        ("apple.magnification", "view", "apple.magnification=2"),
         (
             "apple.inactiveSchedulingPolicy",
             "view",
@@ -1058,6 +1064,7 @@ fn every_concepts_code_compiles_and_its_names_are_its_own() {
     let mut failures = Vec::new();
     for name in [
         "scroll",
+        "edges",
         "loading",
         "plural",
         "choice",

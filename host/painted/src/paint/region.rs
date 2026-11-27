@@ -7,6 +7,7 @@ use exact_kernel::{NodeKey, RegionPublication};
 use exact_plan::EventKind;
 use exact_runner::runner::{ActionBinding, ActionBindingRefusal};
 
+#[derive(Clone)]
 pub(crate) enum ActionSlot {
     Absent,
     Refused,
@@ -20,6 +21,7 @@ pub(crate) struct RegionActions<'a> {
     pub eligible: &'a dyn Fn(NodeKey) -> bool,
     pub motion: &'a dyn Fn(NodeKey, &Rc<()>) -> bool,
 }
+#[derive(Clone)]
 pub(crate) struct ActionNode {
     pub key: NodeKey,
     pub parent: Option<NodeKey>,
@@ -49,14 +51,101 @@ impl ActionNode {
                     })
             })
     }
+    /// A node's press and swipe bindings as the runner captures them now.
+    fn capture(
+        node: &NodeRef<'_>,
+        scene: &Scene<'_>,
+        actions: &mut RegionActions<'_>,
+        budget: &mut ActionBudget,
+    ) -> Result<Self, String> {
+        let mut slot = |kind| -> Result<ActionSlot, String> {
+            let slot = match (actions.capture)(node.key, kind) {
+                None => ActionSlot::Absent,
+                Some(Ok(binding)) => ActionSlot::Bound(Rc::new(binding)),
+                Some(Err(_)) => ActionSlot::Refused,
+            };
+            budget.hold(&slot)?;
+            Ok(slot)
+        };
+        let press = slot(EventKind::Press)?;
+        let swipe = slot(EventKind::Swiperight)?;
+        let swipe_left = slot(EventKind::Swipeleft)?;
+        let swipe_policy = ([&swipe, &swipe_left]
+            .iter()
+            .any(|s| matches!(s, ActionSlot::Bound(_)))
+            && Presented::from_style(node.style) == Presented::IDENTITY
+            && !node.children().iter().any(|id| {
+                scene
+                    .kernel
+                    .node(*id)
+                    .is_some_and(|n| n.props.bool(PropId::SwipeIndicator) == Some(true))
+            })
+            && matches!(
+                node.style.touch_action,
+                exact_kernel::TouchAction::None
+                    | exact_kernel::TouchAction::PanY
+                    | exact_kernel::TouchAction::PanLeftPanY
+                    | exact_kernel::TouchAction::PanRightPanY
+            ))
+        .then(|| {
+            (
+                node.style.touch_action.pans(),
+                node.style
+                    .transition
+                    .matching(exact_motion::Property::Translate)
+                    .cloned(),
+            )
+        });
+        Ok(ActionNode {
+            key: node.key,
+            parent: node
+                .parent
+                .and_then(|id| scene.kernel.node(id))
+                .map(|n| n.key),
+            blocked: !(actions.eligible)(node.key),
+            press,
+            swipe,
+            swipe_left,
+            swipe_policy,
+        })
+    }
 }
-
+/// What a picture's captured actions hold, against their limits.
+#[derive(Default)]
+struct ActionBudget {
+    events: usize,
+    utf8: usize,
+}
+impl ActionBudget {
+    fn hold(&mut self, slot: &ActionSlot) -> Result<(), String> {
+        let utf8 = match slot {
+            ActionSlot::Absent => return Ok(()),
+            ActionSlot::Refused => 0,
+            ActionSlot::Bound(binding) => binding.retained_utf8_bytes(),
+        };
+        self.events += 1;
+        if self.events > 256 {
+            return Err("content retained action count limit".into());
+        }
+        self.utf8 += utf8;
+        if self.utf8 > 65536 {
+            return Err("content retained action UTF-8 limit".into());
+        }
+        Ok(())
+    }
+    fn keep(&mut self, action: &ActionNode) -> Result<(), String> {
+        [&action.press, &action.swipe, &action.swipe_left]
+            .into_iter()
+            .try_for_each(|slot| self.hold(slot))
+    }
+}
 const COMMANDS: usize = exact_kernel::region::REGION_NODES * 12;
 /// Numeric interaction geometry owned by the same picture as the pixels.
 /// Collection limits include the logical end, even when its row is unmounted.
 #[derive(Clone, Copy)]
 pub(crate) struct ScrollBounds {
     pub axes: (Overflow, Overflow),
+    pub min: (f32, f32),
     pub max: (f32, f32),
 }
 impl ScrollBounds {
@@ -92,26 +181,32 @@ impl ScrollBounds {
         if axes == (Overflow::Visible, Overflow::Visible) && collection_max.is_none() {
             return Self {
                 axes,
+                min: (0., 0.),
                 max: (0., 0.),
             };
         }
-        let (width, height) =
-            super::space::content_size_with(node, kernel, presented, scaled_presented);
+        let (min_x, width, height) =
+            super::space::content_extent_with(node, kernel, presented, scaled_presented);
+        // A claimed scroller's range is its content and its insets past its reached scrollport (LLP 1123 D14)
+        let ([t, r, b, l], [it, ir, ib, il]) = presented(node.id)
+            .scroll
+            .map_or(([0.; 4], [0.; 4]), |c| (c.reach, c.insets));
+        let min = ((min_x - il + l).min(0.), 0.);
         let mut max = (
-            (width - node.frame.width).max(0.),
-            (height - node.frame.height).max(0.),
+            (width - node.frame.width + il + ir - l - r).max(0.),
+            (height - node.frame.height + it + ib - t - b).max(0.),
         );
         match collection_max {
             Some(main) if node.style.display == exact_kernel::Display::Flex => max.0 = main,
             Some(main) => max.1 = main,
             None => {}
         }
-        Self { axes, max }
+        Self { axes, min, max }
     }
     pub(crate) fn clamp(self, offset: (f32, f32)) -> (f32, f32) {
         (
-            offset.0.clamp(0., self.max.0),
-            offset.1.clamp(0., self.max.1),
+            offset.0.clamp(self.min.0, self.max.0),
+            offset.1.clamp(self.min.1, self.max.1),
         )
     }
 }
@@ -152,6 +247,7 @@ struct NodePaint {
     key: NodeKey,
     id: ViewId,
     pointer_hit: bool,
+    visible: bool,
     scrollbar: bool,
     paint: BoxPaint,
     payload: Payload,
@@ -178,6 +274,8 @@ pub(super) struct Picture {
     owner: ViewId,
     action_identity: Rc<()>,
     by_id: BTreeMap<ViewId, usize>,
+    /// The painter's `region_motion` when it was taken.
+    motion: u64,
 }
 impl Picture {
     pub(super) fn belongs_to(&self, region: &crate::content_region::ContentRegionState) -> bool {
@@ -201,10 +299,18 @@ impl Picture {
             if p.matches(publication)
                 && p.dark == painter.dark
                 && p.scale == painter.scale.to_bits()
+                && p.motion == painter.region_motion
             {
                 return Ok(p.clone());
             }
         }
+        // @ref LLP 1003.003 D7 — a picture taken again for the publication
+        // it holds (a clip that moves, the appearance or the scale) keeps the
+        // actions it captured and their identity: a press or a swipe begun
+        // on it goes on across the pixels and outlines it takes again.
+        let kept = (painter.region_picture.as_ref())
+            .filter(|p| p.matches(publication) && p.belongs_to(region))
+            .cloned();
         if publication.frames().len() > exact_kernel::region::REGION_NODES {
             return Err("content mounted node limit".into());
         }
@@ -216,7 +322,9 @@ impl Picture {
                 .kernel
                 .node_by_key(f.node)
                 .ok_or("content node retired before capture")?;
-            if (scene.presented)(node.id).moves() {
+            // A swipe that moves a kept picture's node holds its permit,
+            // which replay checks
+            if kept.is_none() && (scene.presented)(node.id).moves() {
                 return Err("content capture refuses internally transformed presentation".into());
             }
             if node.node_type == NodeType::TextInput {
@@ -251,8 +359,7 @@ impl Picture {
         let mut commands = Vec::new();
         let mut nodes = Vec::new();
         let mut command_cost = 0usize;
-        let mut event_count = 0usize;
-        let mut string_bytes = 0usize;
+        let mut budget = ActionBudget::default();
         let mut by_id = BTreeMap::new();
         while let Some(visit) = stack.pop() {
             let id = match visit {
@@ -438,65 +545,17 @@ impl Picture {
                 return Err("content flat paint command limit".into());
             }
             let i = nodes.len();
-            let mut slot = |kind| -> Result<ActionSlot, String> {
-                let Some(binding) = (actions.capture)(node.key, kind) else {
-                    return Ok(ActionSlot::Absent);
-                };
-                event_count += 1;
-                if event_count > 256 {
-                    return Err("content retained action count limit".into());
+            // A node the kept picture did not reach (under a box that was
+            // transparent then) has its actions captured now
+            let kept_action = (kept.as_ref())
+                .and_then(|p| Some(&p.nodes[*p.by_id.get(&id)?].action))
+                .filter(|a| a.key == node.key);
+            let action = match kept_action {
+                Some(action) => {
+                    budget.keep(action)?;
+                    action.clone()
                 }
-                match binding {
-                    Ok(binding) => {
-                        string_bytes += binding.retained_utf8_bytes();
-                        if string_bytes > 65536 {
-                            return Err("content retained action UTF-8 limit".into());
-                        }
-                        Ok(ActionSlot::Bound(Rc::new(binding)))
-                    }
-                    Err(_) => Ok(ActionSlot::Refused),
-                }
-            };
-            let press = slot(EventKind::Press)?;
-            let swipe = slot(EventKind::Swiperight)?;
-            let swipe_left = slot(EventKind::Swipeleft)?;
-            let swipe_policy = ([&swipe, &swipe_left]
-                .iter()
-                .any(|s| matches!(s, ActionSlot::Bound(_)))
-                && Presented::from_style(node.style) == Presented::IDENTITY
-                && !node.children().iter().any(|id| {
-                    scene
-                        .kernel
-                        .node(*id)
-                        .is_some_and(|n| n.props.bool(PropId::SwipeIndicator) == Some(true))
-                })
-                && matches!(
-                    node.style.touch_action,
-                    exact_kernel::TouchAction::None
-                        | exact_kernel::TouchAction::PanY
-                        | exact_kernel::TouchAction::PanLeftPanY
-                        | exact_kernel::TouchAction::PanRightPanY
-                ))
-            .then(|| {
-                (
-                    node.style.touch_action.pans(),
-                    node.style
-                        .transition
-                        .matching(exact_motion::Property::Translate)
-                        .cloned(),
-                )
-            });
-            let action = ActionNode {
-                key: node.key,
-                parent: node
-                    .parent
-                    .and_then(|id| scene.kernel.node(id))
-                    .map(|n| n.key),
-                blocked: !(actions.eligible)(node.key),
-                press,
-                swipe,
-                swipe_left,
-                swipe_policy,
+                None => ActionNode::capture(&node, scene, actions, &mut budget)?,
             };
             by_id.insert(id, i);
             nodes.push(NodePaint {
@@ -506,12 +565,14 @@ impl Picture {
                 pointer_hit: node
                     .computed_row(exact_kernel::StyleId::PointerEvents, |s| s.pointer_events)
                     != exact_kernel::PointerEvents::None,
+                visible: super::paints(scene.kernel, id, None),
                 scrollbar: node.style.scrollbar_width != exact_kernel::ScrollbarWidth::None,
                 paint,
                 payload,
                 opacity,
                 axes,
-                css_clip: node.style.rare.clip_path.clone(),
+                // A clip a transition moves (LLP 1003.003 D7)
+                css_clip: (scene.clips)(id).unwrap_or_else(|| node.style.rare.clip_path.clone()),
                 scroll: scroll_offset,
                 action,
             });
@@ -535,7 +596,8 @@ impl Picture {
                 .node_by_key(region.binding().owner)
                 .ok_or("content owner removed")?
                 .id,
-            action_identity: Rc::new(()),
+            action_identity: kept.map_or_else(|| Rc::new(()), |p| p.action_identity.clone()),
+            motion: painter.region_motion,
             by_id,
         }))
     }
@@ -586,17 +648,24 @@ impl Painter {
                 // geometry, including a recycled slot or a new scroll owner.
                 return ScrollBounds {
                     axes: (Overflow::Hidden, Overflow::Hidden),
+                    min: (0., 0.),
                     max: (0., 0.),
                 };
             }
         }
-        if let Some(bounds) = self.zoom_bounds(kernel, node) {
+        if let Some(mut bounds) = self.zoom_bounds(kernel, node) {
+            // A claimed zoomable scroller's range, its zoomed content's and its insets past its reached port (D14)
+            if let Some(c) = presented(node.id).scroll {
+                let (dx, dy) = c.range_change();
+                bounds.max = ((bounds.max.0 + dx).max(0.), (bounds.max.1 + dy).max(0.));
+            }
             return bounds;
         }
         if node.node_type == NodeType::TextInput {
             if let Some(field) = self.field_text.get(&node.id) {
                 return ScrollBounds {
                     axes: effective_overflow(node),
+                    min: (0., 0.),
                     max: field.scroll_max,
                 };
             }
@@ -884,6 +953,7 @@ impl<'a> Replay<'a> {
                             },
                             shape_clips: Vec::new(),
                             pointer_hit: n.pointer_hit,
+                            visible: n.visible,
                             projective: None,
                             affine: Some((parent, g.outer.rect)),
                             unpress: Transform::identity(),
@@ -903,10 +973,19 @@ impl<'a> Replay<'a> {
                     // @ref LLP 1043.000 §3 D7 — retain the same CSS outline
                     // through trunk's parent-first projection and replay.
                     if n.css_clip.has_path() {
-                        css_clips.push(painter.backend.push_css_clip(
-                            &n.css_clip.resolved(g.outer.rect.2, g.outer.rect.3),
-                            parent.pre_translate(g.outer.rect.0, g.outer.rect.1),
-                        ));
+                        let css = n.css_clip.resolved(g.outer.rect.2, g.outer.rect.3);
+                        // A clip that draws no area clips the whole box (CSS Masking 1 §5)
+                        css_clips.push(if css.draws_nothing() {
+                            painter
+                                .backend
+                                .push_clip(&Shape::rect((0., 0., 0., 0.)), parent);
+                            true
+                        } else {
+                            painter.backend.push_css_clip(
+                                &css,
+                                parent.pre_translate(g.outer.rect.0, g.outer.rect.1),
+                            )
+                        });
                     }
                     n.paint.paint(painter.backend.as_mut(), g, parent);
                     // The overflow clip holds a text's own lines, as the
@@ -1038,6 +1117,7 @@ mod hit_tests {
                 rounded_border: None,
                 shape_clips: Vec::new(),
                 pointer_hit: true,
+                visible: true,
                 id: 1,
                 rect: bbox(ts, rect),
                 clip: None,

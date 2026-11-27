@@ -567,7 +567,7 @@ impl<D: DataSource> Runner<D> {
         let name = |_: &Plan| name.clone();
         self.check_send_arguments(m, args)?;
         self.snapshot_sockets();
-        self.store.set_clock_ms(self.now_ms);
+        self.sync_store_clock();
         self.mutation_requests += 1;
         let answer = self.route_send(target, source, args);
         // What its source staged on sockets goes out only with an answer

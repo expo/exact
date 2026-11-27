@@ -14,7 +14,7 @@
 use crate::CompileError;
 use contract_syntax::scope::Scope;
 use contract_syntax::{Expr, Field, File, ModuleDecl, ModuleKind, ShapeDecl, Span, Stmt, TypeExpr};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// What a call's literals are checked against: the canvases' surface names
 /// the file places, and its shapes, by name.
@@ -376,8 +376,33 @@ fn call(
             ));
         }
     }
-    // A shape named by its literal goes as its schema (LLP 1133.016 D15 item 4).
     let sub: serde_json::Value = serde_json::from_str(&m.substitute).unwrap_or_default();
+    if sub["list"]["androidGroups"] == true {
+        if let Some((_, android)) = words.iter().find(|(platform, _)| platform == "android") {
+            let word = |name: &str| android.iter().find(|(key, _)| key == name).map(|(_, e)| e);
+            let group = word("group");
+            if let Some((value, message)) = match (group, word("groupSummary")) {
+                (Some(e @ Expr::Str(s, _)), _) if s.is_empty() => {
+                    Some((e, "android.group must be a non-empty string"))
+                }
+                (Some(e @ (Expr::Number(..) | Expr::Bool(..) | Expr::None(..))), _) => {
+                    Some((e, "android.group must be a non-empty string"))
+                }
+                (_, Some(e @ (Expr::Str(..) | Expr::Number(..) | Expr::None(..)))) => {
+                    Some((e, "android.groupSummary must be a boolean"))
+                }
+                (None, Some(e)) => Some((e, "android.groupSummary requires android.group")),
+                _ => None,
+            } {
+                errors.push(error(
+                    "contract-module-argument",
+                    message.into(),
+                    value.span(),
+                ));
+            }
+        }
+    }
+    // A shape named by its literal goes as its schema (LLP 1133.016 D15 item 4).
     let paths: Vec<String> = (sub["shapeNames"].as_array().into_iter().flatten())
         .filter_map(|p| p.as_str().map(str::to_owned))
         .collect();
@@ -572,11 +597,11 @@ fn written_out(value: &Expr) -> Option<serde_json::Value> {
 /// across the app: two records of one name that differ are refused, since
 /// the platform keeps one definition of each.
 fn declare(file: &mut File, modules: &HashMap<String, ModuleDecl>, errors: &mut Vec<CompileError>) {
-    let mut found: HashMap<String, Vec<(String, serde_json::Value, Span)>> = HashMap::new();
+    let mut found: BTreeMap<String, Vec<(String, serde_json::Value, Span)>> = BTreeMap::new();
     fn walk(
         body: &[Stmt],
         modules: &HashMap<String, ModuleDecl>,
-        found: &mut HashMap<String, Vec<(String, serde_json::Value, Span)>>,
+        found: &mut BTreeMap<String, Vec<(String, serde_json::Value, Span)>>,
     ) {
         for stmt in body {
             let (name, args) = match stmt {
@@ -953,5 +978,68 @@ pub(crate) fn error(id: &str, message: String, span: Span) -> CompileError {
         span,
         file: None,
         related: Box::new([]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decl(name: &str) -> ModuleDecl {
+        ModuleDecl {
+            name: name.into(),
+            declared: name.into(),
+            package: format!("@exact/{name}"),
+            extension: name.into(),
+            kind: ModuleKind::Send,
+            options: vec![Field {
+                name: "items".into(),
+                ty: TypeExpr::Option(
+                    Box::new(TypeExpr::List(
+                        Box::new(TypeExpr::Named("Item".into(), Span::default())),
+                        Span::default(),
+                    )),
+                    Span::default(),
+                ),
+                span: Span::default(),
+            }],
+            words: Vec::new(),
+            answers: None,
+            args: Vec::new(),
+            raised: String::new(),
+            hold: 0,
+            budget: 0,
+            handler: None,
+            live: false,
+            request: "never".into(),
+            sync: None,
+            data_only: false,
+            imported: false,
+            view_only: false,
+            substitute: r#"{"declares":{"items":"id"}}"#.into(),
+            span: Span::default(),
+        }
+    }
+
+    #[test]
+    fn declare_errors_are_ordered_deterministically_across_modules() {
+        let parsed = contract_syntax::parse(
+            "shape Item\n  id: string\n  label: string\ncomponent App\n  action go\n    zeta(items=[Item(id=\"x\", label=\"one\")])\n    zeta(items=[Item(id=\"x\", label=\"two\")])\n    beta(items=[Item(id=\"x\", label=\"one\")])\n    beta(items=[Item(id=\"x\", label=\"two\")])\n    alpha(items=[Item(id=\"x\", label=\"one\")])\n    alpha(items=[Item(id=\"x\", label=\"two\")])\n    delta(items=[Item(id=\"x\", label=\"one\")])\n    delta(items=[Item(id=\"x\", label=\"two\")])\n  view\n    text \"hi\"\n",
+        )
+        .unwrap();
+        for _ in 0..20 {
+            let mut file = parsed.clone();
+            file.modules = ["zeta", "beta", "alpha", "delta"]
+                .into_iter()
+                .map(decl)
+                .collect();
+            let errs = desugar(&mut file, &[]).unwrap_err();
+            let declared: Vec<&str> = errs
+                .iter()
+                .filter(|e| e.id == "contract-module-declared")
+                .map(|e| e.message.split('`').nth(1).unwrap())
+                .collect();
+            assert_eq!(declared, ["alpha", "beta", "delta", "zeta"]);
+        }
     }
 }

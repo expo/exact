@@ -859,7 +859,7 @@ fn setting_or_forgetting_a_secret_drops_inflight_and_ready_preloads_before_and_a
 }
 
 #[test]
-fn boot_stops_at_the_first_unresolved_ticket_and_the_executor_delivers_in_order() {
+fn boot_stops_at_the_first_unresolved_ticket_and_the_executor_delivers_on_completion() {
     for asynchronous in [false, true] {
         ASYNCHRONOUS.with(|v| v.set(asynchronous));
         let server = Server::new(2);
@@ -876,12 +876,18 @@ fn boot_stops_at_the_first_unresolved_ticket_and_the_executor_delivers_in_order(
         assert!(!batch.contains("\"text\":\"content\""), "{batch}");
         assert_eq!(source.parsed.load(Ordering::Acquire), 0);
         assert!(server.request().contains("/first"));
+        // The adopted ready preload settles on completion while `/first` is still held (LLP 1162 §8 Q2).
+        while source.parsed.load(Ordering::Acquire) < 1 {
+            wakes.recv_timeout(HANG).unwrap();
+            bridge.pump(0.);
+        }
+        assert_eq!(*source.order.lock().unwrap(), ["read"]);
         server.release(1);
         while source.parsed.load(Ordering::Acquire) < 2 {
             wakes.recv_timeout(HANG).unwrap();
             bridge.pump(0.);
         }
-        assert_eq!(*source.order.lock().unwrap(), ["first", "read"]);
+        assert_eq!(*source.order.lock().unwrap(), ["read", "first"]);
         assert_eq!(server.count.load(Ordering::Acquire), 2);
     }
 }

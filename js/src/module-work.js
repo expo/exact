@@ -66,6 +66,14 @@
       // anything else runs where it is, the let-go answer's continuation
       // included. `step(key, arg)` is the helper's next step, bound only when
       // deferred: this runs before every step of every async function.
+      shouldRoute: function (at) {
+        return !tearingDown && !!at && (turn === null || turn === MODULE.id) && hooks.live(at);
+      },
+      defer: function (at, fn) {
+        if (!ready.has(at)) ready.set(at, []);
+        ready.get(at).push(fn);
+        note();
+      },
       route: function (at, step, key, arg) {
         if (tearingDown || !at || (turn !== null && turn !== MODULE.id) || !hooks.live(at)) return false;
         if (!ready.has(at)) ready.set(at, []);
@@ -143,5 +151,76 @@
       });
       return JSON.stringify(ready);
     };
+  };
+
+  // Propagate answer context across plain Promise reactions (`.then`, `.catch`,
+  // `.finally`), capturing only primitive owner ids so retained promises never
+  // keep answered call objects alive. prelude.js takes `__exact_promise_context`
+  // and deletes it.
+  global.__exact_promise_context = function (env) {
+    var origThen = Promise.prototype.then,
+      calls = env.calls,
+      background = env.background,
+      work = env.work;
+    function rawThen(promise, onFulfilled, onRejected) {
+      return promise instanceof Promise
+        ? origThen.call(promise, onFulfilled, onRejected)
+        : promise.then(onFulfilled, onRejected);
+    }
+    Object.defineProperty(Promise.prototype, "then", {
+      configurable: true,
+      writable: true,
+      enumerable: false,
+      value: function then(onFulfilled, onRejected) {
+        if (typeof onFulfilled !== "function" && typeof onRejected !== "function") {
+          return origThen.call(this, onFulfilled, onRejected);
+        }
+        var at = env.current(),
+          bg = at === background,
+          atId = at && !bg ? at.id : 0;
+        function wrap(fn) {
+          return function (value) {
+            var ambient = env.current(),
+              target = bg
+                ? background
+                : atId
+                  ? calls.get(atId) || (ambient === background ? background : null)
+                  : null;
+            if (target && target !== background && target !== ambient && work.shouldRoute(target)) {
+              return new Promise(function (resolve, reject) {
+                work.defer(target, function () {
+                  var live = calls.get(atId),
+                    next = live && !live.letGo && !live.replied ? live : null,
+                    before = env.current();
+                  env.setCurrent(next);
+                  if (next) next.ran = true;
+                  try {
+                    resolve(fn(value));
+                  } catch (e) {
+                    reject(e);
+                  } finally {
+                    env.setCurrent(before);
+                  }
+                });
+              });
+            }
+            var before = ambient;
+            env.setCurrent(target);
+            if (target && target !== background) target.ran = true;
+            try {
+              return fn(value);
+            } finally {
+              env.setCurrent(before);
+            }
+          };
+        }
+        return origThen.call(
+          this,
+          typeof onFulfilled === "function" ? wrap(onFulfilled) : onFulfilled,
+          typeof onRejected === "function" ? wrap(onRejected) : onRejected
+        );
+      },
+    });
+    return rawThen;
   };
 })(globalThis);

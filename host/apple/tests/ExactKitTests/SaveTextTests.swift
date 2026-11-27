@@ -147,6 +147,32 @@ final class SaveTextTests: XCTestCase {
         XCTAssertTrue(staged.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }, "its staged copy")
         XCTAssertEqual(scratch(), before, "the text's scratch copy outlived the picker's staging")
     }
+
+    func testShowSaveFilePickerCleansScratchDirectoryAndDropsStaleCompletions() throws {
+        let session = try booted()
+        let view = try XCTUnwrap(session.presenter.views.values.first { $0.props["id"] == "export-file" }?.id)
+        let saveScratch = {
+            Set(((try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? [])
+                .filter { $0.hasPrefix("exact-save-") })
+        }
+        let before = saveScratch()
+        let lease = SessionLease(session)
+        let picker = try XCTUnwrap(session.pickerHost.presentDocument(
+            "showSaveFilePicker", view: view, multiple: false, suggestedName: "out.txt", startIn: nil, issued: lease
+        ))
+        defer { window?.rootViewController?.presentedViewController?.dismiss(animated: false) }
+        let made = saveScratch().subtracting(before)
+        XCTAssertEqual(made.count, 1, "showSaveFilePicker creates an exact-save scratch directory")
+
+        // Reloading the plan bumps generation, invalidating lease; completion still removes exact-save-* without dispatching.
+        let plan = try fixturePlan("SAVE_TEXT")
+        XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 400, height: 300)).error)
+        XCTAssertTrue(session.pickerHost.documentFinished(picker, urls: nil))
+        XCTAssertEqual(saveScratch().subtracting(before), [], "exact-save scratch directory is removed on stale completion")
+        let logs = session.agent(#"{"op":"logs"}"#)
+        XCTAssertFalse(logs.contains("showSaveFilePicker: cancelled"), "stale completion must not dispatch to replaced session")
+        XCTAssertFalse(logs.contains("showSaveFilePicker: chosen"))
+    }
     #endif
 }
 #endif

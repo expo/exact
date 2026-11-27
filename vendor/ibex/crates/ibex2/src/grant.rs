@@ -204,6 +204,12 @@ pub enum Grant {
     WebSocketLocalNetwork {
         loopback: bool,
     },
+    /// Exact patch (exact2 LLP 1016 D6): `net.fetch loopback`, an `http:` or
+    /// `https:` origin whose host as written is loopback ([`is_loopback`]), at
+    /// any port.
+    FetchLoopback,
+    /// `net.websocket loopback`: the same hosts, for `ws:` and `wss:`.
+    WebSocketLoopback,
     FsRead(PathPrefix),
     FsWrite(PathPrefix),
     EnvRead(String),
@@ -237,6 +243,12 @@ impl Grant {
             (Grant::WebSocketLocalNetwork { loopback }, Operation::WebSocket { origin }) => {
                 matches!(origin.scheme.as_str(), "ws" | "wss")
                     && is_local_network(&origin.host, *loopback)
+            }
+            (Grant::FetchLoopback, Operation::Fetch { origin }) => {
+                matches!(origin.scheme.as_str(), "http" | "https") && is_loopback(&origin.host)
+            }
+            (Grant::WebSocketLoopback, Operation::WebSocket { origin }) => {
+                matches!(origin.scheme.as_str(), "ws" | "wss") && is_loopback(&origin.host)
             }
             (Grant::FsRead(prefix), Operation::FsRead { path }) => prefix.covers(path),
             (Grant::FsWrite(prefix), Operation::FsWrite { path }) => prefix.covers(path),
@@ -432,6 +444,14 @@ impl GrantSet {
                         Grant::WebSocketLocalNetwork { loopback }
                     }
                 }
+                // Exact patch (exact2 LLP 1016 D6): loopback only, any port.
+                "net.fetch" | "net.websocket" if target == "loopback" => {
+                    if capability == "net.fetch" {
+                        Grant::FetchLoopback
+                    } else {
+                        Grant::WebSocketLoopback
+                    }
+                }
                 // A CSP scheme source is a scheme and its colon. Keep the two
                 // network families disjoint and admit only their URL schemes.
                 "net.fetch" | "net.websocket" if is_scheme_source(target) => {
@@ -624,18 +644,40 @@ fn presence_words(words: &[&str]) -> Result<(), String> {
 #[path = "grant_quoted_tests.rs"]
 mod quoted_tests;
 
+/// Exact patch (exact2 LLP 1016 D6): whether `host`, as a URL serializes it,
+/// is a loopback host: IPv4 127.0.0.0/8, `[::1]`, an IPv4-mapped IPv6 address
+/// carrying 127.0.0.0/8, or the exact name `localhost` (case-insensitive, at
+/// most one trailing dot). Mirrors `exact_grants::is_loopback`.
+pub fn is_loopback(host: &str) -> bool {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    let host = host.to_ascii_lowercase();
+    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return inner.parse::<Ipv6Addr>().is_ok_and(|a| {
+            a.to_ipv4_mapped()
+                .map_or_else(|| a.is_loopback(), |v4| v4.is_loopback())
+        });
+    }
+    if let Ok(address) = host.parse::<Ipv4Addr>() {
+        return address.is_loopback();
+    }
+    let name = host.strip_suffix('.').unwrap_or(&host);
+    name == "localhost"
+}
+
 /// Exact patch (exact2 LLP 1133.036 D5): whether `host`, as a URL serializes
 /// it, is on the local network: an RFC 1918, link-local IPv4, unique-local
 /// or link-local IPv6 literal (an IPv4-mapped address judged by the IPv4
 /// address it carries) or a name ending in `.local`; with `loopback`, also
-/// 127.0.0.0/8, `[::1]` and `localhost`. Never the cloud metadata service,
+/// [`is_loopback`]. Never the cloud metadata service,
 /// 169.254.169.254 or `[fd00:ec2::254]`. Mirrors
 /// `exact_grants::is_local_network`.
 pub fn is_local_network(host: &str, loopback: bool) -> bool {
     use std::net::{Ipv4Addr, Ipv6Addr};
+    if loopback && is_loopback(host) {
+        return true;
+    }
     let v4 = |a: Ipv4Addr| {
-        a != Ipv4Addr::new(169, 254, 169, 254)
-            && (a.is_private() || a.is_link_local() || loopback && a.is_loopback())
+        a != Ipv4Addr::new(169, 254, 169, 254) && (a.is_private() || a.is_link_local())
     };
     let host = host.to_ascii_lowercase();
     if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
@@ -646,9 +688,7 @@ pub fn is_local_network(host: &str, loopback: bool) -> bool {
                 None => {
                     let first = a.segments()[0];
                     a != Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254)
-                        && ((first & 0xfe00) == 0xfc00
-                            || (first & 0xffc0) == 0xfe80
-                            || loopback && a.is_loopback())
+                        && ((first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80)
                 }
             });
     }
@@ -656,7 +696,7 @@ pub fn is_local_network(host: &str, loopback: bool) -> bool {
         return v4(address);
     }
     let name = host.strip_suffix('.').unwrap_or(&host);
-    name.ends_with(".local") && name.len() > ".local".len() || loopback && name == "localhost"
+    name.ends_with(".local") && name.len() > ".local".len()
 }
 
 /// Exact patch (exact2 LLP 1133.007 D6): why a path line's namespace refuses
@@ -1118,5 +1158,56 @@ mod tests {
         assert!(!set.permits(&Operation::EnvRead {
             name: "AWS_SECRET_ACCESS_KEY".into()
         }));
+    }
+
+    #[test]
+    fn loopback_admits_loopback_hosts_at_any_port_and_keeps_families_separate() {
+        let fetch = GrantSet::parse("net.fetch loopback").unwrap();
+        for (scheme, host, port) in [
+            ("http", "127.0.0.1", 49152),
+            ("https", "127.9.8.7", 8443),
+            ("http", "[::1]", 0),
+            ("https", "[::ffff:127.0.0.1]", 8443),
+            ("http", "localhost", 3773),
+            ("http", "LOCALHOST.", 3773),
+        ] {
+            assert!(fetch.permits(&Operation::Fetch {
+                origin: Origin::new(scheme, host, port)
+            }));
+        }
+        for (scheme, host, port) in [
+            ("http", "192.168.1.40", 80),
+            ("http", "169.254.169.254", 80),
+            ("http", "foo.localhost", 8080),
+            ("http", "localhost..", 8080),
+            ("http", "0.0.0.0", 8080),
+            ("http", "[::]", 8080),
+            ("http", "[::7f00:1]", 8080),
+            ("ws", "127.0.0.1", 3773),
+        ] {
+            assert!(!fetch.permits(&Operation::Fetch {
+                origin: Origin::new(scheme, host, port)
+            }));
+        }
+        assert!(!fetch.permits(&Operation::WebSocket {
+            origin: Origin::new("ws", "127.0.0.1", 3773)
+        }));
+
+        let ws = GrantSet::parse("net.websocket loopback").unwrap();
+        assert!(ws.permits(&Operation::WebSocket {
+            origin: Origin::new("ws", "127.0.0.1", 3773)
+        }));
+        assert!(ws.permits(&Operation::WebSocket {
+            origin: Origin::new("wss", "[::1]", 8443)
+        }));
+        assert!(!ws.permits(&Operation::WebSocket {
+            origin: Origin::new("ws", "192.168.1.40", 80)
+        }));
+        assert!(!ws.permits(&Operation::Fetch {
+            origin: Origin::new("http", "127.0.0.1", 3773)
+        }));
+        assert!(GrantSet::parse("net.fetch loopback development").is_err());
+        assert!(GrantSet::parse("net.websocket loopback development").is_err());
+        assert!(GrantSet::parse("net.fetch loopback:").is_err());
     }
 }

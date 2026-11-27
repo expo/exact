@@ -230,6 +230,7 @@ impl<D: DataSource> Runner<D> {
     fn held_for_agent(&self, p: &PendingReq) -> bool {
         self.device_holds.iter().any(|h| h.ticket == p.ticket)
             || self.holds_token(p.continuation)
+            || self.holds_data_request(p.ticket)
             || self.presence_holds(p.ticket)
     }
 

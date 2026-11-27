@@ -15,7 +15,7 @@ export function pageCut(dist) {
 export const LEFT_OUT = {
   TABS: ['a tablist', '[navigationBack] [role="tablist"]'],
   SPLITS: ['a list or a split', '[navigationBack] :is([data-exact-list], [navigationSplit])'],
-  SHEETS: ['a presented route', '[navigationPresentation="modal"], [navigationPresentation="fullscreen"]'],
+  SHEETS: ['a presented route', '[navigationPresentation="modal"], [navigationPresentation="popover"], [navigationPresentation="fullscreen"]'],
   BARS: ['a route\'s header', '[navigationKey] > header, [navigationKey] > [data-exact-list-item] > header'],
   CLEAR_BARS: ['a clear bar', '[data-navigationbar="transparent"] > header'],
   PRESS_PAINT: ['a pressed paint', '[style*="--exact-press-opacity"], [style*="--exact-press-background-color"], [style*="--exact-press-color"]'],

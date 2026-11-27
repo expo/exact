@@ -163,10 +163,15 @@ struct WidgetPreviewView: View {
     @ObservedObject var preview: WidgetPreview
     var body: some View {
         let variant = preview.variant
+        let root = (try? preview.session.snapshot()).flatMap { s in s.roots.first.flatMap { s.nodes[$0] } }
         ZStack {
             if variant.mode == "fullColor" {
-                if variant.margin > 0 { RoundedRectangle(cornerRadius: 22, style: .continuous).fill(.background) }
-                else { Rectangle().fill(.background) }
+                if variant.margin > 0 {
+                    ContainerBackground(root: root)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                } else {
+                    ContainerBackground(root: root)
+                }
             }
             else { Color(white: 0.35) }
             SnapshotDriver.view(session: preview.session, displaySize: variant.displaySize, environment: preview.environment)

@@ -365,12 +365,16 @@ pub fn check_shortcut_keys(
     out
 }
 
+fn same_modifiers(a: &[&str], b: &[&str]) -> bool {
+    a.iter().all(|m| b.contains(m)) && b.iter().all(|m| a.contains(m))
+}
+
 /// What Windows does with a chord holding no Windows key (`Meta`) instead
 /// of giving it to the app, for the chords it keeps; `key` as
 /// [`split_chord`] gives it.
 fn windows_keeps(modifiers: &[&str], key: &str) -> Option<&'static str> {
     let held = |m: &str| modifiers.contains(&m);
-    let only = |ms: &[&str]| modifiers.len() == ms.len() && ms.iter().all(|m| held(m));
+    let only = |ms: &[&str]| same_modifiers(modifiers, ms);
     match key.to_ascii_lowercase().as_str() {
         "tab" if held("Alt") => Some("switching windows"),
         "escape" if only(&["Control", "Shift"]) => Some("opening Task Manager"),
@@ -407,9 +411,7 @@ fn same_windows_chord(a: &str, b: &str) -> bool {
         "+" => "plus".to_owned(),
         k => k.to_ascii_lowercase(),
     };
-    a_held.len() == b_held.len()
-        && a_held.iter().all(|m| b_held.contains(m))
-        && key(a_key) == key(b_key)
+    same_modifiers(&a_held, &b_held) && key(a_key) == key(b_key)
 }
 
 /// Every button `aria-keyshortcuts` chord that never presses its button on

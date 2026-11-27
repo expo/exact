@@ -480,6 +480,11 @@ pub trait Backend {
     fn row_draw_through(&mut self, _id: u32, _ts: Transform, _bounds: Rect4) {}
     /// Kept row `id` is not drawn again.
     fn row_free(&mut self, _id: u32) {}
+    /// Whether this backend can open a scroller's row group right now (not
+    /// inside a row, layer, shared element or slot recording).
+    fn can_group(&self) -> bool {
+        true
+    }
     /// The rows of scroller `id`, painted at its `scroll` offset, follow
     /// until [`Backend::group_end`].
     fn group_begin(&mut self, _id: ViewId, _scroll: (f32, f32)) {}

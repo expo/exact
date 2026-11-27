@@ -5,7 +5,7 @@ use exact_js::Module;
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_render::Executor;
-use exact_runner::{Dispatch, Runner};
+use exact_runner::{DataSource, Dispatch, Runner};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,13 +15,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const HBC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/network.hbc"));
+const MODULE_GRANTS: &str = "net.fetch http:\nfs.read app:/data\nfs.write app:/data\n";
 const LIMIT: Duration = Duration::from_secs(30);
 const SHAPE: &str = "shape Result\n  text: string\n  order: string\n";
 
 #[test]
 fn relative_fetch_names_the_missing_native_origin() {
     use exact_runner::{DataSource, Store};
-    let mut module = Module::loaded(HBC.to_vec(), "test.network", "net.fetch http:").unwrap();
+    let mut module = Module::loaded(HBC.to_vec(), "test.network", MODULE_GRANTS).unwrap();
     let plan = contract::compile(&format!(
         "{SHAPE}component App\n  resource row = one(\"\", \"data.json\", \"GET\") as shape Result\n  view\n    text row.text\n"
     )).unwrap();
@@ -185,7 +186,7 @@ impl Drop for Server {
 
 fn boot(server: &Server, component: &str) -> (Runner<Module>, Executor) {
     let src = format!("{SHAPE}{}", component.replace("ORIGIN", &server.origin()));
-    let mut module = Module::loaded(HBC.to_vec(), "test.network", "net.fetch http:").unwrap();
+    let mut module = Module::loaded(HBC.to_vec(), "test.network", MODULE_GRANTS).unwrap();
     module.set_budget_ms(f64::INFINITY);
     let runner = Runner::boot(
         contract::compile(&src).unwrap(),
@@ -199,7 +200,29 @@ fn boot(server: &Server, component: &str) -> (Runner<Module>, Executor) {
     (runner, executor)
 }
 
-fn submit(r: &mut Runner<Module>, executor: &Executor) -> usize {
+fn dispatch_one(
+    executor: &Executor,
+    parked: &mut std::collections::BTreeMap<u64, exact_runner::RequestOut>,
+    request: exact_runner::RequestOut,
+    dispatch: Option<Dispatch>,
+) {
+    match dispatch {
+        Some(Dispatch::Run(work)) => executor.run(request, Some(work)).unwrap(),
+        Some(Dispatch::Held) => {
+            let token = request.request.continuation.unwrap();
+            parked.insert(token, request);
+        }
+        Some(Dispatch::Again) => executor.again(&request).unwrap(),
+        None | Some(Dispatch::Missing) => executor.run(request, None).unwrap(),
+        _ => panic!("unexpected host dispatch"),
+    }
+}
+
+fn submit_parked(
+    r: &mut Runner<Module>,
+    executor: &Executor,
+    parked: &mut std::collections::BTreeMap<u64, exact_runner::RequestOut>,
+) -> usize {
     let requests = r.take_requests();
     let count = requests.len();
     for request in requests {
@@ -207,13 +230,20 @@ fn submit(r: &mut Runner<Module>, executor: &Executor) -> usize {
             .request
             .continuation
             .map(|token| r.dispatch_work(token));
-        match dispatch {
-            Some(Dispatch::Run(work)) => executor.run(request, Some(work)).unwrap(),
-            Some(Dispatch::Again) => executor.again(&request).unwrap(),
-            None | Some(Dispatch::Missing) => executor.run(request, None).unwrap(),
-            _ => panic!("unexpected held or host dispatch"),
+        dispatch_one(executor, parked, request, dispatch);
+    }
+    for (token, dispatch) in r.release_work() {
+        if let Some(request) = parked.remove(&token) {
+            dispatch_one(executor, parked, request, Some(dispatch));
         }
     }
+    count
+}
+
+fn submit(r: &mut Runner<Module>, executor: &Executor) -> usize {
+    let mut parked = std::collections::BTreeMap::new();
+    let count = submit_parked(r, executor, &mut parked);
+    assert!(parked.is_empty(), "unexpected held dispatch");
     count
 }
 
@@ -283,10 +313,13 @@ component App
     }
     settle(&mut r, &executor);
     server.assert_counts(10, 6);
-    assert_eq!(
-        r.resource("result"),
-        Some(&result(&numbers(10), &numbers(10)))
-    );
+    let Some(Value::Record(fields)) = r.resource("result") else {
+        panic!("missing result");
+    };
+    assert_eq!(fields[0], Value::str(&numbers(10)));
+    let mut order: Vec<_> = fields[1].as_str().unwrap().split('/').collect();
+    order.sort_unstable();
+    assert_eq!(order, ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
 }
 
 #[test]
@@ -320,9 +353,13 @@ fn twenty_resources_overlap_six_at_a_time_and_all_settle() {
     settle(&mut r, &executor);
     server.assert_counts(20, 6);
     for i in 0..20 {
+        let Some(Value::Record(fields)) = r.resource(&format!("row{i}")) else {
+            panic!("missing row{i}");
+        };
+        assert_eq!(fields[0], Value::str(&i.to_string()));
         assert_eq!(
-            r.resource(&format!("row{i}")),
-            Some(&result(&i.to_string(), &numbers(i + 1)))
+            fields[1].as_str().unwrap().rsplit('/').next(),
+            Some(i.to_string().as_str())
         );
     }
 }
@@ -405,7 +442,7 @@ component App
 }
 
 #[test]
-fn reverse_replies_resume_the_modules_continuations_in_request_order() {
+fn reverse_replies_resume_the_modules_continuations_in_completion_order() {
     let server = Server::start();
     let (mut r, executor) = boot(
         &server,
@@ -419,9 +456,22 @@ component App
     assert_eq!(submit(&mut r, &executor), 6);
     let mut arrivals = server.take(6);
     arrivals.sort_by(|a, b| b.path.cmp(&a.path));
+    let until = Instant::now() + LIMIT;
     for a in arrivals {
+        let expected = a.path.clone();
         server.release(a);
-        assert!(r.has_pending());
+        // Drain each reply before releasing the next so completion order is deterministic.
+        loop {
+            let outcomes = executor.drain();
+            if !outcomes.is_empty() {
+                for (ticket, outcome, elapsed) in outcomes {
+                    r.fulfill_measured(ticket, outcome, elapsed).unwrap();
+                }
+                break;
+            }
+            assert!(Instant::now() < until, "timed out waiting for {expected}");
+            executor.wait(until);
+        }
     }
     settle(&mut r, &executor);
     server.assert_counts(6, 6);
@@ -431,6 +481,135 @@ component App
     );
     assert_eq!(
         r.resource("result"),
-        Some(&result(&numbers(6), &numbers(6)))
+        Some(&result(&numbers(6), "5/4/3/2/1/0"))
     );
+}
+
+fn pump_until(
+    r: &mut Runner<Module>,
+    executor: &Executor,
+    parked: &mut std::collections::BTreeMap<u64, exact_runner::RequestOut>,
+    done: impl Fn(&Runner<Module>) -> bool,
+) {
+    let until = Instant::now() + LIMIT;
+    loop {
+        submit_parked(r, executor, parked);
+        if done(r) {
+            return;
+        }
+        let outcomes = executor.drain();
+        if outcomes.is_empty() {
+            assert!(Instant::now() < until, "pending: {:?}", r.pending());
+            executor.wait(until);
+        } else {
+            for (ticket, outcome, elapsed) in outcomes {
+                r.fulfill_measured(ticket, outcome, elapsed).unwrap();
+            }
+        }
+    }
+}
+
+/// Regression for expo/exact#1917: an answer waiting on another answer's
+/// `serial` promise chain (using plain `.then` + `scheduler.yield()` or
+/// `storage.fs.readdir`) and a fast HTTP read both settle while an unrelated
+/// slow HTTP GET is still held at the server.
+#[test]
+fn serial_promise_chain_and_fast_read_settle_while_unrelated_fetch_is_held() {
+    let server = Server::start();
+    let dir = std::env::temp_dir().join(format!("exact-network-1917-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = format!(
+        "{SHAPE}{}",
+        r#"
+component App
+  state clicked = false
+  resource slow = one("ORIGIN", "slow", "GET", true) as shape Result
+  resource first = serial("first", "yield") as shape Result
+  resource second = serial("second", "storage") as shape Result
+  resource fast = one("ORIGIN", "fast", "GET", clicked) as shape Result
+  resource click = serial("click", "yield") as shape Result
+  action go
+    clicked = true
+  view
+    column
+      text slow.text
+      text first.text
+      text second.text
+      text fast.text
+      text click.text
+"#
+        .replace("ORIGIN", &server.origin())
+    );
+    let grants = format!(
+        "net.fetch {}\nfs.read app:/data\nfs.write app:/data\n",
+        server.origin()
+    );
+    let mut module = Module::new(HBC.to_vec(), "test.network", MODULE_GRANTS);
+    module.set_budget_ms(f64::INFINITY);
+    module
+        .configure_storage(dir.join("data"), dir.join("cache"), dir.join("tmp"))
+        .unwrap();
+    module.activate().unwrap();
+    let mut r = Runner::boot(
+        contract::compile(&src).unwrap(),
+        module,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let executor = Executor::start(&grants);
+    let mut parked = std::collections::BTreeMap::new();
+
+    submit_parked(&mut r, &executor, &mut parked);
+    let slow = server.take(1).remove(0);
+    assert_eq!(slow.path, "slow");
+
+    // Both `first` (yield), `second` (storage chained via plain `.then`), and
+    // `click` (chained behind `second`) settle while `slow` is still held.
+    let empty = result("", "");
+    pump_until(&mut r, &executor, &mut parked, |r| {
+        r.resource("first") != Some(&empty)
+            && r.resource("second") != Some(&empty)
+            && r.resource("click") != Some(&empty)
+    });
+    assert_eq!(r.resource("first"), Some(&result("first", "yield:first")));
+    assert_eq!(
+        r.resource("second"),
+        Some(&result("second", "storage:second"))
+    );
+    assert_eq!(r.resource("click"), Some(&result("click", "yield:click")));
+    assert_eq!(
+        r.resource("slow"),
+        Some(&empty),
+        "slow GET is still held while serial continuations settled"
+    );
+
+    // Triggering a fast GET while `slow` is still held delivers `fast` immediately.
+    r.act("go", vec![]).unwrap();
+    submit_parked(&mut r, &executor, &mut parked);
+    let fast = server.take(1).remove(0);
+    assert_eq!(fast.path, "fast");
+    server.release(fast);
+    pump_until(&mut r, &executor, &mut parked, |r| {
+        r.resource("fast") == Some(&result("fast", "fast"))
+    });
+    assert_eq!(
+        r.resource("slow"),
+        Some(&empty),
+        "fast GET settled while slow GET was still held"
+    );
+
+    // Finally release `slow`.
+    server.release(slow);
+    pump_until(&mut r, &executor, &mut parked, |r| !r.has_pending());
+    assert!(
+        r.failed_resources().is_empty(),
+        "{:?}",
+        r.failed_resources()
+    );
+    assert_eq!(r.data().in_flight(), 0);
+    assert!(parked.is_empty());
+    assert_eq!(r.resource("slow"), Some(&result("slow", "fast/slow")));
+    let _ = std::fs::remove_dir_all(&dir);
 }

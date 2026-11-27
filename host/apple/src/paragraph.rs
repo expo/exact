@@ -680,8 +680,6 @@ impl<D: DataSource> Host<D> {
         let mut restyled = vec![(view, style::style_json_presented(&node, &env, &shown).0)];
         let mut runs = Vec::new();
         if inherits {
-            let mut inherited = style::Shown::default();
-            inherited.set(Property::Color, color);
             let mut stack = node.children();
             while let Some(child) = stack.pop() {
                 let Some(c) = kernel.node(child) else {
@@ -693,6 +691,12 @@ impl<D: DataSource> Host<D> {
                 if let Some((owner, _)) = self.inline_runs.get(&child) {
                     runs.push((child, *owner));
                 } else {
+                    // The child's own moving values (its clip, its filter,
+                    // its colours) with the colour it inherits
+                    let mut inherited = self.shown_paint(motion_node(c.key));
+                    if inherited.get(Property::Color).is_none() {
+                        inherited.set(Property::Color, color);
+                    }
                     restyled.push((child, style::style_json_inherited(&c, &env, &inherited).0));
                 }
                 stack.extend(c.children());
@@ -834,7 +838,12 @@ pub(super) fn props_for(node: &NodeRef<'_>) -> exact_kernel::SortedMap<&'static 
             PropValue::Str(s) => s.to_string(),
             PropValue::Bool(b) => b.to_string(),
             PropValue::Int(i) => i.to_string(),
-            PropValue::Float(f) if matches!(id, PropId::Datetime | PropId::Start | PropId::End) => {
+            PropValue::Float(f)
+                if matches!(
+                    id,
+                    PropId::Datetime | PropId::Start | PropId::End | PropId::AppleMagnification
+                ) =>
+            {
                 f.to_string()
             }
             PropValue::Float(f) => style::num(*f as f32),

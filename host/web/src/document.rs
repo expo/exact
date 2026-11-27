@@ -590,7 +590,10 @@ pub fn tab_routes(
         for id in ids {
             let Some(f) = src.facts(*id) else { continue };
             if let Some(k) = f.props.str(PropId::NavigationKey) {
-                let modal = f.props.str(PropId::NavigationPresentation) == Some("modal");
+                let modal = f
+                    .props
+                    .presentation()
+                    .is_some_and(exact_kernel::props::Presentation::sheet_like);
                 routes.push((*id, Some(k) == key, modal));
             }
         }

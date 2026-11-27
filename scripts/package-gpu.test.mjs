@@ -162,7 +162,7 @@ test('the GPU build graph selects package targets by the Apple destination', () 
       writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify(declaration));
       const app = { workspace: 'host', manifest: packageGpuManifest({}, dir), crate: kind => `fixture-${kind}` };
       for (const destination of ['ios', 'tvos', 'watchos']) {
-        const built = graph(app, `aarch64-apple-${destination}-sim`, 'apple', {}, false, 'ios');
+        const built = graph(app, `aarch64-apple-${destination}-sim`, 'apple', {}, 'ios');
         const expected = destination !== 'watchos' && (!supported || supported === destination);
         assert.deepEqual(built.modules.map(p => p.name), expected ? ['fixture-gpu-fixture-sky'] : [], `${supported} on ${destination}`);
       }
@@ -240,7 +240,7 @@ test('web input discovery reads package declarations as they are now and leaves 
     // What the build generates from these is not an input of its own: its own write would set the build aside.
     for (const file of [resolve(pkg, 'exact.json'), resolve(pkg, 'rust/Cargo.lock')]) assert.ok(files.includes(file), file);
     assert.ok(roots.includes(resolve(pkg, 'rust')));
-    assert.equal(roots.some(r => (r.file ?? r).startsWith(workspace)), false);
+    assert.equal(roots.some(r => (r.file ?? r.exclude ?? r).startsWith(workspace)), false);
     // A package that leaves the web out is still read, so that adding it back rebuilds.
     declaration.gpu.targets = ['macos'];
     put(resolve(pkg, 'exact.json'), JSON.stringify(declaration));

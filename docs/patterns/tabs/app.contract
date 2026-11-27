@@ -30,8 +30,20 @@ component App
   action pick(name: string)
     nav = select(nav, name)
   // A row is a link to its place; the browser's Back, Forward and a deep link arrive here too.
+  // A place is its list's detail: another of its kind opened while one shows (a row, a link, the browser's history)
+  // takes its place as a new visit, as a split's detail is replaced; the place shown, at another address, keeps its
+  // visit; everything else goes where `go` takes it (a place a stack holds is gone back to).
   action follow(url: string)
-    nav = go(nav, url)
+    let moved = go(nav, url)
+    let to = top(moved)
+    let shown = top(nav)
+    let fresh = (to.name == "place" or to.name == "savedPlace") and nav.tabs.filter(t => t.stack.filter(e => e.id == to.id).length > 0).length == 0
+    if fresh and shown.name == to.name and shown.params.id == to.params.id
+      nav = replace(nav, url)
+    else if fresh and shown.name == to.name
+      nav = push(back(nav), url)
+    else
+      nav = moved
   action search(tab: string, v: string)
     if tab == "saved"
       savedQuery = v
@@ -47,6 +59,7 @@ component App
           column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
             for e in t.stack key=e.id
               column navigationKey=`${e.id}` navigationScroll=`content-${e.id}` position="absolute" inset=0
+                navigationSplit="split"
                 display="flex" flex-direction="column"
                 header display="flex" flex-wrap="wrap" align-items="center" gap=8 padding="8px 16px"
                   text (e.name == "places" ? "Starter" : e.name == "saved" ? "Saved" : nameOf(places, e.params.id))

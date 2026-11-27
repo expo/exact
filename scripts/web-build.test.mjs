@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,8 +13,6 @@ import { bakeTarget, buildBake, pendingBuildInputs, resolveApp } from './app.mjs
 import { pinned } from './test-workspace.mjs';
 import { webChanges, webInputDigests, webInputPresent } from './agent-launch.mjs';
 import { replaceBuild } from '../host/web/serve.mjs';
-let fallbackRoots = [];
-mock.module('../host/web/build.mjs', () => ({ webSourceRoots: () => fallbackRoots }));
 
 // A recorded input in a tree the build copies whole is still one only when no part of its path from the tree's root is a
 // link, as the copy requires; elsewhere the build reads through links.
@@ -179,14 +177,13 @@ test.each(['asset edit', 'asset deletion', 'Cargo alias', 'loop fallback', 'loop
       writeFileSync(included, 'edited Cargo read');
       expect(webChanges(dist, linked).all).toContain(realpathSync(included));
     } else {
-      fallbackRoots = inputRoots;
       const cargo = kind === 'loop deletion' ? cargoContractReads([{ file: included }]) : {};
       writeFileSync(marker, JSON.stringify({ target: 'js', inputsAt: 0, reads: { ...reads, cargo } }));
       if (kind === 'loop deletion') rmSync(included);
       else writeFileSync(included, 'edited Cargo read');
-      expect(webChanges(dist, app).all.some(path => path === included || path === inputRoots[0].file)).toBe(true);
+      expect(webChanges(dist, app, () => inputRoots).all.some(path => path === included || path === inputRoots[0].file)).toBe(true);
     }
-  } finally { fallbackRoots = []; rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test.each(['app.wasm', 'app.hbc', 'app.js'])('packaging retains %s after another bake replaces it', name => {
@@ -399,13 +396,13 @@ test.each(['contract', 'cargo'])('a JS loop keeps an unchanged %s read fresh aft
     mkdirSync(dist, { recursive: true }); writeFileSync(file, 'same bytes');
     const reads = { contract: {}, [kind]: cargoContractReads([{ file }]) };
     writeFileSync(resolve(dist, '.exact-build.json'), JSON.stringify({ target: 'js', reads }));
-    fallbackRoots = [{ file }];
+    const roots = () => [{ file }];
     writeFileSync(file, 'same bytes');
     const future = new Date(Date.now() + 1000); utimesSync(file, future, future);
-    expect(webChanges(dist, app).all).toEqual([]);
+    expect(webChanges(dist, app, roots).all).toEqual([]);
     rmSync(file);
-    expect(webChanges(dist, app).all).toContain(file);
-  } finally { fallbackRoots = []; rmSync(dir, { recursive: true, force: true }); }
+    expect(webChanges(dist, app, roots).all).toContain(file);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('Cargo includes changed at the build start or deleted remain uncertain reads', () => {
@@ -552,7 +549,7 @@ test.each([
       for (const dll of ['vcruntime140.dll', 'msvcp140.dll']) writeFileSync(resolve(crt, dll), arch);
       writeFileSync(resolve(crt, 'runtime.pdb'), 'symbols');
     }
-    const env = { process: { platform: 'win32', argv: [], env: { ...build.env, EXACT_UPDATE_TRUST: trust } }, guardFlags: () => args, resolveApp: () => app, prepareShaders() {},
+    const env = { process: { platform: 'win32', argv: [], env: { ...build.env, EXACT_UPDATE_TRUST: trust } }, guardFlags: () => args, resolveApp: () => app, noWindowsHost: () => null, prepareShaders() {},
       bakeTarget: () => 'x86_64-pc-windows-msvc', pickIcon: () => null, resolve, mkdirSync, developmentBuildEnv: () => build.env,
       copyFileSync, readFileSync, writeFileSync, createHash, windowsFile: (_app, path) => path.endsWith('.exe') ? 'fixture.exe' : basename(path), closeOpened() {}, syncStaticTree() {}, copyShaders() {},
       windowsRuntime: target => windowsRuntime(target, { VCToolsRedistDir: redist }), writePackagedReceipt, unclaimedNote: () => null, console: { log() {} },

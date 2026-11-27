@@ -1242,3 +1242,79 @@ test.skipIf(process.platform !== 'darwin')('Mac aborts print the real delayed di
     expect(existsSync(report.slice('crash report: '.length).split(' (')[0])).toBe(true);
   } finally { rmSync(dir,{recursive:true,force:true}); }
 }, 20_000);
+
+test('multi-display simulators resolve --display by matching screen or pixel dimensions and cache the table', async () => {
+  const { parseSimulatorDisplays, simulatorScreenshot, forgetSimulator } = await import('./devices.mjs');
+  const stderr = [
+    'An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=22):',
+    'Cannot choose between 2 displays. Specify one with --display:',
+    '    --display=3  LCD-1 (primary-1) 2007x2853',
+    '    --display=1  LCD (primary) 1398x2034',
+    'Invalid argument',
+  ].join('\n');
+  expect(parseSimulatorDisplays(stderr)).toEqual([
+    { display: '3', width: 2007, height: 2853 },
+    { display: '1', width: 1398, height: 2034 },
+  ]);
+
+  const dir = mkdtempSync(resolve(tmpdir(), 'devices-duo-'));
+  const saved = { PATH: process.env.PATH, DEVELOPER_DIR: process.env.DEVELOPER_DIR };
+  const calls = resolve(dir, 'calls'), openPng = solid(6, 8, [10, 20, 30, 255]), closedPng = solid(4, 6, [40, 50, 60, 255]);
+  const udid = 'DUO-MULTI-TEST';
+  try {
+    writeFileSync(resolve(dir, 'open.png'), openPng);
+    writeFileSync(resolve(dir, 'closed.png'), closedPng);
+    // Fake xcrun: refuses calls without --display, accepts --display=3 (6x8) and --display=1 (4x6).
+    writeFileSync(resolve(dir, 'xcrun'), `#!/bin/sh
+echo "$*" >> '${calls}'
+disp=""
+for arg in "$@"; do
+  case "$arg" in --display=*) disp="$arg" ;; esac
+  last="$arg"
+done
+if [ -z "$disp" ]; then
+  printf 'Cannot choose between 2 displays. Specify one with --display:\\n    --display=3  LCD-1 (primary-1) 6x8\\n    --display=1  LCD (primary) 4x6\\nInvalid argument\\n' >&2
+  exit 22
+fi
+if [ "$disp" = "--display=3" ]; then cp '${resolve(dir, 'open.png')}' "$last"; exit 0; fi
+if [ "$disp" = "--display=1" ]; then cp '${resolve(dir, 'closed.png')}' "$last"; exit 0; fi
+exit 1
+`);
+    chmodSync(resolve(dir, 'xcrun'), 0o755);
+    process.env.PATH = `${dir}:${saved.PATH}`;
+    process.env.DEVELOPER_DIR ??= '/Applications/Xcode.app/Contents/Developer';
+
+    // 1. First simulatorScreenshot discovers the display table and picks --display=3 for rotated 8x6 pixels.
+    const out1 = resolve(dir, 'out1.png');
+    expect(simulatorScreenshot(udid, out1, { type: 'png', pixels: { width: 8, height: 6 } }).status).toBe(0);
+    expect(readFileSync(out1)).toEqual(openPng);
+
+    // 2. Second call uses the cached table directly without a failed probe, picking --display=1 for 2x3 points @2x.
+    const out2 = resolve(dir, 'out2.png');
+    expect(simulatorScreenshot(udid, out2, { type: 'png', screen: { w: 2, h: 3 } }).status).toBe(0);
+    expect(readFileSync(out2)).toEqual(closedPng);
+
+    // 3. withDisplay passes the app PNG dimensions so displayReads selects the matching display on Duo.
+    const appShot = resolve(dir, 'app.png');
+    writeFileSync(appShot, openPng);
+    const reply = await withDisplay(
+      { screenshot: appShot, w: 3, h: 4, scale: 2, front: true, epoch: 1, incarnation: 1, clock: 0, opaque: [[1, 1]] },
+      appShot,
+      udid,
+      0,
+      { gap: 10, probe: async () => ({ front: true, epoch: 1, incarnation: 1, clock: 0 }) },
+    );
+    expect(reply.pixels).toBe('display');
+
+    const lines = readFileSync(calls, 'utf8').trim().split('\n');
+    // Only the very first call lacked --display; every subsequent call reused the cached display table.
+    expect(lines.filter((l) => !l.includes('--display=')).length).toBe(1);
+    expect(lines[1]).toContain('--display=3');
+    expect(lines[2]).toContain('--display=1');
+  } finally {
+    forgetSimulator(udid);
+    process.env.PATH = saved.PATH;
+    if (saved.DEVELOPER_DIR === undefined) delete process.env.DEVELOPER_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

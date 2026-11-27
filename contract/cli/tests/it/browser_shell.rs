@@ -204,6 +204,12 @@ fn a_partition_refuses_what_would_reach_the_app_and_the_words_are_an_iframes() {
         "lower-iframe-partition-sandbox"
     );
     assert_eq!(refused("column zoom=1.5"), "lower-attr-tag");
+    for word in ["-1", "0", "0.00099", "256.000000001"] {
+        assert_eq!(
+            refused(&format!("iframe apple.magnification={word}")),
+            "lower-attr-value"
+        );
+    }
     let e = contract::compile(
         "component A\n  state n = 0\n  action go\n    n = 1\n  view\n    column newwindow=go\n",
     )

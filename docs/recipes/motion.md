@@ -46,12 +46,13 @@ component App
   `:focus-visible` grows paint and hits.
 - **Keyframes:** literals or app `fn` on constants.
 - **Exit:** an `if` arm or `for` row leaves layout and becomes inert at once.
-  Give the exit an end. Siblings use layout transitions. Apple and web outside popped screens.
+  Give the exit an end. Siblings use layout transitions. Refused on route elements.
 - **Routes:** `::view-transition-new` / `::view-transition-old` animate opacity,
   translate, scale and rotate. `animation="none"` cuts. Modal sheets and routes
   with a literal nonempty `navigationSource` reject these parts.
 - **Layout:** surfaces move/resize; children jump, unscaled. `sharedElement=` flies
-  except on Linux/Windows; across routes (no sheets) except on macOS.
+  (in a page, with `-exact-layout-transition` on both endpoints) except on Linux/Windows;
+  across routes (no sheets) except on macOS.
 - **Zoom:** `navigationSource=` names a source `id` for iOS 18 zoom or Android's
   container transform. Without a visible source, push uses shared axis and
   fullscreen cuts. Sheets have their own motion.
@@ -61,4 +62,4 @@ component App
 - **Reduced motion:** `exactViewport()` and `prefer prefers-reduced-motion reduce`.
   Flights land and routes cut.
 - **Check:** `clock settle` or `screenshot .exact/m.png over 600 every 50`.
-  Android reader drives refuse film. Layers need `--live` or a normal run. Record with `adb shell screenrecord`.
+  Android drives refuse film; use `--live` and `adb shell screenrecord`.

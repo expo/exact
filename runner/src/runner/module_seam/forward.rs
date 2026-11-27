@@ -472,12 +472,7 @@ impl<D: DataSource> Runner<D> {
     /// The host refused a handler's request at admission: it settles in
     /// its turn, as a failure, an ordered one only once earlier ordered work
     /// has.
-    pub(in crate::runner) fn refuse_tool(
-        &mut self,
-        ticket: u64,
-        reason: &'static str,
-        ordered: bool,
-    ) {
+    pub(in crate::runner) fn refuse_tool(&mut self, ticket: u64, reason: String, ordered: bool) {
         let m = self.seams.modules;
         m.refuse_tool(self, ticket, reason, ordered)
     }
@@ -641,10 +636,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A handler's refused request that may settle now.
-    pub(in crate::runner) fn tool_refusal(
-        &mut self,
-        allow_ordered: bool,
-    ) -> Option<(u64, &'static str)> {
+    pub(in crate::runner) fn tool_refusal(&mut self, allow_ordered: bool) -> Option<(u64, String)> {
         let m = self.seams.modules;
         m.tool_refusal(self, allow_ordered)
     }
@@ -714,6 +706,11 @@ impl<D: DataSource> Runner<D> {
     /// Whether `token` is a held module request (not I/O: no clock waits).
     pub(in crate::runner) fn holds_token(&self, token: Option<u64>) -> bool {
         self.seams.modules.holds_token(self, token)
+    }
+
+    /// Whether pending request `ticket` is waiting on a held data-code module call.
+    pub(in crate::runner) fn holds_data_request(&self, ticket: u64) -> bool {
+        self.seams.modules.holds_data_request(self, ticket)
     }
 
     /// The module readers as a commit found them, for its checkpoint.

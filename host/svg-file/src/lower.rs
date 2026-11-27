@@ -23,7 +23,8 @@ pub fn lower(events: Vec<Event>) -> Result<Document, Error> {
         ops: Vec::new(),
         next: 1,
         warnings: Vec::new(),
-        rules: Vec::new(),
+        sheet: css::Sheet::default(),
+        style_work: css::MAX_STYLE_WORK,
         elements: 0,
         text: false,
         fonts: Vec::new(),
@@ -31,7 +32,7 @@ pub fn lower(events: Vec<Event>) -> Result<Document, Error> {
     };
     // The sheet applies to every element, those before it too: read the
     // whole document's `style` elements first.
-    l.read_sheets(&events);
+    l.read_sheets(&events)?;
     let mut i = 0;
     let mut root = None;
     while i < events.len() {
@@ -95,7 +96,8 @@ struct Lowerer {
     ops: Vec<Op>,
     next: u32,
     warnings: Vec<String>,
-    rules: Vec<css::Rule>,
+    sheet: css::Sheet,
+    style_work: usize,
     elements: usize,
     text: bool,
     fonts: Vec<Vec<(bool, String)>>,
@@ -163,26 +165,47 @@ fn node_type(tag: &str, nested_svg: bool) -> Result<NodeType, Option<&'static st
 }
 
 impl Lowerer {
-    fn read_sheets(&mut self, events: &[Event]) {
+    fn warn(&mut self, message: impl FnOnce() -> String) {
+        if self.warnings.len() < css::MAX_WARNINGS {
+            self.warnings.push(message());
+        }
+    }
+
+    fn read_sheets(&mut self, events: &[Event]) -> Result<(), Error> {
+        let mut total_bytes = 0usize;
         let mut i = 0;
         while i < events.len() {
-            if let Event::Start { name, empty, .. } = &events[i] {
+            if let Event::Start {
+                name, empty, line, ..
+            } = &events[i]
+            {
                 if local(name) == "style" && !*empty {
                     let mut text = String::new();
                     let mut j = i + 1;
                     while let Some(Event::Text(t)) = events.get(j) {
+                        total_bytes = total_bytes.saturating_add(t.len());
+                        if total_bytes > css::MAX_STYLE_BYTES {
+                            return Err(Error::at(*line, css::Limit::Bytes.to_string()));
+                        }
                         text.push_str(t);
                         j += 1;
                     }
                     let mut dropped = Vec::new();
-                    self.rules.extend(css::rules(&text, &mut dropped));
+                    self.sheet
+                        .parse(&text, &mut dropped)
+                        .map_err(|limit| Error::at(*line, limit.to_string()))?;
                     for selector in dropped {
-                        self.warnings.push(format!("the stylesheet's `{selector}` is not read: an SVG image takes type, class and id selectors with no combinators"));
+                        self.warn(|| {
+                            format!(
+                                "the stylesheet's `{selector}` is not read: an SVG image takes type, class and id selectors with no combinators"
+                            )
+                        });
                     }
                 }
             }
             i += 1;
         }
+        Ok(())
     }
 
     /// Skip the subtree from the start event at `*i`, leaving `*i` past it.
@@ -246,7 +269,7 @@ impl Lowerer {
             Ok(t) => t,
             Err(why) => {
                 if let Some(why) = why {
-                    self.warnings.push(format!("line {line}: `<{name}>` {why}"));
+                    self.warn(|| format!("line {line}: `<{name}>` {why}"));
                 }
                 Self::skip(events, i);
                 return Ok((0, false));
@@ -297,7 +320,7 @@ impl Lowerer {
         }
         let in_text = tag == "text" || tag == "tspan";
         let is_fe = tag.starts_with("fe");
-        let weight = self.attributes(id, &tag, attrs, inherited_weight);
+        let weight = self.attributes(id, &tag, attrs, inherited_weight, *line)?;
         if is_fe {
             self.ops.push(Op::SetProp {
                 id,
@@ -394,13 +417,29 @@ impl Lowerer {
         tag: &str,
         attrs: &[(String, String)],
         inherited_weight: u16,
-    ) -> u16 {
+        line: usize,
+    ) -> Result<u16, Error> {
         let mut merged: Vec<(String, String)> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
         let mut put = |name: String, value: String| {
-            if let Some(slot) = merged.iter_mut().find(|(n, _)| *n == name) {
+            if !index.is_empty() {
+                if let Some(&at) = index.get(&name) {
+                    merged[at].1 = value;
+                } else {
+                    let at = merged.len();
+                    index.insert(name.clone(), at);
+                    merged.push((name, value));
+                }
+            } else if let Some(slot) = merged.iter_mut().find(|(n, _)| *n == name) {
                 slot.1 = value;
             } else {
                 merged.push((name, value));
+                if merged.len() == 16 {
+                    index.reserve(32);
+                    for (at, (k, _)) in merged.iter().enumerate() {
+                        index.insert(k.clone(), at);
+                    }
+                }
             }
         };
         let mut style_attr = None;
@@ -432,11 +471,17 @@ impl Lowerer {
             .as_deref()
             .map(|c| c.split_whitespace().collect())
             .unwrap_or_default();
-        for (name, value) in css::matching(&self.rules, tag, element_id.as_deref(), &classes) {
+        for (name, value) in self
+            .sheet
+            .matching(tag, element_id.as_deref(), &classes, &mut self.style_work)
+            .map_err(|limit| Error::at(line, limit.to_string()))?
+        {
             put(name.clone(), value.clone());
         }
         if let Some(style) = &style_attr {
-            for (name, value) in css::declarations(style) {
+            for (name, value) in css::declarations_bounded(style, &mut self.style_work)
+                .map_err(|limit| Error::at(line, limit.to_string()))?
+            {
                 put(name, value);
             }
         }
@@ -469,10 +514,12 @@ impl Lowerer {
                 if !StyleValue::text_unsets(&value, StyleId::FontFamily)
                     && !value.eq_ignore_ascii_case("initial")
                 {
-                    self.warnings.push(format!(
-                        "`font-family=\"{}\"` on `<{tag}>` is not a font family list",
-                        clip(&StyleValue::Text(value.clone()))
-                    ));
+                    self.warn(|| {
+                        format!(
+                            "`font-family=\"{}\"` on `<{tag}>` is not a font family list",
+                            clip(&StyleValue::Text(value.clone()))
+                        )
+                    });
                     continue;
                 }
             }
@@ -501,18 +548,22 @@ impl Lowerer {
                     {
                         styled = true
                     }
-                    Err(_) => self.warnings.push(format!(
-                        "`{name}=\"{}\"` on `<{tag}>` is not a value the row takes",
-                        clip(&value)
-                    )),
+                    Err(_) => self.warn(|| {
+                        format!(
+                            "`{name}=\"{}\"` on `<{tag}>` is not a value the row takes",
+                            clip(&value)
+                        )
+                    }),
                 },
                 Attr::Ignored => {}
-                Attr::ExternalReference => self.warnings.push(format!(
-                    "`{name}` on `<{tag}>` is an external reference and is dropped from an SVG image"
-                )),
-                Attr::Unknown => self.warnings.push(format!(
-                    "`{name}` on `<{tag}>` is not an attribute this host draws"
-                )),
+                Attr::ExternalReference => self.warn(|| {
+                    format!(
+                        "`{name}` on `<{tag}>` is an external reference and is dropped from an SVG image"
+                    )
+                }),
+                Attr::Unknown => self.warn(|| {
+                    format!("`{name}` on `<{tag}>` is not an attribute this host draws")
+                }),
             }
         }
         if tag == "svg" || tag == "symbol" || tag == "marker" {
@@ -537,7 +588,7 @@ impl Lowerer {
                 patch: Box::new(patch),
             });
         }
-        weight
+        Ok(weight)
     }
 
     /// One attribute as the kernel takes it.

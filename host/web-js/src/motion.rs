@@ -34,29 +34,11 @@ impl Em<'_> {
         }
     }
 
-    /// Resolve SVG rotation eligibility with the current animation name and axis.
-    pub(super) fn svg_animation(
-        &mut self,
-        i: u32,
-        id: StyleId,
-        e: &str,
-        f: &str,
-        scope: &Scope,
-    ) -> Result<Option<String>, String> {
-        let plan = self.plan;
-        let row = plan.node(NodesId(i));
-        if !exact_kernel::NodeType::from_wire(row.node_type)
-            .is_some_and(exact_kernel::NodeType::is_svg_element)
-            || !matches!(id, StyleId::Animation | StyleId::ExitAnimation)
-        {
-            return Ok(None);
-        }
-        let binding = |id: StyleId| {
-            row.bindings
-                .iter()
-                .map(|b| plan.binding(b))
-                .find(|b| b.kind == BindingKind::Style && b.id == id as u16)
-        };
+    /// Keyframe names in `plan` that rotate outside the screen plane, either
+    /// directly (`spatial`) or by inheriting a non-Z `rotate` axis (`inherited`).
+    pub(super) fn spatial_svg_keyframes<'p>(
+        plan: &'p exact_plan::Plan,
+    ) -> Result<(Vec<&'p str>, Vec<&'p str>), String> {
         let mut spatial = Vec::new();
         let mut inherited = Vec::new();
         for rule in &plan.keyframes {
@@ -82,6 +64,54 @@ impl Em<'_> {
                 inherited.push(name);
             }
         }
+        Ok((spatial, inherited))
+    }
+
+    /// Whether a literal binding on `node_type` still needs the runtime SVG rotation guard.
+    pub(super) fn needs_svg_animation_guard(
+        &self,
+        node_type: exact_kernel::NodeType,
+        kind: BindingKind,
+        id: u16,
+    ) -> bool {
+        node_type.is_svg_element()
+            && kind == BindingKind::Style
+            && matches!(
+                StyleId::from_bit(id as u32),
+                Some(StyleId::Animation | StyleId::ExitAnimation)
+            )
+            && Self::spatial_svg_keyframes(self.plan)
+                .map(|(spatial, inherited)| !spatial.is_empty() || !inherited.is_empty())
+                .unwrap_or(true)
+    }
+
+    /// Resolve SVG rotation eligibility with the current animation name and axis.
+    pub(super) fn svg_animation(
+        &mut self,
+        i: u32,
+        id: StyleId,
+        e: &str,
+        f: &str,
+        scope: &Scope,
+    ) -> Result<Option<String>, String> {
+        let plan = self.plan;
+        let row = plan.node(NodesId(i));
+        if !exact_kernel::NodeType::from_wire(row.node_type)
+            .is_some_and(exact_kernel::NodeType::is_svg_element)
+            || !matches!(id, StyleId::Animation | StyleId::ExitAnimation)
+        {
+            return Ok(None);
+        }
+        let (spatial, inherited) = Self::spatial_svg_keyframes(plan)?;
+        if spatial.is_empty() && inherited.is_empty() {
+            return Ok(None);
+        }
+        let binding = |id: StyleId| {
+            row.bindings
+                .iter()
+                .map(|b| plan.binding(b))
+                .find(|b| b.kind == BindingKind::Style && b.id == id as u16)
+        };
         let rotate = match binding(StyleId::Rotate) {
             Some(b) => self.bound(i, e, &b, scope)?,
             None => "()=>0".into(),
@@ -318,6 +348,34 @@ impl Em<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn delegated_spring_transitions_are_not_reported_as_skipped() {
+        let mut warnings = Vec::new();
+        for transition in [
+            "translate -exact-spring()",
+            "translate -exact-spring(),\n      opacity -exact-spring()",
+        ] {
+            let plan = contract::compile(&format!(
+                r#"component App
+  view
+    column
+      view translate="100px 0px" transition=(
+        {literal}
+      )
+      view translate="200px 0px" transition=(
+        {literal}
+      )
+"#,
+                literal = serde_json::to_string(transition).unwrap(),
+            ))
+            .unwrap();
+            let emitted = crate::emit::emit(&plan, false, false).unwrap();
+            assert!(emitted.motion, "{transition}");
+            warnings.extend(emitted.warnings);
+        }
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
     #[test]
     fn computed_transitions_register_motion_without_guessing_their_values() {
         for (declarations, transition, motion) in [

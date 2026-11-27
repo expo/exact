@@ -58,7 +58,7 @@ const NATIVE_PORTS = 'iOS simulator: a Unix socket; --device: a free TCP port; m
 
 // host/apple/build.mjs's flags, which `ios` and `mac` both run: each documents its own, and takes the rest.
 const APPLE = ['--painted-benchmark', '--watchos', '--watch-sim <udid>', '--ios', '--tvos', '--device', '--run', '--no-install', '--prebuild', '--release', '--host', '--embed', '--bundle', '--distribution', '--appstore', '--ad-hoc', '--sandbox', '--unsigned', '--development', '--extensions <kinds>', '--test', '--only <Class,…>',
-  '--archive <out.ipa>', '--sim <udid|name>', '--phone <udid|name>', '--url <url>', '--optimize <speed|size|balanced>', '--link <plan>', '--widget-gallery'];
+  '--archive <out.ipa>', '--sim <udid|name>', '--phone <udid|name>', '--url <url>', '--optimize <speed|size|balanced>', '--link <plan>', '--widget-gallery', '--no-live', '--rebuild', '--logs', '--pick'];
 const appleRest = (documented) => APPLE.filter((spec) => !documented.some(([row]) => specs(row).some((d) => name(d) === name(spec))));
 const OPTIMIZE = ['--optimize speed|size|balanced', 'production Rust and ExactKit; default balanced on iOS/tvOS, size for embeds, speed on Mac; a game keeps speed and refuses size and balanced; app.json host.ios|macos.optimize overrides the default'];
 const PREBUILD = ['--prebuild', 'start the build apart from this shell and return; its log: .exact/<ios|macos>-build.log'];
@@ -85,6 +85,18 @@ export const HELP = {
     example: 'bun exact.mjs snapback --port 4410',
   },
   status: {line:'the game\'s web and prove runs: phase and elapsed time', usage:'bun exact.mjs status', flags:[], body:'Lists the game\'s web and prove invocations with their phase, elapsed time, previous duration and exit status.', example:'bun exact.mjs status'},
+  dev: {
+    line: 'dev server with live reload and platform keys',
+    usage: 'bun exact.mjs dev [--ios|--mac|--android|--open] [--sim <udid|name>] [--port <n>] [--lan] [--no-interactive]',
+    get flags() { return HELP.web.flags; },
+    get more() { return HELP.web.more; },
+    get internal() { return HELP.web.internal; },
+    body: `Runs the development loop in the foreground until q or ^C, printing its URL and single-key
+platform shortcuts (i iOS, I pick sim, m macOS, a Android, w web, r reload, l logs, q quit).
+Pass --ios, --mac, --android or --open to launch a platform as soon as the server listens.`,
+    get bodyAll() { return HELP.web.bodyAll; },
+    example: 'bun exact.mjs dev --ios            # start dev loop and open in iOS Simulator',
+  },
   web: {
     line: 'serve the app and reload on save (foreground)',
     usage: 'bun exact.mjs web [--port <n>] [--lan] [--allow-host <name>]… [--wasm]',
@@ -96,6 +108,7 @@ export const HELP = {
       ['--lan', 'bind every interface, so a phone on this network opens the printed LAN URL'],
     ],
     more: [
+      ['--ios · --mac · --android · --open · --sim <udid|name> · --no-interactive', 'launch a platform once listening (iOS, macOS and Android follow it for live reload); --sim picks the simulator; --no-interactive disables TTY keys'],
       ['--allow-host <name>', 'also answer to this host name (a tunnel\'s); repeatable'],
       ['--remote <host:port>', 'with a design: a TLS-only listener for paired remote clients (a certificate made for this run; its fingerprint printed)'],
       ['--trust-tunnel <port>', 'with a design: a loopback port for a tunnel you run; only paired tokens work through it'],
@@ -158,7 +171,7 @@ Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreg
     common: ['test [web|ios] [<file>…] [--size <w>x<h>] [--sim <name>]'],
     flags: DRIVE.filter(naming(['--size', '--sim'], true)),
     more: [
-      ['--test <file>', 'a test file, as a bare path or glob is (from the current directory)'],
+      ['--test <file> · --only <pattern>', 'a test file, as a bare path or glob is · run only tests whose name contains this substring'],
       ['--storage <name>', 'the base of each test\'s own store name (default test)'],
       ...DRIVE.filter(naming(['--storage', '--size', '--sim', ...TEST_IGNORES.map(name)], false)),
     ],
@@ -168,7 +181,7 @@ it: web builds the app (web-build); ios, macos and windows build when the build 
 older than its sources, saying so on stderr; windows drives at app.json's window size. Each test launches the app fresh with its own
 store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags. Exit 1 when a test fails.
 Host     unnamed: one app.json ships, chosen as verify's (verify --help) and macos or linux too; none here: refused, saying why.
-Server   restarts empty per test (DB=.exact/test/db.sqlite; database:false too); an ancestor's stays shared; else refuses a live server or ignored DB.
+Server   restarts empty per test (DB=.exact/test/p<port>/db.sqlite; database:false too); an ancestor's stays shared; else refuses a live server or ignored DB.
 Runs     to completion; nothing is left running; a test past 30 s says its line every 30 s.
 Backend  start snapback4 dev on app.ts’s selected origin’s port first; checked before launch.
          A server this run did not start stays shared. EXACT_PORT is the page’s.
@@ -188,7 +201,7 @@ Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: head
       '  each op one quoted argument: "tap <target>" "type <target> <text>" "clock data|settle|+<ms>" "state [<name>]" tree "check [both]" "screenshot <png>" "resize <w>x<h>" "prefer <feature> <value>" back'],
     flags: DRIVE.filter(naming(DRIVE_FIRST, true)),
     more: DRIVE.filter(naming(DRIVE_FIRST, false)),
-    internal: ['--test <file>', ...DRIVE_INTERNAL],
+    internal: ['--test <file>', '--only <pattern>', ...DRIVE_INTERNAL],
     body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock
   tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · rotate <orientation> (iOS simulator) · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
@@ -204,14 +217,13 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
   },
   verify: {
     line: 'build if stale, run *.test.contract, check each screen it reaches light and dark, relaunch once',
-    usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]',
+    usage: 'bun exact.mjs verify [web|ios|windows|android] [<file.test.contract>|<glob>]… [--sim <udid|name>] [--duo <udid|name>|none] [--shots <dir>] [--rescroll] [--strict] [--json]',
     common: ['verify [ios] [--shots <dir>] [--sim <name>]    done when it says "verify: clean"'],
     flags: [
       DRIVE.find(([flag]) => flag === '--backend <url>'),
-      ['--sim <udid|name> · --variant <name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro) · which app.json variant (or EXACT_VARIANT)'],
+      ['--sim <udid|name> · --duo <udid|name>|none · --variant <name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro) · which iPhone Duo (else EXACT_DUO, .exact/duo, the Phone leg\'s Duo, the sole booted Duo or sole booted with the app installed, or the sole available Duo on iOS 27.1+; never guesses among several; none skips) · which app.json variant (or EXACT_VARIANT)'],
       ['--shots <dir>', 'also copy every screenshot it captured there, named as in .exact/verify/ (a test\'s own `screenshot` steps too)'],
-      ['--rescroll · --strict', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI)'],
-      ['--json', 'the report as one JSON object (ios: `scrolling`, each finding\'s metric, value, UIKit\'s and remedy)'],
+      ['--rescroll · --strict · --json', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI) · the report as one JSON object (ios: `scrolling`, each finding\'s metric, value, UIKit\'s and remedy)'],
     ],
     internal: ['--app <name>'],
     body: `Host     unnamed: one app.json ships (host, deploy.store, deploy.binaries): web when they name it or nothing, else the
@@ -219,7 +231,7 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
 web launches at 390x844 and 1280x900, ios at the simulator's own size with UIKit's bars (an edit to only
 app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
 light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
-beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
+beside it, as test runs them (named files run partial, unrecorded). Each test's last screen is checked the same way in the test's own session (web: at
 both widths; ios runs them with UIKit's bars). A real-time relaunch checks what a passing test stored.
 One report: the build if it built, compiler warnings (as contract build prints them), the tests, check's findings (each
 once, naming the screens it was on), tree --ax's (each screen's accessibility tree, read once), the relaunch, then
@@ -232,6 +244,7 @@ Large    each of those screens again at the largest text size (ios: the simulato
          projects into its navigation bar and its tab bar. A smaller or fixed font is the tell, as is a line-clamp
          in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
          than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
+Duo      ios: by default runs the tests again on an unambiguous existing iPhone Duo simulator (iOS 27.1+): boots it headless by default if shut down, installs the development build on it and runs with scratch app data, folds and turns it through its poses and keyboard check, restores its keyboard setting and flat pose, shuts it down if this run booted it, and leaves .exact/simulator unchanged. Skips with a note when none or several match; --duo <udid|name> remembers in .exact/duo; --duo none (or EXACT_DUO=none) skips.
 Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the accessibility tree or the largest text, or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.
@@ -239,7 +252,7 @@ Runs     to completion: exit 1 when the build, a test, a launch or the relaunch 
          relaunch's, the largest text size's, scrolling's) and the compiler's warnings are counted, never fail it but under --strict. A
          screen no test ends on is not checked: end a test there. Its first line says about how long it takes (its last run's time): wait that once.
 Server   an app's own: restarts empty per test, database:false too; relaunch replays the chosen test first.
-         DB=.exact/verify/db.sqlite is removed after. Remote servers stay shared; an ancestor's is shared by test and agent --test.
+         DB=.exact/verify/p<port>/db.sqlite is removed after. Remote servers stay shared; an ancestor's is shared by test and agent --test.
          A dev server already answering is refused, as is an entry that does not read DB unless server.database is false.
 Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simulator's socket).`,
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',
@@ -249,37 +262,33 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
     usage: 'bun exact.mjs ios [--run|--prebuild|--no-install] [--json] [--release] [--sim <udid|name>] [--device [--phone <udid|name>]] [--url <url>] [--optimize speed|size|balanced]',
     common: ['ios [--run] [--sim <name>]    build for a simulator; --run launches it'],
     flags: [
-      ['--run', 'also launch it (in Simulator.app, or on the phone); returns once launched'],
+      ['--run · --logs', 'also launch it (in Simulator.app, or on the phone); --logs streams simulator app logs in the foreground until ^C'],
       ['--no-install', 'build and sign the simulator .app, and install it on no simulator; the default on Linux/WSL'],
       jsonBuilt(', signing (an identity\'s SHA-1, or ad-hoc), installed ({name, udid}, unless --no-install, --unsigned or --archive)', '; not with --run, --prebuild or --test'),
       PREBUILD,
       RELEASE,
-      ['--sim <udid|name>', 'which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro)'],
+      ['--sim <udid|name> · --pick', 'which simulator (exact or substring; else EXACT_SIM, a booted iPhone, or the newest Pro) · interactively pick a simulator on a TTY'],
       ['--device', 'an iPhone, signed with an installed development profile and identity; DEVELOPMENT_TEAM restricts their team; EXACT_PROFILE/EXACT_IDENTITY override'],
       ['--phone <udid|name>', 'which phone, with --device'],
       ['--archive <out.ipa>', 'with --device: an .ipa to distribute (EXACT_IDENTITY, EXACT_PROFILE), no phone; production trust, so with an update store EXACT_UPDATE_RECEIPT or EXACT_UPDATE_GENESIS=1'],
       ['--unsigned', 'with --device: ad-hoc signed .app, no phone, profile, identity or install; no --run; --archive writes an .ipa for re-signing'],
       ['--development', 'with --archive --unsigned: the development build --run installs, as an .ipa (development trust, host-dev; no update store receipt)'],
-      ['--extensions <kinds>', 'which app extensions to package: all (the default), none, or a list of widgets,activities,controls,intents,alarms,notifications,watch,share (controls need intents); the bake still compiles every entry, and app code that reaches a missing one is refused, not crashed'],
+      ['--extensions <kinds> · --widget-gallery', 'which app extensions to package (all, none, or a list of widgets,activities,controls,intents,alarms,notifications,watch,share) · build with the development widget gallery (for `agent ios widget`)'],
       ['--tvos', 'an Apple TV simulator instead (with --device, an Apple TV)'],
-      ['--url <url>', 'connect the client to that dev server (web\'s URL) for live reload'],
+      ['--url <url> · --no-live · --rebuild', 'connect to that dev server for live reload (else auto-connects a running dev loop on --run) · launch standalone without attaching to a running dev loop · force a full native rebuild instead of fast reuse'],
       OPTIMIZE,
     ],
     get internal() { return appleRest(this.flags); },
     body: `Linux/WSL builds an ARM64 simulator bundle without installing it. Use macOS to run the
 simulator. The first build takes minutes, later ones a minute or two. Of several booted simulators it
-takes the one the app is installed on, else refuses to guess (--sim or EXACT_SIM). test ios
-and agent ios run it first themselves when the build is missing or older than its sources;
-an edit to only app.contract or what app.ts imports runs its new plan on the existing build
-instead, in about a second.
-Ports    none. Runs to completion (--run too); --prebuild returns at once, the build going on
-         apart from this shell (its pid printed; test, agent and ios without it wait for it).`,
+takes the one the app is installed on, else prompts on a TTY (or refuses non-interactively: --sim or EXACT_SIM).
+With --run, a fresh or Contract/TS-only edit reuses the existing simulator build in about a second (--rebuild forces a full build).
+Ports    none. Runs to completion (--run too, unless --logs streams until ^C); --prebuild returns at once.`,
     example: 'bun exact.mjs ios --run',
   },
   share: {
     line: 'build for iPhone and print an AppDrop link that installs it',
     usage: 'bun exact.mjs share [--new-link | --force] [--json]',
-    common: ['share    an AppDrop link that installs the app on an iPhone'],
     flags: [
       ['--new-link', 'a new link for this branch, when the last share was from another branch'],
       ['--force', 'publish over the other branch\'s link instead'],
@@ -354,7 +363,7 @@ Ports    none. Runs to completion, or until Ctrl-C with --watch.`,
       ['--bundle', 'assemble the .app bundle (the macOS default)'],
       ['--sandbox', 'sign the App Sandbox the Mac App Store build signs, and refuse what it refuses; the agent drives it, its stores in ~/Library/Containers/<id>'],
       ['--painted-benchmark', 'build the app’s <macos-crate>-painted bin with ink; benchmark carrier only (LLP 1149 S1.1)'],
-      ['--url <url>', 'connect the app to that dev server (web\'s URL) for live reload'],
+      ['--url <url> · --no-live', 'connect the app to that dev server (web\'s URL) for live reload (else auto-connects a running dev loop on --run) · launch standalone without attaching'],
       OPTIMIZE,
     ],
     get internal() { return appleRest(this.flags); },
@@ -507,7 +516,7 @@ bindings from the IR, generated and never committed (LLP 1121 D12): ts, forma.ts
 ColorToken union, each token's CSS per mode) and forma.css; rust, forma.rs, a
 Token<Color> constant a token (SURFACE_CARD), which session.forma().get resolves; swift,
 forma.swift, ExactFormaToken.surfaceCard; kotlin, FormaTokens.kt for Android native views.
-op takes the server's token and sends one request, or prints the change stream (subscribe).
+op uses the server's token. subscribe prints changes. A transaction can unset conditions and remove-axis.
 import css writes :root custom properties into the design, between markers a later
 import of it rewrites, naming each it refuses (LLP 1153 D6). import <kind> holds another
 system's theme on the server as proposals: the tokens as one, each role override apart.
@@ -541,7 +550,7 @@ Ports    none. Runs to completion.`,
       ['--app', 'the app-scope hatch, in place of a word'],
       ['--window', 'the window-scope hatch, in place of a word'],
     ],
-    body: `<word> is lowercase letters and digits joined by "-" (avatar); mark a node with
+    body: `<word> is a lowercase letter followed by lowercase letters, digits or "-" (avatar, v-2); mark a node with
 hatch="<word>". Writes only missing files, which are yours from then on: docs/reference.md
 "Access hatches".
 Ports    none. Runs to completion.`,
@@ -707,7 +716,7 @@ export function printHelp(verb, { verbs, own = {}, all = process.argv.slice(2).i
 // `--variant`, which every verb that builds or drives the app takes. `guardFlags` takes it out of the arguments before
 // the verb's script parses them, so it is no script's flag, and `--help all` names it.
 const VARIANT = ['--variant <name>', "app.json's variants.<name>: the app under that identity, installed beside the plain build (or EXACT_VARIANT; LLP 1030.008)"];
-const VARIANT_VERBS = new Set(['web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'linux', 'android']);
+const VARIANT_VERBS = new Set(['dev', 'web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'linux', 'android']);
 /** Takes `--variant <name>` out of `args` (in place) and, when given, sets EXACT_VARIANT in `env` for this process and
  * every one it starts, as `--sim` sets EXACT_SIM, so the flag wins over an exported value; the app the verb resolves
  * then claims the selection (scripts/variants.mjs `claimVariant`). Returns `args`. Here, beside `guardFlags`, because
@@ -745,6 +754,8 @@ export function appleBuildRefusal(args, env = process.env, platform = process.pl
   if (args.includes('--development') && !(archive && unsigned)) return '--development needs --archive and --unsigned: it packages the development build as an .ipa a service re-signs';
   if (args.includes('--development') && (args.includes('--release') || env.EXACT_UPDATE_TRUST === 'production')) return '--development packages the development build, so it takes neither --release nor EXACT_UPDATE_TRUST=production';
   if (unsigned && args.includes('--run')) return '--unsigned takes no --run: an ad-hoc signed device bundle cannot launch on a stock device; use a development profile and identity';
+  if (args.includes('--logs') && (!args.includes('--run') || args.includes('--device') || args.includes('--json'))) return '--logs requires a simulator --run (not with --device or --json)';
+  if (args.includes('--pick') && (args.includes('--device') || args.includes('--json'))) return '--pick selects a simulator and takes neither --device nor --json';
   if (archive && (!args.includes('--device') || args.includes('--run') || args.includes('--host') || !unsigned && (!env.EXACT_IDENTITY || !env.EXACT_PROFILE))) return '--archive needs --device and EXACT_IDENTITY and EXACT_PROFILE (or --unsigned), and takes neither --run nor --host';
   return null;
 }

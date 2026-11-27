@@ -54,6 +54,30 @@ fn data_names_added_by_attribute_and_canvas_writers_are_reserved() {
 }
 
 #[test]
+fn the_page_ignores_literal_and_bound_apple_frame_options() {
+    let source = r#"component App
+  state z = 2
+  state allowed = true
+  state scheduling = "throttle"
+  view
+    column
+      iframe apple.magnification=z apple.allowsMagnification=allowed apple.allowsBackForwardNavigationGestures=allowed apple.inactiveSchedulingPolicy=scheduling
+      iframe apple.magnification=4 apple.allowsMagnification=true apple.allowsBackForwardNavigationGestures=true apple.inactiveSchedulingPolicy="none"
+"#;
+    let js = crate::emit::emit(&contract::compile(source).unwrap(), false, false)
+        .unwrap()
+        .js;
+    for name in [
+        "appleMagnification",
+        "appleAllowsMagnification",
+        "appleAllowsBackForwardNavigationGestures",
+        "appleInactiveSchedulingPolicy",
+    ] {
+        assert!(!js.contains(name), "{name}: {js}");
+    }
+}
+
+#[test]
 fn a_literal_data_frame_is_shown_by_its_sandbox() {
     // A literal opaque sandbox decides here; a bound one, in rt.js `P`,
     // which is handed the source (no attribute until then); a

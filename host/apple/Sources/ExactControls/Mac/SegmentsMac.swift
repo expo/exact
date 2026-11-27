@@ -51,7 +51,13 @@ private final class SegmentAccessibility: NSAccessibilityElement, InspectionOwne
     override func accessibilityPerformPress() -> Bool { native?.accessibilityPerformPress() ?? false }
 }
 
-private final class ExactSegmentedControl: NSSegmentedControl {
+private final class ExactSegmentedControl: NSSegmentedControl, AccentControl {
+    private let accent = ControlAccent()
+    override var selectedSegmentBezelColor: NSColor? { didSet { accent.nativeFill = selectedSegmentBezelColor } }
+    func applyAccent(_ color: NSColor?) {
+        accent.apply(color, current: selectedSegmentBezelColor) { super.selectedSegmentBezelColor = $0 }
+    }
+
     let ownerID: UInt32
     var accessibilityDisabledSegments: [Bool] = []
     var memberIDs: [UInt32] = []
@@ -126,6 +132,8 @@ final class SegmentHost: SegmentHosting {
             $0.isButton && $0.props["accessibilityRole"] == role && $0.handlers.contains("press")
         }
     }
+    /// AppKit's size for each `-exact-control-size` value.
+    private static let controlSizes: [String: NSControl.ControlSize] = ["mini": .mini, "small": .small, "medium": .regular, "large": .large]
     /// The chosen member: a tab `aria-selected`, a radio `aria-checked`.
     private static func chosen(_ tab: NodeView) -> Bool {
         tab.props[tab.props["accessibilityRole"] == "radio" ? "accessibilityChecked" : "accessibilitySelected"] == "true"
@@ -219,6 +227,10 @@ final class SegmentHost: SegmentHosting {
                 return value
             }()
             if control.superview !== owner { owner.addSubview(control) }
+            presenter.controls.applyColors(control, owner)
+            // @ref LLP 1069.011.001 D8 — the size the author names, AppKit's own
+            let size = Self.controlSizes[owner.style["control_size"]?.string ?? ""] ?? .regular
+            if control.controlSize != size { control.controlSize = size }
             control.frame = owner.contentBox()
             control.setAccessibilityLabel(owner.props["accessibilityLabel"])
             control.segmentCount = tabs.count

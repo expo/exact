@@ -1436,3 +1436,41 @@ fn gpu_readiness_tracks_the_picture_drawn_through_replacements_and_failures() {
     assert!(s.error.is_empty());
     assert!(empty.data.iter().all(|v| *v == 0));
 }
+
+#[test]
+fn device_lost_re_requests_pending_asset_through_module() {
+    static REGISTRY: exact_gpu::Registry = exact_gpu::Registry {
+        surfaces: &[("modelViewer", 13, crate::surface)],
+        shaders: &[],
+    };
+    let mut module = exact_gpu::Module::new(&REGISTRY);
+    module.set_seekable(true);
+    let id = module.create_headless("modelViewer").unwrap();
+    let mut a = args();
+    a[0] = text("assets/assembly.glb");
+    assert!(module.bind(id, &a, None));
+    assert_eq!(module.take_assets(id).requests, ["assembly.glb"]);
+    // Losing the device before delivery clears outstanding requests in Module;
+    // ModelViewer must re-emit the pending asset so recovery can deliver it.
+    module.lose_device();
+    assert_eq!(module.take_assets(id).requests, ["assembly.glb"]);
+    assert!(module.asset(id, "assembly.glb", Ok(GLB)));
+    assert!(module.take_assets(id).requests.is_empty());
+    let clock: serde_json::Value =
+        serde_json::from_str(&module.agent(id, r#"{"op":"clock"}"#).unwrap()).unwrap();
+    assert_eq!(clock["quiescent"], true);
+
+    // A superseded parse awaiting fresh delivery (load.sequence != job) also re-requests.
+    let mut s = ModelViewer::default();
+    s.bind(&a, None).unwrap();
+    let _ = s.assets();
+    let Source::Pending(load) = std::mem::take(&mut s.source) else {
+        panic!("expected pending source");
+    };
+    s.source = Source::Parsing {
+        job: load.sequence + 1,
+        load,
+    };
+    s.device_lost();
+    assert_eq!(s.assets().requests, ["assembly.glb"]);
+}

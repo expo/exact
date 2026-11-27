@@ -736,11 +736,24 @@ pub fn check_asset_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result
 /// port: every file card is same-origin in v1. Credentials are refused rather
 /// than copied into a request.
 pub fn resolve_url(base: &str, url: &str) -> Result<String, String> {
-    if base.contains('\\') || url.contains('\\') {
+    // The URL Standard strips a leading C0 control or space and drops a tab
+    // or newline anywhere, so ` https://elsewhere/` is another origin there.
+    if [base, url]
+        .iter()
+        .any(|s| s.contains('\\') || s.bytes().any(|b| b <= b' '))
+    {
         return Err(format!("the url {url} is not an http or https URL"));
     }
     let base = parse_http_url(base, "the envelope url")?;
-    if url.contains("://") || url.starts_with("//") {
+    // RFC 3986 §3.1: a scheme is a letter, then letters, digits, `+`, `-`
+    // or `.`, up to the first `:`. A colon after a `/`, `?` or `#` is part of
+    // a relative reference's path, query or fragment.
+    let scheme = url.split_once(':').map(|(scheme, _)| scheme).filter(|s| {
+        s.starts_with(|c: char| c.is_ascii_alphabetic())
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+    });
+    if (scheme.is_some() && url.contains("://")) || url.starts_with("//") {
         let absolute = if url.starts_with("//") {
             format!("{}:{url}", base.scheme)
         } else {
@@ -756,7 +769,7 @@ pub fn resolve_url(base: &str, url: &str) -> Result<String, String> {
         let (path, query) = resolved.path_and_query();
         return Ok(resolved.serialize(&remove_dot_segments(path, url)?, query));
     }
-    if url.contains(':') && !url.starts_with('/') {
+    if scheme.is_some() {
         // `mailto:`, `data:`, `file:` — anything with a scheme and no origin.
         return Err(format!("the url {url} is not http or https"));
     }
@@ -1204,7 +1217,37 @@ mod url_tests {
             );
         }
         assert!(resolve_url("https://o.example?index=1", "../asset.bin").is_err());
+        assert!(resolve_url("https://o.example/a/i.json", "mailto:x@o.example").is_err());
+    }
+
+    /// A colon or `://` after the first `/`, `?` or `#` names no scheme
+    /// (RFC 3986 §3.1 and §4.2; `new URL` agrees): the reference is relative.
+    #[test]
+    fn a_colon_past_the_first_segment_is_not_a_scheme() {
+        let base = "https://o.example/a/exact.json";
+        for (card, resolved) in [
+            (
+                "./app.plan?mirror=https://o.example/b",
+                "https://o.example/a/app.plan?mirror=https://o.example/b",
+            ),
+            ("app.plan?t=12:00", "https://o.example/a/app.plan?t=12:00"),
+            ("./a:b.bin", "https://o.example/a/a:b.bin"),
+            ("blobs/x#y:z", "https://o.example/a/blobs/x"),
+        ] {
+            assert_eq!(
+                resolve_url(base, card).as_deref(),
+                Ok(resolved),
+                "{card} against {base}"
+            );
+        }
         assert!(resolve_url("https://o.example/i.json", "https://o.example/../x").is_err());
+        for card in [
+            " https://elsewhere.example/x",
+            "ht\ttps://elsewhere.example/x",
+            "\n//elsewhere.example/x",
+        ] {
+            assert!(resolve_url(base, card).is_err(), "{card:?}");
+        }
     }
 }
 

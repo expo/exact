@@ -154,7 +154,7 @@ impl Parser {
         } else {
             None
         };
-        self.resource_clause_in_order(&["with", "when"])?;
+        self.resource_clause_in_order(&["with", "when", "transient", "keep"])?;
         self.expect_word("as")?;
         self.expect_word("shape")?;
         let shape = self.type_expr()?;
@@ -326,5 +326,120 @@ impl Parser {
             options,
             span,
         })
+    }
+
+    /// Parse a written type, bounding nesting and postfix `[]` depth so deep
+    /// inputs refuse cleanly before constructing an unbounded tree.
+    pub(super) fn type_expr(&mut self) -> R<TypeExpr> {
+        Ok(self.type_expr_depth(0)?.0)
+    }
+
+    fn type_expr_depth(&mut self, nesting: usize) -> R<(TypeExpr, usize)> {
+        // Above `MAX_TYPE_DEPTH` (64) so moderate inputs still reach the type
+        // pass's `type-too-deep` diagnostic, while keeping all walks stack-safe.
+        const MAX_TYPE_NESTING: usize = 128;
+        if nesting > MAX_TYPE_NESTING {
+            return self.err(
+                "syntax-type-depth",
+                format!("types nest more than {MAX_TYPE_NESTING} levels deep"),
+            );
+        }
+        // `action` is a keyword everywhere else; as a prop type it names an
+        // action reference (LLP 1004 D3: children are views over their props).
+        if self.at_ident("action") {
+            let span = self.next().span;
+            return Ok((TypeExpr::Named("action".into(), span), 0));
+        }
+        let (name, span) = self.ident()?;
+        let (mut ty, mut depth) = match name.as_str() {
+            "enum" => {
+                self.expect_punct("<")?;
+                let mut values = Vec::new();
+                loop {
+                    let token = self.next();
+                    let TokenKind::Str(value) = token.kind else {
+                        return self.err("syntax-enum", "enum members are quoted strings");
+                    };
+                    if values.contains(&value) {
+                        return self.err("syntax-enum", "enum members must be distinct");
+                    }
+                    values.push(value);
+                    if self.at_punct(">") {
+                        break;
+                    }
+                    self.expect_punct(",")?;
+                }
+                self.expect_punct(">")?;
+                (TypeExpr::Enum(values, span), 0)
+            }
+            "option" => {
+                self.expect_punct("<")?;
+                let (inner, inner_depth) = self.type_expr_depth(nesting + 1)?;
+                self.expect_punct(">")?;
+                let depth = inner_depth + 1;
+                if depth > MAX_TYPE_NESTING {
+                    return Err(SyntaxError {
+                        id: "syntax-type-depth",
+                        message: format!("types nest more than {MAX_TYPE_NESTING} levels deep"),
+                        span,
+                    });
+                }
+                (TypeExpr::Option(Box::new(inner), span), depth)
+            }
+            // @ref LLP 1116.015 D2 — a list type is `T[]`.
+            "list" if self.at_punct("<") => {
+                let open = self.next().span;
+                let (inner, inner_depth) = self.type_expr_depth(nesting + 1)?;
+                let close = self.expect_punct(">")?;
+                let depth = inner_depth + 1;
+                if depth > MAX_TYPE_NESTING {
+                    return Err(SyntaxError {
+                        id: "syntax-type-depth",
+                        message: format!("types nest more than {MAX_TYPE_NESTING} levels deep"),
+                        span,
+                    });
+                }
+                self.edits.push(crate::migrate::Edit::new(span, span, ""));
+                self.edits.push(crate::migrate::Edit::new(open, open, ""));
+                self.edits
+                    .push(crate::migrate::Edit::new(close, close, "[]"));
+                self.retired.push(SyntaxError {
+                    id: "syntax-list-type",
+                    message: format!("write `{inner}[]`: a list type is `T[]`, as in TypeScript"),
+                    span,
+                });
+                (TypeExpr::List(Box::new(inner), span), depth)
+            }
+            _ => (TypeExpr::Named(name, span), 0),
+        };
+        while self.at_punct("[") && matches!(self.peek2(), TokenKind::Punct("]")) {
+            let open = self.next().span;
+            self.next();
+            depth += 1;
+            if depth > MAX_TYPE_NESTING {
+                return Err(SyntaxError {
+                    id: "syntax-type-depth",
+                    message: format!("types nest more than {MAX_TYPE_NESTING} levels deep"),
+                    span: open,
+                });
+            }
+            ty = TypeExpr::List(Box::new(ty), span);
+        }
+        Ok((ty, depth))
+    }
+}
+
+#[cfg(test)]
+mod resource_clause_tests {
+    #[test]
+    fn transient_and_keep_before_as_shape_name_clause_order() {
+        for clause in ["transient", "keep"] {
+            let src = format!(
+                "component App\n  resource items = fetch() {clause} as shape number[]\n  view\n    text \"ok\"\n"
+            );
+            let err = crate::parse(&src).unwrap_err();
+            assert_eq!(err.id, "syntax-resource-clause-order", "{err:?}");
+            assert!(err.message.contains(clause), "{err:?}");
+        }
     }
 }

@@ -7,5 +7,6 @@ import dev.exact.video.PlaybackService
 
 /** Media3's player with a system media session for audible audio. */
 internal val videoPlayers: ((Context) -> VideoPlayer)? = { context ->
-    MediaPlayer(context) { player -> PlaybackService.claim(context, player) }
+    val application = context.applicationContext
+    MediaPlayer(context) { player -> PlaybackService.claim(application, player) }
 }

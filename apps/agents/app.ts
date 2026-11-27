@@ -52,6 +52,7 @@ async function load(storage: Storage) {
   // Only a missing file is a first launch. Any other failure (and the build's 'bake') leaves the
   // module unloaded, so no command saves an empty list over the file.
   const bytes = await storage.fs.readFile(FILE).catch((e: { code?: string }) => { if (e.code === 'ENOENT') return null; throw e; });
+  if (loaded) return;
   try {
     const data = bytes && JSON.parse(new TextDecoder().decode(bytes));
     if (data?.version === 1 && Array.isArray(data.conversations)) {
@@ -179,13 +180,13 @@ async function start(c: Conversation, at: number, storage: Storage) {
   if (c.model === DEVICE.id) return startOnDevice(c, history as Turn[], reply, storage);
   try {
     const job = await api('/turns', 'POST', { model: c.model, effort: c.effort, messages: history });
-    if (!c.streaming || c.reply !== reply.id) {
+    if (!conversations.includes(c) || !c.streaming || c.reply !== reply.id) {
       try { await api(`/turns/${job.id}`, 'DELETE'); } catch { /* the service bounds abandoned jobs */ }
       return;
     }
     c.job = job.id; connected = true;
   } catch (e) {
-    if (!c.streaming || c.reply !== reply.id) return;
+    if (!conversations.includes(c) || !c.streaming || c.reply !== reply.id) return;
     c.streaming = false; c.job = ''; reply.error = offline(e);
   }
   await persist(storage);
@@ -231,15 +232,15 @@ async function startOnDevice(c: Conversation, history: Turn[], reply: Msg, stora
   const input = history.pop();
   try {
     const session = await sessionFor(c, history);
-    if (!session || !c.streaming || c.reply !== reply.id) return;
+    if (!session || !conversations.includes(c) || !c.streaming || c.reply !== reply.id) return;
     const response = await promptStreaming({ session, input: input?.content ?? '' });
-    if (!c.streaming || c.reply !== reply.id) {
+    if (!conversations.includes(c) || !c.streaming || c.reply !== reply.id) {
       try { await abortLanguageModelResponse({ response: response.id }); } catch { /* already ended */ }
       return;
     }
     c.job = response.id;
   } catch (e) {
-    if (!c.streaming || c.reply !== reply.id) return;
+    if (!conversations.includes(c) || !c.streaming || c.reply !== reply.id) return;
     c.streaming = false; c.job = ''; reply.error = unavailable(e);
   }
   await persist(storage);
@@ -248,13 +249,14 @@ async function startOnDevice(c: Conversation, history: Turn[], reply: Msg, stora
 async function pulseOnDevice(c: Conversation, reply: Msg, at: number, storage: Storage) {
   let r;
   try { r = await languageModelResponse({ response: c.job }); } catch (e) {
+    if (!conversations.includes(c) || !c.streaming || c.reply !== reply.id) return;
     // A response the module no longer holds (a reload while it streamed): the reply keeps what it had.
     c.streaming = false; c.job = '';
     if (!reply.body) reply.error = unavailable(e);
     await persist(storage);
     return;
   }
-  if (!c.streaming) return;
+  if (!conversations.includes(c) || !c.streaming || c.reply !== reply.id) return;
   reply.body = r.text;
   const search = r.toolCalls.find((t) => t.name === FIND.name);
   if (search) try { reply.searched = String(JSON.parse(search.arguments).query ?? ''); } catch { /* cut at 4 KB: no query to show */ }
@@ -300,18 +302,18 @@ export const tools = {
 
 async function name(c: Conversation, storage: Storage) {
   const first = c.messages.find((m) => m.mine);
-  if (c.titled || !first) return;
+  if (!conversations.includes(c) || c.titled || !first) return;
   c.titled = true;
   if (c.model === DEVICE.id) {
     try {
       const title = await titleOnDevice(first.body);
-      if (title) { c.title = title.slice(0, 64); revision++; await persist(storage); }
+      if (title && conversations.includes(c)) { c.title = title.slice(0, 64); revision++; await persist(storage); }
     } catch { /* the first words stay the title */ }
     return;
   }
   try {
     const { title } = await api('/title', 'POST', { text: first.body });
-    if (title) { c.title = title; revision++; await persist(storage); }
+    if (title && conversations.includes(c)) { c.title = title; revision++; await persist(storage); }
   } catch { /* the first words stay the title */ }
 }
 
@@ -322,7 +324,7 @@ async function pulse(at: number, storage: Storage) {
     if (c.model === DEVICE.id) { if (reply) await pulseOnDevice(c, reply, at, storage); return; }
     try {
       const job = await api(`/turns/${c.job}`);
-      if (!c.streaming || !reply) return;
+      if (!conversations.includes(c) || !c.streaming || !reply || c.reply !== reply.id) return;
       reply.body = job.content; reply.reasoning = job.reasoning; reply.thinkingMs = job.thinkingMs;
       if (job.done) {
         c.streaming = false; c.job = ''; c.updated = at; reply.error = job.error;
@@ -331,8 +333,9 @@ async function pulse(at: number, storage: Storage) {
         void name(c, storage);
       }
     } catch (e) {
+      if (!conversations.includes(c) || !c.streaming || !reply || c.reply !== reply.id) return;
       c.streaming = false; c.job = '';
-      if (reply) reply.error = offline(e);
+      reply.error = offline(e);
       await persist(storage);
     }
   }));
@@ -386,10 +389,13 @@ async function command(op: string, id: string, value: string, at: number, storag
     const option = [DEVICE, ...FEATURED, ...catalogCache].find((m) => m.id === value);
     if (option && !c.streaming) { c.model = option.id; c.modelName = option.name; c.maker = option.maker; await release(c); await persist(storage); }
   } else if (op === 'delete') {
-    // Gone from the list first, so a session still being made for it is not adopted.
+    // Gone from the list and cleared first, so in-flight turns, polls, and sessions stop adopting or naming it.
+    const job = c.job;
+    c.streaming = false; c.reply = ''; c.job = '';
     conversations = conversations.filter((x) => x !== c);
+    if (job && c.model === DEVICE.id) try { await abortLanguageModelResponse({ response: job }); } catch { /* gone with it */ }
     await release(c);
-    if (c.job && c.model !== DEVICE.id) try { await api(`/turns/${c.job}`, 'DELETE'); } catch { /* gone with it */ }
+    if (job && c.model !== DEVICE.id) try { await api(`/turns/${job}`, 'DELETE'); } catch { /* gone with it */ }
     await persist(storage);
   }
   return change(c.id);

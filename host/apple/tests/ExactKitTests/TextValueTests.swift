@@ -33,11 +33,17 @@ final class TextValueTests: XCTestCase {
         XCTAssertEqual(Array(edit!.text.utf16), [101, 769])
     }
 
+    func testAFilteredSelectionUsesTheSharedSurrogate() {
+        let edit = minimalTextEdit(from: "abc\u{10000}", to: "\u{10400}")!
+        XCTAssertEqual(carrySelection(NSRange(location: 2, length: 0), through: edit, filtered: true),
+                       NSRange(location: 1, length: 0))
+    }
+
     func testSelectionCarriesThroughAnEdit() {
-        let insert = (range: NSRange(location: 2, length: 0), text: "XY")
+        let insert = minimalTextEdit(from: "abcdef", to: "abXYcdef")!
         XCTAssertEqual(carrySelection(NSRange(location: 1, length: 0), through: insert), NSRange(location: 1, length: 0))
         XCTAssertEqual(carrySelection(NSRange(location: 5, length: 2), through: insert), NSRange(location: 7, length: 2))
-        let replace = (range: NSRange(location: 2, length: 4), text: "Q")
+        let replace = minimalTextEdit(from: "abcdefghij", to: "abQghij")!
         XCTAssertEqual(carrySelection(NSRange(location: 4, length: 0), through: replace), NSRange(location: 3, length: 0))
         XCTAssertEqual(carrySelection(NSRange(location: 1, length: 8), through: replace), NSRange(location: 1, length: 5))
     }

@@ -1,8 +1,8 @@
 import { test, expect } from 'bun:test';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listIdentities, preflight, ascValidation, debuggable, entitlementLines } from './appstore.mjs';
+import { listIdentities, preflight, ascValidation, debuggable, entitlementLines, appstore } from './appstore.mjs';
 import { signRelease, signedEntitlements, plistFile } from './assets.mjs';
 import { macSigning, macProfile, macProfileIdentity, shareStoreProfile, sandboxEntitlements } from './presence.mjs';
 import { macWidgetProfiles, macWidgetSigning, widgetSigningTeam, widgetId } from './widgets.mjs';
@@ -173,5 +173,31 @@ test('the store signs each part for its role: the app sandboxed, a helper inheri
     const release = signedEntitlements([extension, at]);
     expect(release[0].entitlements['com.apple.security.application-groups']).toEqual([group]);
     expect(release[1].entitlements).toEqual({ 'com.apple.security.application-groups': [group] });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('appstore writes its .pkg inside out using the sanitized executable name even when displayName has traversal', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-appstore-path-'));
+  try {
+    const out = join(dir, 'nested/out'), calls = [];
+    const badApp = { id: app.id, displayName: '../../escape', manifest: { categories: ['productivity'], deploy: { store: { macos: '0' } } } };
+    const built = join(dir, 'built/Store.app');
+    mkdirSync(join(built, 'Contents/Resources'), { recursive: true });
+    writeFileSync(join(built, 'Contents/Info.plist'), plistFile({ CFBundleExecutable: 'Store', CFBundleIdentifier: app.id, CFBundlePackageType: 'APPL' }));
+    mkdirSync(join(built, 'Contents/MacOS'), { recursive: true });
+    copyFileSync('/usr/bin/true', join(built, 'Contents/MacOS/Store'));
+    writeFileSync(join(built, 'Contents/Resources/receipt.json'), JSON.stringify({ build: { compat: { inputs: { store: { L: '0' } }, reach: { entitlements: [], sandboxEntitlements: ['com.apple.security.app-sandbox'] } } } }));
+    const sh = (cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === '/usr/bin/ditto') { mkdirSync(join(args[1], 'Contents/Resources'), { recursive: true }); writeFileSync(join(args[1], 'Contents/Resources/receipt.json'), readFileSync(join(args[0], 'Contents/Resources/receipt.json'))); mkdirSync(join(args[1], 'Contents/MacOS'), { recursive: true }); copyFileSync('/usr/bin/true', join(args[1], 'Contents/MacOS/Store')); writeFileSync(join(args[1], 'Contents/Info.plist'), readFileSync(join(args[0], 'Contents/Info.plist'))); }
+    };
+    const pkg = appstore(badApp, {
+      build: () => built, out, env: {}, log: () => {}, list: lists([store], [installer]), sh,
+      sign: (staged) => [staged], signed: (order) => order.map((path) => ({ path, entitlements: { 'com.apple.security.app-sandbox': true } })),
+    });
+    expect(pkg.startsWith(`${out}/`)).toBe(true);
+    expect(pkg.endsWith('/-..-escape.pkg')).toBe(true);
+    const productbuild = calls.find(([cmd]) => cmd === 'productbuild');
+    expect(productbuild[1].at(-1)).toBe(pkg);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -87,7 +87,13 @@ pub(crate) fn emit(
             json!({"name":name, "sha256":exact_update::sha256_hex(&bytes), "bytes":bytes.len()}),
         );
     }
-    if typescript && !entries.is_empty() {
+    // Every Apple TypeScript binary carries its module pair in its embedded
+    // roster (LLP 1156.008.000 D2.3) so `apply_release` and `Check::Current`
+    // match published seq-N heads without special-casing non-widget apps.
+    if typescript
+        && (!entries.is_empty()
+            || (out.join("app.hbc").is_file() && out.join("app.module.json").is_file()))
+    {
         std::fs::create_dir_all(out.join("typescript")).map_err(|e| e.to_string())?;
         for file in ["app.hbc", "app.module.json"] {
             let bytes = std::fs::read(out.join(file)).map_err(|e| e.to_string())?;
@@ -232,6 +238,7 @@ mod tests {
                 &manifest,
                 &out,
                 &entries,
+                None,
             )
             .unwrap();
             let assets = compat.embedded["assets"].as_array().unwrap();
@@ -254,6 +261,7 @@ mod tests {
                 &manifest,
                 &out,
                 &entries,
+                None,
             )
             .unwrap();
             assert_eq!(compat.embedded["trust"], "production", "{platform}");
@@ -303,6 +311,7 @@ mod tests {
                 &manifest,
                 &out,
                 &entries,
+                None,
             )
             .unwrap();
             let bytes = std::fs::read(out.join("app.plan")).unwrap();
@@ -404,6 +413,7 @@ mod tests {
                 &manifest,
                 &out,
                 &entries,
+                None,
             )
         };
         std::fs::write(
@@ -509,5 +519,76 @@ mod tests {
         for tree in ["activities", "plans"] {
             assert!(!out.join(tree).exists() && !destination.join(tree).exists());
         }
+    }
+
+    #[test]
+    fn non_widget_apple_typescript_app_embeds_module_pair_and_matches_current() {
+        let dir = TempDir(
+            std::env::temp_dir().join(format!("exact-ts-no-widgets-{}", std::process::id())),
+        );
+        let out = dir.0.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(
+            dir.0.join("app.contract"),
+            "component App\n  view\n    text \"app\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.0.join("app.json"),
+            r#"{"app":{"id":"test.ts.app","name":"TestTS"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.0.join("app.ts"), "").unwrap();
+        std::fs::write(out.join("app.hbc"), b"hermes bytecode").unwrap();
+        std::fs::write(out.join("app.module.json"), br#"{"grants":""}"#).unwrap();
+
+        let entries = contract::snapshot::entries(&dir.0).unwrap();
+        assert!(entries.is_empty());
+        let manifest = Manifest::read(&dir.0).unwrap();
+        let plan = contract::compile_path(&dir.0.join("app.contract")).unwrap();
+        let plan_bytes = plan.encode();
+        std::fs::write(out.join("app.plan"), &plan_bytes).unwrap();
+
+        let mut compat = crate::Compat {
+            id: "b".repeat(64),
+            inputs: json!({"trust":"development","store":{"L":"A"}}),
+            channel: "prod".into(),
+            origin: None,
+            activate: "next-launch".into(),
+            check_interval: None,
+            target: "aarch64-apple-ios".into(),
+            embedded: Value::Null,
+            reach: Value::Null,
+            painter: None,
+            game: false,
+            host_work: false,
+        };
+        crate::receipt::emit(
+            &mut compat,
+            "development",
+            &dir.0,
+            ("ios", "aarch64-apple-ios"),
+            &manifest,
+            &out,
+            &entries,
+            None,
+        )
+        .unwrap();
+        let assets = compat.embedded["assets"].as_array().unwrap();
+        let names: Vec<_> = assets.iter().filter_map(|c| c["name"].as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["typescript/app.hbc", "typescript/app.module.json"]
+        );
+        let copied = dir.0.join("copy");
+        copy(&out, &copied, assets).unwrap();
+        assert_eq!(
+            std::fs::read(copied.join("typescript/app.hbc")).unwrap(),
+            b"hermes bytecode"
+        );
+        assert_eq!(
+            std::fs::read(copied.join("typescript/app.module.json")).unwrap(),
+            br#"{"grants":""}"#
+        );
     }
 }

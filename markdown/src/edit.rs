@@ -199,10 +199,21 @@ fn code_span(content: &str, ticks: usize, padded: bool) -> (String, String) {
 
 fn inline(source: &str, sel: B, kind: u8, marker: &str) -> Draft {
     let analysis = analyze(source, None);
+    // Match `selection()` for a collapsed caret so a caret on or after a nested
+    // construct's closing delimiter resolves to the enclosing construct rather
+    // than the finished inner one. Non-empty selections still match outer bounds
+    // so selecting a construct with its delimiters unwraps it.
     let inside = analysis
         .constructs
         .iter()
-        .filter(|c| c.kind == kind && c.outer.start <= sel.start && sel.end <= c.outer.end)
+        .filter(|c| {
+            c.kind == kind
+                && if sel.is_empty() {
+                    c.inner.start <= sel.start && sel.end <= c.inner.end
+                } else {
+                    c.outer.start <= sel.start && sel.end <= c.outer.end
+                }
+        })
         .min_by_key(|c| c.outer.len());
     if let Some(c) = inside {
         return Draft {
@@ -728,9 +739,9 @@ fn newline(source: &str, mut sel: B) -> Draft {
     let marker = match p.kind {
         Some(BlockKind::Ordered) => {
             // The delimiter follows the authored digits, which may be `01`.
-            let symbol = source[p.marker..p.content].trim_end();
-            let digits = symbol.bytes().take_while(|c| c.is_ascii_digit()).count();
-            format!("{}{} ", p.number + 1, &symbol[digits..])
+            let marker = &source[p.marker..p.content];
+            let digits = marker.bytes().take_while(|c| c.is_ascii_digit()).count();
+            format!("{}{}", p.number + 1, &marker[digits..])
         }
         Some(BlockKind::Task(_)) => "- [ ] ".to_string(),
         Some(BlockKind::Bullet) => source[p.marker..p.content].to_string(),

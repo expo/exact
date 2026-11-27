@@ -790,3 +790,81 @@ fn select_before_launch_is_refused() {
         (Router::default(), "unknown tab home".into())
     );
 }
+
+/// LLP 1156.008.000 D3: structural-prefix ancestors take positional URL segments
+/// so colliding or renamed prefix parameters reconstruct the true ancestor path.
+#[test]
+fn structural_prefix_ancestors_use_positional_url_segments() {
+    let table = Table {
+        routes: vec![
+            Route {
+                name: "home".into(),
+                pattern: "/".into(),
+                parent: None,
+                tab: true,
+                notfound: false,
+            },
+            Route {
+                name: "trip".into(),
+                pattern: "/trip/:id".into(),
+                parent: Some(0),
+                tab: false,
+                notfound: false,
+            },
+            Route {
+                name: "place".into(),
+                pattern: "/trip/:trip/place/:id".into(),
+                parent: Some(1),
+                tab: false,
+                notfound: false,
+            },
+            Route {
+                name: "room".into(),
+                pattern: "/trip/:trip/room/:roomId".into(),
+                parent: Some(1),
+                tab: false,
+                notfound: false,
+            },
+            Route {
+                name: "alt".into(),
+                pattern: "/alt/:id/detail".into(),
+                parent: Some(1),
+                tab: false,
+                notfound: false,
+            },
+        ],
+    };
+    table
+        .check()
+        .expect("structural prefix routes check cleanly");
+    let collided = table.chain("/trip/T%201/place/I%202");
+    assert_eq!(collided.len(), 3);
+    assert_eq!(collided[1].url, "/trip/T%201");
+    assert_eq!(
+        collided[1].params.get("id").map(String::as_str),
+        Some("T 1")
+    );
+    assert_eq!(collided[2].url, "/trip/T%201/place/I%202");
+    assert_eq!(
+        collided[2].params.get("trip").map(String::as_str),
+        Some("T 1")
+    );
+    assert_eq!(
+        collided[2].params.get("id").map(String::as_str),
+        Some("I 2")
+    );
+
+    let renamed = table.chain("/trip/T9/room/R4");
+    assert_eq!(renamed.len(), 3);
+    assert_eq!(renamed[1].url, "/trip/T9");
+    assert_eq!(renamed[1].params.get("id").map(String::as_str), Some("T9"));
+
+    // Non-prefix parent still falls back to parameter name lookup.
+    let non_prefix = table.chain("/alt/A7/detail");
+    assert_eq!(non_prefix.len(), 3);
+    assert_eq!(non_prefix[1].url, "/trip/A7");
+    assert_eq!(
+        non_prefix[1].params.get("id").map(String::as_str),
+        Some("A7")
+    );
+}

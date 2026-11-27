@@ -300,7 +300,7 @@ test('quiet geometry keeps fast timers on RAF; a slow timer sleeps until its dea
   try {
     await f.controller.settle(); f.pause(true); f.timer(16);
     for (let i = 0; i < 5; i++) f.tick();
-    expect(f.frames.size).toBe(1); expect(f.timers.size).toBe(0);
+    expect(f.frames.size).toBe(1); expect(f.timers.size).toBe(1);
     f.timer(1000); expect(f.frames.size).toBe(0); expect(f.timers.size).toBe(1);
     f.events.length = 0; f.poll();
     expect(f.events.map(e => e[0])).toEqual(['commit', 'delay']); expect(f.events[1][1]).toBeCloseTo(1000); expect(f.frames.size).toBe(0);
@@ -574,12 +574,12 @@ test('one scheduler catches up once before paint, replaces wakes, and cancels on
   clock.update(1000); clock.update(2000);
   expect(frames.size).toBe(0); expect(timers.size).toBe(1);
   expect([...timers.values()][0].ms).toBe(2000);
-  clock.update(16); expect(timers.size).toBe(0); expect(frames.size).toBe(1);
+  clock.update(16); expect(timers.size).toBe(1); expect([...timers.values()][0].ms).toBe(16); expect(frames.size).toBe(1);
   // Worst realistic input: a 500ms hitch plus several invalidations in one frame.
   now = 500; clock.requestFrame(); clock.requestFrame();
   const callback = [...frames.values()][0]; frames.clear(); callback();
   expect(events).toEqual([['advance', 500], ['paint']]);
-  expect(frames.size).toBe(1); expect(timers.size).toBe(0);
+  expect(frames.size).toBe(1); expect(timers.size).toBe(1); expect([...timers.values()][0].ms).toBe(16);
   clock.dispose(); expect(frames.size + timers.size).toBe(0);
   clock.update(501); clock.requestFrame(); expect(frames.size + timers.size).toBe(0);
 });

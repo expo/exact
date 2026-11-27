@@ -31,7 +31,13 @@ fn words(dataset: &str) -> BTreeMap<String, String> {
 
 impl<D: DataSource> Presenter<D> {
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-    pub(crate) fn reader_hatch_act(&mut self, node: u32, kind: i32, text: Option<&str>) -> i64 {
+    pub(crate) fn reader_hatch_act(
+        &mut self,
+        node: u32,
+        kind: i32,
+        text: Option<&str>,
+        now: f64,
+    ) -> i64 {
         if node == 0 && kind == 6 && self.hatches.install.is_none() {
             // Package timers use the session clock even when the app declares no hatches.
             self.hatches.install = Some(crate::hatches::install_with_reader::<()>(&[]));
@@ -40,6 +46,9 @@ impl<D: DataSource> Presenter<D> {
             let app_id = self.host.runner().data_ref().app_id().to_owned();
             self.hatches.connect(!production, self.agent, &app_id);
             self.hatch_moments();
+        }
+        if let Some(shared) = self.hatches.shared() {
+            shared.now.set(now);
         }
         let answer = crate::hatches::reader::act(node, kind, text);
         if answer >= 0 {
@@ -543,6 +552,7 @@ impl<D: DataSource> Presenter<D> {
                 self.forget_replaced_choices();
                 let bound = self.bound_text(id);
                 self.host.values.watch(id, Some(bound.clone()));
+                self.chosen.insert(id, (value.clone(), bound));
                 let heard = (self.host.runner().handlers_of(id)).contains(&EventKind::Input);
                 let error = match heard {
                     true => {
@@ -553,7 +563,7 @@ impl<D: DataSource> Presenter<D> {
                     false => None,
                 };
                 let after = self.after_commit();
-                self.keep_typed(id, value, bound);
+                self.finish_field_edit(id);
                 error.or(after)
             }
         };

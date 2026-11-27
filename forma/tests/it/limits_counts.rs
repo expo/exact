@@ -334,6 +334,8 @@ fn no_client_operation_adds_a_dial() {
         Op::AddAxis {
             name: "size".into(),
             values: vec!["s".into(), "m".into()],
+            before: None,
+            comment: None,
             under_dark: false,
         },
     ];

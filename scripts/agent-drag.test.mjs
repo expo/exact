@@ -1,7 +1,7 @@
 // `drag`'s reply carries what the host journaled about a reorder during it (LLP 1102 §3.17), and
 // keeps every field of the carrier's reply. `bun test ./scripts/agent-drag.test.mjs`.
 import { test, expect } from 'bun:test';
-import { dragTap, dragArguments, parseDrag, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
+import { dragTap, dragArguments, duringOp, parseDrag, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
 import { DRAG_BOUNDS, realFingers, realTap, reaches, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
 
 import assert from 'node:assert/strict';
@@ -968,4 +968,15 @@ test('fingers tapped together are one runner request and four touches in the log
   const edge = run(four, { ...aim, at: [10, 400], point: [10, 400], fixed: [10, 400] });
   await expect(edge.result).rejects.toThrow('outside the viewport');
   expect(edge.sent).toEqual([]);
+});
+
+test('duringOp routes screenshot display to the live display capture form', async () => {
+  const calls = [];
+  const s = { screenshot: async (...args) => (calls.push(args), { ok: true }) };
+  await duringOp(s, 'screenshot /tmp/mid.png display');
+  await duringOp(s, 'screenshot /tmp/mid.png window');
+  expect(calls).toEqual([
+    ['/tmp/mid.png', true, 'display', true],
+    ['/tmp/mid.png', true, undefined, true],
+  ]);
 });

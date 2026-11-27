@@ -92,6 +92,7 @@ wgpu = { version = "30", default-features = false, features = ["std", "parking_l
 
 # Android presents into the window's swapchain (gpu/present.rs).
 [target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
 icu_locale = "2.3"
 raw-window-handle = "0.6"
 jni-sys = "0.3"

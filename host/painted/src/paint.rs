@@ -25,7 +25,9 @@ mod rotation;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 pub(crate) use presentation::Presentation;
 pub mod border;
+mod scene;
 mod shape;
+pub use scene::Scene;
 pub use shape::Shape;
 pub(crate) use shape::{bezier_outline, bezier_path, svg_bezier_path};
 use space::sticky;
@@ -54,6 +56,10 @@ pub(crate) mod inline_frame;
 pub(crate) mod inline_opacity;
 mod layer;
 mod lift;
+mod visibility;
+pub(crate) use visibility::paints;
+#[cfg(test)]
+pub(crate) use visibility::revealed;
 pub(crate) mod look;
 pub use look::page_color;
 pub(crate) mod material;
@@ -307,6 +313,9 @@ pub struct PaintedBox {
     pub scroll: Option<(f32, f32)>,
     /// Generic pointer eligibility of this painted scene, including inheritance.
     pub(crate) pointer_hit: bool,
+    /// Whether the node showed: by its `visibility` or a ghost's reveal, and
+    /// outside any transparent (`opacity: 0`) subtree.
+    pub(crate) visible: bool,
     /// Rounded box or control face in local space, used for scrollbar coverage.
     rounded_border: Option<Rc<exact_kernel::svg::Path>>,
     shape_clips: Vec<shape::HitClip>,
@@ -324,45 +333,6 @@ struct HitGeometry {
     clip: Option<Rect4>,
     affine: Option<(Transform, Rect4)>,
     projective: Option<ProjectiveHit>,
-}
-
-/// What a frame is painted from.
-pub struct Scene<'a> {
-    /// The kernel: frames, styles, props.
-    pub kernel: &'a Kernel,
-    /// @ref LLP 1038 D6 — hidden route subtrees paint no pixels or hit boxes.
-    pub hidden: &'a dyn Fn(ViewId) -> bool,
-    /// The roots, in order.
-    pub roots: &'a [ViewId],
-    /// A node's presentation values.
-    pub presented: &'a dyn Fn(ViewId) -> Presented,
-    /// Nodes whose played or held scale differs from identity.
-    pub scaled_presented: &'a std::collections::BTreeSet<ViewId>,
-    /// A path's `d` while a transition moves it (LLP 1055.000 D15).
-    pub paths: &'a dyn Fn(ViewId) -> Option<exact_motion::PathValue>,
-    /// A `filter` while a transition moves it (LLP 1003.002 D8).
-    pub filters: &'a dyn Fn(ViewId) -> Option<exact_motion::FilterValue>,
-    /// Scroll offsets of scroll containers (host state, LLP 1010).
-    pub scroll: &'a BTreeMap<ViewId, (f32, f32)>,
-    /// The page's scroll offset: the window is a viewport over a document.
-    pub page: (f32, f32),
-    /// Decoded images by node.
-    pub images: &'a BTreeMap<ViewId, Arc<Bitmap>>,
-    /// The focused node, if any (its ring, or a field's caret, is painted).
-    pub focus: Option<ViewId>,
-    /// The focused text field's selection (x2apps codeedit #2).
-    pub selection: Option<exact_runner::FieldSelection>,
-    /// At a wrap, a click or visual-line End can choose the preceding line.
-    pub caret_upstream: bool,
-    /// Unbound checkboxes' own states, which the host keeps (LLP 1069.001 D4).
-    pub controls: &'a BTreeMap<ViewId, bool>,
-    /// Values chosen in a date, range or select, or typed into a field, since
-    /// its bound value last changed: (choice, bound).
-    pub chosen: &'a BTreeMap<ViewId, (String, String)>,
-    /// A select's open menu, painted over everything (LLP 1069.001 D7).
-    pub menu: Option<control::MenuPaint>,
-    /// The pointer, in viewport points, when the host draws one.
-    pub pointer: Option<(f32, f32)>,
 }
 
 mod frame;
@@ -425,7 +395,7 @@ pub struct Painter {
     pub(crate) lift: Lift,
     pub(crate) shared: SharedState,
     // Accepted owners retain their paragraph leases while a subsequent backend frame fails.
-    accepted_text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
+    accepted_text: Rc<BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>>,
     pub(crate) reader_highlights:
         BTreeMap<exact_kernel::NodeKey, inline_frame::selection::Highlight>,
     pub(crate) field_text: HashMap<ViewId, Rc<field::PaintedField>>,
@@ -433,6 +403,9 @@ pub struct Painter {
     pub(crate) composition: Option<Rc<field::Composition>>,
     pub(crate) inline_text: HashMap<ViewId, Rc<inline_frame::PaintedInline>>,
     region_picture: Option<Rc<region::Picture>>,
+    /// How many times a moving list value (a `d`, a `filter`, a clip) presented a new value: a current
+    /// region's picture taken at another count, a restored one too, is taken again (LLP 1003.003 D7).
+    region_motion: u64,
     region_frame: Option<region::Published>,
     damage: damage::Retained,
     /// `backgroundMaterial` names the schema lacks.
@@ -554,10 +527,11 @@ impl Painter {
             fresh_order: HashMap::new(),
             rank_increments: 0,
             ranks: Rc::default(),
-            accepted_text: BTreeMap::new(),
+            accepted_text: Rc::default(),
             lift: Lift::default(),
             shared: SharedState::default(),
             region_picture: None,
+            region_motion: 0,
             region_frame: None,
             damage: Default::default(),
             materials: Default::default(),
@@ -879,7 +853,7 @@ impl Painter {
         self.labels.painted();
         self.ripples.painted(self.numerals.now, self.numerals.still);
         if finished.is_ok() {
-            self.accepted_text = walk.text;
+            self.accepted_text = Rc::new(walk.text);
             self.field_text = walk.fields;
             self.inline_text = walk.inline;
         } else {
@@ -968,7 +942,9 @@ impl Painter {
             // A backdrop reads what is under it, beyond any damage.
             || !node.style.backdrop_filter.is_none()
             || self.material_note(&node)
-            || !p.colors.is_empty();
+            || !p.colors.is_empty()
+            // A reach paints past the box, where damage does not look (LLP 1123 D13, D14)
+            || p.claimed();
         let origin = node.style.transform_origin.resolve(w, h);
         let (hit_parent, hit_clip) = walk.hit_space.unwrap_or((ts, clip_rect));
         let mut hit_p = p;
@@ -1013,14 +989,25 @@ impl Painter {
                 .computed_row(exact_kernel::StyleId::PointerEvents, |s| s.pointer_events)
                 != exact_kernel::PointerEvents::None
                 && visible,
+            visible,
             projective: None,
             affine: Some((ts, (x, y, w, h))),
-            hit: walk.hit_space.map(|_| HitGeometry {
-                shape_clips: Vec::new(),
-                rect: bbox(hit_ts, (x, y, w, h)),
-                clip: hit_clip,
-                affine: Some((hit_ts, (x, y, w, h))),
-                projective: None,
+            // A reaching box takes the hits in its reached frame, snapped outward as it is painted; what reads its
+            // geometry keeps its laid-out box
+            hit: (walk.hit_space.is_some() || p.claimed()).then(|| {
+                let reached = p.port_reached(grid::outward(
+                    p.reached((x, y, w, h)),
+                    p.reach,
+                    ts,
+                    self.scale,
+                ));
+                HitGeometry {
+                    shape_clips: Vec::new(),
+                    rect: bbox(hit_ts, reached),
+                    clip: hit_clip,
+                    affine: Some((hit_ts, reached)),
+                    projective: None,
+                }
             }),
             unpress: if p.press == 1. {
                 Transform::identity()
@@ -1058,12 +1045,16 @@ impl Painter {
         }
         // @ref LLP 1043.000 §3 D7 — polygon demo ink and exclusion share an outline.
         let (sx, sy, sw, sh) = surface;
-        let css = node.style.rare.clip_path.resolved(sw, sh);
+        let css = shape::shown_clip(walk.scene, &node, sw, sh);
         let clip_ts = ts.pre_translate(sx, sy);
-        let path_clip = css.has_path() && self.backend.push_css_clip(&css, clip_ts);
-        self.without_grid(transformed, |painter| {
-            painter.box_content(walk, &node, rect, ts, offset, clip_rect);
-        });
+        // A clip that draws no area clips the whole box (CSS Masking 1 §5)
+        let hidden = css.draws_nothing();
+        let path_clip = !hidden && css.has_path() && self.backend.push_css_clip(&css, clip_ts);
+        if !hidden {
+            self.without_grid(transformed, |painter| {
+                painter.box_content(walk, &node, rect, ts, offset, clip_rect);
+            });
+        }
         shape::clip_hits(
             &mut walk.boxes[hit_start..],
             &css,
@@ -1078,7 +1069,13 @@ impl Painter {
             self.backend.pop_mask(&Shape::rect(rect), mask, ts);
         }
         match drawn {
-            Some(picture) => drop(self.restore_picture_backend(walk.scene.kernel, picture)),
+            Some(picture) => {
+                // Nothing of a transparent subtree shows, though it is hit
+                walk.boxes[hit_start..]
+                    .iter_mut()
+                    .for_each(|b| b.visible = false);
+                drop(self.restore_picture_backend(walk.scene.kernel, picture))
+            }
             None if opacity < 1.0 => self.backend.pop_opacity(),
             None => {}
         }
@@ -1108,15 +1105,34 @@ impl Painter {
         }
         self.clipped = Some((node.id, paint.background));
         let mut geometry = paint.geometry(rect);
-        // @ref LLP 1063 — a layout transition's size is the surface's alone.
-        let mut surface = paint.geometry(shown.surface(rect));
+        // @ref LLP 1063 — a layout transition's size is the surface's alone, as a reach is (LLP 1123 D13).
+        let mut surface = paint.geometry(grid::outward(
+            shown.reached(shown.surface(rect)),
+            shown.reach,
+            ts,
+            self.scale,
+        ));
         self.flight_geometry(node, &mut geometry);
         self.flight_geometry(node, &mut surface);
         // A text node still walks its runs so a visible inline paints.
         if paints_self {
-            surface.bleed = self.bleed(walk.scene.kernel, node.id, &surface.outer, ts);
+            // A colour-only extension stands in for the band's bleed (LLP 1123 D13)
+            surface.bleed = match shown.extension == [0.0; 4] {
+                true => self.bleed(walk.scene.kernel, node.id, &surface.outer, ts),
+                false => [0.0; 4],
+            };
             self.row_box_reach(&paint.shadows, surface.outer.rect, geometry.outer.rect, ts);
             paint.paint(self.backend.as_mut(), &surface, ts);
+            let kernel = walk.scene.kernel;
+            self.extension_strip(
+                kernel,
+                node,
+                &shown,
+                paint.background,
+                surface.outer.rect,
+                rect,
+                ts,
+            );
             self.column_rules(walk.scene.kernel, node, rect, ts);
             self.prose_marker(walk, node, rect, ts);
             let (dark, feedback) = (
@@ -1141,7 +1157,12 @@ impl Painter {
         // Clipped by this box when its overflow is not visible: its children,
         // and a text's own lines (CSS Overflow 3 §3).
         let (ox, oy) = effective_overflow(node);
-        let clip = field::overflow_clip(&surface.outer, paint.widths, (ox, oy));
+        // A claimed scroller's scrollport reaches with it; its decoration keeps its box (LLP 1123 D13)
+        let port = Shape {
+            rect: shown.port_reached(surface.outer.rect),
+            ..surface.outer
+        };
+        let clip = field::overflow_clip(&port, paint.widths, (ox, oy));
         let mut cover = surface.outer;
         match node.node_type {
             NodeType::Video if native::is_audio(node) && (content.2 <= 0.0 || content.3 <= 0.0) => {
@@ -1466,35 +1487,3 @@ pub(crate) fn intersect(a: Rect4, b: Rect4) -> Rect4 {
 mod inline_image_tests;
 #[cfg(test)]
 mod paragraph_tests;
-
-/// Whether `id` paints, is hit, and is exposed. In a ghost, [`revealed`];
-/// otherwise the computed `visibility` (inherited). A missing node does not
-/// veto a caller that already has nothing to draw.
-pub(crate) fn paints(kernel: &Kernel, id: ViewId, reveal: Option<ViewId>) -> bool {
-    match reveal {
-        Some(root) => revealed(kernel, id, root),
-        None => kernel.node(id).is_none_or(|n| {
-            n.computed_row(exact_kernel::StyleId::Visibility, |s| s.visibility)
-                == exact_kernel::Visibility::Visible
-        }),
-    }
-}
-
-/// Whether `id` shows in the ghost of `root`: the nearest `visibility` set
-/// on it or an ancestor below the ghost's root decides, as in the web's
-/// clone whose root alone is made visible (`group-glue.js`); none set shows.
-pub(crate) fn revealed(kernel: &Kernel, id: ViewId, root: ViewId) -> bool {
-    let arena = kernel.arena();
-    let mut at = arena.key_of(id).map(|k| k.index);
-    while let Some(slot) = at {
-        if arena.local_id(slot) == root {
-            return true;
-        }
-        let style = arena.style(slot);
-        if style.mask.has(exact_kernel::StyleId::Visibility) {
-            return style.visibility == exact_kernel::Visibility::Visible;
-        }
-        at = arena.parent(slot);
-    }
-    true
-}

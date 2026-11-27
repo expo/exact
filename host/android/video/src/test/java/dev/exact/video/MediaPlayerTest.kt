@@ -33,8 +33,9 @@ class MediaPlayerTest {
 
     private class Events : MediaSink {
         val names = ArrayList<String>()
+        val states = ArrayList<JSONObject>()
         override fun event(name: String, payload: String) { if (name != "timeupdate") names += if (payload.isEmpty()) name else "$name($payload)" }
-        override fun state(json: String) {}
+        override fun state(json: String) { states += JSONObject(json) }
         override fun firstFrame() {}
     }
 
@@ -69,6 +70,19 @@ class MediaPlayerTest {
             p.update(props("preventsDisplaySleepDuringVideoPlayback" to false), 640, 360, null)
             assertFalse(p.view.keepScreenOn)
         }
+    }
+
+    @Test fun aNativePlayWithRefusedFocusLeavesThePlayerPaused() {
+        val p = player()
+        ReflectionHelpers.setField(p, "focusType", "playback")
+        val events = Events()
+        p.bind(events)
+        p.update(props("controls" to true), 640, 360, null)
+        val native = (p.controller as PlayerView).player!!
+        native.play()
+        assertTrue("error(not-allowed)" in events.names)
+        assertFalse(native.playWhenReady)
+        assertTrue(p.snapshot()!!.paused)
     }
 
     @Test fun anUnchangedPausedFalseAfterARebuildIsNoRequestToPlay() {
@@ -286,6 +300,90 @@ class MediaPlayerTest {
             assertEquals(android.graphics.Rect((-x).coerceAtLeast(0f).toInt(), (-y).coerceAtLeast(0f).toInt(),
                 w.coerceAtMost(160 - x).toInt(), h.coerceAtMost(80 - y).toInt()), visible)
         }
+        activity.finish()
+    }
+
+    @Test fun releasingWhileFullscreenEmitsNothingAndSkipsPostReleaseReattach() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val p = MediaPlayer(activity).also { made += it }
+        val events = Events()
+        p.bind(events)
+        p.update(props("controls" to true), 640, 360, null)
+        p.update(props("controls" to true, "fullscreen" to 1), 640, 360, null)
+        assertTrue("fullscreenchange(true)" in events.names)
+        assertTrue(events.states.last().getBoolean("fullscreen"))
+        val inline = p.controller as PlayerView
+        p.release()
+        made.remove(p)
+        val eventsBefore = events.names.size
+        val statesBefore = events.states.size
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(eventsBefore, events.names.size)
+        assertEquals(statesBefore, events.states.size)
+        assertEquals(null, inline.player)
+        activity.finish()
+    }
+
+    @Test fun retiringAndRebindingAFullscreenPlayerCarriesNoStateOrLateEvent() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val p = MediaPlayer(activity).also { made += it }
+        val first = Events()
+        p.bind(first)
+        p.update(props("controls" to false), 640, 360, null)
+        p.update(props("controls" to false, "fullscreen" to 1), 640, 360, null)
+        assertTrue(first.states.last().getBoolean("fullscreen"))
+        assertTrue(p.lendable)
+
+        p.stop()
+        assertEquals(1, first.names.count { it == "fullscreenchange(false)" })
+        assertFalse(first.states.last().getBoolean("fullscreen"))
+
+        val second = Events()
+        p.bind(second)
+        p.update(props("controls" to false, "src" to "assets/b.mp4"), 640, 360, null)
+        assertFalse(second.states.last().getBoolean("fullscreen"))
+        assertFalse("fullscreenchange(false)" in second.names)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("fullscreenchange(false)" in second.names)
+        assertFalse(second.states.last().getBoolean("fullscreen"))
+
+        // Direct rebind without stop() also clears fullscreen silently before the next borrower uses the player.
+        p.update(props("controls" to false, "src" to "assets/b.mp4", "fullscreen" to 2), 640, 360, null)
+        assertTrue(second.states.last().getBoolean("fullscreen"))
+        val third = Events()
+        p.bind(third)
+        p.update(props("controls" to false, "src" to "assets/c.mp4"), 640, 360, null)
+        assertFalse(third.states.last().getBoolean("fullscreen"))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("fullscreenchange(false)" in third.names)
+        assertFalse(third.states.last().getBoolean("fullscreen"))
+        activity.finish()
+    }
+
+    @Test fun togglingControlsWhileFullscreenLeavesSynchronouslyBeforePresenting() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val p = MediaPlayer(activity).also { made += it }
+        val events = Events()
+        p.bind(events)
+        p.update(props("controls" to true), 640, 360, null)
+        p.update(props("controls" to true, "fullscreen" to 1), 640, 360, null)
+        assertTrue(events.states.last().getBoolean("fullscreen"))
+
+        p.update(props("controls" to false, "fullscreen" to 1), 640, 360, null)
+        assertFalse(events.states.last().getBoolean("fullscreen"))
+        assertEquals("TextureView", events.states.last().getString("renderer"))
+        assertEquals(1, events.names.count { it == "fullscreenchange(false)" })
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, events.names.count { it == "fullscreenchange(false)" })
+
+        // Re-entering fullscreen in the same update as a controls toggle succeeds because leave was synchronous.
+        p.update(props("controls" to false, "fullscreen" to 2), 640, 360, null)
+        assertTrue(events.states.last().getBoolean("fullscreen"))
+        p.update(props("controls" to true, "fullscreen" to 3), 640, 360, null)
+        assertTrue(events.states.last().getBoolean("fullscreen"))
+        assertEquals("PlayerView", events.states.last().getString("renderer"))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(events.states.last().getBoolean("fullscreen"))
         activity.finish()
     }
 

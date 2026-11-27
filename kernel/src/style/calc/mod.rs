@@ -571,9 +571,9 @@ pub(crate) fn narrow(v: f64) -> f32 {
     }
 }
 
-/// Whether `v` is an `f32` exactly, so a compact form loses nothing.
+/// Whether `v` is a finite `f32` exactly, so a compact form loses nothing.
 fn exact(v: f64) -> bool {
-    f64::from(v as f32).to_bits() == v.to_bits()
+    v.is_finite() && f64::from(v as f32).to_bits() == v.to_bits()
 }
 
 /// A simplified tree as the dimension that holds it: a compact form where
@@ -1245,6 +1245,35 @@ impl Comparison {
     pub(crate) fn has_percent(&self) -> bool {
         self.tree(|t| t.any(&|n| matches!(n, Node::Value(_, Unit::Percent))))
             .unwrap_or(false)
+    }
+
+    /// Whether a simplified tree is valid as `line-height` length math: no
+    /// percentages, `env()`, `var()`, observations, or segments (LLP 1035.000.000).
+    pub(crate) fn is_line_height_math(&self) -> bool {
+        self.tree(|t| {
+            !t.any(&|n| {
+                matches!(
+                    n,
+                    Node::Value(_, Unit::Percent)
+                        | Node::Env(_)
+                        | Node::Var(_)
+                        | Node::Observe(_)
+                        | Node::Segment(_)
+                )
+            })
+        })
+        .unwrap_or(false)
+    }
+
+    /// Whether any viewport unit read by this tree has a different basis in
+    /// `new` than in `old`.
+    pub(crate) fn reads_viewport_change(&self, old: &Env, new: &Env) -> bool {
+        self.tree(|t| {
+            t.any(
+                &|n| matches!(n, Node::Value(_, Unit::Viewport(u)) if u.basis(old) != u.basis(new)),
+            )
+        })
+        .unwrap_or(false)
     }
 }
 

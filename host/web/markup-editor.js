@@ -528,19 +528,19 @@ function installMarkupEditor(textarea, host) {
     if (answer) emit();
     moved();
   }
-  function setValue(value) {
+  function setValue(value, filtered = false) {
     value = String(value);
     if (destroyed) return;
-    if (value === source) { pendingValue = undefined; return; }
-    if (composing || notifying) { pendingValue = value; return; }
+    if (value === (composing ? readDom().value : source)) { pendingValue = undefined; return; }
+    if (composing || notifying) { pendingValue = [value, filtered]; return; }
     pendingValue = undefined;
     clearDrag();
-    const bits = wasm.mde_set_value(h, put(value));
+    const bits = wasm.mde_set_value(h, put(value), filtered);
     if (bits & SOURCE) { read(); render(); place(false); emit(); }
   }
   function flush() {
     if (destroyed || composing) return;
-    if (pendingValue !== undefined) setValue(pendingValue);
+    if (pendingValue !== undefined) setValue(...pendingValue);
     if (pendingSync) { pendingSync = false; sync(); }
   }
   const link = () => {

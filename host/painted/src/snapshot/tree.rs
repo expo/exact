@@ -210,8 +210,10 @@ fn lines(kernel: &Kernel, text: &Shared, n: &NodeRef<'_>, s: &StyleProps) -> Vec
     let computed = n.computed_style(StyleMask::INHERITED);
     let mut spec = text_spec(&computed, "");
     spec.strut = Run::from_style("", exact_kernel::TextStyle::from_style(&computed));
-    spec.runs = n.text_runs().iter().map(Run::from_kernel).collect();
-    let spec = spec.shown(n.props.str(PropId::Markup) == Some("markdown"));
+    let spec = spec.shown(
+        &n.text_runs(),
+        exact_kernel::text::Markup::from_prop(n.props.str(PropId::Markup)),
+    );
     if spec.is_empty() {
         return Vec::new();
     }

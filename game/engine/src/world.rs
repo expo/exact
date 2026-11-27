@@ -171,10 +171,16 @@ struct Registration {
     edit: Option<ComponentEdit>,
 }
 
+pub(crate) enum AttachmentPose {
+    None,
+    Pose(crate::Affine3A),
+    Cycle,
+}
 #[derive(Clone, Copy)]
 // Installed together by the linked attachment component, never saved as state.
 pub(crate) struct Attachments {
-    pub pose: fn(&World, Entity, usize) -> Option<crate::Affine3A>,
+    pub pose: fn(&World, Entity, &mut Vec<Entity>) -> AttachmentPose,
+    pub validate: fn(&World, &mut dyn Reader) -> Result<(), DataError>,
 }
 
 /// One journal event. Reads never generate per-tick samples.

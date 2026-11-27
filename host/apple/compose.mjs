@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { within } from '../../scripts/paths.mjs';
 import { directDependencies, swiftPackageFiles, swiftPackageInventories, swiftPackageOutputs } from '../../scripts/package-libraries.mjs';
 import { spawnSync, swiftOptimization } from './toolchain.mjs';
-import { evictArms, probeDigest } from './arms.mjs';
+import { evictArms, packageKeyArgs, probeDigest } from './arms.mjs';
 import { swiftPackagesProblems } from '../../scripts/app.mjs';
 import { appleImplementations, moduleInterfaces } from '../../js/bake/src/typescript.mjs';
 import { packageConfig, sourceString } from '../../js/bake/src/package-config.mjs';
@@ -132,7 +132,7 @@ export function composedModule(packages, ownModule, config = new Map()) {
 /** Compile each package against the seam's link stub, then link its independent library.
  * The final app library supplies the seam; the stub permits app Swift to import a package
  * without a build-time link cycle (LLP 1067.000.001 D1, D5). */
-export function packageCompiler({ packages, packageDir, packageTargets, packageCopies, seam, packagesRoot, swiftc, production, distribution, ios, tv, minimum, app, extensions, swiftInputs }) {
+export function packageCompiler({ packages, packageDir, packageTargets, packageCopies, seam, packagesRoot, swiftc, production, distribution, ios, tv, frameworkBundles = ios && production, minimum, app, extensions, swiftInputs }) {
   const destination = tv ? 'tvos' : ios ? 'ios' : 'macos';
   const cache = { snapshots: new Map(), manifests: new Map(), destination };
   const graph = app ? appSwiftPackageGraph(app, packages, extensions, cache) : swiftPackageGraph(app, packages, cache);
@@ -156,8 +156,9 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
     ...(linkName ? ['-module-link-name', linkName] : []),
     '-emit-module', '-emit-module-path', resolve(dir, `${name}.swiftmodule`),
     '-I', dir, '-c', ...sources, '-o', resolve(dir, `${name}.o`)];
+  const copies = new Set(packageCopies?.flat());
   const kept = (name, args, sources, imports, dir, compile) => {
-    const key = createHash('sha256').update(JSON.stringify([name, args.map(a => a.replaceAll(dir, '<dir>')), sources.map(f => readFileSync(f, 'utf8')), imports, swiftc])).digest('hex').slice(0, 20);
+    const key = createHash('sha256').update(JSON.stringify([name, packageKeyArgs(args, dir, packageDir, copies, name), sources.map(f => readFileSync(f, 'utf8')), imports, swiftc])).digest('hex').slice(0, 20);
     const entry = resolve(packagesRoot, 'packages-kept', `${name}-${key}`);
     const outputs = d => readdirSync(d).filter(f => f.startsWith(`${name}.`));
     if (existsSync(entry)) {
@@ -179,7 +180,7 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
   const place = dir => {
     if (placed.has(dir)) return;
     mkdirSync(dir, { recursive: true });
-    const wrapped = dir === packageDir && ios && production;
+    const wrapped = dir === packageDir && frameworkBundles;
     const os = packageTargets.get(dir)[1].some(arg => /-apple-(ios|tvos)/.test(arg)) ? 'ios' : 'macos';
     const platform = dir === packageDir ? destination : packageTargets.get(dir)[1].some(arg => arg.endsWith('-macabi')) ? 'maccatalyst' : os;
     const traitChecks = [];
@@ -215,15 +216,42 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
       const adapter = resolve(dir, `adapter-${p.module}.swift`);
       writeFileSync(adapter, packageAdapter(p));
       const sources = [...packageCopies[i], adapter];
+      // Compile package Objective-C sources via Clang module.modulemap + -I (LLP 1156.008.001 A3).
+      const objcImports = [], objcObjects = [], objcInputs = [];
+      if (p.objc?.length && p.objcModule) {
+        const objcDir = resolve(dir, `objc-${p.module}`);
+        mkdirSync(objcDir, { recursive: true });
+        const headerPath = realpathSync(p.objcModule.header);
+        const headerBytes = readFileSync(headerPath, 'utf8');
+        writeFileSync(resolve(objcDir, 'module.modulemap'), `module ${p.objcModule.name} {\n  header ${JSON.stringify(headerPath)}\n  export *\n}\n`);
+        objcImports.push('-I', objcDir);
+        objcInputs.push(headerBytes);
+        const [sdkName, targetFlags] = packageTargets.get(dir);
+        const targetAt = targetFlags.indexOf('-target'), sdkAt = targetFlags.indexOf('-sdk');
+        const clangTarget = targetAt >= 0 ? ['-target', targetFlags[targetAt + 1]] : [];
+        const clangSdk = sdkAt >= 0 ? ['-isysroot', targetFlags[sdkAt + 1]] : [];
+        const clangFsys = [];
+        for (let k = 0; k < targetFlags.length; k++) if (targetFlags[k] === '-Fsystem') clangFsys.push('-iframework', targetFlags[k + 1]);
+        const clangCache = resolve(packagesRoot, 'modules-module-cache');
+        p.objc.forEach((src, j) => {
+          const objName = `${p.module}_objc_${j}`;
+          const objPath = resolve(dir, `${objName}.o`);
+          const clangArgs = ['--sdk', sdkName, 'clang', '-O2', '-fobjc-arc', '-fobjc-arc-exceptions', '-fmodules',
+            `-fmodules-cache-path=${clangCache}`, ...clangTarget, ...clangSdk, ...clangFsys, '-I', dirname(headerPath), '-c', src, '-o', objPath];
+          const objKey = kept(objName, clangArgs, [src], [headerBytes], dir, () => run(clangArgs));
+          objcObjects.push(objPath);
+          objcInputs.push(objKey);
+        });
+      }
       const sdkImports = p.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...product.imports] : [];
-      const object = [...objectArgs(p.module, sources, dir), ...sdkImports, ...buildCondition];
+      const object = [...objectArgs(p.module, sources, dir), ...objcImports, ...sdkImports, ...buildCondition];
       const os = dir === packageDir ? (ios ? tv ? 'tvos' : 'ios' : 'macos')
         : packageTargets.get(dir)[1].some(arg => arg.includes('-apple-ios')) ? 'ios' : 'macos';
       const floor = minimum && typeof minimum === 'object' ? minimum[os] : minimum;
-      const link = [...flags(dir), '-emit-library', resolve(dir, `${p.module}.o`),
+      const link = [...flags(dir), '-emit-library', resolve(dir, `${p.module}.o`), ...objcObjects,
         '-L', dir, '-lexact_modules', ...systemFrameworks([p], os, floor),
         ...moduleLibraryLinkArgs({ wrapped, module: p.module }), ...(p.swiftPackages?.length ? product.link : []), '-o', resolve(dir, `${p.module}.dylib`)];
-      kept(p.module, [...object, ...link], sources, [seamKey, product?.digest], dir, () => {
+      kept(p.module, [...object, ...link], sources, [seamKey, product?.digest, ...objcInputs], dir, () => {
         run(object);
         run(link);
       });
@@ -597,13 +625,18 @@ function buildSwiftDependencies({ app, graph, declarations, traitChecks, compile
     swiftRun([...args, '--print-manifest-job-graph'], dir);
     const plan = JSON.parse(readFileSync(resolve(bin, 'description.json'), 'utf8'));
     const inputs = new Set(Object.values(plan.swiftCommands).find(c => c.moduleName === name)?.inputs?.map(input => input.name));
-    const staticLibraries = Object.values(plan.copyCommands ?? {}).filter(copy => copy.outputs.some(output => inputs.has(output.name)))
-      .flatMap(copy => copy.inputs.map(input => input.name)).flatMap(path => path.endsWith('.framework')
-        ? [resolve(path, basename(path, '.framework'))] : path.endsWith('.a') ? [path] : [])
-      .filter(path => machOType(path) !== 6);
+    const binary = path => path.endsWith('.framework') ? resolve(path, basename(path, '.framework')) : path.endsWith('.a') ? path : null;
+    const staticLibraries = Object.values(plan.copyCommands ?? {}).flatMap(copy => copy.outputs.flatMap(({ name }) => {
+      const output = binary(name);
+      if (!output || !inputs.has(name)) return [];
+      // The plan is available before SwiftPM has copied the archive.
+      const original = copy.inputs?.find(input => input.kind !== 'virtual' && basename(input.name) === basename(name));
+      const source = original && binary(original.name);
+      return source && machOType(source) !== 6 ? [output] : [];
+    }));
     // Force-load every member so consumers can link symbols the shared product leaves unreferenced.
-    // Pass -force_load to clang so it precedes SwiftPM's -framework of its copy.
-    // ld64.lld reports duplicate symbols when a later -force_load loads members already taken from the copy.
+    // Pass -force_load to clang before SwiftPM's inputs and use the same archive path
+    // so ld64.lld loads each member once, including when -ObjC is present.
     if (staticLibraries.length) writeFileSync(resolve(dir, 'Package.swift'), swiftManifest(graph, name, declarations, compile,
       [...link, ...[...new Set(staticLibraries)].flatMap(path => ['-Xclang-linker', '-force_load', '-Xclang-linker', path])]));
     swiftRun([...args, ...swiftResourceOverlay(bin)], dir);

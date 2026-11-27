@@ -6,15 +6,21 @@ use exact_painted::presenter::{PanelImage, Presenter, SubmittedFrame};
 use exact_runner::DataSource;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+#[cfg(target_os = "linux")]
+use std::time::Duration;
+use std::time::{Instant, SystemTime};
 use tiny_skia::Pixmap;
 
-pub(crate) type PanelFrame = SubmittedFrame<PanelImage>;
+pub(crate) struct PanelFrame {
+    pub(super) picture: SubmittedFrame<PanelImage>,
+    sample: Option<exact_painted::frames::Submission>,
+}
 
-pub(crate) enum Completion {
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) enum Completion<F = PanelFrame> {
     Pending,
-    Shown(PanelFrame),
-    Retry(PanelFrame),
+    Shown(F),
+    Retry(Vec<F>),
 }
 
 pub(crate) trait Output {
@@ -24,6 +30,9 @@ pub(crate) trait Output {
     fn refresh(&self) -> u32;
     fn period_ms(&self) -> f64;
     fn pending(&self) -> bool;
+    fn can_submit(&self) -> bool {
+        !self.pending()
+    }
     fn sequence(&self) -> Option<u32>;
     #[cfg(target_os = "linux")]
     fn observed(&self) -> Option<Instant> {
@@ -52,6 +61,18 @@ pub(crate) trait Events<D: DataSource> {
 }
 
 type ReloadStamp = Vec<(std::path::PathBuf, SystemTime, u64)>;
+
+fn can_prepare<D: DataSource>(p: &Presenter<D>, display: &impl Output) -> bool {
+    if !display.can_submit() {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    if display.direct() {
+        return p.panel_can_prepare_ahead();
+    }
+    let _ = p;
+    true
+}
 
 fn mtime(path: &Path) -> Option<ReloadStamp> {
     fn collect(path: &Path, rows: &mut ReloadStamp) {
@@ -157,33 +178,58 @@ pub(crate) fn run<D: DataSource>(
                 frames.dirty(wall());
             }
         }
-        if p.dirty() && !display.pending() {
-            let Some(frame) = p.panel_frame(display.direct(), events.mirror()) else {
+        if p.dirty() && can_prepare(&p, display) {
+            #[cfg(target_os = "linux")]
+            let frame = if display.direct() {
+                p.panel_frame_ahead(events.mirror())
+            } else {
+                p.panel_frame(false, events.mirror())
+            };
+            #[cfg(not(target_os = "linux"))]
+            let frame = p.panel_frame(false, events.mirror());
+            if let Some(frame) = frame {
+                let sample = measured.then(|| {
+                    frames.submitted(
+                        wall(),
+                        p.host().runner().seq(),
+                        p.hosts(),
+                        p.last_frame_ms().map(|(ms, _)| ms),
+                    )
+                });
+                let submitted = display.submit(PanelFrame {
+                    picture: frame,
+                    sample,
+                });
+                if !marks.done() {
+                    marks.submitted(first_pixel.is_none());
+                }
+                match submitted {
+                    // The first picture's synchronous modeset has no flip event:
+                    // it is presented when `set_crtc` returns (LLP 1003.001 D9).
+                    Ok(Completion::Shown(frame)) => {
+                        presented(&mut p, frame.picture, wall(), events, &mut first_pixel)
+                    }
+                    Ok(Completion::Pending) => {}
+                    Ok(Completion::Retry(lost)) => {
+                        for frame in lost {
+                            p.panel_lost(&frame.picture);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("exact: {e}");
+                        return 1;
+                    }
+                }
+                // What the frame moved under the resting pointer is hovered (#139).
+                p.follow_pointer();
+            } else if display.direct() {
+                // A canvas callback can create a new held start after admission.
+                // Keep its picture owed while its preceding real flip completes.
+                p.repaint();
+            } else {
                 eprintln!("exact: display/presenter submission ownership mismatch");
                 return 1;
-            };
-            if measured {
-                frames.submitted(wall(), p.host().runner().seq(), p.hosts());
             }
-            let submitted = display.submit(frame);
-            if !marks.done() {
-                marks.submitted(first_pixel.is_none());
-            }
-            match submitted {
-                // The first picture's synchronous modeset has no flip event:
-                // it is presented when `set_crtc` returns (LLP 1003.001 D9).
-                Ok(Completion::Shown(frame)) => {
-                    presented(&mut p, frame, wall(), events, &mut first_pixel)
-                }
-                Ok(Completion::Pending) => {}
-                Ok(Completion::Retry(frame)) => p.panel_lost(&frame),
-                Err(e) => {
-                    eprintln!("exact: {e}");
-                    return 1;
-                }
-            }
-            // What the frame moved under the resting pointer is hovered (#139).
-            p.follow_pointer();
         }
         if p.module_pending() {
             p.first_pixel();
@@ -204,7 +250,7 @@ pub(crate) fn run<D: DataSource>(
         }
         let now = wall();
         let mut timeout = work_timeout(
-            display.pending(),
+            !can_prepare(&p, display),
             p.needs_animation_frame(),
             p.wake_due_ms(),
             now,
@@ -213,7 +259,7 @@ pub(crate) fn run<D: DataSource>(
             timeout = if timeout < 0 { wait } else { timeout.min(wait) };
         }
         // An activation after this turn's paint left a commit to show: don't sleep.
-        if p.dirty() && !display.pending() {
+        if p.dirty() && can_prepare(&p, display) {
             timeout = 0;
         }
         if config.dev_plan.is_some() || config.dev_url.is_some() {
@@ -232,6 +278,7 @@ pub(crate) fn run<D: DataSource>(
         let mut fds = events.fds();
         fds.push(p.executor_fd());
         fds.push(p.image_fd());
+        fds.push(p.surface_wake_fd());
         if let Some(fd) = p.content_region_fd() {
             fds.push(fd);
         }
@@ -239,51 +286,71 @@ pub(crate) fn run<D: DataSource>(
             fds.push(fd);
         }
         fds.push(display.fd());
-        match display.wait(&fds, timeout) {
-            Ok(true) => match display.ready() {
-                Ok(Completion::Shown(frame)) => {
-                    // The flip's kernel timestamp, else when it was heard.
-                    #[cfg(target_os = "linux")]
-                    let at = display.last_flip().map_or_else(
-                        || {
-                            display.observed().map_or_else(wall, |t| {
-                                t.duration_since(started).as_secs_f64() * 1000.
-                            })
-                        },
-                        |at| monotonic_ms(at, wall()),
-                    );
-                    #[cfg(not(target_os = "linux"))]
-                    let at = wall();
-                    #[cfg(target_os = "linux")]
-                    if !marks.done() {
-                        if let Some(at) = display.last_flip() {
-                            marks.flipped(
-                                at,
-                                &exact_painted::launch_marks::items(
-                                    &p.host().runner().outstanding(),
-                                ),
-                            );
-                        }
-                    }
-                    presented(&mut p, frame, at, events, &mut first_pixel);
-                    let paint = p.last_frame_ms().map(|(ms, _)| ms);
-                    if measured {
-                        if let Some(line) = frames.flipped(display.sequence(), at, paint) {
-                            p.host_mut().log(line);
-                        }
-                    }
-                }
-                Ok(Completion::Pending) => {}
-                Ok(Completion::Retry(frame)) => p.panel_lost(&frame),
-                Err(e) => {
-                    eprintln!("exact: {e}");
-                    return 1;
-                }
-            },
-            Ok(false) => {}
+        let ready = match display.wait(&fds, timeout) {
+            Ok(ready) => ready,
             Err(e) => {
                 eprintln!("exact: {e}");
                 return 1;
+            }
+        };
+        if ready {
+            // Two completed direct frames can arrive during CPU preparation.
+            // Publish both pictures before input uses their hit-test geometry.
+            for completed in 0..2 {
+                match display.ready() {
+                    Ok(Completion::Shown(frame)) => {
+                        // The flip's kernel timestamp, else when it was heard.
+                        #[cfg(target_os = "linux")]
+                        let at = display.last_flip().map_or_else(
+                            || {
+                                display.observed().map_or_else(wall, |t| {
+                                    t.duration_since(started).as_secs_f64() * 1000.
+                                })
+                            },
+                            |at| monotonic_ms(at, wall()),
+                        );
+                        #[cfg(not(target_os = "linux"))]
+                        let at = wall();
+                        #[cfg(target_os = "linux")]
+                        if !marks.done() {
+                            if let Some(at) = display.last_flip() {
+                                marks.flipped(
+                                    at,
+                                    &exact_painted::launch_marks::items(
+                                        &p.host().runner().outstanding(),
+                                    ),
+                                );
+                            }
+                        }
+                        presented(&mut p, frame.picture, at, events, &mut first_pixel);
+                        if let Some(sample) = frame.sample {
+                            if let Some(line) = frames.flipped(sample, display.sequence(), at) {
+                                p.host_mut().log(line);
+                            }
+                        }
+                    }
+                    Ok(Completion::Pending) => {}
+                    Ok(Completion::Retry(lost)) => {
+                        for frame in lost {
+                            p.panel_lost(&frame.picture);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("exact: {e}");
+                        return 1;
+                    }
+                }
+                if completed == 1 || !display.direct() || !display.pending() {
+                    break;
+                }
+                match display.wait(&[display.fd()], 0) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(e) => {
+                        eprintln!("exact: {e}");
+                        return 1;
+                    }
+                }
             }
         }
         // Work this turn does (input, completions, timers, frame tasks) is
@@ -324,7 +391,7 @@ pub(crate) fn run<D: DataSource>(
         }
         // A frame task (LLP 1073 D5): each frame the display can take is
         // `frame` (timers, then frame tasks), never caught up.
-        if !display.pending() && p.wants_frames() {
+        if can_prepare(&p, display) && p.wants_frames() {
             if let Some(e) = p.animation_frame(now) {
                 eprintln!("exact: {e}");
             }
@@ -333,7 +400,7 @@ pub(crate) fn run<D: DataSource>(
                 eprintln!("exact: {e}");
             }
         }
-        if !display.pending() && p.needs_animation_frame() {
+        if can_prepare(&p, display) && p.needs_animation_frame() {
             p.tick(now);
         }
         p.poll_images();
@@ -371,7 +438,9 @@ pub(super) fn poll(fds: &[i32], display_fd: i32, timeout: i32) -> Result<bool, S
         };
     }
     if let Some(fd) = pfds.iter().find(|fd| {
-        fd.fd == display_fd && fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
+        fd.fd == display_fd
+            && (fd.revents & (libc::POLLERR | libc::POLLNVAL) != 0
+                || (fd.revents & libc::POLLHUP != 0 && fd.revents & libc::POLLIN == 0))
     }) {
         return Err(format!("poll fd {} flags {}", fd.fd, fd.revents));
     }
@@ -380,8 +449,8 @@ pub(super) fn poll(fds: &[i32], display_fd: i32, timeout: i32) -> Result<bool, S
         .any(|fd| fd.fd == display_fd && fd.revents & libc::POLLIN != 0))
 }
 
-pub(super) fn work_timeout(pending: bool, animation: bool, due: Option<f64>, now: f64) -> i32 {
-    if animation && !pending {
+pub(super) fn work_timeout(blocked: bool, animation: bool, due: Option<f64>, now: f64) -> i32 {
+    if animation && !blocked {
         0
     } else if let Some(due) = due {
         (due - now).max(0.0).ceil().min(f64::from(i32::MAX)) as i32
@@ -407,7 +476,7 @@ fn monotonic_ms(at: Duration, wall: f64) -> f64 {
 
 fn presented<D: DataSource>(
     p: &mut Presenter<D>,
-    frame: PanelFrame,
+    frame: SubmittedFrame<PanelImage>,
     at: f64,
     events: &mut impl Events<D>,
     first: &mut Option<Instant>,
@@ -460,3 +529,7 @@ mod activation_tests;
 #[cfg(all(test, feature = "attach"))]
 #[path = "event_loop/attach_tests.rs"]
 mod attach_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "event_loop/ahead_tests.rs"]
+mod ahead_tests;

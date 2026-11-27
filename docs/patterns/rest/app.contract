@@ -102,12 +102,12 @@ component App
     nav = back(nav)
 
   view
-    // A narrow window pushes an item; a wide one shows it beside the list by itself, because a row
-    // draws the disclosure chevron (`contract vocab navigationSplit`).
+    // A narrow window pushes an item; a wide one shows it beside the list, because the list's route
+    // asks (`navigationSplit="split"`, `contract vocab navigationSplit`).
     main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
       for e in stack(nav) key=e.id
         if e.name == "items"
-          column navigationKey=`${e.id}` navigationScroll="items-list" position="absolute" inset=0
+          column navigationKey=`${e.id}` navigationSplit="split" navigationScroll="items-list" position="absolute" inset=0
             // A large title (`aria-level=1`) collapses as the list scrolls: nothing sits fixed between
             // the bar and the list. A control that stays goes in the bar; one that may scroll away, in the list.
             header display="flex" align-items="center" padding="8px 16px"

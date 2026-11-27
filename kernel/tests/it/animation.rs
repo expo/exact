@@ -170,6 +170,114 @@ fn an_animation_waits_for_its_row_unless_its_trigger_is_none() {
     assert_eq!(sync.animations[0].1, row, "running, from its start");
 }
 
+/// A row's wait is the row's while it lives: a row destroyed, or a kernel
+/// reset, forgets it, so the same id created again does not start paused.
+#[test]
+fn a_row_created_again_does_not_wait_for_its_former_self() {
+    let row = rows("lit 900ms linear");
+    let ops = |root: bool| {
+        let mut ops = vec![
+            Op::CreateView {
+                id: 2,
+                node_type: NodeType::View,
+            },
+            Op::CreateView {
+                id: 3,
+                node_type: NodeType::View,
+            },
+            Op::SetStyle {
+                id: 3,
+                patch: patch(StyleId::Animation, &row),
+            },
+            Op::SetChildren {
+                id: 2,
+                children: vec![3],
+            },
+        ];
+        if root {
+            ops.insert(
+                0,
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::View,
+                },
+            );
+            ops.push(Op::AttachRoot { id: 1 });
+        }
+        ops.push(Op::SetChildren {
+            id: 1,
+            children: vec![2],
+        });
+        ops
+    };
+    let paused = |k: &Kernel| {
+        let node = k.node(3).unwrap();
+        k.animation_row(&node).0.iter().all(|a| a.paused)
+    };
+    let mut k = Kernel::with_monospace();
+    k.apply(0, 1, &ops(true)).unwrap();
+    assert!(k.await_view(2));
+    k.reset();
+    k.apply(0, 2, &ops(true)).unwrap();
+    assert!(!k.is_awaiting(2), "reset forgets the wait");
+    assert!(!paused(&k));
+
+    assert!(k.await_view(2));
+    k.apply(0, 3, &[Op::DestroyView { id: 2 }]).unwrap();
+    k.apply(0, 4, &ops(false)).unwrap();
+    assert!(!k.is_awaiting(2), "destroying the row forgets the wait");
+    assert!(!paused(&k));
+
+    assert!(k.await_view(2));
+    let mut again = vec![Op::DestroyView { id: 2 }];
+    again.extend(ops(false));
+    k.apply(0, 5, &again).unwrap();
+    assert!(!k.is_awaiting(2), "in the batch that creates it again too");
+    assert!(!paused(&k));
+
+    // A multi-phase commit that creates a row, awaits it before finish, and
+    // destroys another row keeps the newly awaited live row held.
+    k.apply(
+        0,
+        6,
+        &[
+            Op::DestroyView { id: 2 },
+            Op::CreateView {
+                id: 4,
+                node_type: NodeType::View,
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![4],
+            },
+        ],
+    )
+    .unwrap();
+    let mut phase = vec![Op::DestroyView { id: 4 }];
+    phase.extend(ops(false));
+    k.begin_document_commit(0, 7, &phase, None).unwrap();
+    assert!(k.await_view(2));
+    k.finish_document_commit().unwrap();
+    assert!(
+        k.is_awaiting(2),
+        "live row awaited during a multi-phase commit stays held"
+    );
+    assert!(paused(&k));
+
+    // A row created, awaited, and destroyed across phases of one commit is
+    // forgotten when the commit finishes.
+    k.apply(0, 8, &[Op::DestroyView { id: 2 }]).unwrap();
+    k.begin_document_commit(0, 9, &ops(false), None).unwrap();
+    assert!(k.await_view(2));
+    k.continue_document_commit(&[Op::DestroyView { id: 2 }])
+        .unwrap();
+    k.finish_document_commit().unwrap();
+    assert!(!k.is_awaiting(2));
+    k.apply(0, 10, &ops(false)).unwrap();
+    assert!(!k.is_awaiting(2));
+    assert!(!paused(&k));
+}
+
 #[test]
 fn delayed_lights_keep_independent_timing_through_patches_and_clears() {
     use exact_kernel::{motion::motion_node, StyleMask};

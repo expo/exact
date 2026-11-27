@@ -28,10 +28,30 @@ final class NativeTaskTimers {
     deinit { for entry in entries.values { entry.timer.invalidate() } }
     var nextDue: Double? { rows.map(\.due).min() }
     var hasReady: Bool { !queue.isEmpty }
-    func matches(_ rows: [NativeTimerWake]?) -> Bool { rows == nil || rows == self.rows }
+    func matches(_ rows: [NativeTimerWake]?) -> Bool {
+        (rows == nil || rows == self.rows) && entries.values.allSatisfy { $0.pending || $0.timer.isValid }
+    }
     func cancel() {
         for entry in entries.values { entry.timer.invalidate() }
         entries.removeAll(); queue.removeAll(); rows.removeAll(); epoch = nil
+    }
+    private func arm(_ row: NativeTimerWake, epoch: Int, minDelay: Double = -Double.infinity) {
+        entries.removeValue(forKey: row.index)?.timer.invalidate()
+        // Keep the original deadline and full authored tolerance, including overdue firings
+        let delay = max(minDelay, (row.due - now()) / 1000)
+        let fireDate = date().addingTimeInterval(delay)
+        let timer = SessionClockTimer.schedule(at: fireDate, every: row.once ? 0 : Double(row.interval) / 1000,
+                                              tolerance: Double(row.tolerance) / 1000) { [weak self] timer in
+            guard let self, self.epoch == epoch, let entry = self.entries[row.index], entry.timer === timer, !entry.pending else { return }
+            let cutoff = self.now()
+            if cutoff < entry.row.due {
+                if entry.row.once { self.arm(entry.row, epoch: epoch, minDelay: 0.0001) }
+                return
+            }
+            entry.pending = true
+            self.queue.append(Delivery(cutoff: cutoff, entry: entry)); self.resume()
+        }
+        entries[row.index] = Entry(row, timer)
     }
     func update(_ rows: [NativeTimerWake]?, epoch: Int, enabled: Bool) {
         guard enabled else { cancel(); return }
@@ -43,21 +63,12 @@ final class NativeTaskTimers {
             entries.removeValue(forKey: index)?.timer.invalidate()
         }
         for row in rows {
-            if let entry = entries[row.index], entry.row.generation == row.generation {
+            if let entry = entries[row.index], entry.row.generation == row.generation,
+               entry.pending || entry.timer.isValid {
                 entry.row = row
                 continue
             }
-            entries.removeValue(forKey: row.index)?.timer.invalidate()
-            // Keep the original deadline and full authored tolerance, including overdue firings
-            let delay = (row.due - now()) / 1000
-            let fireDate = date().addingTimeInterval(delay)
-            let timer = SessionClockTimer.schedule(at: fireDate, every: row.once ? 0 : Double(row.interval) / 1000,
-                                                  tolerance: Double(row.tolerance) / 1000) { [weak self] timer in
-                guard let self, self.epoch == epoch, let entry = self.entries[row.index], entry.timer === timer, !entry.pending else { return }
-                entry.pending = true
-                self.queue.append(Delivery(cutoff: self.now(), entry: entry)); self.resume()
-            }
-            entries[row.index] = Entry(row, timer)
+            arm(row, epoch: epoch)
         }
         queue.removeAll { entries[$0.row.index] !== $0.entry }
         resume()
@@ -73,7 +84,7 @@ final class NativeTaskTimers {
         if delay > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: ask) } else { DispatchQueue.main.async(execute: ask) }
     }
     func take() -> Delivery? { queue.isEmpty ? nil : queue.removeFirst() }
-    func complete(_ delivery: Delivery, retry: Bool) {
+    func complete(_ delivery: Delivery, retry: Bool, remaining: [NativeTimerWake]? = nil) {
         let entry = delivery.entry
         guard entries[entry.row.index] === entry else { resume(); return }
         // A busy or held answer keeps the firing at the front and asks for it again, a frame later: its entry stays
@@ -82,6 +93,13 @@ final class NativeTaskTimers {
         // nested run loop would otherwise ask again on every turn of it.)
         if retry { queue.insert(delivery, at: 0); resume(after: 1.0 / 60); return }
         entry.pending = false
+        if !entry.timer.isValid, let epoch {
+            if let latest = remaining?.first(where: { $0.index == entry.row.index && $0.generation == entry.row.generation }) {
+                arm(latest, epoch: epoch, minDelay: 0.0001)
+            } else if remaining == nil, rows.contains(where: { $0.index == entry.row.index && $0.generation == entry.row.generation }) {
+                arm(entry.row, epoch: epoch, minDelay: 0.0001)
+            }
+        }
         resume()
     }
     #if DEBUG
@@ -136,13 +154,13 @@ extension ExactSession {
                 self?.publish(.advance, completion)
                 DispatchQueue.main.async { [weak self] in
                     guard let self, runtime.accepts(completion.lease) else { return }
-                    taskTimers.complete(timer, retry: completion.batch.busy || completion.batch.held)
+                    taskTimers.complete(timer, retry: completion.batch.busy || completion.batch.held, remaining: completion.batch.nativeTimers)
                 }
             }
         } else {
             let batch = runtime.fireNativeTimer(timer.row, now: timer.cutoff)
             applyUnlessEmpty(batch)
-            taskTimers.complete(timer, retry: batch.busy || batch.held)
+            taskTimers.complete(timer, retry: batch.busy || batch.held, remaining: batch.nativeTimers)
         }
     }
 }

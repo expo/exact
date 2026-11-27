@@ -346,3 +346,54 @@ fn android_compat_uses_the_merged_permissions_after_package_resolution() {
         );
     }
 }
+
+#[test]
+fn android_bake_output_uses_android_stem_for_linux_and_android_platform_flags() {
+    let app = App::new("android-stem");
+    app.write(
+        "app.json",
+        r#"{"app":{"id":"com.example.stem","name":"Stem"}}"#,
+    );
+    app.write("app.contract", "component App\n  view\n    text \"ok\"\n");
+    let plan = contract::compile_path(&app.0.join("app.contract"))
+        .unwrap()
+        .encode();
+    let target = "aarch64-linux-android";
+    let mut outputs = Vec::new();
+    for platform in ["linux", "android"] {
+        let out = app.0.join(format!("out-{platform}"));
+        let bake_out = app.0.join(format!("bake-{platform}"));
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("app.plan"), &plan).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_exact-bake"))
+            .arg("compat")
+            .arg(&app.0)
+            .args(["--platform", platform, "--target", target, "--json"])
+            .env("OUT_DIR", &out)
+            .env("EXACT_BAKE_OUTPUT", &bake_out)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{platform}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        for suffix in [".json", ".plan", ".artifacts.json"] {
+            assert!(
+                bake_out.join(format!("android-{target}{suffix}")).is_file(),
+                "{platform}: missing android-{target}{suffix}"
+            );
+            assert!(
+                !bake_out.join(format!("linux-{target}{suffix}")).exists(),
+                "{platform}: unexpected linux-{target}{suffix}"
+            );
+        }
+        let written: Value = serde_json::from_slice(
+            &std::fs::read(bake_out.join(format!("android-{target}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert!(written["embedded"].get("displayName").is_none());
+        outputs.push(written);
+    }
+    assert_eq!(outputs[0], outputs[1]);
+}

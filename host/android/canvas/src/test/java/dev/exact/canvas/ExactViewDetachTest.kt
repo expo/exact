@@ -176,7 +176,9 @@ class ExactViewDetachTest {
             val worker = view.get<ExecutorService>("worker")
             try {
                 // The feed's group 7 places row 21, which the stream left waiting: it was out of view.
-                field("ops").set(view, IntBuffer.wrap(intArrayOf(20, 7, 17, 21, 0, f(top), 21)))
+                val page = IntBuffer.wrap(intArrayOf(20, 7, 17, 21, 0, f(top), 21))
+                field("ops").set(view, page)
+                assertEquals(false, view.call("retained", page, true))
                 view.get<HashMap<Int, RenderNode>>("groups")[7] = RenderNode("group")
                 val row = intArrayOf(15, 21, previous, f(200f), f(80f), 1, 16)
                 val wait = Structure.Later(IntBuffer.wrap(row), 0, row.size).also { it.top = top }
@@ -190,11 +192,93 @@ class ExactViewDetachTest {
                 worker.submit {}.get()
                 shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
                 assertEquals("top $top", listOf(true), drawn)
+                assertEquals("the completed row is inside group 7", true, view.call("retained", page, true))
+                assertEquals("the group already recorded the completed row", listOf(true), drawn)
             } finally {
                 view.detach()
             }
             assertTrue(worker.isShutdown)
         }
+    }
+
+    @Test fun aPlacementFollowsItsDrawableRowFromFallbackToCompletion() {
+        val view = view()
+        val held = HeldWork()
+        try {
+            val row = intArrayOf(15, 5, 0, 200f.toBits(), 80f.toBits(), 1, 16)
+            view.call("makeRow", IntBuffer.wrap(row), 0, true)
+            val page = IntBuffer.wrap(intArrayOf(17, 21, 0, 0))
+            field("ops").set(view, page)
+            assertEquals(false, view.call("retained", page, true))
+            val worker = view.get<ExecutorService>("worker")
+            worker.execute { held.hold() }
+            assertTrue(held.entered.await(5, TimeUnit.SECONDS))
+            row[1] = 23
+            view.call("makeRow", IntBuffer.wrap(row), 0, false)
+            assertNull("a new pending row has no predecessor", view.get<Map<Int, Int?>>("pending").getValue(23))
+            row[1] = 21; row[2] = 5
+            view.call("makeRow", IntBuffer.wrap(row), 0, false)
+            val player = view.get<Player>("main")
+            assertSame(player.row(5), player.row(21))
+            assertEquals("the root can now draw the fallback", false, view.call("retained", page, true))
+            held.finish.countDown()
+            worker.submit {}.get(5, TimeUnit.SECONDS)
+            val shadow = shadowOf(view)
+            shadow.clearWasInvalidated()
+            shadowOf(Looper.getMainLooper()).idle()
+            view.get<Choreographer.FrameCallback>("regroupFrame").doFrame(0L)
+            assertTrue("a direct placement needs the new root drawing", shadow.wasInvalidated())
+            assertNotSame(player.row(5), player.row(21))
+            assertEquals("the completion already requested the new root", true, view.call("retained", page, true))
+        } finally { held.finish.countDown(); view.detach() }
+    }
+
+    @Test fun completingAnUnplacedWorkerRowDoesNotWakeTheTicker() {
+        val view = view()
+        try {
+            val page = IntBuffer.allocate(0)
+            field("ops").set(view, page)
+            view.call("retained", page, true)
+            var ticks = 0
+            view.ticker = object : android.view.View(view.context) { override fun invalidate() { ticks++ } }
+            ticks = 0
+            view.call("record", 21, 5, RenderNode("unused"), IntBuffer.allocate(0), 0, 0)
+            view.get<ExecutorService>("worker").submit {}.get(5, TimeUnit.SECONDS)
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+            assertEquals(0, ticks)
+        } finally { view.detach() }
+    }
+
+    @Test fun aGroupInsideAFilterKeepsItsRecordingOriginOnAPartialPaint() {
+        val view = view()
+        try {
+            val main = view.get<Player>("main")
+            main.width = 100; main.height = 100
+            val identity = intArrayOf(1, 1f.toBits(), 0, 0, 1f.toBits(), 0, 0)
+            val tint = IntArray(20).also { for (i in 0..3) it[i * 6] = 1f.toBits() }
+            val filter = intArrayOf(53, 26, 10f.toBits(), 0, 80f.toBits(), 80f.toBits(), 1, 1) + tint
+            fun stream(extra: Boolean): IntBuffer {
+                val marker = intArrayOf(2, android.graphics.Color.BLUE, 40f.toBits(), 35f.toBits(), 8f.toBits(), 8f.toBits()) + IntArray(8)
+                val other = if (extra) intArrayOf(17, 91, 0, 0) else intArrayOf()
+                return IntBuffer.wrap(identity + filter + intArrayOf(20, 7) + identity + marker + other + intArrayOf(21, 54))
+            }
+            fun markerX(page: RenderNode): Int {
+                val hw = android.graphics.HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
+                    RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+                    .invoke(null, page, 100, 100) as Bitmap
+                val copy = hw.copy(Bitmap.Config.ARGB_8888, false)
+                return try { (0 until 100).first { copy.getPixel(it, 38) == android.graphics.Color.BLUE } }
+                    finally { copy.recycle(); hw.recycle() }
+            }
+            val page = RenderNode("page").apply { setPosition(0, 0, 100, 100) }
+            val initial = stream(false)
+            assertEquals(false, view.call("retained", initial, true))
+            main.replay(page.beginRecording(), initial, 0, initial.limit())
+            page.endRecording()
+            val x = markerX(page)
+            assertEquals(true, view.call("retained", stream(true), true))
+            assertEquals("mounting a sibling keeps the marker at its painted position", x, markerX(page))
+        } finally { view.detach() }
     }
 
     @Test fun aRowDrawsTheSamePixelsAfterAnInlineFrameDropsItsDisplayList() {
@@ -235,7 +319,7 @@ class ExactViewDetachTest {
         val view = view()
         view.detach()
         view.call("record", 1, 0, RenderNode("row"), IntBuffer.allocate(0), 0, 0)
-        assertTrue(view.get<Map<Int, Int>>("pending").isEmpty())
+        assertTrue(view.get<Map<Int, Int?>>("pending").isEmpty())
     }
 
     @Test fun aDetachedViewMakesNoHardwarePictures() {

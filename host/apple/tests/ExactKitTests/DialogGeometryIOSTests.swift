@@ -213,5 +213,84 @@ final class DialogGeometryIOSTests: XCTestCase {
         sheet.scroller.setContentOffset(.zero, animated: false)
         until("scrolling alone leaves the target") { self.slots(s)["seen"] as? Bool == false }
     }
+
+    private final class FixedTouch: UITouch {
+        private let target: UIView
+        private let point: CGPoint
+        init(_ target: UIView, at point: CGPoint) { self.target = target; self.point = point; super.init() }
+        override var view: UIView? { target }
+        override func location(in view: UIView?) -> CGPoint { target.convert(point, to: view) }
+    }
+
+    /// LLP 1123 D2: modal-background inertness blocks direct touches on the page
+    /// behind a modal route sheet, while logical pointer bubbling out of the sheet
+    /// still reaches ancestors that are not authored `inert`.
+    func testModalSheetPointerEventsBubbleToNonAuthoredInertAncestors() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a modal sheet needs a scene's window") }
+        let s = ExactApp.shared.makeSession(label: "modal-pointer-bubble")
+        session = s
+        let view = ExactView(session: s), host = UIViewController(), w = UIWindow(windowScene: scene)
+        w.frame = w.screen.bounds; w.rootViewController = host; w.makeKeyAndVisible(); host.view.addSubview(view)
+        window = w
+        XCTAssertNil(s.boot(plan: try fixturePlan("ROUTE_BACKDROP"), size: w.bounds.size).error)
+        view.frame = host.view.bounds; view.layoutIfNeeded()
+        if s.firstDrawMs == nil { s.firstDrawMs = ExactEnv.wall() }
+        let p = s.presenter, agent = Agent(session: s)
+        defer { host.dismiss(animated: false) }
+        let opener = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "open-sheet" })
+        p.press(opener.id)
+        until("the modal sheet settles") { p.modalHost.owner?.view.window != nil && !agent.nativeInFlight() }
+        let mounted = try XCTUnwrap(p.modalHost.mounted.first)
+        let sheetRoute = mounted.route
+        let root = try XCTUnwrap(p.logicalParent(of: sheetRoute.id).flatMap { p.views[$0] })
+        let child = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "open-detail" })
+        let mount = mounted.mount
+        XCTAssertTrue(root.inert, "page root is behind the modal sheet")
+        XCTAssertFalse(root.authoredInert)
+        XCTAssertFalse(sheetRoute.inert, "the modal sheet itself is live")
+
+        root.handlers = ["pointerdown", "pointerup"]; root.syncPointerRecognizer()
+        sheetRoute.handlers = []; sheetRoute.syncPointerRecognizer()
+        var downs: [UInt32] = []
+        p.onPointer = { id, kind, _ in if kind == .down { downs.append(id) } }
+        let relayRecognizer = try XCTUnwrap(mount.gestureRecognizers?.compactMap { $0 as? PointerRecognizer }.first { $0.relay != nil })
+        let insideTouch = FixedTouch(child, at: CGPoint(x: 20, y: 20))
+        let event = UIEvent()
+
+        // 1. Relay-only listener on modal-behind root receives pointerdown from inside the sheet.
+        relayRecognizer.touchesBegan([insideTouch], with: event)
+        relayRecognizer.touchesEnded([insideTouch], with: event)
+        XCTAssertEqual(downs, [root.id], "relayed pointerdown reaches modal-behind ancestor")
+
+        // 2. Direct touch on modal-behind root (no relay) is blocked by modal inertness.
+        downs = []
+        let rootRecognizer = try XCTUnwrap(root.gestureRecognizers?.compactMap { $0 as? PointerRecognizer }.first)
+        let directTouch = FixedTouch(root, at: CGPoint(x: 20, y: 20))
+        rootRecognizer.touchesBegan([directTouch], with: event)
+        rootRecognizer.touchesEnded([directTouch], with: event)
+        XCTAssertTrue(downs.isEmpty, "direct touch on modal-behind root stays inert")
+
+        // 3. In-sheet pointerdown bubbles out of the sheet to modal-behind root.
+        downs = []
+        sheetRoute.handlers = ["pointerdown", "pointerup"]; sheetRoute.syncPointerRecognizer()
+        let routeRecognizer = try XCTUnwrap(sheetRoute.gestureRecognizers?.compactMap { $0 as? PointerRecognizer }.first)
+        routeRecognizer.touchesBegan([insideTouch], with: event)
+        routeRecognizer.touchesEnded([insideTouch], with: event)
+        XCTAssertEqual(downs, [sheetRoute.id, root.id], "in-sheet pointerdown bubbles to modal-behind root")
+
+        // 4. Authored inert="true" on root blocks both direct bubbling and relay delivery.
+        downs = []
+        p.apply(wireBatch([["op": "props", "id": Int(root.id), "set": ["inert": "true"]]]))
+        XCTAssertTrue(root.authoredInert)
+        routeRecognizer.touchesBegan([insideTouch], with: event)
+        routeRecognizer.touchesEnded([insideTouch], with: event)
+        XCTAssertEqual(downs, [sheetRoute.id], "authored inert ancestor is skipped during bubbling")
+
+        downs = []
+        sheetRoute.handlers = []; sheetRoute.syncPointerRecognizer()
+        relayRecognizer.touchesBegan([insideTouch], with: event)
+        relayRecognizer.touchesEnded([insideTouch], with: event)
+        XCTAssertTrue(downs.isEmpty, "authored inert ancestor is skipped by MountRelay")
+    }
 }
 #endif

@@ -215,3 +215,25 @@ fn an_initializer_calls_the_roster_and_fns_not_states_of_that_name() {
     .unwrap_err();
     assert_eq!(e.id, "type-initializer-scope", "{}", e.message);
 }
+
+#[test]
+fn fn_dag_expansion_is_bounded_and_refused_promptly() {
+    let mut distinct = String::from("fn f0(x: number): number = x\n");
+    let mut conditional = String::from("fn f0(x: number): number = x\n");
+    for i in 1..=20 {
+        let p = i - 1;
+        distinct.push_str(&format!(
+            "fn f{i}(x: number): number = f{p}(x) + f{p}(x + 1) + f{p}(x + 2)\n"
+        ));
+        conditional.push_str(&format!(
+            "fn f{i}(x: number): number = (x > 0 ? f{p}(x) : 0) + (x > 0 ? f{p}(x) : 0) + (x > 0 ? f{p}(x) : 0)\n"
+        ));
+    }
+    let tail = "component App\n  view\n    text `${f20(0)}`\n";
+    for src in [format!("{distinct}{tail}"), format!("{conditional}{tail}")] {
+        let started = std::time::Instant::now();
+        let e = contract::compile(&src).unwrap_err();
+        assert_eq!(e.id, "lower-fn-size", "{e}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+}

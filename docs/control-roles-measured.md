@@ -24,7 +24,7 @@ the table's `select` is the closed button, as a person first sees it.
 **Where (2026-10-18):**
 
 - `ios`: iOS 27.0 simulator (iPhone 17 Pro, 24A434).
-- `macos`: macOS 27.0, the agent's capture in a key window (`EXACT_AGENT_ACTIVATE=1`, which `measure-controls` sets for this run only).
+- `macos`: macOS 27.0, the agent's capture in a key window (`EXACT_AGENT_ACTIVATE=1`, which `measure-controls` sets for this run only). The accent rows were remeasured on 2026-11-25 on macOS 27.2.1 (26B131) at 2×.
 - `web`: Chrome 155.0.8059.84 on macOS 27.0.
 - `linux`: the Linux host's painter (caltrain-linux, host-dev), headless on macOS 27.0.
 - `windows`: not measured.
@@ -36,6 +36,7 @@ the table's `select` is the closed button, as a person first sees it.
 
 - `measured`: the run above gave it.
 - `inferred: same painter, not measured`: Windows draws with Linux's painter (`host/windows` and `host/linux` both depend on `exact-painted`); Linux's row, until a Windows box exists.
+- `inferred from presenter, not measured`: for this title-only group, iOS leaves the selected fill at UIKit’s default in `SegmentsIOS.swift`. The web CSS in `host/web/neutral.css` and the Linux neutral painter in `host/painted/src/paint/segment.rs` use the page ground in light mode and the fill role in dark mode. The Android branch in that painter uses the Material selected container.
 - A `none` whose why says the host does not read a role yet is Exact's gap, not the platform's: each has a QUEUE line, and fixing the host flips the cell after a re-measure.
 - `none by construction`: the terminal draws no colour and no control but progress as text.
 - `measured, key window via EXACT_AGENT_ACTIVATE`: the Mac's accent cells. An agent's Mac app is never activated by design (an accessory app, so a drive takes no focus), and AppKit draws an inactive app's controls grey; `measure-controls` activates the one run (stage 9 F2, 2026-10-18).
@@ -50,14 +51,14 @@ the table's `select` is the closed button, as a person first sees it.
 | switch | accent-color | terminal | none | - | - | none by construction |
 | switch | accent-color | android | exact | 0 | 49364 | measured |
 | switch:disabled | accent-color | ios | best-effort | 20.2 | 6934 | measured |
-| switch:disabled | accent-color | macos | none | (43.4) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
+| switch:disabled | accent-color | macos | none | (43.7) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
 | switch:disabled | accent-color | web | best-effort | 19.6 | 408 | measured |
 | switch:disabled | accent-color | linux | best-effort | 19.1 | 6752 | measured |
 | switch:disabled | accent-color | windows | best-effort | - | - | inferred: same painter, not measured |
 | switch:disabled | accent-color | terminal | none | - | - | none by construction |
 | switch:disabled | accent-color | android | best-effort | 19.4 | 51236 | measured |
 | checkbox | accent-color | ios | exact | 0 | 2180 | measured |
-| checkbox | accent-color | macos | exact | 0.7 | 166 | measured, key window via EXACT_AGENT_ACTIVATE |
+| checkbox | accent-color | macos | exact | 0.7 | 699 | measured, key window via EXACT_AGENT_ACTIVATE |
 | checkbox | accent-color | web | exact | 0 | 276 | measured |
 | checkbox | accent-color | linux | exact | 0 | 6894 | measured |
 | checkbox | accent-color | windows | exact | - | - | inferred: same painter, not measured |
@@ -71,7 +72,7 @@ the table's `select` is the closed button, as a person first sees it.
 | checkbox:disabled | accent-color | terminal | none | - | - | none by construction |
 | checkbox:disabled | accent-color | android | best-effort | 19.4 | 27720 | measured |
 | radio | accent-color | ios | exact | 0 | 1732 | measured |
-| radio | accent-color | macos | exact | 0.9 | 160 | measured, key window via EXACT_AGENT_ACTIVATE |
+| radio | accent-color | macos | exact | 1.1 | 660 | measured, key window via EXACT_AGENT_ACTIVATE |
 | radio | accent-color | web | exact | 0 | 232 | measured |
 | radio | accent-color | linux | exact | 0 | 6848 | measured |
 | radio | accent-color | windows | exact | - | - | inferred: same painter, not measured |
@@ -85,19 +86,26 @@ the table's `select` is the closed button, as a person first sees it.
 | radio:disabled | accent-color | terminal | none | - | - | none by construction |
 | radio:disabled | accent-color | android | best-effort | 14.2 | 27696 | measured |
 | range | accent-color | ios | exact | 0 | 10726 | measured |
-| range | accent-color | macos | none | (38.6) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
+| range | accent-color | macos | exact | 1.1 | 5277 | measured, key window via EXACT_AGENT_ACTIVATE |
 | range | accent-color | web | exact | 0 | 180 | measured |
 | range | accent-color | linux | exact | 0 | 180 | measured |
 | range | accent-color | windows | exact | - | - | inferred: same painter, not measured |
 | range | accent-color | terminal | none | - | - | none by construction |
 | range | accent-color | android | exact | 0 | 6371 | measured |
 | range:disabled | accent-color | ios | best-effort | 19.8 | 10748 | measured |
-| range:disabled | accent-color | macos | none | (39) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
+| range:disabled | accent-color | macos | none | (38.8) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
 | range:disabled | accent-color | web | best-effort | 20.2 | 216 | measured |
 | range:disabled | accent-color | linux | best-effort | 20.2 | 212 | measured |
 | range:disabled | accent-color | windows | best-effort | - | - | inferred: same painter, not measured |
 | range:disabled | accent-color | terminal | none | - | - | none by construction |
 | range:disabled | accent-color | android | best-effort | 7.7 | 7587 | measured |
+| segmented-group | accent-color | ios | none | - | - | inferred from presenter, not measured |
+| segmented-group | accent-color | macos | exact | 0.7 | 16054 | measured, key window via EXACT_AGENT_ACTIVATE |
+| segmented-group | accent-color | web | none | - | - | inferred from presenter, not measured |
+| segmented-group | accent-color | linux | none | - | - | inferred from presenter, not measured |
+| segmented-group | accent-color | windows | none | - | - | inferred: same painter, not measured |
+| segmented-group | accent-color | terminal | none | - | - | none by construction |
+| segmented-group | accent-color | android | none | - | - | inferred from presenter, not measured |
 | progress | accent-color | ios | exact | 0.6 | 7927 | measured |
 | progress | accent-color | macos | none | (38.8) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
 | progress | accent-color | web | exact | 0 | 926 | measured |
@@ -120,14 +128,14 @@ the table's `select` is the closed button, as a person first sees it.
 | select | accent-color | terminal | none | - | - | none by construction |
 | select | accent-color | android | none | 31.5 | 0 | measured |
 | button-prominent | accent-color | ios | exact | 0 | 101731 | measured |
-| button-prominent | accent-color | macos | exact | 0.2 | 8177 | measured, key window via EXACT_AGENT_ACTIVATE |
+| button-prominent | accent-color | macos | exact | 0.2 | 32891 | measured, key window via EXACT_AGENT_ACTIVATE |
 | button-prominent | accent-color | web | exact | 0 | 12639 | measured |
 | button-prominent | accent-color | linux | exact | 0 | 12698 | measured |
 | button-prominent | accent-color | windows | exact | - | - | inferred: same painter, not measured |
 | button-prominent | accent-color | terminal | none | - | - | none by construction |
 | button-prominent | accent-color | android | exact | 0 | 76983 | measured |
 | button-prominent:disabled | accent-color | ios | none | 35 | 0 | measured |
-| button-prominent:disabled | accent-color | macos | best-effort | 11.6 | 8488 | measured, key window via EXACT_AGENT_ACTIVATE |
+| button-prominent:disabled | accent-color | macos | best-effort | 11.6 | 33956 | measured, key window via EXACT_AGENT_ACTIVATE |
 | button-prominent:disabled | accent-color | web | none | 28.1 | 0 | measured |
 | button-prominent:disabled | accent-color | linux | none | 28.1 | 0 | measured |
 | button-prominent:disabled | accent-color | windows | none | - | - | inferred: same painter, not measured |
@@ -175,3 +183,13 @@ the table's `select` is the closed button, as a person first sees it.
 | textarea | placeholder | windows | exact | - | - | inferred: same painter, not measured |
 | textarea | placeholder | terminal | none | - | - | none by construction |
 | textarea | placeholder | android | exact | 0 | 1633 | measured |
+
+On macOS a tablist or radio group projected to an inline `NSSegmentedControl` uses the group’s accent for `selectedSegmentBezelColor`. The fixture measures a title-only group.
+The toolbar has a separate projection on macOS.
+
+| AppKit projection | Parameter | macOS fidelity | Observation |
+| --- | --- | --- | --- |
+| `NSToolbarItemGroup` in a window toolbar | accent-color | none | AppKit owns the selected fill. Its title-based group has no public selected-segment tint and its public `view` was nil after installation. |
+
+`NSSwitch` and both forms of `NSProgressIndicator` also leave their fill to AppKit.
+A `meter` role gives the authored view level-indicator accessibility semantics. The app draws its gauge.

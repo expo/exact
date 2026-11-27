@@ -66,12 +66,14 @@ pub mod haptics;
 pub mod json;
 pub mod shaders;
 mod target;
-pub use target::ColorSpace;
+pub use target::{ColorSpace, ColorTarget};
 pub mod tier;
 pub use tier::{set_thread_tier, set_tier, tier, GpuTier};
 #[cfg(not(target_arch = "wasm32"))]
 mod storage;
 mod uniform;
+mod wake;
+pub use wake::SurfaceWaker;
 #[cfg(windows)]
 mod window;
 pub use uniform::FrameUniform;
@@ -219,6 +221,11 @@ impl AssetChanges {
 
 /// What an app implements per canvas.
 pub trait Surface {
+    /// Receive this canvas's wake handle, once at surface creation before any
+    /// other callback (LLP 1009 D12). Call [`SurfaceWaker::wake`] from any
+    /// thread when asynchronous work finishes and a resting canvas needs
+    /// another frame.
+    fn set_waker(&mut self, _waker: SurfaceWaker) {}
     /// This canvas's native session directories, once before its first bind.
     /// Copy paths you keep; create directories only when needed. The paths map
     /// to `app:/data`, `app:/cache` and `app:/tmp`, including named agent stores.
@@ -402,6 +409,9 @@ pub trait Surface {
     /// Every native readback reports sRGB before capture, including after
     /// detachment, then restores any P3 presentation grant after capture.
     fn color_space_granted(&mut self, _space: ColorSpace) {}
+    /// The current destination for a bound colour. Called before preparing or rendering
+    /// for a window, hardware buffer or native readback.
+    fn color_target(&mut self, _target: ColorTarget) {}
     /// Every output pixel of this instance has alpha one under its current
     /// clear/background policy. Evaluated after binding, never by surface type.
     /// Allows a host to present a full-window canvas beneath its UI. On Android
@@ -424,6 +434,12 @@ pub trait Surface {
     }
     /// One device event in canvas points, stamped with the host's clock.
     fn input(&mut self, _event: &InputEvent) {}
+    /// Why the surface requested this frame, sampled before rendering during a platform trace.
+    fn draw_reasons(&self, _input_poll: bool, _record: &mut dyn FnMut(&str)) {}
+    /// Remember this completed draw for the trace and return samples consumed since its predecessor.
+    fn finish_draw_trace(&mut self, _traced: bool) -> Option<u64> {
+        None
+    }
     /// Whether the event the last [`Surface::input`] took changed what the
     /// canvas shows, as [`Surface::frame_ready`] answers for `render`. False
     /// asks for no frame, so a resting scene can take a sensor's samples or a
@@ -583,6 +599,7 @@ pub struct Module {
     next: u32,
     error: String,
     seekable: bool,
+    frame_samples: bool,
     reduced_motion: bool,
     period_ms: f64,
     /// The host's last display callback and the device's thermal state ([`pace`]).
@@ -632,7 +649,7 @@ mod recovery;
 /// free (the compositor releases one some 5 ms after it) and a kernel
 /// stall of 8 ms then cost a refresh: about five a 90-second tour, none to
 /// two with four, for some 0.6 frames more queued on average.
-const FRAME_LATENCY: u32 = if cfg!(target_os = "android") { 4 } else { 2 };
+pub(crate) const FRAME_LATENCY: u32 = if cfg!(target_os = "android") { 4 } else { 2 };
 
 struct Instance {
     name: String,
@@ -656,6 +673,8 @@ struct Instance {
     acquire: acquire::Acquire,
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<readback::Readback>,
+    #[cfg(not(target_arch = "wasm32"))]
+    sampled: Option<readback::Rows>,
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
     layer: Option<usize>,
     outstanding: BTreeSet<String>,
@@ -663,8 +682,13 @@ struct Instance {
     bound: bool,
     /// The inputs its last accepted bind gave its surface ([`Module::bind_changed_json`]).
     inputs: Vec<Value>,
+    has_color_inputs: bool,
+    destination: ColorTarget,
     dirty: bool,
     input_dirty: bool,
+    wake: wake::WakeState,
+    #[cfg(exact_android_draw_trace)]
+    draw_trace: android::DrawTrace,
     /// Its first frame has been handed to the compositor (`Module::seen`);
     /// shared with the callback that says so.
     seen: Arc<AtomicBool>,
@@ -735,6 +759,7 @@ impl Module {
             next: 0,
             error: String::new(),
             seekable: false,
+            frame_samples: false,
             reduced_motion: false,
             period_ms: 0.0,
             host: Default::default(),
@@ -753,6 +778,7 @@ impl Module {
         #[cfg(not(target_arch = "wasm32"))]
         for inst in self.instances.values_mut() {
             inst.readback = None;
+            inst.sampled = None;
             inst.scratch = None;
         }
         // A frame recorded on another device is never submitted on this one.
@@ -803,9 +829,12 @@ impl Module {
                 };
             inst.surface
                 .device_ready(gpu.device.features(), gpu.device.limits());
-            inst.report_color_space();
+            if let Err(e) = inst.report_color_space() {
+                self.error = e.0;
+                continue;
+            }
             inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
-            inst.dirty = true;
+            inst.invalidate();
         }
         self.gpu = Some(gpu);
     }
@@ -887,7 +916,7 @@ impl Module {
         match shaders::set_shader(name, text, Some(expected)) {
             Ok(()) => {
                 for inst in self.instances.values_mut() {
-                    inst.dirty = true;
+                    inst.invalidate();
                 }
                 true
             }
@@ -912,23 +941,38 @@ impl Module {
         else {
             return self.fail(format!("no surface named `{name}` in this module"));
         };
-        self.insert(name, factory(), None)
+        let mut surface = factory();
+        let (wake, waker) = wake::WakeState::new();
+        surface.set_waker(waker);
+        self.insert(name, surface, wake, None)
     }
 
     fn insert(
         &mut self,
         name: &str,
         mut surface: Box<dyn Surface>,
+        wake: wake::WakeState,
         presentation: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
     ) -> Option<u32> {
         self.next += 1;
         let id = self.next;
+        let destination = presentation.as_ref().map_or_else(
+            || {
+                ColorTarget::readback(if surface.srgb_target() {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                })
+            },
+            |(_, config)| ColorTarget::of(config),
+        );
         surface.clock(self.seekable);
         surface.reduced_motion(self.reduced_motion);
         if let Some(gpu) = &self.gpu {
             surface.device_ready(gpu.device.features(), gpu.device.limits());
-            surface.color_space_granted(target::granted(presentation.as_ref().map(|(_, c)| c)));
+            surface.color_space_granted(destination.space);
         }
+        surface.color_target(destination);
         let (presentation, config) = presentation.map_or((None, None), |(target, config)| {
             (Some(SurfaceRef::new(target)), Some(config))
         });
@@ -951,14 +995,21 @@ impl Module {
                 acquire: Default::default(),
                 #[cfg(not(target_arch = "wasm32"))]
                 readback: None,
+                #[cfg(not(target_arch = "wasm32"))]
+                sampled: None,
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
                 layer: None,
                 outstanding: BTreeSet::new(),
                 answered: BTreeSet::new(),
                 bound: false,
                 inputs: Vec::new(),
+                has_color_inputs: false,
+                destination,
                 dirty: false,
                 input_dirty: false,
+                wake,
+                #[cfg(exact_android_draw_trace)]
+                draw_trace: Default::default(),
                 seen: Default::default(),
                 presented: Default::default(),
                 children: None,
@@ -989,7 +1040,7 @@ impl Module {
             inst.surface.device_lost();
             inst.answered.clear();
             inst.outstanding.clear();
-            inst.dirty = true;
+            inst.invalidate();
             inst.children = None;
             inst.each.clear();
             inst.child_geometry.clear();
@@ -1038,7 +1089,7 @@ impl Module {
         self.reduced_motion = reduce;
         for inst in self.instances.values_mut() {
             inst.surface.reduced_motion(reduce);
-            inst.dirty = true;
+            inst.invalidate();
             inst.drain();
         }
     }
@@ -1085,7 +1136,9 @@ impl Module {
         };
         let reply = inst.surface.agent(request);
         let messages = inst.surface.messages();
-        inst.dirty |= reply.is_some() || !messages.is_empty();
+        if reply.is_some() || !messages.is_empty() {
+            inst.invalidate();
+        }
         inst.messages.extend(messages);
         if let Some(record) = inst.surface.published() {
             inst.published = Some(record);
@@ -1100,6 +1153,10 @@ impl Module {
     /// New inputs for a canvas; a refusal is reported and the surface keeps
     /// its last accepted inputs.
     pub fn bind(&mut self, id: u32, inputs: &[Value], at_ms: Option<f64>) -> bool {
+        self.bind_inputs(id, inputs, at_ms, false)
+    }
+
+    fn bind_inputs(&mut self, id: u32, inputs: &[Value], at_ms: Option<f64>, tagged: bool) -> bool {
         self.settle(id);
         self.check_device();
         let Some(inst) = self.instances.get_mut(&id) else {
@@ -1109,8 +1166,10 @@ impl Module {
             Ok(()) => {
                 inst.drain();
                 inst.bound = true;
+                inst.has_color_inputs =
+                    tagged && binding::has_color(inputs, inst.surface.rest_arguments());
                 inst.inputs = inputs.to_vec();
-                inst.dirty = true;
+                inst.invalidate();
                 #[cfg(windows)]
                 if inst.surface.is_empty() {
                     self.discard_window_picture(id);
@@ -1136,7 +1195,7 @@ impl Module {
             retired,
         } = inst.surface.assets();
         if !retired.is_empty() {
-            inst.dirty = true;
+            inst.invalidate();
         }
         for name in &retired {
             inst.answered.remove(name);
@@ -1181,7 +1240,7 @@ impl Module {
                 .prepare_assets(&gpu.device, &gpu.queue, view_format(config));
         }
         inst.drain();
-        inst.dirty = true;
+        inst.invalidate();
         if let Some(SurfaceError(error)) = inst.surface.take_error() {
             self.error = error;
             return false;
@@ -1216,7 +1275,7 @@ impl Module {
                 inst.presented.forget_record();
                 inst.presented.reset();
                 inst.drain();
-                inst.dirty = true;
+                inst.invalidate();
                 true
             }
             Err(error) => {
@@ -1224,15 +1283,6 @@ impl Module {
                 false
             }
         }
-    }
-
-    /// Whether a canvas has something to render: inputs it has not shown.
-    pub fn dirty(&self, id: u32) -> bool {
-        self.has_device(id)
-            && self
-                .instances
-                .get(&id)
-                .is_some_and(|i| i.dirty || i.input_dirty || i.surface.preparing())
     }
 
     /// Whether a canvas's last render went without a drawable (`acquire`):
@@ -1252,8 +1302,7 @@ impl Module {
 
     /// Every command submitted to the device so far, complete (LLP 1008 §9):
     /// a host that hands the module textures it renders itself waits here
-    /// before drawing into one the module may still be reading — sampling
-    /// it, or copying it into the previous children.
+    /// before drawing into one the module may still be reading.
     pub fn sync(&mut self) -> bool {
         self.flush();
         match self.gpu() {
@@ -1271,156 +1320,11 @@ impl Module {
     /// Drop a canvas's surface.
     pub fn destroy(&mut self, id: u32) {
         self.settle(id);
+        if let Some(inst) = self.instances.get(&id) {
+            inst.wake.kill();
+        }
         self.release(id);
         self.instances.remove(&id);
-    }
-
-    /// Import the host's retained Metal children texture; reuse an unchanged
-    /// pointer, copying previous children before the next hand-over.
-    ///
-    /// # Safety
-    /// `raw` is a live `MTLTexture` of that size and format, valid until
-    /// the canvas is destroyed or another texture replaces it.
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-    pub unsafe fn texture_from_metal(
-        &mut self,
-        id: u32,
-        width: u32,
-        height: u32,
-        raw: *mut std::ffi::c_void,
-    ) -> bool {
-        self.check_device();
-        self.settle(id);
-        use objc2::rc::Retained;
-        use objc2::runtime::ProtocolObject;
-        use objc2_metal::MTLTexture;
-        if width == 0 || height == 0 || raw.is_null() {
-            self.error = format!("children: a {width}x{height} Metal texture at {raw:?}");
-            return false;
-        }
-        let Some(gpu) = self.gpu.as_ref() else {
-            self.error = "no device".into();
-            return false;
-        };
-        let Some(inst) = self.instances.get_mut(&id) else {
-            self.error = "no such canvas".into();
-            return false;
-        };
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-        let same = matches!(&inst.children, Some(c) if c.width == width && c.height == height && c.metal == Some(raw as usize));
-        if !same {
-            // SAFETY: the caller's contract — a live MTLTexture; `retain`
-            // takes its own reference to it.
-            let Some(retained) =
-                (unsafe { Retained::retain(raw as *mut ProtocolObject<dyn MTLTexture>) })
-            else {
-                self.error = "children: the Metal texture could not be retained".into();
-                return false;
-            };
-            // SAFETY: the texture's own size and format, as the host made it.
-            let hal = unsafe {
-                wgpu::hal::metal::Device::texture_from_raw(
-                    retained,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    objc2_metal::MTLTextureType::Type2D,
-                    1,
-                    1,
-                    wgpu::hal::CopyExtent {
-                        width,
-                        height,
-                        depth: 1,
-                    },
-                    None,
-                )
-            };
-            // SAFETY: the hal texture matches the descriptor.
-            let texture = unsafe {
-                gpu.device.create_texture_from_hal::<wgpu::hal::api::Metal>(
-                    hal,
-                    &wgpu::TextureDescriptor {
-                        label: Some("children (metal)"),
-                        size,
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                        view_formats: &[],
-                    },
-                    wgpu::TextureUses::RESOURCE,
-                )
-            };
-            // The previous children, out of the texture bound until now,
-            // before the surface hears of the new one.
-            let previous = match inst.children.take() {
-                Some(Children {
-                    texture: old,
-                    previous: Some(previous),
-                    width: w,
-                    height: h,
-                    ..
-                }) if w == width && h == height => {
-                    let mut encoder = gpu.device.create_command_encoder(&Default::default());
-                    encoder.copy_texture_to_texture(
-                        old.as_image_copy(),
-                        previous.as_image_copy(),
-                        size,
-                    );
-                    gpu.queue.submit([encoder.finish()]);
-                    Some(previous)
-                }
-                _ => matches!(
-                    inst.surface.children_mode(),
-                    ChildrenMode::Composite { previous: true }
-                )
-                .then(|| {
-                    gpu.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("previous children"),
-                        size,
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING
-                            | wgpu::TextureUsages::COPY_DST
-                            | wgpu::TextureUsages::COPY_SRC,
-                        view_formats: &[],
-                    })
-                }),
-            };
-            let view = texture.create_view(&Default::default());
-            let previous_view = previous
-                .as_ref()
-                .map(|p| p.create_view(&Default::default()));
-            inst.surface.children(Some(&view), previous_view.as_ref());
-            inst.children = Some(Children {
-                texture,
-                previous,
-                width,
-                height,
-                metal: Some(raw as usize),
-            });
-        } else if let Some(Children {
-            texture,
-            previous: Some(previous),
-            ..
-        }) = &inst.children
-        {
-            let mut encoder = gpu.device.create_command_encoder(&Default::default());
-            encoder.copy_texture_to_texture(
-                texture.as_image_copy(),
-                previous.as_image_copy(),
-                size,
-            );
-            gpu.queue.submit([encoder.finish()]);
-        }
-        inst.children_generation += 1;
-        inst.dirty = true;
-        true
     }
 
     /// A canvas's picture as pixels, rendered again into a module-owned

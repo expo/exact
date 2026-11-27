@@ -8,9 +8,10 @@
 //! A scheme-wide line (`net.fetch https:`) is not among them: a request's
 //! route can choose what a source fetches, and on the server nothing stands
 //! between that choice and the operator's own network. Such a source keeps
-//! its placeholder, and the client fetches it after adoption. So is
-//! `net.fetch local-network` (LLP 1133.036 D5): with it a visitor could point
-//! the server at the operator's own network.
+//! its placeholder, and the client fetches it after adoption. So are
+//! `net.fetch local-network` (LLP 1133.036 D5) and `net.fetch loopback`
+//! (LLP 1016 D6): with either, a visitor could point the server at the
+//! operator's own network or host.
 use exact_plan::{Plan, Value};
 use exact_runner::{
     Answer, DataError, DataSource, Dispatch, InFlight, Interrupt, Outcome, Placement, Store, Target,
@@ -30,18 +31,52 @@ impl<D: DataSource> Anonymous<D> {
         let grants = held(inner.grants());
         Self { inner, grants }
     }
+
+    /// Intersect a valid source scope with what a render holds, leaving an
+    /// out-of-ceiling scope untouched so the executor still refuses it, and
+    /// keeping an empty narrowed scope as `Some("")` rather than widening to
+    /// `None`.
+    fn narrow_request(&self, request: &mut exact_runner::Request) {
+        let Some(scope) = request.grants.as_deref() else {
+            return;
+        };
+        let within_inner = scope
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .all(|line| {
+                self.inner
+                    .grants()
+                    .lines()
+                    .map(str::trim)
+                    .any(|grant| grant == line)
+            });
+        if within_inner {
+            request.grants = Some(held(scope));
+        }
+    }
+
+    fn narrow_answer(&self, mut answer: Answer) -> Answer {
+        if let Answer::Later(request) = &mut answer {
+            self.narrow_request(request);
+        }
+        answer
+    }
 }
 
-/// The lines of `spec` a render holds (module doc).
+/// The lines of `spec` a render holds (module doc): only exact-origin and
+/// subdomain `net.fetch` grants, never `self`, scheme-wide, or host-class lines.
 fn held(spec: &str) -> String {
+    use ibex2::grant::{Grant, GrantSet};
     spec.lines()
         .map(str::trim)
         .filter(|line| {
-            let mut words = line.split_whitespace();
-            words.next() == Some("net.fetch")
-                && words.next().is_some_and(|target| {
-                    (!target.ends_with(':') || target.contains('/')) && target != "local-network"
-                })
+            GrantSet::parse(line).is_ok_and(|set| {
+                !set.is_empty()
+                    && set
+                        .iter()
+                        .all(|g| matches!(g, Grant::Fetch(_) | Grant::FetchSubdomains(_)))
+            })
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -66,10 +101,86 @@ fn a_render_source_is_told_it_renders_the_web() {
 
 #[cfg(test)]
 #[test]
-fn a_render_holds_no_scheme_wide_or_local_network_line() {
-    let spec = "net.fetch https://api.test\nnet.fetch https:\nnet.fetch local-network\n\
-                net.fetch local-network development\nnet.websocket wss://a.test\nfs.read /x";
-    assert_eq!(held(spec), "net.fetch https://api.test");
+fn a_render_holds_only_origin_and_subdomain_fetch_lines() {
+    let spec = "net.fetch https://api.test\nnet.fetch https://*.cdn.test\nnet.fetch https:\n\
+                net.fetch self\nnet.fetch loopback\nnet.fetch local-network\n\
+                net.fetch local-network development\nnet.websocket wss://a.test\n\
+                net.websocket loopback\nfs.read /x";
+    assert_eq!(
+        held(spec),
+        "net.fetch https://api.test\nnet.fetch https://*.cdn.test"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn anonymous_narrows_valid_source_scopes_and_preserves_empty_or_out_of_ceiling() {
+    use exact_runner::Request;
+    struct MixedLike(&'static str);
+    impl DataSource for MixedLike {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn grants(&self) -> &str {
+            self.0
+        }
+        fn answer(
+            &mut self,
+            _: &mut Store,
+            source: &str,
+            _: &[Value],
+        ) -> Result<Answer, DataError> {
+            let mut req = Request::get("https://api.test/data");
+            req.grants = Some(match source {
+                "both" => "net.fetch https://api.test\nnet.fetch loopback".into(),
+                "loopback-only" => "net.fetch loopback".into(),
+                "out-of-ceiling" => "net.fetch https://evil.test".into(),
+                _ => return Ok(Answer::Now(Value::Bool(false))),
+            });
+            Ok(Answer::Later(req))
+        }
+    }
+    let mut anon = Anonymous::new(MixedLike("net.fetch https://api.test\nnet.fetch loopback"));
+    let mut store = Store::default();
+    assert_eq!(anon.grants(), "net.fetch https://api.test");
+
+    // Valid inner scope containing both exact-origin and loopback narrows to the held origin,
+    // so an unrelated exact-origin fetch settles while loopback is refused.
+    let Answer::Later(both) = anon.answer(&mut store, "both", &[]).unwrap() else {
+        panic!("expected request");
+    };
+    assert_eq!(both.grants.as_deref(), Some("net.fetch https://api.test"));
+    let scoped = exact_data::storage::scope(anon.grants(), both.grants.as_deref()).unwrap();
+    assert_eq!(
+        exact_runner::grants::admitting(anon.grants(), Some(scoped), "https://api.test/data"),
+        Some("net.fetch https://api.test")
+    );
+    assert_eq!(
+        exact_runner::grants::admitting(
+            anon.grants(),
+            Some(scoped),
+            "http://127.0.0.1:49152/health"
+        ),
+        None
+    );
+
+    // Loopback-only source scope narrows to Some(""), never widening to None (app grants).
+    let Answer::Later(only) = anon.answer(&mut store, "loopback-only", &[]).unwrap() else {
+        panic!("expected request");
+    };
+    assert_eq!(only.grants.as_deref(), Some(""));
+    let scoped = exact_data::storage::scope(anon.grants(), only.grants.as_deref()).unwrap();
+    assert_eq!(
+        exact_runner::grants::admitting(anon.grants(), Some(scoped), "https://api.test/data"),
+        None
+    );
+
+    // Out-of-ceiling scope is left untouched so storage::scope still fails closed.
+    let Answer::Later(evil) = anon.answer(&mut store, "out-of-ceiling", &[]).unwrap() else {
+        panic!("expected request");
+    };
+    assert_eq!(evil.grants.as_deref(), Some("net.fetch https://evil.test"));
+    assert!(exact_data::storage::scope(anon.grants(), evil.grants.as_deref()).is_err());
 }
 
 impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
@@ -93,6 +204,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
 
     fn render_web(&mut self) {
         self.inner.render_web();
+    }
+
+    fn ambient_taint(&self, source: &str) -> (bool, bool) {
+        self.inner.ambient_taint(source)
     }
 
     fn configure_storage(
@@ -129,7 +244,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        self.inner.answer(store, source, args)
+        self.inner
+            .answer(store, source, args)
+            .map(|a| self.narrow_answer(a))
     }
     fn parse(
         &mut self,
@@ -138,7 +255,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         args: &[Value],
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
-        self.inner.parse(store, source, args, outcome)
+        self.inner
+            .parse(store, source, args, outcome)
+            .map(|a| self.narrow_answer(a))
     }
     fn answer_for(
         &mut self,
@@ -147,10 +266,16 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        self.inner.answer_for(target, store, source, args)
+        self.inner
+            .answer_for(target, store, source, args)
+            .map(|a| self.narrow_answer(a))
     }
     fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
-        self.inner.more_for(target)
+        let mut requests = self.inner.more_for(target);
+        for request in &mut requests {
+            self.narrow_request(request);
+        }
+        requests
     }
     fn parse_fetch_for(
         &mut self,
@@ -163,6 +288,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<Option<Answer>, DataError> {
         self.inner
             .parse_fetch_for(target, fetch, store, source, args, outcome)
+            .map(|opt| opt.map(|a| self.narrow_answer(a)))
     }
     fn parse_for(
         &mut self,
@@ -172,7 +298,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         args: &[Value],
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
-        self.inner.parse_for(target, store, source, args, outcome)
+        self.inner
+            .parse_for(target, store, source, args, outcome)
+            .map(|a| self.narrow_answer(a))
     }
     fn launch(&self) -> Option<exact_runner::request::Launch> {
         self.inner.launch()
@@ -269,14 +397,22 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         self.inner.discard(token);
     }
     fn background(&mut self, store: &Store) -> Option<exact_runner::Request> {
-        self.inner.background(store)
+        self.inner.background(store).map(|mut r| {
+            self.narrow_request(&mut r);
+            r
+        })
     }
     fn background_landed(
         &mut self,
         store: &Store,
         outcome: Outcome,
     ) -> Result<Option<exact_runner::Request>, DataError> {
-        self.inner.background_landed(store, outcome)
+        self.inner.background_landed(store, outcome).map(|opt| {
+            opt.map(|mut r| {
+                self.narrow_request(&mut r);
+                r
+            })
+        })
     }
     fn background_state(&self) -> Option<exact_runner::BackgroundState> {
         self.inner.background_state()
@@ -298,7 +434,14 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         token: u64,
         outcome: Outcome,
     ) -> Result<Option<exact_runner::Request>, DataError> {
-        self.inner.module_delivery(store, token, outcome)
+        self.inner
+            .module_delivery(store, token, outcome)
+            .map(|opt| {
+                opt.map(|mut r| {
+                    self.narrow_request(&mut r);
+                    r
+                })
+            })
     }
     fn timer_before_reply(
         &mut self,
@@ -306,7 +449,12 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         in_flight: InFlight<'_>,
         fetch: Option<u64>,
     ) -> Option<(u64, exact_runner::Request)> {
-        self.inner.timer_before_reply(store, in_flight, fetch)
+        self.inner
+            .timer_before_reply(store, in_flight, fetch)
+            .map(|(id, mut r)| {
+                self.narrow_request(&mut r);
+                (id, r)
+            })
     }
     fn module_landed(
         &mut self,
@@ -334,6 +482,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<Answer, DataError> {
         self.inner
             .parse_tool(fetch, continuation, store, source, args, outcome)
+            .map(|a| self.narrow_answer(a))
     }
 
     fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {

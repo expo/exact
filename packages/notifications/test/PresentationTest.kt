@@ -1,5 +1,6 @@
 package exact.notifications
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -33,6 +34,74 @@ class PresentationTest {
             @JvmStatic @Implementation fun changed(topic: String) {
                 events += JSONObject(topic.removePrefix("exact-event:"))
             }
+        }
+    }
+
+    @Test fun aNamedGroupKeepsItsChildrenAndSilencesItsSummary() {
+        val app: Context = RuntimeEnvironment.getApplication()
+        val manager = app.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(NotificationChannel("trip", "Field trip", NotificationManager.IMPORTANCE_HIGH))
+        fun record(tag: String) = JSONObject().put("identifier", tag).put("tag", tag).put("channel", "trip").put("title", tag)
+        fun check(tag: String, group: String, summary: Boolean, alerts: Int) {
+            val notification = manager.activeNotifications.single { it.tag == tag }.notification
+            assertEquals(group, notification.group)
+            assertEquals(summary, notification.flags and Notification.FLAG_GROUP_SUMMARY != 0)
+            assertEquals(alerts, notification.groupAlertBehavior)
+        }
+        val fern = record("fern").put("group", "field-trip")
+        val summary = record("summary").put("group", "field-trip").put("groupSummary", true)
+        NotificationsModule.post(app, fern)
+        check("fern", "field-trip", false, Notification.GROUP_ALERT_ALL)
+        NotificationsModule.post(app, summary)
+        check("summary", "field-trip", true, Notification.GROUP_ALERT_CHILDREN)
+        NotificationsModule.post(app, fern.put("silent", true))
+        check("fern", "field-trip", false, Notification.GROUP_ALERT_SUMMARY)
+        Later.schedule(app, summary.put("silent", true).put("title", "Updated"), System.currentTimeMillis() + 5000)
+        Later.rearm(app)
+        Later.due(app, "summary")
+        check("summary", "field-trip", true, Notification.GROUP_ALERT_CHILDREN)
+        val updated = manager.activeNotifications.single { it.tag == "summary" }.notification
+        assertEquals("Updated", updated.extras.getCharSequence(Notification.EXTRA_TITLE))
+        try {
+            NotificationsModule.builderHatch = { it.setGroup("hatch").setGroupSummary(true) }
+            NotificationsModule.post(app, record("hatch-only"))
+            check("hatch-only", "hatch", true, Notification.GROUP_ALERT_CHILDREN)
+            NotificationsModule.post(app, record("inherited").put("silent", true))
+            check("inherited", "hatch", true, Notification.GROUP_ALERT_CHILDREN)
+            NotificationsModule.post(app, record("inherited").put("group", "authored"))
+            check("inherited", "authored", true, Notification.GROUP_ALERT_CHILDREN)
+            for (policy in listOf(Notification.GROUP_ALERT_SUMMARY, Notification.GROUP_ALERT_ALL)) {
+                NotificationsModule.builderHatch = { it.setGroup("hatch").setGroupSummary(true).setGroupAlertBehavior(policy) }
+                NotificationsModule.post(app, record("explicit"))
+                check("explicit", "hatch", true, policy)
+                NotificationsModule.post(app, record("explicit").put("silent", true))
+                check("explicit", "hatch", true, Notification.GROUP_ALERT_CHILDREN)
+            }
+            NotificationsModule.builderHatch = { it.setGroup("").setGroupSummary(true) }
+            NotificationsModule.post(app, record("empty"))
+            check("empty", "", true, Notification.GROUP_ALERT_CHILDREN)
+            NotificationsModule.builderHatch = { it.setGroup("") }
+            NotificationsModule.post(app, record("empty").put("silent", true))
+            check("empty", "silent", false, Notification.GROUP_ALERT_SUMMARY)
+        } finally {
+            NotificationsModule.builderHatch = null
+        }
+        NotificationsModule.post(app, record("solo").put("silent", true))
+        check("solo", "silent", false, Notification.GROUP_ALERT_SUMMARY)
+    }
+
+    @Test fun anInvalidGroupIsRefusedBeforeThePermissionRequest() {
+        val module = NotificationsModule(ExtensionContext(RuntimeEnvironment.getApplication(), "notifications"))
+        for ((words, name) in listOf(
+            JSONObject().put("group", 7) to "android.group",
+            JSONObject().put("group", "") to "android.group",
+            JSONObject().put("groupSummary", false) to "android.groupSummary",
+            JSONObject().put("group", "trip").put("groupSummary", "true") to "android.groupSummary"
+        )) {
+            var answer: JSONObject? = null
+            module.later("showNotification", JSONObject().put("android", words)) { answer = it }
+            assertEquals("TypeError", answer?.optString("error"))
+            assertTrue(answer?.optString("message").orEmpty().startsWith(name))
         }
     }
 

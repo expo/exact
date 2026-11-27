@@ -42,6 +42,9 @@ package protocol DragHandles: AnyObject {
     func reset()
     /// What may have moved a transform handle's geometry did.
     func geometryChanged()
+    /// Whether `id` is a bound transform or height handle, which a press may
+    /// drag (LLP 1094.000 D5 asks, arming nothing).
+    func handles(_ id: UInt32) -> Bool
     #if EXACT_AGENT
     /// The clip of `id`'s transform handle, if it is one.
     func transformClip(_ id: UInt32) -> UInt32?
@@ -54,6 +57,7 @@ final class NoDragHandles: DragHandles {
     func retire(_ id: UInt32) {}
     func reset() {}
     func geometryChanged() {}
+    func handles(_ id: UInt32) -> Bool { false }
     #if EXACT_AGENT
     func transformClip(_ id: UInt32) -> UInt32? { nil }
     #endif

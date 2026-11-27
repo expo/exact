@@ -4,9 +4,11 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
 import { BUILD_SCRIPT_FAILED_LINE, buildScriptFailed, throwContractErrors } from './contract-diagnosis.mjs';
-import { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import { resolveAppleLLVM, writtenPath } from './paths.mjs';
+export { writtenPath } from './paths.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -451,14 +453,6 @@ export function cargoBuildEnv(cwd, env) {
   return result;
 }
 
-/** `path` made absolute as written, a `..` kept: a relative one joins the working directory, a Windows drive's own
- * for `D:staging`, and a root (a drive, a UNC share) stays whole. */
-export function writtenPath(path) {
-  if (isAbsolute(path)) return path;
-  const { root } = parse(path);
-  return resolve(root || '.') + sep + path.slice(root.length);
-}
-
 /** `path` as the system reaches it, or null when a part of it cannot be read. Windows collapses a `..` before it
  * opens a path, as `path.resolve` does; POSIX follows each link before a later `..`, which `path.resolve`, and Bun's
  * `realpathSync.native`, collapse first, so there a path with `..` is followed part by part, split at `/` alone. Bun
@@ -490,12 +484,17 @@ export function targetRustflags(target, flags, { cwd = process.cwd(), env = proc
 
 /** Make Apple's deployment environment part of every target unit's Cargo hash. Add to each existing flags source
  * so Cargo keeps choosing and merging flags itself; introducing a target table would hide `build.rustflags`. */
-export function appleCargo(command, arguments_, options = {}) {
-  const targets = arguments_.filter((value, index) => arguments_[index - 1] === '--target' || value.startsWith('--target='));
+export function appleCargo(command, arguments_, options = {}, platform = process.platform) {
+  const separator = arguments_.indexOf('--'), at = separator < 0 ? arguments_.length : separator;
+  const cargoArgs = arguments_.slice(0, at);
+  const targets = cargoArgs.flatMap((arg, index) => arg === '--target' && index + 1 < at ? [cargoArgs[index + 1]]
+    : arg.startsWith('--target=') ? [arg.slice('--target='.length)] : []);
   const apple = command === 'cargo' && (targets.some(value => value.includes('-apple-')) ||
-    !targets.length && process.platform === 'darwin' && ['build', 'rustc', 'check', 'test', 'clippy'].includes(arguments_[0]));
+    !targets.length && platform === 'darwin' && ['build', 'rustc', 'check', 'test', 'clippy'].includes(cargoArgs[0]));
   if (!apple) return [command, arguments_, options];
   const environment = { ...(options.env ?? process.env) };
+  // The diagnostics relay starts in the workspace, and Cargo runs build scripts in their packages.
+  if (platform === 'linux') resolveAppleLLVM(environment);
   // LIBSQLITE3_FLAGS is global to a Cargo invocation. Recompute it for each
   // destination, including a nested Mac bake after an iOS compile.
   const sqliteFlags = ['-DSQLITE_ENABLE_LOCKING_STYLE=0', '-Dfstatfs=exact_sqlite_fstatfs'];
@@ -548,8 +547,7 @@ export function appleCargo(command, arguments_, options = {}) {
     else if (Array.isArray(flags) && flags.every(value => typeof value === 'string')) set(key, [flag]);
     else throw new Error(`Cannot track Apple deployment targets because Cargo ${key} is not a string or string array. Fix its configuration before building.`);
   }
-  const separator = arguments_.indexOf('--'), at = separator < 0 ? arguments_.length : separator;
-  return [command, [...arguments_.slice(0, at), ...configurationArgs, ...arguments_.slice(at)], { ...options, env: environment }];
+  return [command, [...cargoArgs, ...configurationArgs, ...arguments_.slice(at)], { ...options, env: environment }];
 }
 
 /** The link argument that aligns an Android library's LOAD segments to 16 KB, which a device with 16 KB pages needs

@@ -279,3 +279,19 @@ fn a_packages_call_reaches_the_host_beside_a_native_module() {
         assert_eq!(finish(&mut m, &mut s, &a, answer), expected, "{op}");
     }
 }
+
+#[test]
+fn a_package_without_an_app_module_answers_its_sync_form() {
+    let root = Root::new();
+    let mut module = root.module();
+    let slot = module.native().unwrap();
+    slot.host_call(Some(std::sync::Arc::new(|_| {
+        Ok(br#"{"text":"package"}"#.to_vec())
+    })));
+    slot.sync([("pkg.echo".to_string(), None)].into_iter().collect());
+    let mut store = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    module.activate().unwrap();
+    let a = args("native-extension", "hi");
+    let answer = module.answer(&mut store, "work", &a).unwrap();
+    assert_eq!(finish(&mut module, &mut store, &a, answer), "package");
+}

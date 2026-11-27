@@ -282,6 +282,18 @@ impl Acquire {
         let _ = thread.join();
         Some(answer)
     }
+
+    /// Queue `current` as the next answer from the acquire worker.
+    pub(crate) fn inject(&mut self, current: Current) {
+        let (ask, _asked) = mpsc::channel::<Present>();
+        let (answer_tx, answer_rx) = mpsc::channel::<Current>();
+        answer_tx.send(current).unwrap();
+        let thread = std::thread::spawn(|| {});
+        self.worker = Some((ask, answer_rx, thread));
+        self.in_flight = true;
+        self.sent.store(1, Ordering::SeqCst);
+        self.taken = 0;
+    }
 }
 
 /// The presenter's callback for a starved canvas's texture (`gpu_on_acquire`),

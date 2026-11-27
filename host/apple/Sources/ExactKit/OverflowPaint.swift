@@ -1,6 +1,8 @@
 import QuartzCore
 #if os(iOS) || os(tvOS)
 import UIKit
+#else
+import AppKit
 #endif
 
 /// Paint in a layer's own coordinates, including descendants and the full
@@ -8,9 +10,11 @@ import UIKit
 enum OverflowPaint {
     static func bounds(_ layer: CALayer) -> CGRect {
         var rect = layer.bounds
+        // A box's extension paints its own bounds; what the platform holds inside it is its own (LLP 1123 D13)
         #if os(iOS) || os(tvOS)
-        // A box's extension paints its own bounds; what UIKit holds inside it is UIKit's (LLP 1123 D13)
         if let view = layer.delegate as? UIView, view.isBoxExtension { return rect }
+        #else
+        if let view = layer.delegate as? NSView, view.isBoxExtension { return rect }
         #endif
         let stroke = (layer as? CAShapeLayer).map(strokeReach) ?? 0
         if let shape = layer as? CAShapeLayer, let path = shape.path {

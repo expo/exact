@@ -240,6 +240,8 @@ class SpeechSynthesisModule(context: ExtensionContext) : ExactExtension(context)
     private fun reclaim() {
         val holds = (current != null || queue.isNotEmpty()) && reasons.all { it == "focus-transient" }
         val want = if (holds) strongest() else "auto"
+        // Without a held claim Android will never deliver AUDIOFOCUS_GAIN, so a transient pause cannot stay set.
+        if (want == "auto") reasons.remove("focus-transient")
         if (want == claimed) return
         claim?.release(); claim = null; claimed = want
         if (want == "auto" || context.agent) return
@@ -311,7 +313,7 @@ class SpeechSynthesisModule(context: ExtensionContext) : ExactExtension(context)
         queue.clear()
         current?.let { utterances[it] }?.let { it.state = "ended"; it.outcome = "error"; it.error = "interrupted"; it.spokenAs = null }
         current = null
-        reasons.remove("requested")
+        reasons.removeAll(listOf("requested", "interrupted", "focus", "focus-transient", "route"))
         boundary = noBoundary()
         tts?.stop()
         reclaim()

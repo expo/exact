@@ -2,11 +2,11 @@
 import UIKit
 
 // LLP 1057.001 §8 on UIKit: a node's `swipe` is UIKit's discrete swipe, a
-// `UISwipeGestureRecognizer` in the node's `swipe-direction`. It has no
+// `UISwipeGestureRecognizer` in the node's `swipe-flick` direction. It has no
 // delegate, so it hears the touches of every view inside the node, a field's
 // included, and UIKit arbitrates it with the recognizers on the touch's path.
 extension NodeView {
-    /// Makes the recognizer the node's `swipe` and `swipe-direction` ask for,
+    /// Makes the recognizer the node's `swipe` and `swipe-flick` ask for,
     /// again when the direction changes, and removes it when either goes.
     func updateDiscreteSwipe() {
         let direction = handlers.contains("swipe") ? Self.swipeDirections[props["swipeDirection"] ?? ""] : nil

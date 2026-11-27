@@ -83,6 +83,10 @@ pub const GENERIC: [&str; 13] = [
 /// `smaller` on a canvas outside a document (LLP 1056 §8.2).
 pub const BASE_SIZE: f64 = 10.0;
 
+/// The largest size a font takes: Chrome holds a larger one to this, so it
+/// draws, measures and reads back at 10000px.
+pub const MAX_SIZE: f64 = 10000.0;
+
 /// A canvas font: the `font` shorthand's result, with `fontStretch` and
 /// `fontVariantCaps` (which the shorthand also sets) folded in.
 #[derive(Debug, Clone, PartialEq)]
@@ -118,7 +122,8 @@ impl Default for Font {
 impl Font {
     /// Chrome's serialisation: `[italic] [weight] [small-caps] <size>px
     /// <families>`, `bold` for 700, nothing for the defaults and for
-    /// `fontStretch` (Chrome omits it).
+    /// `fontStretch` (Chrome omits it). The size has at most six significant
+    /// digits, as Chrome writes a CSS number (`10pt` is `13.3333px`).
     pub fn serialize(&self) -> String {
         let mut s = String::new();
         if self.style == 1 {
@@ -134,7 +139,8 @@ impl Font {
         if self.caps == 1 {
             s.push_str("small-caps ");
         }
-        let _ = write!(s, "{}px ", exact_num::js(self.size));
+        let size: f64 = format!("{:.5e}", self.size).parse().unwrap_or(self.size);
+        let _ = write!(s, "{}px ", exact_num::js(size));
         let families: Vec<String> = self.families.iter().map(|f| quote_family(f)).collect();
         s.push_str(&families.join(", "));
         s
@@ -147,15 +153,51 @@ impl Font {
     }
 }
 
+/// The keywords a lone family name may not be, so Chrome quotes it.
+const CSS_WIDE: [&str; 6] = [
+    "inherit",
+    "initial",
+    "unset",
+    "revert",
+    "revert-layer",
+    "default",
+];
+/// The generics Chrome's parser takes as keywords: a family of one of these
+/// names in another case was written quoted, and is written quoted.
+const KEYWORDS: [&str; 7] = [
+    "serif",
+    "sans-serif",
+    "monospace",
+    "cursive",
+    "fantasy",
+    "system-ui",
+    "math",
+];
+
+/// A family as Chrome writes it: bare when it is one identifier that is no
+/// keyword of the property, quoted otherwise (`"Arial Black"`, `"--a"`,
+/// `"-1a"`, `"Serif"`, `"inherit"`). A generic is stored lower-case, so a
+/// name that differs from one only in case was written quoted.
 fn quote_family(f: &str) -> String {
-    let plain = !f.is_empty()
-        && !f.starts_with(|c: char| c.is_ascii_digit())
+    let lower = f.to_ascii_lowercase();
+    let keyword =
+        CSS_WIDE.contains(&lower.as_str()) || (KEYWORDS.contains(&lower.as_str()) && f != lower);
+    let mut chars = f.chars();
+    let start = match chars.next() {
+        Some('-') => chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()),
+        Some(c) => !c.is_ascii_digit(),
+        None => false,
+    };
+    let plain = !keyword
+        && start
         && f.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || !c.is_ascii());
     if plain {
         f.to_string()
     } else {
-        format!("\"{}\"", f.replace('"', "\\\""))
+        format!("\"{}\"", f.replace('\\', "\\\\").replace('"', "\\\""))
     }
 }
 
@@ -167,14 +209,38 @@ fn tokens(s: &str) -> Option<Vec<String>> {
     while let Some(c) = chars.next() {
         match c {
             '"' | '\'' => {
+                // A string is a token of its own (`a"b"` and `"a"b` are not
+                // names); the end of the input closes it, and an escape keeps
+                // its backslash for [`unescape`] (CSS Syntax 3 §4.3.5).
+                if !cur.is_empty() {
+                    return None;
+                }
                 cur.push(c);
                 loop {
-                    let d = chars.next()?;
-                    cur.push(d);
-                    if d == c {
-                        break;
+                    match chars.next() {
+                        None => {
+                            cur.push(c);
+                            break;
+                        }
+                        Some('\\') => {
+                            cur.push('\\');
+                            cur.extend(chars.next());
+                        }
+                        Some(d) => {
+                            cur.push(d);
+                            if d == c {
+                                break;
+                            }
+                        }
                     }
                 }
+                if chars
+                    .peek()
+                    .is_some_and(|n| !n.is_whitespace() && !matches!(n, ',' | '/'))
+                {
+                    return None;
+                }
+                out.push(std::mem::take(&mut cur));
             }
             c if c.is_whitespace() => {
                 if !cur.is_empty() {
@@ -226,16 +292,40 @@ pub fn length_px(t: &str, allow_percent: bool) -> Option<f64> {
     None
 }
 
+/// A number as CSS Syntax 3 reads one (§4.3.13): a sign, digits, a `.` only
+/// before a digit, and an exponent of an `e` and digits, so not `1.` or `1e`.
 fn num(t: &str) -> Option<f64> {
-    let ok = !t.is_empty()
-        && t.bytes()
-            .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'+' | b'e' | b'E'))
-        && t.bytes().any(|b| b.is_ascii_digit());
-    let v = if ok {
-        exact_num::parse_f64(t).ok()?
-    } else {
-        return None;
+    let b = t.as_bytes();
+    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    let digits = |i: &mut usize| {
+        let start = *i;
+        while b.get(*i).is_some_and(u8::is_ascii_digit) {
+            *i += 1;
+        }
+        *i > start
     };
+    let whole = digits(&mut i);
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        if !digits(&mut i) {
+            return None;
+        }
+    } else if !whole {
+        return None;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        if !digits(&mut i) {
+            return None;
+        }
+    }
+    if i != b.len() {
+        return None;
+    }
+    let v = exact_num::parse_f64(t).ok()?;
     v.is_finite().then_some(v)
 }
 
@@ -253,8 +343,69 @@ fn font_size(t: &str) -> Option<f64> {
         "smaller" => Some(BASE_SIZE / 1.2),
         _ => None,
     };
-    let v = keyword.or_else(|| length_px(t, true))?;
+    // A length needs a unit, except zero (CSS Values 4 §6.1).
+    let zero = num(t).filter(|v| *v == 0.0).map(|_| 0.0);
+    let v = keyword.or(zero).or_else(|| length_px(t, true))?;
     (v >= 0.0).then_some(v)
+}
+
+/// A string's or identifier's escapes resolved (CSS Syntax 3 §4.3.7): `\"`
+/// is `"`, `\62 ` is `b`, and an escaped newline or a backslash at the end is
+/// dropped.
+fn unescape(s: &str) -> String {
+    let mut out = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let mut hex = 0u32;
+        let mut n = 0;
+        while n < 6 {
+            let Some(d) = it.peek().and_then(|d| d.to_digit(16)) else {
+                break;
+            };
+            hex = hex * 16 + d;
+            n += 1;
+            it.next();
+        }
+        if n == 0 {
+            if let Some(d) = it.next().filter(|d| *d != '\n') {
+                out.push(d);
+            }
+            continue;
+        }
+        if it.peek().is_some_and(|d| d.is_whitespace()) {
+            it.next();
+        }
+        out.push(
+            char::from_u32(hex)
+                .filter(|_| hex != 0)
+                .unwrap_or('\u{fffd}'),
+        );
+    }
+    out
+}
+
+/// One word of an unquoted family name, its escapes resolved: an identifier
+/// (CSS Syntax 3 §4.3.11), so not `a.b`, `3d`, `-1a` or `-`.
+fn ident(w: &str) -> Option<String> {
+    let b = w.as_bytes();
+    let start = match b.first()? {
+        b'-' => matches!(b.get(1), Some(c) if !c.is_ascii_digit()),
+        c => !c.is_ascii_digit(),
+    };
+    // Name characters, or an escape of any one character.
+    let mut it = w.chars();
+    let mut chars = true;
+    while let Some(c) = it.next() {
+        chars &= match c {
+            '\\' => it.next().is_some(),
+            c => c.is_ascii_alphanumeric() || matches!(c, '-' | '_') || !c.is_ascii(),
+        };
+    }
+    (start && chars).then(|| unescape(w))
 }
 
 fn families(toks: &[String]) -> Option<Vec<String>> {
@@ -272,15 +423,33 @@ fn families(toks: &[String]) -> Option<Vec<String>> {
         if cur.is_empty() {
             return None;
         }
-        for w in cur.iter() {
-            if w.starts_with(|c: char| c.is_ascii_digit())
-                || ["inherit", "initial", "unset", "default", "revert"]
-                    .contains(&w.to_ascii_lowercase().as_str())
-            {
-                return None;
-            }
+        let words = cur.iter().map(|w| ident(w)).collect::<Option<Vec<_>>>()?;
+        let first = words[0].to_ascii_lowercase();
+        // A CSS-wide keyword or `default` is no name alone, and a generic
+        // keyword cannot start one (`serif font`), as Chrome reads them.
+        let lone = [
+            "inherit",
+            "initial",
+            "unset",
+            "revert",
+            "revert-layer",
+            "default",
+        ];
+        let generic = [
+            "serif",
+            "sans-serif",
+            "monospace",
+            "cursive",
+            "fantasy",
+            "system-ui",
+            "math",
+        ];
+        if (words.len() == 1 && lone.contains(&first.as_str()))
+            || (words.len() > 1 && generic.contains(&first.as_str()))
+        {
+            return None;
         }
-        let name = cur.join(" ");
+        let name = words.join(" ");
         let lower = name.to_ascii_lowercase();
         out.push(if GENERIC.contains(&lower.as_str()) {
             lower
@@ -299,7 +468,7 @@ fn families(toks: &[String]) -> Option<Vec<String>> {
             if !cur.is_empty() || quoted.is_some() || t.len() < 2 {
                 return None;
             }
-            quoted = Some(t[1..t.len() - 1].to_string());
+            quoted = Some(unescape(&t[1..t.len() - 1]));
             continue;
         }
         if quoted.is_some() || t == "/" {
@@ -309,6 +478,42 @@ fn families(toks: &[String]) -> Option<Vec<String>> {
     }
     finish(&mut cur, &mut quoted)?;
     Some(out)
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::*;
+
+    /// Family names as Chrome reads them (headless Chrome, 2026-11-27).
+    #[test]
+    fn family_names_are_read_as_chrome_reads_them() {
+        let f = |v: &str| parse(v).map(|f| f.families);
+        assert_eq!(f("12px 'a\\'b'"), Some(vec!["a'b".to_string()]));
+        assert_eq!(f("12px \"a\\\\b\""), Some(vec!["a\\b".to_string()]));
+        assert_eq!(f("12px 'Open Sans"), Some(vec!["Open Sans".to_string()]));
+        assert_eq!(f("12px a\\.b"), Some(vec!["a.b".to_string()]));
+        assert_eq!(f("12px a inherit"), Some(vec!["a inherit".to_string()]));
+        assert_eq!(f("12px x serif"), Some(vec!["x serif".to_string()]));
+        for bad in [
+            "12px a.b",
+            "12px a!b",
+            "12px 'a'b",
+            "12px a'b'",
+            "12px 'a' 'b'",
+            "12px -1a",
+            "12px -",
+            "12px inherit",
+            "12px revert-layer",
+            "12px serif font",
+            "12px Math x",
+        ] {
+            assert_eq!(f(bad), None, "{bad}");
+        }
+        assert_eq!(
+            parse("12px \"a\\\\b\"").unwrap().serialize(),
+            "12px \"a\\\\b\""
+        );
+    }
 }
 
 /// Parse the CSS `font` shorthand as a canvas `font` assignment does, or
@@ -356,9 +561,10 @@ pub fn parse(input: &str) -> Option<Font> {
             let w = match t.as_str() {
                 "bold" | "bolder" => Some(700),
                 "lighter" => Some(100),
+                // Chrome reads `1e2` as 100 and writes `500.6` as 500.
                 _ => num(&t)
-                    .filter(|v| (1.0..=1000.0).contains(v) && !t.contains(['e', 'E']))
-                    .map(|v| v.round() as u16),
+                    .filter(|v| (1.0..=1000.0).contains(v))
+                    .map(|v| v.trunc() as u16),
             };
             if let Some(w) = w {
                 weight = true;
@@ -377,7 +583,7 @@ pub fn parse(input: &str) -> Option<Font> {
         }
         break;
     }
-    font.size = font_size(toks.get(i)?)?;
+    font.size = font_size(toks.get(i)?)?.min(MAX_SIZE);
     i += 1;
     if toks.get(i).map(String::as_str) == Some("/") {
         let lh = toks.get(i + 1)?;
@@ -598,8 +804,47 @@ pub fn prepare(text: &str) -> String {
 }
 
 #[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    /// Chrome holds a font's size to 10000px (headless Chrome, 2026-11-27).
+    #[test]
+    fn a_size_is_held_to_ten_thousand_pixels() {
+        let size = |v: &str| parse(v).map(|f| f.size);
+        assert_eq!(size("20000px a"), Some(10000.0));
+        assert_eq!(size("1e9px a"), Some(10000.0));
+        assert_eq!(size("9999.5px a"), Some(9999.5));
+        assert_eq!(parse("20000px a").unwrap().serialize(), "10000px a");
+        // Measured, and so drawn, at the held size: the estimate is half an
+        // em a character.
+        let ctx = crate::Context2d::new();
+        ctx.set_font("20000px a");
+        assert_eq!(ctx.measure_text("ab").unwrap().width, 10000.0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A family is bare only when it is one identifier and no keyword of the
+    /// property (headless Chrome, 2026-11-27).
+    #[test]
+    fn a_family_is_quoted_as_chrome_quotes_it() {
+        let s = |v: &str| parse(v).map(|f| f.serialize());
+        assert_eq!(s("12px 'Serif'").as_deref(), Some("12px \"Serif\""));
+        assert_eq!(s("12px SERIF").as_deref(), Some("12px serif"));
+        assert_eq!(s("12px 'inherit'").as_deref(), Some("12px \"inherit\""));
+        assert_eq!(
+            s("12px 'Revert-Layer'").as_deref(),
+            Some("12px \"Revert-Layer\"")
+        );
+        assert_eq!(s("12px --a").as_deref(), Some("12px \"--a\""));
+        assert_eq!(s("12px '-1a'").as_deref(), Some("12px \"-1a\""));
+        assert_eq!(s("12px '-'").as_deref(), Some("12px \"-\""));
+        assert_eq!(s("12px -a, _1, é").as_deref(), Some("12px -a, _1, é"));
+        assert_eq!(s("12px 'Arial'").as_deref(), Some("12px Arial"));
+    }
 
     #[test]
     fn the_shorthand_serialises_as_chrome_does() {
@@ -640,6 +885,19 @@ mod tests {
         assert_eq!(parse("condensed 12px a").unwrap().stretch, 75.0);
     }
 
+    /// Chrome writes the size as a CSS number, six significant digits at
+    /// most (headless Chrome, 2026-11-26); the font keeps the exact size.
+    #[test]
+    fn the_size_serialises_with_six_significant_digits() {
+        let s = |v: &str| parse(v).map(|f| f.serialize());
+        assert_eq!(s("10pt a").as_deref(), Some("13.3333px a"));
+        assert_eq!(s("smaller a").as_deref(), Some("8.33333px a"));
+        assert_eq!(s("12.3456789px a").as_deref(), Some("12.3457px a"));
+        assert_eq!(s("12.000001px a").as_deref(), Some("12px a"));
+        assert_eq!(s("0px a").as_deref(), Some("0px a"));
+        assert!((parse("10pt a").unwrap().size - 40.0 / 3.0).abs() < 1e-12);
+    }
+
     #[test]
     fn metrics_follow_chrome_for_top_and_center() {
         // Chrome's 10px sans-serif on this Mac, "Hi there".
@@ -662,5 +920,23 @@ mod tests {
         assert!((m.hanging_baseline + 0.15625).abs() < 1e-9);
         assert!((m.ideographic_baseline + 10.15625).abs() < 1e-9);
         assert!((m.actual_bounding_box_right - (24.080078125 - 23.0146484375 / 2.0)).abs() < 1e-9);
+    }
+
+    /// Numbers as CSS reads them (headless Chrome, 2026-11-27): a unitless
+    /// zero is a size, a weight may have an exponent and loses its fraction,
+    /// and `1.` is not a number.
+    #[test]
+    fn the_shorthand_reads_numbers_as_css_does() {
+        let s = |v: &str| parse(v).map(|f| f.serialize());
+        assert_eq!(s("0 serif").as_deref(), Some("0px serif"));
+        assert_eq!(s("-0 serif").as_deref(), Some("0px serif"));
+        assert_eq!(s("1e2 12px a").as_deref(), Some("100 12px a"));
+        assert_eq!(s("1E+2 12px a").as_deref(), Some("100 12px a"));
+        assert_eq!(s("500.6 12px a").as_deref(), Some("500 12px a"));
+        assert_eq!(s("999.9 12px a").as_deref(), Some("999 12px a"));
+        assert_eq!(s("1.px a"), None);
+        assert_eq!(s("100. 12px a"), None);
+        assert_eq!(s("12px/1. a"), None);
+        assert_eq!(s("0 0 a"), None);
     }
 }

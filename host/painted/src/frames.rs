@@ -42,6 +42,14 @@ impl Record {
     }
 }
 
+/// Timing and transaction range captured for a particular display submission.
+pub struct Submission {
+    host: u64,
+    seq: u64,
+    wanted: f64,
+    paint: Option<f64>,
+}
+
 /// The sampler over the display loop's flips.
 #[derive(Debug)]
 pub struct Frames {
@@ -58,10 +66,7 @@ pub struct Frames {
     last: Option<(Option<u32>, f64)>,
     /// When the next frame was first wanted.
     wanted: Option<f64>,
-    /// The frame awaiting its flip: when it was wanted, and the runner's
-    /// `seq` when it was submitted.
-    pending: Option<(f64, u64)>,
-    /// The runner's `seq` at the previous submitted frame.
+    /// The runner's `seq` at the previous completed flip.
     seq_mark: u64,
     /// The presenter's host these samples are of ([`Frames::submitted`]).
     host: u64,
@@ -82,7 +87,6 @@ impl Frames {
             segments: 0,
             last: None,
             wanted: None,
-            pending: None,
             seq_mark: 0,
             host: 0,
         }
@@ -97,9 +101,14 @@ impl Frames {
     /// The loop submitted a frame at `t`, the runner's `seq` then, under
     /// the presenter's `host`th host. Another host (a reload, an update) is a
     /// runner numbering its transactions afresh: the samples start over.
-    pub fn submitted(&mut self, t: f64, seq: u64, host: u64) {
+    pub fn submitted(&mut self, t: f64, seq: u64, host: u64, paint: Option<f64>) -> Submission {
         self.host(host);
-        self.pending = Some((self.wanted.take().unwrap_or(t), seq));
+        Submission {
+            host,
+            seq,
+            wanted: self.wanted.take().unwrap_or(t),
+            paint,
+        }
     }
 
     /// The presenter's `host`th host is current: under another, every
@@ -122,13 +131,21 @@ impl Frames {
     /// sequence. Such frames contribute intervals but cannot count missed flips.
     pub fn flipped(
         &mut self,
+        frame: Submission,
         sequence: impl Into<Option<u32>>,
         t: f64,
-        paint: Option<f64>,
     ) -> Option<String> {
         let sequence = sequence.into();
         let r2 = |x: f64| (x * 100.0).round() / 100.0;
-        let (wanted, seq) = self.pending.take()?;
+        let Submission {
+            host,
+            wanted,
+            seq,
+            paint,
+        } = frame;
+        if host != self.host {
+            return None;
+        }
         let carried = (seq > self.seq_mark).then_some((self.seq_mark + 1, seq));
         self.seq_mark = seq;
         let (interval, missed) = match self.last.replace((sequence, t)) {
@@ -292,8 +309,8 @@ mod tests {
         let mut frames = Frames::new(60);
         for (seq, requested, completed) in [(1, 0., 12.), (2, 13., 62.)] {
             frames.dirty(requested);
-            frames.submitted(requested, seq, 0);
-            frames.flipped(None, completed, None);
+            let sample = frames.submitted(requested, seq, 0, None);
+            frames.flipped(sample, None, completed);
         }
         let reply = frames.reply(5, true);
         assert_eq!(reply["lifetime"]["presented"], 2);
@@ -304,28 +321,38 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_submissions_keep_their_own_paint_and_runner_sequence() {
+        let mut frames = Frames::new(60);
+        let first = frames.submitted(0., 3, 1, Some(4.));
+        let second = frames.submitted(8., 7, 1, Some(9.));
+        frames.flipped(first, None, 16.);
+        frames.flipped(second, None, 33.);
+        let records = &frames.reply(0, true)["records"];
+        assert_eq!(records[0]["seq"], serde_json::json!([1, 3]));
+        assert_eq!(records[0]["paint"], 4.);
+        assert_eq!(records[1]["seq"], serde_json::json!([4, 7]));
+        assert_eq!(records[1]["paint"], 9.);
+    }
+
+    #[test]
     fn a_flip_is_late_by_its_vblank_gap_a_slow_start_by_its_wait_and_idle_never() {
         let mut f = Frames::new(60);
         let p = 1000.0 / 60.0;
         f.dirty(0.0);
-        f.submitted(0.0, 1, 0);
+        let sample = f.submitted(0.0, 1, 0, None);
         assert_eq!(
-            f.flipped(100, p, None),
+            f.flipped(sample, 100, p),
             None,
             "wanted at 0, shown at the next vblank"
         );
         f.dirty(p);
-        f.submitted(p, 2, 0);
-        assert_eq!(
-            f.flipped(101, 2.0 * p, Some(3.0)),
-            None,
-            "continuous, on time"
-        );
+        let sample = f.submitted(p, 2, 0, Some(3.0));
+        assert_eq!(f.flipped(sample, 101, 2.0 * p), None, "continuous, on time");
         // Continuous, and a render that took three more vblanks.
         f.dirty(2.0 * p);
-        f.submitted(5.0 * p, 4, 0);
+        let sample = f.submitted(5.0 * p, 4, 0, Some(40.0));
         let line = f
-            .flipped(105, 6.0 * p, Some(40.0))
+            .flipped(sample, 105, 6.0 * p)
             .expect("three vblanks missed");
         assert!(
             line.starts_with(
@@ -335,9 +362,9 @@ mod tests {
         );
         // Idle, then a frame wanted at 1000 ms that took 40 ms to render.
         f.dirty(1000.0);
-        f.submitted(1040.0, 5, 0);
+        let sample = f.submitted(1040.0, 5, 0, None);
         let line = f
-            .flipped(170, 1000.0 + 3.0 * p, None)
+            .flipped(sample, 170, 1000.0 + 3.0 * p)
             .expect("a slow first frame is late");
         assert!(
             line.contains(": 2 missed (50 ms / 16.67 refresh) seq 5..5"),
@@ -345,8 +372,8 @@ mod tests {
         );
         // Idle, then a quick frame: never late, though the vblank gap is large.
         f.dirty(3000.0);
-        f.submitted(3001.0, 5, 0);
-        assert_eq!(f.flipped(300, 3000.0 + p, None), None);
+        let sample = f.submitted(3001.0, 5, 0, None);
+        assert_eq!(f.flipped(sample, 300, 3000.0 + p), None);
         let reply = f.reply(20, true);
         assert_eq!(reply["lifetime"]["presented"], 5);
         assert_eq!(reply["lifetime"]["late"], 2);
@@ -357,12 +384,12 @@ mod tests {
         assert_eq!(reply["period"]["source"], "refresh");
         // Another host while a flip is awaited: its picture is the old runner's.
         f.dirty(3050.0);
-        f.submitted(3051.0, 6, 0);
+        let sample = f.submitted(3051.0, 6, 0, None);
         f.host(1);
-        assert_eq!(f.flipped(310, 3060.0, None), None);
+        assert_eq!(f.flipped(sample, 310, 3060.0), None);
         assert_eq!(f.reply(20, false)["lifetime"]["presented"], 0);
         // Another host (a reload): the samples start over.
-        f.submitted(3100.0, 1, 2);
+        f.submitted(3100.0, 1, 2, None);
         assert_eq!(f.reply(20, false)["lifetime"]["presented"], 0);
     }
 }

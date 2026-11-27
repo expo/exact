@@ -59,6 +59,7 @@ fn laid(
                 },
                 values: values.clone(),
                 under_dark: false,
+                comment: None,
             }),
         }
     }

@@ -36,6 +36,13 @@ impl State {
         matches!(self.source, File::None)
     }
 
+    pub fn pending_asset(&self) -> Option<&str> {
+        match &self.source {
+            File::Pending(path) => path.strip_prefix("assets/"),
+            _ => None,
+        }
+    }
+
     pub fn set_source(&mut self, path: &str) {
         self.preparing = None;
         self.binding = Bound::Ok;

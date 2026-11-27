@@ -14,12 +14,14 @@
 // then is told once it has. rt.js re-exports `ht`: only a plan that marks a
 // node bundles this.
 import { onEnd, journal, clock, viewId, inflight, painted, time, paint, drive } from "./rt.js";
+import { loadOnce } from '../web/load-once.js';
 
-let Page = null;
+const loads = {};
+
 const said = new Set(), warned = new Set();
 const say = line => journal.push(`t=${clock.now} hatch ${line}`);
 // (An app with no page module asks for no module artifact: its table is none, build.mjs `pageModule`.)
-const page = () => Page ??= painted().then(() => globalThis.exact?.pageModule === false ? null : import("./native.js").then(m => m.pageTable()));
+const page = () => loadOnce(loads, "Page", () => painted().then(() => globalThis.exact?.pageModule === false ? null : import("./native.js").then(m => m.pageTable())));
 // `state.hatches` (the agent), as Apple's: per word, its live nodes, and its
 // calls by moment. A row's calls after the first of each moment are counted,
 // not journaled, so a fling does not flood the journal.

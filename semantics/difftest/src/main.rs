@@ -136,6 +136,7 @@ fn run_js(
     tag: &str,
     shrinking: bool,
     verbose_outside: bool,
+    strict_refusals: bool,
 ) -> Result<bool, String> {
     let compiler = js::build()?;
     let verdicts = js::check(&compiler, cases, batch, tag)?;
@@ -151,10 +152,26 @@ fn run_js(
         lean.as_deref(),
         shrinking,
         verbose_outside,
+        strict_refusals,
     )
 }
 
 fn run_corpus(args: &[String]) -> Result<bool, String> {
+    run_corpus_with(args, run_js)
+}
+
+fn run_corpus_with(
+    args: &[String],
+    run_js_fn: impl FnOnce(
+        &[Case],
+        Option<&[Outcome]>,
+        usize,
+        &str,
+        bool,
+        bool,
+        bool,
+    ) -> Result<bool, String>,
+) -> Result<bool, String> {
     let (js, args) = js_flag(args);
     let dirs: Vec<PathBuf> = if args.is_empty() {
         vec![leanrun::project().join("corpus")]
@@ -175,7 +192,9 @@ fn run_corpus(args: &[String]) -> Result<bool, String> {
     let cases: Vec<Case> = scripted.into_iter().map(|s| s.case).collect();
     if js == Js::Only {
         println!("difftest: {} scripts could not be read", errors.len());
-        return Ok(run_js(&cases, None, 32, "corpus", false, true)? && errors.is_empty());
+        return Ok(run_js_fn(&cases, None, 32, "corpus", false, true, true)?
+            && failed.is_empty()
+            && errors.is_empty());
     }
     leanrun::build()?;
     let mut outcomes = check(cases.clone(), 64, "corpus")?;
@@ -188,7 +207,7 @@ fn run_corpus(args: &[String]) -> Result<bool, String> {
     }
     println!("difftest: {} scripts could not be read", errors.len());
     let lean = report(&outcomes, true, false)?;
-    let js = js == Js::No || run_js(&cases, Some(&outcomes), 32, "corpus", false, true)?;
+    let js = js == Js::No || run_js_fn(&cases, Some(&outcomes), 32, "corpus", false, true, true)?;
     Ok(lean && js && errors.is_empty())
 }
 
@@ -211,12 +230,15 @@ fn run_explore(args: &[String]) -> Result<bool, String> {
         cases.push(contract_difftest::explore(&f.display().to_string(), &src, Some(f)).case);
     }
     if js == Js::Only {
-        return run_js(&cases, None, 16, "explore", false, true);
+        return run_js(&cases, None, 16, "explore", false, true, false);
     }
     leanrun::build()?;
     let outcomes = check(cases.clone(), 16, "explore")?;
     let lean = report(&outcomes, false, false)?;
-    Ok((js == Js::No || run_js(&cases, Some(&outcomes), 16, "explore", false, true)?) && lean)
+    Ok(
+        (js == Js::No || run_js(&cases, Some(&outcomes), 16, "explore", false, true, false)?)
+            && lean,
+    )
 }
 
 /// One app for its author (`contract verify`).
@@ -285,12 +307,12 @@ fn run_random(args: &[String]) -> Result<bool, String> {
         .collect();
     let tag = format!("random-{seed}");
     if js == Js::Only {
-        return run_js(&cases, None, batch, &tag, true, false);
+        return run_js(&cases, None, batch, &tag, true, false, false);
     }
     leanrun::build()?;
     let outcomes = check(cases.clone(), batch, &tag)?;
     let lean = report(&outcomes, false, true)?;
-    Ok((js == Js::No || run_js(&cases, Some(&outcomes), batch, &tag, true, false)?) && lean)
+    Ok((js == Js::No || run_js(&cases, Some(&outcomes), batch, &tag, true, false, false)?) && lean)
 }
 
 /// Random programs' bytecode against the Lean VM model and the semantics.
@@ -312,12 +334,19 @@ fn run_lowering(args: &[String]) -> Result<bool, String> {
     let cases: Vec<Case> = (0..count as u64)
         .map(|i| gen::case(seed.wrapping_add(i), &size))
         .collect();
-    lowering::run(cases, batch, &format!("lowering-{seed}"))
+    lowering::run(cases, batch, &format!("lowering-{seed}"), false)
 }
 
 /// The corpus's programs' bytecode against the Lean VM model and the
 /// semantics.
 fn run_lowering_corpus(args: &[String]) -> Result<bool, String> {
+    run_lowering_corpus_with(args, lowering::run)
+}
+
+fn run_lowering_corpus_with(
+    args: &[String],
+    run_lowering_fn: impl FnOnce(Vec<Case>, usize, &str, bool) -> Result<bool, String>,
+) -> Result<bool, String> {
     let dirs: Vec<PathBuf> = if args.is_empty() {
         vec![leanrun::project().join("corpus")]
     } else {
@@ -328,7 +357,7 @@ fn run_lowering_corpus(args: &[String]) -> Result<bool, String> {
         println!("SCRIPT {e}");
     }
     let cases: Vec<Case> = scripted.into_iter().map(|s| s.case).collect();
-    lowering::run(cases, 16, "lowering-corpus")
+    Ok(run_lowering_fn(cases, 16, "lowering-corpus", true)? && errors.is_empty())
 }
 
 /// Component expansion: the files given (scripted, or explored when they
@@ -336,6 +365,13 @@ fn run_lowering_corpus(args: &[String]) -> Result<bool, String> {
 /// by `Contract.Expand` and run on the component-level and flat semantics
 /// (`contract_difftest::expansion`). With neither, semantics/corpus.
 fn run_expansion(args: &[String]) -> Result<bool, String> {
+    run_expansion_with(args, contract_difftest::expansion::run)
+}
+
+fn run_expansion_with(
+    args: &[String],
+    run_expansion_fn: impl FnOnce(Vec<Case>, usize, &str) -> Result<bool, String>,
+) -> Result<bool, String> {
     let mut seed: u64 = 1;
     let mut count = 0usize;
     let mut batch = 32usize;
@@ -355,11 +391,13 @@ fn run_expansion(args: &[String]) -> Result<bool, String> {
         dirs.push(leanrun::project().join("corpus"));
     }
     let mut cases: Vec<Case> = Vec::new();
+    let mut script_errors = false;
     if !dirs.is_empty() {
         let (scripted, errors) = corpus(&dirs)?;
         for e in &errors {
             println!("SCRIPT {e}");
         }
+        script_errors = !errors.is_empty();
         // Queued sends and gated tasks (LLP 1092) are the flat semantics'
         // alone; the component-level one refuses them.
         let scheduled = |src: &str| {
@@ -381,7 +419,7 @@ fn run_expansion(args: &[String]) -> Result<bool, String> {
         ..gen::Size::default()
     };
     cases.extend((0..count as u64).map(|i| gen::case(seed.wrapping_add(i), &size)));
-    contract_difftest::expansion::run(cases, batch, &format!("expansion-{seed}"))
+    Ok(run_expansion_fn(cases, batch, &format!("expansion-{seed}"))? && !script_errors)
 }
 
 /// The Lean type checker against the Rust one over generated programs and
@@ -605,4 +643,63 @@ fn report(outcomes: &[Outcome], strict_refusals: bool, shrinking: bool) -> Resul
         outcomes.len()
     );
     Ok(diverge == 0 && emit == 0 && expect == 0 && (!strict_refusals || refused == 0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("difftest-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn corpus_js_only_fails_on_failed_expect_and_passes_strict_refusals() {
+        let dir = temp_dir("corpus-js-only");
+        let file = dir.join("fail.contract");
+        std::fs::write(
+            &file,
+            "component App\n  view\n    text \"hello\"\ntest \"mismatch\"\n  expect tree has \"goodbye\"\n",
+        )
+        .unwrap();
+        let mut saw_strict = false;
+        let ok = run_corpus_with(
+            &[file.display().to_string(), "--js-only".into()],
+            |_, _, _, _, _, _, strict| {
+                saw_strict = strict;
+                Ok(true)
+            },
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(saw_strict);
+        assert!(!ok);
+    }
+
+    #[test]
+    fn lowering_corpus_and_expansion_fail_on_corpus_script_errors() {
+        let dir = temp_dir("corpus-script-errors");
+        let file = dir.join("bad_script.contract");
+        std::fs::write(
+            &file,
+            "component App\n  view\n    text \"ok\"\ntest \"bad\"\n  not_a_real_step\n",
+        )
+        .unwrap();
+        let arg = file.display().to_string();
+        let mut saw_strict = false;
+        let lowering_ok =
+            run_lowering_corpus_with(std::slice::from_ref(&arg), |_, _, _, strict| {
+                saw_strict = strict;
+                Ok(true)
+            })
+            .unwrap();
+        let expansion_ok = run_expansion_with(&[arg], |_, _, _| Ok(true)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(saw_strict);
+        assert!(!lowering_ok);
+        assert!(!expansion_ok);
+    }
 }

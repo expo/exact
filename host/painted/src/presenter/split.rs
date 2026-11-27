@@ -1,6 +1,7 @@
 //! @ref LLP 1115.004 D16 — Windows list/details.
 //! @ref LLP 1115.002 D4 — the root list stays in the page; details have pane blocks.
 use super::*;
+use exact_kernel::props::Presentation;
 use exact_kernel::{BlockAxis, HostBlock, HostCover, Kernel, NodeKey};
 use exact_runner::{instance::InstanceStep, Runner};
 use std::collections::BTreeSet;
@@ -69,11 +70,23 @@ struct RetainedList {
     site: Option<(exact_plan::NodesId, Vec<InstanceStep>)>,
 }
 
+/// The columns a root could not narrow to, as its trials used them (as asked, clamped to the allocation), while its
+/// style, as a failed trial's layout left it, and its allocation and viewport, measured before that trial, stand: a
+/// split refused for one column is tried again for another, or once the viewport its lengths resolve against moves,
+/// and once for each, not every frame.
+struct Refusal {
+    style: exact_kernel::StyleProps,
+    allocation: Rect4,
+    /// The viewport the root's viewport lengths resolve against, which the split's own layout cannot move
+    viewport: (f32, f32),
+    columns: Vec<f32>,
+}
+
 #[derive(Default)]
 pub(crate) struct State {
     pub active: Option<Split>,
     retained: BTreeMap<NodeKey, Option<RetainedList>>,
-    refused: BTreeMap<NodeKey, (exact_kernel::StyleProps, Rect4)>,
+    refused: BTreeMap<NodeKey, Refusal>,
     logged: BTreeSet<NodeKey>,
     actions: BTreeMap<ViewId, Association>,
     blocks: BTreeMap<NodeKey, ViewId>,
@@ -219,7 +232,9 @@ impl<D: DataSource> Presenter<D> {
         );
     }
 
-    fn read_split(&mut self) -> Option<Split> {
+    /// The split the stack asks for, and the viewport its trial is judged against beside it, outside the `Split` a
+    /// shown split compares to know whether to lay out again.
+    fn read_split(&mut self) -> Option<(Split, (f32, f32))> {
         self.validate_split_rows();
         let stack = self.host.shown_stack()?.to_vec();
         let root = *stack.first()?;
@@ -264,37 +279,37 @@ impl<D: DataSource> Presenter<D> {
             (f.width - l - r).max(0.),
             (f.height - t - b).max(0.),
         );
-        if self
-            .host
-            .navigation
-            .split
-            .refused
-            .get(&key)
-            .is_some_and(|(style, allocation)| {
-                kernel.node(root).is_some_and(|n| style == n.style) && *allocation == rect
-            })
-        {
-            return None;
-        }
-        if rect.2 < THRESHOLD || rect.2 < MIN_LIST + DIVIDER + MIN_DETAIL {
-            return None;
-        }
+        // The column the trial would use, clamped to the allocation, which the refusal is kept against
         let list_width = rule
             .width
             .unwrap_or(LIST_WIDTH)
             .max(MIN_LIST)
             .min(rect.2 - DIVIDER - MIN_DETAIL);
+        // Read the page's environment, not the root's local one, since viewport lengths resolve against the page's
+        let env = kernel.arena().env();
+        // The basis `vw` and `vh` resolve against (`ViewportUnit::basis`): the window's, where the host sets it
+        let viewport = env
+            .screen
+            .unwrap_or((env.viewport_width, env.viewport_height));
+        if (self.host.navigation.split.refused.get(&key)).is_some_and(|r| {
+            kernel.node(root).is_some_and(|n| r.style == *n.style)
+                && r.allocation == rect
+                && r.viewport == viewport
+                && r.columns.contains(&list_width)
+        }) {
+            return None;
+        }
+        if rect.2 < THRESHOLD || rect.2 < MIN_LIST + DIVIDER + MIN_DETAIL {
+            return None;
+        }
         let routes: Vec<_> = stack
             .iter()
             .skip(1)
             .copied()
             .take_while(|id| {
-                !kernel.node(*id).is_some_and(|n| {
-                    matches!(
-                        n.props.str(PropId::NavigationPresentation),
-                        Some("modal" | "fullscreen")
-                    )
-                })
+                !kernel
+                    .node(*id)
+                    .is_some_and(|n| n.props.presentation().is_some())
             })
             .collect();
         let detail = routes.last().copied();
@@ -320,21 +335,8 @@ impl<D: DataSource> Presenter<D> {
                     base.is_some_and(|id| linked(id).is_some() || actions.contains_key(&id));
                 rule.current.filter(|_| detail.is_some() && !pushed)
             });
-        let placeholder = detail
-            .is_none()
-            .then(|| {
-                kernel
-                    .preorder_where(&[root], |_, p| {
-                        p.str(PropId::NavigationSplit) == Some("placeholder")
-                    })
-                    .into_iter()
-                    .find(|id| {
-                        kernel
-                            .node(*id)
-                            .is_some_and(|n| n.node_type == NodeType::View)
-                    })
-            })
-            .flatten();
+        // The runner's choice, the root route's own box, which asked for the split (LLP 1127 D1)
+        let placeholder = rule.placeholder.filter(|_| detail.is_none());
         let mut chevrons = BTreeSet::new();
         if let Some(list) = rule.list {
             for id in kernel.preorder_where(&[list], |_, p| {
@@ -352,27 +354,30 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        Some(Split {
-            root,
-            within: within_id,
-            list: rule.list,
-            list_width,
-            authored_width: rule.width,
-            rect,
-            detail,
-            base,
-            row,
-            placeholder,
-            inert: stack.len() > routes.len() + 1,
-            hidden: stack.iter().skip(routes.len() + 1).any(|id| {
-                kernel.node(*id).is_some_and(|n| {
-                    n.props.str(PropId::NavigationPresentation) == Some("fullscreen")
-                        && !crate::navigation::over_page(&n)
-                })
-            }),
-            routes,
-            chevrons,
-        })
+        Some((
+            Split {
+                root,
+                within: within_id,
+                list: rule.list,
+                list_width,
+                authored_width: rule.width,
+                rect,
+                detail,
+                base,
+                row,
+                placeholder,
+                inert: stack.len() > routes.len() + 1,
+                hidden: stack.iter().skip(routes.len() + 1).any(|id| {
+                    kernel.node(*id).is_some_and(|n| {
+                        n.props.presentation() == Some(Presentation::FullScreen)
+                            && !crate::navigation::over_page(&n)
+                    })
+                }),
+                routes,
+                chevrons,
+            },
+            viewport,
+        ))
     }
 
     fn validate_split_rows(&mut self) {
@@ -459,11 +464,15 @@ impl<D: DataSource> Presenter<D> {
     }
 
     fn apply_split(&mut self) -> Result<(), String> {
-        let next = self.read_split();
-        self.apply_split_to(next)
+        let (next, viewport) = self.read_split().unzip();
+        self.apply_split_to(next, viewport)
     }
 
-    fn apply_split_to(&mut self, next: Option<Split>) -> Result<(), String> {
+    fn apply_split_to(
+        &mut self,
+        next: Option<Split>,
+        viewport: Option<(f32, f32)>,
+    ) -> Result<(), String> {
         let old = self.host.navigation.split.active.clone();
         let mut changed = old != next;
         if let Some(root) = old
@@ -603,19 +612,41 @@ impl<D: DataSource> Presenter<D> {
             };
             let content = root.frame.x + root.frame.width - cover - s.rect.0;
             if (content - s.list_width).abs() > 0.5 {
-                let key = root.key;
-                self.host
-                    .navigation
-                    .split
-                    .refused
-                    .insert(key, (root.style.clone(), s.rect));
+                // Kept against the root's style as the trial's layout left it, and the viewport read before it
+                let (key, style) = (root.key, root.style.clone());
+                let refused = &mut self.host.navigation.split.refused;
+                if let Some(viewport) = viewport {
+                    match refused.get_mut(&key) {
+                        Some(r)
+                            if r.style == style
+                                && r.allocation == s.rect
+                                && r.viewport == viewport =>
+                        {
+                            if !r.columns.contains(&s.list_width) {
+                                r.columns.push(s.list_width);
+                            }
+                        }
+                        _ => {
+                            let columns = vec![s.list_width];
+                            refused.insert(
+                                key,
+                                Refusal {
+                                    style,
+                                    allocation: s.rect,
+                                    viewport,
+                                    columns,
+                                },
+                            );
+                        }
+                    }
+                }
                 if self.host.navigation.split.logged.insert(key) {
                     self.host.log(format!(
                         "split: route {} cannot narrow to its {} px column (its content ends at {content} px)",
                         s.root, s.list_width
                     ));
                 }
-                return self.apply_split_to(None);
+                return self.apply_split_to(None, None);
             }
         }
         self.place_split();

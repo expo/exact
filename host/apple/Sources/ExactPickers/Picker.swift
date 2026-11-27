@@ -29,18 +29,26 @@ final class Picker: NSObject, FilePicking {
     private var open: [UInt32: Int] = [:]
     /// The holds of document pickers a drive shows for real (`--touch
     /// platform`), by element: what the person's choice answers.
-    var documentTickets: [UInt32: UInt64] = [:]
+    var documentTickets: [UInt32: (ticket: UInt64, issued: SessionLease)] = [:]
     #if canImport(UIKit)
     /// Those pickers, by element: what `back` or the agent's answer closes.
     var documentShown: [UInt32: UIViewController] = [:]
     private var requests: [ObjectIdentifier: Request] = [:]
     /// Exporting document pickers showing (LLP 1069.010 D3): the element
-    /// the outcome goes to, and the scratch directory to remove.
-    var exports: [ObjectIdentifier: (UInt32, URL)] = [:]
-    /// Document pickers showing (LLP 1069.010 D2): the element, the command.
-    var documentRequests: [ObjectIdentifier: (UInt32, String)] = [:]
+    /// the outcome goes to, the scratch directory to remove, and the session lease.
+    var exports: [ObjectIdentifier: (view: UInt32, dir: URL, issued: SessionLease)] = [:]
+    /// Document pickers showing (LLP 1069.010 D2): element, command, optional scratch directory, and session lease.
+    var documentRequests: [ObjectIdentifier: (view: UInt32, name: String, scratch: URL?, issued: SessionLease)] = [:]
     #endif
     init(session: ExactSession) { self.session = session }
+    deinit {
+        #if canImport(UIKit)
+        for entry in exports.values { try? FileManager.default.removeItem(at: entry.dir) }
+        for entry in documentRequests.values {
+            if let scratch = entry.scratch { try? FileManager.default.removeItem(at: scratch) }
+        }
+        #endif
+    }
 
     /// A picker shown for input `view`, in the session generation `issued`.
     struct Request { let view: UInt32; let id: String; let accept: [String]; let multiple: Bool; let issued: SessionLease }

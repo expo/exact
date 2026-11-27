@@ -393,7 +393,9 @@ final class ModalDetentIOSTests: XCTestCase {
         until("the menu is presented as a sheet") { sheet()?.sheetPresentationController != nil }
         let presented = try XCTUnwrap(sheet())
         let controller = try XCTUnwrap(presented.sheetPresentationController)
-        XCTAssertEqual(presented.modalPresentationStyle, .pageSheet, "unsaid, a page sheet")
+        let unsaid = UIViewController()
+        unsaid.modalPresentationStyle = .automatic
+        XCTAssertEqual(presented.modalPresentationStyle, unsaid.modalPresentationStyle, "unsaid, the platform's sheet")
         let route = try node(session, "route-menu")
         func update(_ props: [String: String?]) {
             for (name, value) in props { route.props[name] = value }
@@ -416,22 +418,28 @@ final class ModalDetentIOSTests: XCTestCase {
         XCTAssertEqual(controller.selectedDetentIdentifier, .init("authored-0"), "let go: where it opens, its first")
         XCTAssertFalse(controller.prefersEdgeAttachedInCompactHeight)
         XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge, "unsaid over two detents: the platform's")
-        update(["navigationEdgeAttachedInCompactHeight": "true", "navigationScrollExpands": "false"])
+        XCTAssertFalse(controller.widthFollowsPreferredContentSizeWhenEdgeAttached)
+        update(["navigationEdgeAttachedInCompactHeight": "true", "navigationWidthFollowsPreferredContentSize": "true", "navigationScrollExpands": "false"])
         XCTAssertTrue(controller.prefersEdgeAttachedInCompactHeight)
+        XCTAssertTrue(controller.widthFollowsPreferredContentSizeWhenEdgeAttached)
         XCTAssertFalse(controller.prefersScrollingExpandsWhenScrolledToEdge)
-        update(["navigationEdgeAttachedInCompactHeight": nil, "navigationScrollExpands": nil])
+        update(["navigationEdgeAttachedInCompactHeight": nil, "navigationWidthFollowsPreferredContentSize": nil, "navigationScrollExpands": nil])
         XCTAssertFalse(controller.prefersEdgeAttachedInCompactHeight, "UIKit's default once it stops")
+        XCTAssertFalse(controller.widthFollowsPreferredContentSizeWhenEdgeAttached)
         XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge)
-        // UIKit reads a style back as it resolves it for the device (on an iPhone a form sheet reads as a page
-        // sheet), so the sheet is made as a controller given the same style is
-        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .pageSheet)] {
+        // UIKit reads a style back as it resolves it (`automatic` as a form sheet on iOS 18 and later, a page sheet
+        // before), so the sheet is made as a plain controller given the same style is
+        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .automatic)] {
             XCTAssertEqual(ModalController.sheetStyle(sizing), style, sizing ?? "unsaid")
             route.props["navigationSizing"] = sizing
-            let made = ModalController(host: session.presenter.modalHost, route: route, fullscreen: false, detent: nil, grabber: nil)
+            let made = ModalController(host: session.presenter.modalHost, route: route, kind: "modal", detent: nil, grabber: nil)
             let plain = UIViewController()
             plain.modalPresentationStyle = style
             XCTAssertEqual(made.modalPresentationStyle, plain.modalPresentationStyle, sizing ?? "unsaid")
             XCTAssertNotNil(made.sheetPresentationController, "\(sizing ?? "unsaid"): a sheet to configure")
+            // Each sizing's sheet takes its route's detents, as any sheet does
+            made.updateSheet(detent: "medium large", cornerRadius: nil, grabber: nil)
+            XCTAssertEqual(made.sheetPresentationController?.detents.count, 2, "\(sizing ?? "unsaid"): its detents")
         }
     }
 
@@ -458,9 +466,12 @@ final class ModalDetentIOSTests: XCTestCase {
             let reply = try? JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
             return (reply?["slots"] as? [String: Any])?["count"] as? Double
         }
-        // A short detent, so the sheet leaves Bump uncovered
+        // A short detent, so the sheet leaves Bump uncovered on any screen: 40 points clear of Bump's bottom
         let short = UISheetPresentationController.Detent.Identifier("authored-0")
-        update(["navigationDetent": "200 large", "navigationSelectedDetent": "200", "navigationUndimmedDetent": "200"])
+        let bumpBottom = bump.convert(bump.bounds, to: window).maxY
+        let height = Int(window.bounds.height - window.safeAreaInsets.bottom - bumpBottom - 40)
+        XCTAssertGreaterThan(height, 80, "room for a short sheet under Bump")
+        update(["navigationDetent": "\(height) large", "navigationSelectedDetent": "\(height)", "navigationUndimmedDetent": "\(height)"])
         XCTAssertEqual(controller.largestUndimmedDetentIdentifier, short)
         until("the sheet rests at its short detent") { controller.selectedDetentIdentifier == short && presented.transitionCoordinator == nil }
         XCTAssertFalse(modals.inertBehind(bump), "the screen under it is live")

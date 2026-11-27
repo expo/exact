@@ -10,7 +10,8 @@
 //     "services": [{"name": "<class>", "directBootAware": true, "foregroundServiceType": "systemExempted"}],
 //     "queries": [{"package": "com.google.android.apps.healthdata"}, {"action": "android.intent.action.TTS_SERVICE"},
 //                 {"action": "android.intent.action.SENDTO", "scheme": "mailto"}],
-//     "activities": [{"name": "<class>", "actions": ["androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"]}],
+//     "activities": [{"name": "<class>", "actions": ["androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"]},
+//                    {"name": "<class>", "private": true, "theme": "translucent"}],
 //     "aliases": [{"name": "<class>", "targetActivity": "<an activity above>", "action": "android.intent.action.VIEW_PERMISSION_USAGE",
 //                  "category": "android.intent.category.HEALTH_PERMISSIONS"}],
 //     "carAppService": {"name": "<class>", "category": "POI", "minCarApiLevel": 1},
@@ -20,10 +21,13 @@
 //   }
 //
 // Receivers and services are `exported="false"`, but for a service another app binds: the system's protected broadcasts still reach an unexported receiver,
-// and a receiver for the package's own alarm needs no action, since its intent is explicit. An activity is exported,
-// since the system starts it, but only for an action on the list, and never shows: it is `Theme.NoDisplay` and opens
-// the app's privacy policy, which the application's `exact.privacy_policy` meta-data carries (Health Connect's
-// rationale, [Health Connect: get started](https://developer.android.com/health-and-fitness/guides/health-connect/develop/get-started)).
+// and a receiver for the package's own alarm needs no action, since its intent is explicit. An activity is either:
+// (a) exported for an action on `ACTIVITY_ACTIONS`, using `Theme.NoDisplay` to open the app's privacy policy carried in
+// `exact.privacy_policy` meta-data (Health Connect's rationale, [Health Connect: get started](https://developer.android.com/health-and-fitness/guides/health-connect/develop/get-started)); or
+// (b) package-private (`"private": true`), emitted with `android:exported="false"`, no intent filter, a theme on
+// `PRIVATE_ACTIVITY_THEMES` (default `"translucent"` -> `@style/ExactTranslucent`, or `"opaque"` -> `@style/ExactLaunch`),
+// and `tools:node="replace"` so an explicit-intent trampoline (for example a `ComponentActivity` hosting a third-party
+// sheet) stays internal to the package.
 // A service bound by another app through a permission only that app holds (`SERVICE_BINDS`: Google Pay's callbacks,
 // LLP 1133.034 D5) is exported, since the binder is Play services' process; the permission is what guards it.
 // A service a library's own exported receiver starts (`LIBRARY_SERVICES`: Firebase's messaging) is unexported and
@@ -63,7 +67,9 @@ export function extensionFactories(bound) {
     const usesMlKit = deferred && pkg.maven?.some(c => c.startsWith('com.google.mlkit:') || c.startsWith('com.google.android.gms:play-services-mlkit-'));
     const guard = pkg.className === 'exact.translation.TranslationModule' ? 'if (!c.agent) ' : '';
     const init = usesMlKit ? `${guard}ExactMlKit.initialize(c.application); ` : '';
-    return `        ${JSON.stringify(pkg.extension)} to { c -> ${init}${pkg.className}(c) },`;
+    const make = `{ c -> ${init}${pkg.className}(c) }`;
+    const factory = pkg.reader ? `dev.exact.canvas.SynchronousExtension(${pkg.className}::read) ${make}` : make;
+    return `        ${JSON.stringify(pkg.extension)} to ${factory},`;
   });
 }
 
@@ -114,8 +120,14 @@ export const METADATA = new Map([
   ['com.google.firebase.messaging.default_notification_icon', { resource: '@drawable/exact_notification' }],
 ]);
 
-/** The actions an activity may answer: Health Connect's request to show the app's privacy policy. */
+/** The actions an exported rationale activity may answer: Health Connect's request to show the app's privacy policy. */
 export const ACTIVITY_ACTIONS = new Set(['androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE']);
+
+/** The themes a package-private activity (`private: true`) may name (LLP 1133.030 D9). */
+export const PRIVATE_ACTIVITY_THEMES = new Map([
+  ['translucent', '@style/ExactTranslucent'],
+  ['opaque', '@style/ExactLaunch'],
+]);
 
 /** An alias's action and category: Android 14's permission-usage entry for Health (LLP 1133.026 D19 item 3). */
 export const ALIAS_ACTIONS = new Set(['android.intent.action.VIEW_PERMISSION_USAGE']);
@@ -127,6 +139,7 @@ export const NORMAL_PERMISSIONS = new Set([
   'android.permission.DETECT_SCREEN_CAPTURE',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+  'android.permission.MODIFY_AUDIO_SETTINGS',
   'android.permission.RUN_USER_INITIATED_JOBS',
 ]);
 
@@ -145,7 +158,7 @@ export function carAppService(bound) {
     if (service) refuse(`a second car service ${JSON.stringify(row.name)} conflicts with ${service.name}`);
     for (const key of Object.keys(row)) if (!['name', 'category', 'minCarApiLevel'].includes(key)) refuse(`${key}=${JSON.stringify(row[key])} is not allowed`);
     const own = className.slice(0, className.lastIndexOf('.'));
-    if (typeof row.name !== 'string' || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(row.name) || !row.name.startsWith(own + '.')) refuse(`${JSON.stringify(row.name)} must name a class in ${own}`);
+    if (!own || typeof row.name !== 'string' || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(row.name) || row.name.slice(0, row.name.lastIndexOf('.')) !== own) refuse(`${JSON.stringify(row.name)} must name a class in ${own}`);
     if (row.category !== 'POI') refuse(`category ${JSON.stringify(row.category)} must be POI`);
     if (!Number.isInteger(row.minCarApiLevel) || row.minCarApiLevel < 1 || row.minCarApiLevel > 8) refuse(`minCarApiLevel ${JSON.stringify(row.minCarApiLevel)} must be an integer from 1 to 8`);
     service = row;
@@ -253,7 +266,7 @@ const FIELDS = {
   receivers: new Set(['name', 'directBootAware', 'actions']),
   services: new Set(['name', 'directBootAware', 'foregroundServiceType', 'permission', 'actions']),
   queries: new Set(['package', 'action', 'scheme']),
-  activities: new Set(['name', 'actions']),
+  activities: new Set(['name', 'actions', 'private', 'theme']),
   aliases: new Set(['name', 'targetActivity', 'action', 'category']),
   metadata: new Set(['name', 'value', 'resource']),
 };
@@ -285,7 +298,7 @@ export function configMetaData(configs) {
 /** `fragment` (from [manifestFragment]) with `meta` lines inside its `<application>`, made if it has none. */
 export function withMetaData(fragment, meta) {
   if (!meta.length) return fragment;
-  if (fragment.includes('    <application>\n')) return fragment.replace('    <application>\n', `    <application>\n${meta.join('\n')}\n`);
+  if (fragment.includes('    <application>\n')) return fragment.replace('    <application>\n', () => `    <application>\n${meta.join('\n')}\n`);
   return [fragment, '    <application>', ...meta, '    </application>'].filter(Boolean).join('\n');
 }
 
@@ -312,6 +325,7 @@ function addQueries(queries, list, refuse) {
  * A refused entry names its source. A rationale activity carries the app's privacy policy as meta-data. */
 export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] } = {}) {
   const lines = [], queries = new Set(), names = new Set(), removed = new Set();
+  let hasWorkManagerService = false;
   if (defersMlKit(bound)) removed.add('com.google.mlkit.common.internal.MlKitInitProvider');
   addQueries(queries, appQueries, (what) => { throw new Error(`app.json host.android.queries: ${what} (LLP 1133.030 D9's allow-list)`); });
   const car = carAppService(bound);
@@ -328,16 +342,16 @@ export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] 
       '        <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc" tools:node="replace" />',
       `        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="${car.minCarApiLevel}" tools:node="replace" />`);
   }
-  let activities = 0;
+  let rationaleActivities = 0;
   for (const impl of bound) {
     const fragment = impl.manifest;
     if (fragment == null) continue;
     const who = `${impl.extension}'s Android implementation`, refuse = (what) => { throw new Error(`${who}: its manifest fragment ${what} (LLP 1133.030 D9's allow-list)`); };
     if (typeof fragment !== 'object' || Array.isArray(fragment)) refuse('is not an object');
-    // A component is the package's own class: one in the Java package of its `class`.
-    const own = impl.className.split('.').slice(0, -1).join('.'), mine = new Set();
+    // A component is the package's own class: one in the exact Java/Kotlin package of its `class`.
+    const own = impl.className.split('.').slice(0, -1).join('.'), rationaleTargets = new Set();
     const component = (kind, c) => {
-      if (typeof c.name !== 'string' || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(c.name) || !c.name.startsWith(`${own}.`)) refuse(`names ${JSON.stringify(c.name)}, not a class in ${own}`);
+      if (typeof c.name !== 'string' || !own || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(c.name) || c.name.slice(0, c.name.lastIndexOf('.')) !== own) refuse(`names ${JSON.stringify(c.name)}, not a class in ${own}`);
       if (names.has(c.name)) refuse(`declares ${c.name} twice`);
       names.add(c.name);
     };
@@ -348,7 +362,7 @@ export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] 
       const list = fragment[kind];
       if (kind === 'queries') { addQueries(queries, list, refuse); continue; }
       if (kind === 'carAppService' || kind === 'permissions') continue;
-      if (!FIELDS[kind]) refuse(`names "${kind}"; only ${[...Object.keys(FIELDS), 'carAppService', 'permissions'].join(', ')} are allowed`);
+      if (!Object.hasOwn(FIELDS, kind)) refuse(`names "${kind}"; only ${[...Object.keys(FIELDS), 'carAppService', 'permissions'].join(', ')} are allowed`);
       if (!Array.isArray(list)) refuse(`has ${kind} that is not a list`);
       for (const c of list) {
         for (const key of Object.keys(c ?? {})) if (!FIELDS[kind].has(key)) refuse(`gives a ${ONE[kind]} "${key}", which the list does not allow`);
@@ -361,10 +375,15 @@ export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] 
           lines.push(`        <meta-data android:name="${escape(c.name)}" android:${field}="${escape(c[field])}" />`);
           continue;
         }
+        if (c == null || typeof c !== 'object' || Array.isArray(c)) refuse(`gives a ${ONE[kind]} that is not an object`);
         if (kind === 'services' && c.name === 'androidx.work.impl.foreground.SystemForegroundService') {
           if (c.foregroundServiceType !== 'dataSync' || c.directBootAware !== undefined || c.permission !== undefined || c.actions !== undefined) refuse('gives WorkManager a service declaration other than dataSync');
-          if (!names.has(c.name)) lines.push(`        <service android:name="${c.name}" android:exported="false" android:foregroundServiceType="dataSync" tools:node="merge" />`);
-          names.add(c.name);
+          if (names.has(c.name) && !hasWorkManagerService) refuse(`declares ${c.name} twice`);
+          if (!hasWorkManagerService) {
+            lines.push(`        <service android:name="${c.name}" android:exported="false" android:foregroundServiceType="dataSync" tools:node="merge" />`);
+            hasWorkManagerService = true;
+            names.add(c.name);
+          }
           continue;
         }
         component(kind, c);
@@ -374,17 +393,28 @@ export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] 
           continue;
         }
         if (kind === 'activities') {
-          const actions = c.actions ?? [];
-          if (!Array.isArray(actions) || !actions.length) refuse(`gives ${c.name} no actions; an activity is only for one the system starts`);
+          if (Object.hasOwn(c, 'private') && c.private !== undefined) {
+            if (c.private !== true) refuse(`gives ${c.name} private=${JSON.stringify(c.private)}; omit private for a rationale activity or set private: true`);
+            if (Object.hasOwn(c, 'actions') && c.actions !== undefined) refuse(`gives private activity ${c.name} actions; a private activity is unexported and takes no intent filter`);
+            const hasTheme = Object.hasOwn(c, 'theme') && c.theme !== undefined;
+            const themeName = hasTheme ? c.theme : 'translucent';
+            if (typeof themeName !== 'string' || !PRIVATE_ACTIVITY_THEMES.has(themeName)) refuse(`gives private activity ${c.name} the theme ${JSON.stringify(c.theme)}, which is not on the list`);
+            const theme = PRIVATE_ACTIVITY_THEMES.get(themeName);
+            lines.push(`        <activity android:name="${c.name}" android:exported="false" android:theme="${theme}" tools:node="replace" />`);
+            continue;
+          }
+          if (Object.hasOwn(c, 'theme') && c.theme !== undefined) refuse(`gives rationale activity ${c.name} a theme; only a private activity names a theme`);
+          const actions = Object.hasOwn(c, 'actions') ? (c.actions ?? []) : [];
+          if (!Array.isArray(actions) || !actions.length) refuse(`gives ${c.name} no actions; an activity is only for one the system starts or a private activity (private: true)`);
           for (const a of actions) listed(ACTIVITY_ACTIONS, a, `${c.name} the action`);
-          mine.add(c.name);
-          activities++;
+          rationaleTargets.add(c.name);
+          rationaleActivities++;
           lines.push(`        <activity android:name="${c.name}" android:exported="true" android:theme="@android:style/Theme.NoDisplay">`, '            <intent-filter>',
             ...actions.map((a) => `                <action android:name="${a}" />`), '            </intent-filter>', '        </activity>');
           continue;
         }
         if (kind === 'aliases') {
-          if (!mine.has(c.targetActivity)) refuse(`gives ${c.name} the target ${JSON.stringify(c.targetActivity)}, not an activity it declares`);
+          if (!rationaleTargets.has(c.targetActivity)) refuse(`gives ${c.name} the target ${JSON.stringify(c.targetActivity)}, not an activity it declares`);
           listed(ALIAS_ACTIONS, c.action, `${c.name} the action`);
           listed(ALIAS_CATEGORIES, c.category, `${c.name} the category`);
           lines.push(`        <activity-alias android:name="${c.name}" android:exported="true" android:targetActivity="${c.targetActivity}" android:permission="android.permission.START_VIEW_PERMISSION_USAGE">`,
@@ -426,7 +456,7 @@ export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] 
     }
   }
   for (const provider of removed) lines.push(`        <provider android:name="${provider}" tools:node="remove" />`);
-  if (activities && privacyPolicy) lines.unshift(`        <meta-data android:name="exact.privacy_policy" android:value="${escape(privacyPolicy)}" />`);
+  if (rationaleActivities && privacyPolicy) lines.unshift(`        <meta-data android:name="exact.privacy_policy" android:value="${escape(privacyPolicy)}" />`);
   return [
     ...(queries.size ? ['    <queries>', ...queries, '    </queries>'] : []),
     ...(lines.length ? ['    <application>', ...lines, '    </application>'] : []),
@@ -440,7 +470,7 @@ const MAIN_ACTIVITY = '        <activity android:name="dev.exact.app.MainActivit
 /** `fragment` with `lines` (intent filters) on the app's activity and `meta` on the application: a share target, auth
  * callbacks and links extend one activity element instead of duplicating it. */
 function onMainActivity(fragment, lines, meta = []) {
-  if (fragment.includes(MAIN_ACTIVITY)) return withMetaData(fragment.replace(MAIN_ACTIVITY, [MAIN_ACTIVITY, ...lines].join('\n')), meta);
+  if (fragment.includes(MAIN_ACTIVITY)) return withMetaData(fragment.replace(MAIN_ACTIVITY, () => [MAIN_ACTIVITY, ...lines].join('\n')), meta);
   return withMetaData(fragment, [...meta, MAIN_ACTIVITY, ...lines, '        </activity>']);
 }
 
@@ -519,7 +549,7 @@ export function withAuthCallbacks(fragment, callbacks = []) {
     '        <intent><action android:name="android.support.customtabs.action.CustomTabsService" /></intent>',
     '        <intent><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="https" /></intent>',
   ].join('\n');
-  if (app.includes('    </queries>')) return app.replace('    </queries>', `${queries}\n    </queries>`);
+  if (app.includes('    </queries>')) return app.replace('    </queries>', () => `${queries}\n    </queries>`);
   return `${app}\n    <queries>\n${queries}\n    </queries>`;
 }
 
@@ -545,5 +575,6 @@ export const systemWidgets = manifest => (manifest.widgets ?? []).filter(row => 
  * APK includes the player so a live edit can add video. A locked app links it only when its plan uses it. */
 export function androidLibraryArgs(app, bound, uses, env, liveVideo = false) {
   return [...composeArgs(uses, app.dir, bound, env), ...(uses.includes('video') || liveVideo ? ['-Pvideo=1'] : []),
+    ...(uses.includes('videoPictureInPicture') || liveVideo ? ['-PvideoPictureInPicture=1'] : []),
     ...(systemWidgets(app.manifest).length ? ['-Pwidgets=1'] : []), `-PcarAppService=${carAppService(bound)?.name ?? ''}`];
 }

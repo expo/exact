@@ -111,6 +111,81 @@ pub(super) fn remove_entry(entry: &Path) -> bool {
     true
 }
 
+/// Take an exclusive non-blocking advisory lock on an entry's `exact.json` so
+/// replacement never touches a directory a secondary reader runs ([`hold_entry`]).
+/// Returns `Ok(None)` when `exact.json` is absent.
+pub(super) fn lock_entry(entry: &Path) -> Result<Option<std::fs::File>, String> {
+    let path = entry.join("exact.json");
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(e) => return Err(format!("cannot open {}: {e}", path.display())),
+    };
+    match try_lock(&file, true) {
+        Ok(true) => Ok(Some(file)),
+        Ok(false) => Err(format!(
+            "cannot replace {}: another instance is using it",
+            entry.display()
+        )),
+        Err(e) => Err(format!("cannot lock {}: {e}", path.display())),
+    }
+}
+
+fn remove_path(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+    .map_err(|e| format!("cannot clear {}: {e}", path.display()))
+}
+
+/// Replace an existing entry's payload files from `tmp` while keeping its
+/// verified `exact.json` floor witness intact and publishing `app.plan` last.
+pub(super) fn replace_entry_in_place(tmp: &Path, target: &Path) -> Result<(), String> {
+    remove_path(&target.join("app.plan"))?;
+    remove_path(&target.join("assets"))?;
+    if tmp.join("assets").exists() {
+        std::fs::rename(tmp.join("assets"), target.join("assets"))
+            .map_err(|e| format!("cannot replace assets: {e}"))?;
+    }
+    remove_path(&target.join("assets.json"))?;
+    if tmp.join("assets.json").exists() {
+        std::fs::rename(tmp.join("assets.json"), target.join("assets.json"))
+            .map_err(|e| format!("cannot replace assets.json: {e}"))?;
+    }
+    sync_dir(target)?;
+    std::fs::rename(tmp.join("app.plan"), target.join("app.plan"))
+        .map_err(|e| format!("cannot replace app.plan: {e}"))?;
+    sync_dir(target)
+}
+
+/// Swap a verified `tmp` directory into an existing `target` that holds no
+/// valid witness, restoring `target` if the rename into place fails.
+pub(super) fn swap_entry(tmp: &Path, target: &Path) -> Result<(), String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("{} has no parent", target.display()))?;
+    let backup = parent.join(temporary_name());
+    std::fs::rename(target, &backup)
+        .map_err(|e| format!("cannot move {} aside: {e}", target.display()))?;
+    if let Err(e) = std::fs::rename(tmp, target) {
+        let _ = std::fs::rename(&backup, target);
+        return Err(format!("cannot put {} in place: {e}", target.display()));
+    }
+    sync_dir(parent)?;
+    let _ = remove_path(&backup);
+    Ok(())
+}
+
 pub(super) fn regular_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }

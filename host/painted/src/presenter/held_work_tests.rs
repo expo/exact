@@ -218,7 +218,7 @@ impl DataSource for Oversized {
     ) -> Result<Answer, DataError> {
         assert!(matches!(outcome, Outcome::Failed {
             kind: exact_runner::FailureKind::Refused, ref message,
-        } if message.starts_with("native request exceeds 4 MiB (URL, headers and body together)")));
+        } if message.contains("request bytes (maximum 4194304, including URL, headers and body)")));
         Ok(Answer::Now(Value::Bool(true)))
     }
 }

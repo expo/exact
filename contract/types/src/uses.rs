@@ -197,7 +197,11 @@ fn check_argument(
     } else {
         err(
             "type-prop",
-            format!("`{}` expects `{expected}`, given `{given}`", arg.name),
+            format!(
+                "`{}` expects `{expected}`, given `{given}`{}",
+                arg.name,
+                super::enums::rejection(expected, &arg.value)
+            ),
             arg.span,
         )
     }

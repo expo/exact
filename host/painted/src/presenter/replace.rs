@@ -20,8 +20,8 @@ impl<D: DataSource> Presenter<D> {
             ahead,
             scroll,
             scroll_end,
-            wheel_free,
-            snap_rested,
+            wheel_snap,
+            snap_layout,
             glides,
             zooms,
             page,
@@ -31,6 +31,7 @@ impl<D: DataSource> Presenter<D> {
             autofocus_from,
             disabled_blur,
             edited,
+            filtering_field,
             fields,
             field_history,
             field_drag,
@@ -77,6 +78,7 @@ impl<D: DataSource> Presenter<D> {
             alert: _,
             hatches: _,
             frame_partitions: _,
+            hosted: _,
             // The tree's, set by `restore_focus` from the place of the old
             // focus.
             focus: _,
@@ -114,7 +116,6 @@ impl<D: DataSource> Presenter<D> {
             // where the new tree differs.
             reader: _,
             colors: _,
-            hosted: _,
             access: _,
             // The window's, the device's and the session's.
             make_text: _,
@@ -165,6 +166,9 @@ impl<D: DataSource> Presenter<D> {
             agent: _,
             booting: _,
             content_registration: _,
+            lifter: _,
+            shown,
+            plan_drags,
         } = self;
         // Turns still wait for the frame; none of the old tree's do.
         if let Some(waiting) = deferred_collections {
@@ -176,10 +180,10 @@ impl<D: DataSource> Presenter<D> {
         scroll.clear();
         *scroll_end = Default::default();
         *media = Default::default();
-        // Kept by view id, as where a wheel left a scroller and the area it
-        // last rested on.
-        wheel_free.clear();
-        snap_rested.clear();
+        // Kept by view id, as unsettled fine wheel gestures and the area a
+        // scroller last rested on.
+        wheel_snap.clear();
+        *snap_layout = Default::default();
         *glides = Default::default();
         *zooms = zoom::Zooms::kept(zooms);
         *page = (0.0, 0.0);
@@ -192,10 +196,14 @@ impl<D: DataSource> Presenter<D> {
         // 1069.001 D4), an edit to commit, a caret: as Apple's reset and
         // the web's rebuilt page have it.
         *edited = None;
+        *filtering_field = None;
         fields.clear();
         *field_history = Default::default();
         *field_drag = None;
         drag_in.reset();
+        // A new plan's frames are the ones a lift cuts its picture from
+        *shown = None;
+        *plan_drags = None;
         *mouse_selection = Default::default();
         #[cfg(any(target_os = "android", test))]
         {
@@ -240,6 +248,7 @@ impl<D: DataSource> Presenter<D> {
         self.brush.canvases.drawings = self.host.canvas_snapshots().clone();
         self.brush.lift = Default::default();
         // A picker's answer or a GPU surface is not the new tree's.
+        self.hosted_replaced();
         self.picks_replaced();
         self.close_menu();
         self.surfaces.replaced(&mut self.host);

@@ -171,9 +171,17 @@ class AlarmRingTest {
         notices.createNotificationChannel(NotificationChannel(AlarmRing.RING, "Alarms", NotificationManager.IMPORTANCE_NONE))
     }
 
-    /** A boot with no Stop to show: neither an overdue alarm nor one that was ringing starts its sound, every held alarm
-     * goes, and a paused countdown stays (D7). */
-    private fun bootDenied(deny: (NotificationManager) -> Unit) {
+    @Test fun aBootWithExactAlarmsRevokedRingsNothing() = bootDenied(Intent.ACTION_BOOT_COMPLETED) {
+        ShadowAlarmManager.setCanScheduleExactAlarms(false)
+    }
+
+    @Test fun aPackageReplaceWithExactAlarmsRevokedRingsNothing() = bootDenied(Intent.ACTION_MY_PACKAGE_REPLACED) {
+        ShadowAlarmManager.setCanScheduleExactAlarms(false)
+    }
+
+    /** A boot or package replace with no Stop to show or exact-alarm permission revoked: neither an overdue alarm nor
+     * one that was ringing starts its sound, every held alarm goes, and a paused countdown stays (D7). */
+    private fun bootDenied(action: String = Intent.ACTION_BOOT_COMPLETED, deny: (NotificationManager) -> Unit) {
         val app = RuntimeEnvironment.getApplication()
         val alarms = app.getSystemService(AlarmManager::class.java)
         val notices = app.getSystemService(NotificationManager::class.java)
@@ -194,7 +202,7 @@ class AlarmRingTest {
             listOf(future, overdue).forEach { alarms.cancel(AlarmRing.action(app, it, AlarmRing.FIRE)) }
             ShadowSystemClock.advanceBy(Duration.ofMinutes(2))
             Settings.Global.putInt(app.contentResolver, Settings.Global.BOOT_COUNT, 2)
-            AlarmSystemReceiver().onReceive(app, Intent(Intent.ACTION_BOOT_COMPLETED))
+            AlarmSystemReceiver().onReceive(app, Intent(action))
             shadowOf(Looper.getMainLooper()).idle()
 
             assertNull("no sound starts", shadowOf(app).nextStartedService)
@@ -202,6 +210,31 @@ class AlarmRingTest {
             assertNull("no alarm is set again", alarms.nextAlarmClock)
         } finally {
             records.forEach { AlarmRing.cancel(app, it.tag) }
+            app.createDeviceProtectedStorageContext().getSharedPreferences("exact.alarms", Context.MODE_PRIVATE)
+                .edit().clear().commit()
+        }
+    }
+
+    /** A FIRE broadcast racing with SCHEDULE_EXACT_ALARM revocation starts no foreground service and drops held alarms. */
+    @Test fun aDueAlarmWithExactAlarmsRevokedRingsNothing() {
+        val app = RuntimeEnvironment.getApplication()
+        ShadowAlarmManager.setCanScheduleExactAlarms(true)
+        Settings.Global.putInt(app.contentResolver, Settings.Global.BOOT_COUNT, 1)
+        val now = System.currentTimeMillis().toDouble()
+        val due = AlarmRecord("due", "Tea", now, null, null, null, "scheduled")
+        val paused = AlarmRecord("paused", "Oven", now + 60_000.0, 60_000.0, null, null, "countdown")
+        try {
+            AlarmRing.set(app, due)
+            AlarmRing.set(app, paused)
+            AlarmRing.pause(app, AlarmRecords.get(app, paused.tag)!!)
+            ShadowAlarmManager.setCanScheduleExactAlarms(false)
+            AlarmRing.due(app, due.tag)
+            shadowOf(Looper.getMainLooper()).idle()
+
+            assertNull("no foreground service starts", shadowOf(app).nextStartedService)
+            assertEquals(listOf(paused.tag), AlarmRecords.all(app).map { it.tag })
+        } finally {
+            listOf(due, paused).forEach { AlarmRing.cancel(app, it.tag) }
             app.createDeviceProtectedStorageContext().getSharedPreferences("exact.alarms", Context.MODE_PRIVATE)
                 .edit().clear().commit()
         }

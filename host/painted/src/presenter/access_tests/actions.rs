@@ -145,3 +145,51 @@ fn a_muted_child_does_not_announce_its_live_ancestor() {
         .iter()
         .all(|(_, what, ..)| what & change::LIVE == 0));
 }
+
+#[test]
+fn ancestor_and_cyclic_aria_labelledby_and_describedby_terminate() {
+    let mut p = boot(
+        r#"component App
+  state on = false
+  action flip(checked: bool)
+    on = checked
+  action act
+    on = !on
+  view
+    column width=320 height=600
+      row id="wifi-row"
+        text "Wi-Fi"
+        input type="checkbox" role="switch" checked=on change=flip aria-labelledby="wifi-row"
+      column id="cycle-a"
+        text "Alpha"
+        button press=act aria-labelledby="cycle-b"
+          text "In A"
+      column id="cycle-b"
+        text "Beta"
+        button press=act aria-labelledby="cycle-a"
+          text "In B"
+      row id="desc-row"
+        text "Connects automatically"
+        input type="checkbox" role="switch" checked=on change=flip aria-labelledby="desc-row"
+      button "Details" press=act aria-describedby="desc-row"
+      text id="prefix" "Price:"
+      button id="self-btn" press=act aria-labelledby="prefix self-btn"
+        text "Buy"
+"#,
+        (320., 600.),
+        0,
+    );
+    let shown = statement(&mut p);
+    let switches: Vec<_> = shown
+        .nodes
+        .iter()
+        .filter(|n| n.role == role::SWITCH)
+        .map(|n| n.name.as_str())
+        .collect();
+    assert_eq!(switches, ["Wi-Fi", "Connects automatically"]);
+    assert_eq!(named(&shown.nodes, "Beta In B").role, role::BUTTON);
+    assert_eq!(named(&shown.nodes, "Alpha In A").role, role::BUTTON);
+    let details = named(&shown.nodes, "Details");
+    assert_eq!(details.hint, "Connects automatically");
+    assert_eq!(named(&shown.nodes, "Price: Buy").role, role::BUTTON);
+}

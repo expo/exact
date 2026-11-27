@@ -76,11 +76,98 @@ class Node {
 class Text extends Node { constructor(t) { super(3); this.data = String(t); } get textContent() { return this.data; } html() { return esc(this.data); } }
 class Comment extends Node { constructor() { super(8); } get textContent() { return ''; } html() { return ''; } }
 class Fragment extends Node { constructor() { super(11); } }
+// CSS Animations 1 §4.2: extract the `animation-name` list from an `animation` shorthand.
+const ANIM_TIMING = new Set(['ease', 'linear', 'ease-in', 'ease-out', 'ease-in-out', 'step-start', 'step-end']);
+const ANIM_DIR = new Set(['normal', 'reverse', 'alternate', 'alternate-reverse']);
+const ANIM_FILL = new Set(['forwards', 'backwards', 'both']);
+const ANIM_PLAY = new Set(['running', 'paused']);
+const ANIM_WIDE = new Set(['initial', 'inherit', 'unset', 'revert', 'revert-layer']);
+const ANIM_TIME = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?m?s$/i;
+const ANIM_NUM = /^(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+function animationNames(raw) {
+  const text = raw.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+  if (!text) return '';
+  if (ANIM_WIDE.has(text.toLowerCase())) return text.toLowerCase();
+  const layers = [];
+  let depth = 0, quote = '', start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { if (--depth < 0) return ''; }
+    else if (c === ',' && depth === 0) { layers.push(text.slice(start, i)); start = i + 1; }
+  }
+  if (depth !== 0 || quote) return '';
+  layers.push(text.slice(start));
+  const names = [];
+  for (const layer of layers) {
+    const tokens = [];
+    let t0 = -1;
+    for (let i = 0; i <= layer.length; i++) {
+      const c = layer[i];
+      if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
+      if (c === '"' || c === "'") { if (t0 < 0) t0 = i; quote = c; continue; }
+      if (c === '(') { if (t0 < 0) t0 = i; depth++; continue; }
+      if (c === ')') { depth--; continue; }
+      if ((c === undefined || /\s/.test(c)) && depth === 0) {
+        if (t0 >= 0) { tokens.push(layer.slice(t0, i)); t0 = -1; }
+      } else if (t0 < 0) t0 = i;
+    }
+    if (!tokens.length) return '';
+    let timing = false, iter = false, dir = false, fill = '', play = false, times = 0, name = null;
+    for (const token of tokens) {
+      const lower = token.toLowerCase();
+      if (lower.startsWith('var(')) return '';
+      if (token[0] === '"' || token[0] === "'") { if (name !== null) return ''; name = token; continue; }
+      if (token.includes('(')) {
+        if (lower.startsWith('cubic-bezier(') || lower.startsWith('steps(') || lower.startsWith('linear(')) {
+          if (timing) return '';
+          timing = true;
+          continue;
+        }
+        return '';
+      }
+      if (ANIM_TIME.test(token)) {
+        if ((times === 0 && token[0] === '-') || ++times > 2) return '';
+        continue;
+      }
+      if (!iter && (lower === 'infinite' || ANIM_NUM.test(token))) { iter = true; continue; }
+      if (!timing && ANIM_TIMING.has(lower)) { timing = true; continue; }
+      if (!dir && ANIM_DIR.has(lower)) { dir = true; continue; }
+      if (lower === 'none') {
+        if (!fill) { fill = 'none'; continue; }
+        if (name === null) { name = 'none'; continue; }
+        return '';
+      }
+      if (ANIM_FILL.has(lower)) {
+        if (!fill) { fill = 'explicit'; continue; }
+        if (fill === 'none' && name === null) { fill = 'explicit'; name = 'none'; continue; }
+      }
+      if (!play && ANIM_PLAY.has(lower)) { play = true; continue; }
+      if (name !== null) return '';
+      name = token;
+    }
+    names.push(name ?? 'none');
+  }
+  return names.join(', ');
+}
 class Style {
   constructor() { this.map = new Map(); }
   setProperty(k, v) { if (v !== '' && v != null) this.map.set(k, String(v)); }
   removeProperty(k) { this.map.delete(k); }
   getPropertyValue(k) { return this.map.get(k) ?? ''; }
+  get animation() { return this.getPropertyValue('animation'); }
+  set animation(v) {
+    this.removeProperty('animation-name');
+    if (v === '' || v == null) this.removeProperty('animation');
+    else this.setProperty('animation', v);
+  }
+  get animationName() { return this.getPropertyValue('animation-name') || animationNames(this.getPropertyValue('animation')); }
+  set animationName(v) {
+    if (v === '' || v == null) this.removeProperty('animation-name');
+    else this.setProperty('animation-name', v);
+  }
   set fontSize(v) { this.setProperty('font-size', v); } set fontWeight(v) { this.setProperty('font-weight', v); }
   set fontStyle(v) { this.setProperty('font-style', v); } set fontFamily(v) { this.setProperty('font-family', v); }
   set textDecoration(v) { this.setProperty('text-decoration', v); } set opacity(v) { this.setProperty('opacity', v); }
@@ -109,7 +196,14 @@ class Element extends Node {
   get childElementCount() { return this.childNodes.filter(c => c.nodeType === 1).length; }
   get firstElementChild() { return this.childNodes.find(c => c.nodeType === 1) ?? null; }
   getElementsByTagName(tag) { return this.childNodes.flatMap(c => c.nodeType === 1 ? [...(tag === '*' || c.localName === tag ? [c] : []), ...c.getElementsByTagName(tag)] : []); }
-  querySelectorAll() { return []; } querySelector() { return null; } contains() { return false; }
+  querySelectorAll() { return []; }
+  querySelector(sel) {
+    const m = /^\[data-exact-id="((?:\\.|[^"\\])*)"\]$/.exec(sel);
+    if (!m) return null;
+    const target = unescapeCssAttr(m[1]);
+    return this.getElementsByTagName('*').find(el => el.getAttribute('data-exact-id') === target) ?? null;
+  }
+  contains() { return false; }
   // A tag and attributes only (`[a]`, `[a=v]`, `[a~=v]`, the value quoted or not), comma-separated: rt.js `on` asks
   // whether a press is native, and navigation.js `markBars` reads a header as `barItems` does.
   matches(sel) {
@@ -193,6 +287,239 @@ const fontPx = (value, inherited) => {
 const HERO_PRIORITY = 'high';
 // The `visibility` values an element can set; any other (`unset`, `inherit`) takes its parent's.
 const VISIBILITIES = new Set(['visible', 'hidden', 'collapse']);
+
+// CSS Values 4 §10 + CSSOM §2.1: minimal `CSS` global for SSR (`render.mjs`), matching browser
+// `CSS.supports` for the properties the JS runtime validates (`line-height`, `translate`, `scale`)
+// and `CSS.escape` for scoped `url(#...)` lookups.
+const CSS_NUM = '[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?';
+const CSS_LEN_UNIT =
+  'px|rem|em|ex|rex|cap|rcap|ch|rch|ic|ric|lh|rlh|[sld]?v[whib]|[sld]?vmin|[sld]?vmax|cm|mm|q|in|pc|pt|cq[whib]|cqmin|cqmax';
+const CSS_NUM_RE = new RegExp('^' + CSS_NUM + '$', 'i');
+const CSS_PCT_RE = new RegExp('^' + CSS_NUM + '%$', 'i');
+const CSS_LEN_RE = new RegExp('^' + CSS_NUM + '(?:' + CSS_LEN_UNIT + ')$', 'i');
+const CSS_ZERO_RE = /^[+-]?(?:0+(?:\.0+)?|\.0+)(?:e[+-]?\d+)?$/i;
+const CSS_TOKEN_RE = new RegExp(`^(?:(${CSS_NUM})(?:(${CSS_LEN_UNIT})|(%))?|([a-z0-9-]+)\\(|([(),*/+-]))`, 'i');
+const CSS_MATH_SAME = new Set(['calc', 'abs', 'min', 'max', 'clamp', 'hypot', 'mod', 'rem', 'round']);
+const CSS_MATH_NUM = new Set(['sqrt', 'exp', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'pow', 'log', 'sign']);
+const CSS_ROUND_MODES = new Set(['nearest', 'up', 'down', 'to-zero']);
+function stripCssComments(text) {
+  let out = '', i = 0;
+  while (i < text.length) {
+    if (text[i] === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end < 0) return null;
+      out += ' ';
+      i = end + 2;
+    } else out += text[i++];
+  }
+  return out.trim();
+}
+function splitCssValues(text) {
+  const parts = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i <= text.length; i++) {
+    const c = text[i];
+    if (c === '(') {
+      if (start < 0) start = i;
+      depth++;
+    } else if (c === ')') {
+      if (--depth < 0) return null;
+      if (depth === 0 && start >= 0) {
+        parts.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    } else if ((c === undefined || /\s/.test(c)) && depth === 0) {
+      if (start >= 0) {
+        parts.push(text.slice(start, i));
+        start = -1;
+      }
+    } else if (start < 0) start = i;
+  }
+  return depth === 0 ? parts : null;
+}
+function combineCssType(a, b, mixLenPct) {
+  if (!a || !b) return null;
+  if (a === b) return a;
+  if (mixLenPct && a !== 'num' && b !== 'num') return 'lenpct';
+  return null;
+}
+const CSS_CONST_RE = /^(?:e|pi|-?infinity|nan)(?![a-z0-9_(-])/i;
+function cssMathType(token, mixLenPct) {
+  let i = 0;
+  const skip = () => { while (i < token.length && /\s/.test(token[i])) i++; };
+  const parseSum = depth => {
+    let left = parseProd(depth);
+    if (!left) return null;
+    for (;;) {
+      const wsBefore = i;
+      skip();
+      const c = token[i];
+      if ((c === '+' || c === '-') && i > wsBefore && i + 1 < token.length && /\s/.test(token[i + 1])) {
+        i++;
+        left = combineCssType(left, parseProd(depth), mixLenPct);
+        if (!left) return null;
+      } else {
+        i = wsBefore;
+        return left;
+      }
+    }
+  };
+  const parseProd = depth => {
+    let left = parseAtom(depth);
+    if (!left) return null;
+    for (;;) {
+      const wsBefore = i;
+      skip();
+      const c = token[i];
+      if (c === '*' || c === '/') {
+        i++;
+        const right = parseAtom(depth);
+        if (!right) return null;
+        if (c === '/') {
+          if (right !== 'num') return null;
+        } else if (left === 'num') left = right;
+        else if (right !== 'num') return null;
+      } else {
+        i = wsBefore;
+        return left;
+      }
+    }
+  };
+  const parseAtom = depth => {
+    skip();
+    const rest = token.slice(i);
+    const k = CSS_CONST_RE.exec(rest);
+    if (k) { i += k[0].length; return 'num'; }
+    const m = CSS_TOKEN_RE.exec(rest);
+    if (!m) return null;
+    if (m[1]) {
+      i += m[0].length;
+      return m[2] ? 'len' : m[3] ? 'pct' : 'num';
+    }
+    if (m[5] === '(') {
+      if (depth >= 32) return null;
+      i++;
+      const t = parseSum(depth + 1);
+      skip();
+      if (!t || token[i] !== ')') return null;
+      i++;
+      return t;
+    }
+    if (m[4]) {
+      if (depth >= 32) return null;
+      const fn = m[4].toLowerCase();
+      const isSame = CSS_MATH_SAME.has(fn), isNum = CSS_MATH_NUM.has(fn);
+      if (!isSame && !isNum) return null;
+      i += m[0].length;
+      let acc = null, count = 0;
+      if (fn === 'round') {
+        skip();
+        const mode = /^([a-z-]+)\s*,/i.exec(token.slice(i));
+        if (mode && CSS_ROUND_MODES.has(mode[1].toLowerCase())) i += mode[0].length;
+      }
+      for (;;) {
+        skip();
+        const none = fn === 'clamp' && count !== 1 && /^none(?=\s*[,)])/i.exec(token.slice(i));
+        if (none) { i += none[0].length; }
+        else {
+          const arg = parseSum(depth + 1);
+          if (!arg) return null;
+          if (isNum) {
+            if (fn === 'sign' || fn === 'atan2') {
+              acc = acc === null ? arg : combineCssType(acc, arg, mixLenPct);
+              if (!acc) return null;
+            } else if (arg !== 'num') return null;
+          } else {
+            acc = acc === null ? arg : combineCssType(acc, arg, mixLenPct);
+            if (!acc) return null;
+          }
+        }
+        count++;
+        skip();
+        if (token[i] === ',') { i++; continue; }
+        if (token[i] === ')') { i++; break; }
+        return null;
+      }
+      if ((fn === 'calc' || fn === 'abs' || fn === 'sqrt' || fn === 'exp' || fn === 'sin' || fn === 'cos'
+        || fn === 'tan' || fn === 'asin' || fn === 'acos' || fn === 'atan' || fn === 'sign') && count !== 1) return null;
+      if ((fn === 'pow' || fn === 'atan2' || fn === 'mod' || fn === 'rem') && count !== 2) return null;
+      if ((fn === 'log' || fn === 'round') && (count < 1 || count > 2)) return null;
+      if (fn === 'clamp' && (count !== 3 || !acc)) return null;
+      return isNum ? 'num' : acc;
+    }
+    return null;
+  };
+  const head = /^([a-z0-9-]+)\(/i.exec(token);
+  if (!head || (!CSS_MATH_SAME.has(head[1].toLowerCase()) && !CSS_MATH_NUM.has(head[1].toLowerCase()))) return null;
+  const t = parseAtom(0);
+  skip();
+  return t && i === token.length ? t : null;
+}
+function hasBalancedSubstitution(clean) {
+  if (!/(?:^|[^a-z0-9_-])(?:var\(\s*--[a-z0-9_-]|env\(\s*[a-z_-])/i.test(clean) || /[;{}]/.test(clean)) return false;
+  let depth = 0;
+  for (let i = 0; i < clean.length; i++) {
+    if (clean[i] === '(') depth++;
+    else if (clean[i] === ')' && --depth < 0) return false;
+  }
+  return depth === 0;
+}
+function cssSupports(prop, value) {
+  if (typeof prop !== 'string' || typeof value !== 'string') return false;
+  const p = prop.trim().toLowerCase(), clean = stripCssComments(value);
+  if (!clean) return false;
+  if (p === 'line-height') {
+    if (/^(?:normal|unset|inherit|initial|revert|revert-layer)$/i.test(clean)) return true;
+    if (CSS_NUM_RE.test(clean) || CSS_PCT_RE.test(clean) || CSS_LEN_RE.test(clean)) return true;
+    if (hasBalancedSubstitution(clean)) return true;
+    return cssMathType(clean, true) !== null;
+  }
+  if (p === 'translate') {
+    if (/^(?:none|unset|inherit|initial|revert|revert-layer)$/i.test(clean)) return true;
+    const parts = splitCssValues(clean);
+    if (!parts || parts.length < 1 || parts.length > 3) return false;
+    return parts.every((tok, idx) => {
+      if (CSS_LEN_RE.test(tok) || CSS_ZERO_RE.test(tok) || (idx < 2 && CSS_PCT_RE.test(tok))) return true;
+      const t = cssMathType(tok, idx < 2);
+      return idx < 2 ? t === 'len' || t === 'pct' || t === 'lenpct' : t === 'len';
+    });
+  }
+  if (p === 'scale') {
+    if (/^(?:none|unset|inherit|initial|revert|revert-layer)$/i.test(clean)) return true;
+    const parts = splitCssValues(clean);
+    if (!parts || parts.length < 1 || parts.length > 3) return false;
+    return parts.every(tok => {
+      if (CSS_NUM_RE.test(tok) || CSS_PCT_RE.test(tok)) return true;
+      const t = cssMathType(tok, false);
+      return t === 'num' || t === 'pct';
+    });
+  }
+  return false;
+}
+function cssEscape(value) {
+  const s = String(value);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 0) out += '\uFFFD';
+    else if ((code >= 1 && code <= 0x1f) || code === 0x7f || (i === 0 && code >= 0x30 && code <= 0x39)
+      || (i === 1 && code >= 0x30 && code <= 0x39 && s.charCodeAt(0) === 0x2d))
+      out += '\\' + code.toString(16) + ' ';
+    else if (i === 0 && s.length === 1 && code === 0x2d) out += '\\-';
+    else if (code >= 0x80 || code === 0x2d || code === 0x5f
+      || (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a))
+      out += s[i];
+    else out += '\\' + s[i];
+  }
+  return out;
+}
+function unescapeCssAttr(s) {
+  return s.replace(/\\([0-9a-f]{1,6}\s?|.)/gi, (_, g) =>
+    /^[0-9a-f]+$/i.test(g.trim()) ? String.fromCodePoint(parseInt(g.trim(), 16)) : g);
+}
+export function createCSS() {
+  return { supports: cssSupports, escape: cssEscape };
+}
 
 /** A document for one render: `#exact-root` in a body, a head for metas. */
 export function createDocument(shell = '') {

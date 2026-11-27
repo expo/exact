@@ -27,7 +27,7 @@ extension Presenter {
     }
 
     /// The views of the surfaces beside the document.
-    func presentations(includingRetiring: Bool = false) -> [UIView] {
+    package func presentations(includingRetiring: Bool = false) -> [UIView] {
         surfaces(includingRetiring: includingRetiring).filter { $0.kind != .document }.map(\.view)
     }
 

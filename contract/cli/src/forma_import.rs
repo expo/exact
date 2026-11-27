@@ -506,12 +506,15 @@ pub fn op_json(op: &Op) -> Value {
         Op::RemoveAxisValue { axis, value } => {
             json!({"op": "remove-axis-value", "axis": axis, "value": value})
         }
+        Op::RemoveAxis { name } => json!({"op": "remove-axis", "name": name}),
         Op::AddAxis {
+            before,
+            comment,
             name,
             values,
             under_dark,
         } => {
-            json!({"op": "add-axis", "name": name, "values": values, "under": under_dark.then_some("scheme=dark")})
+            json!({"op": "add-axis", "name": name, "values": values, "before": before, "comment": comment, "under": under_dark.then_some("scheme=dark")})
         }
         // No client's to send; an import never makes one.
         Op::Restore { .. } => json!({"op": "restore"}),

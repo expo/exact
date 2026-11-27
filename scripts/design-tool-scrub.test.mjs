@@ -1,7 +1,7 @@
 // The design tool's live scrubs on a real dev loop: a token's on the frame's build (T2) (split from
 // design-tool.test.mjs, so a lane runs it beside the others; stage 6's kinds are design-tool-kinds.test.mjs).
 import { expect, onTestFinished, test } from 'bun:test';
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnOwned } from './test-children.mjs';
@@ -30,7 +30,10 @@ const ready = looked => [looked.pause(4000, 0), 'clock +1', 'clock data', 'clock
 
 test('T2: a scrub chosen on a token previews on the frame\'s build with no reload and no file written, Keep writes one line, Cancel restores, and an edit that rebuilds has no scrub', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-scrub-'));
-  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  for (const f of ['app.contract', 'app.forma']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  const manifest = JSON.parse(readFileSync(resolve(ROOT, 'apps/theme-fixture/app.json'), 'utf8'));
+  delete manifest.rust;
+  writeFileSync(join(app, 'app.json'), JSON.stringify(manifest, null, 2));
   const original = readFileSync(join(app, 'app.forma'), 'utf8');
   const listener = (await import('node:http')).createServer();
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
@@ -101,8 +104,9 @@ test('T2: a scrub chosen on a token previews on the frame\'s build with no reloa
     // Looked at each `tree` op: before the scrub, during it, after Keep,
     // during the second, and after its cancel (before the last edit applies);
     // each look done, the drive goes on.
+    const isTree = l => { if (!l.startsWith('{')) return false; try { return Array.isArray(JSON.parse(l).nodes); } catch { return false; } };
     for (const n of [1, 2, 3, 4, 5]) {
-      await out.until(() => out.seen.filter(l => l.startsWith('{"nodes"')).length >= n, 600_000).catch(e => { throw new Error(`${e.message}\n${driveSaid}`); });
+      await out.until(() => out.seen.filter(isTree).length >= n, 600_000).catch(e => { throw new Error(`${e.message}\n${driveSaid}`); });
       await look(n === 1);
       looked.fire(n);
     }

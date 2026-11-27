@@ -661,3 +661,26 @@ export async function openRemoteCanvas(forma, asked, loop, options) {
   try { await openCanvas(doors, forma, { loop, host: asked.remote?.host, ...options }); } catch (e) { await doors?.close(); throw e; }
   return doors;
 }
+
+/** Remote listeners belong to the writer holding the project lock. A standalone writer can
+ * release that lock just before its listener releases the port. */
+export function projectCanvas(wire, asked, origin, running, failed) {
+  let doors, opening, retry, closed = false, waited = false;
+  wire.writerBusy.then(() => { waited = true; });
+  const open = async () => {
+    if (closed || wire.down) return;
+    try { doors = await openRemoteCanvas(wire, asked, origin); }
+    catch (e) {
+      if (!closed && e.code === 'EADDRINUSE' && (running || waited)) {
+        if (!retry) console.warn(`Forma is waiting for its remote port: ${e.message}`);
+        retry = setTimeout(() => { opening = open(); }, 1000).unref();
+      } else if (!closed) failed(e);
+    }
+  };
+  const ready = wire.ready.then(() => opening = open());
+  return {
+    ready: Promise.race([ready, wire.writerBusy]),
+    list: () => doors?.list() ?? [],
+    async close() { closed = true; clearTimeout(retry); await opening; await doors?.close(); },
+  };
+}

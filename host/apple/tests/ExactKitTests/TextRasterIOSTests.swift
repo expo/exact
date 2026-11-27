@@ -553,5 +553,105 @@ final class TextRasterIOSTests: XCTestCase {
         defer { p.textClips = nil }
         XCTAssertEqual(p.textScrollportRect(node), walked)
     }
+
+    /// Regression for expo/exact#1935: fallback text drawn into `NodeView`'s
+    /// backing store before `showTextRaster` installs the raster layer must be
+    /// cleared so a subsequent equal-width `wordsOnly` update does not paint
+    /// new digits over stale fallback digits.
+    func testShowTextRasterClearsFallbackBackingStoreOnEqualWidthUpdates() throws {
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "Core Animation displays a layer only in a scene's window")
+        }
+        let session = ExactApp.shared.makeSession(label: "text-fallback-clear")
+        let p = session.presenter
+        let hostedWindow = UIWindow(windowScene: scene)
+        hostedWindow.frame = CGRect(x: 0, y: 0, width: 400, height: 400)
+        p.viewport.frame = hostedWindow.bounds
+        hostedWindow.addSubview(p.viewport)
+        hostedWindow.makeKeyAndVisible()
+        defer { session.destroy(); hostedWindow.isHidden = true; RegionTextExecutor.queue.isSuspended = false }
+        let styleBase: [String: Any] = [
+            "font_family": "Menlo",
+            "font_size": 24.0,
+            "text_color": [0.0, 0.0, 0.0, 255.0],
+        ]
+        let boxDrawnStyle: [String: Any] = [
+            "font_family": "Menlo",
+            "font_size": 24.0,
+            "text_color": [0.0, 0.0, 0.0, 255.0],
+            "border_width_top": 1.0,
+            "border_width_bottom": 2.0,
+            "border_color_top": [255.0, 0.0, 0.0, 255.0],
+            "border_color_bottom": [0.0, 0.0, 255.0, 255.0],
+        ]
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "8.90%"], "style": styleBase],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "8.90%"], "style": boxDrawnStyle],
+            ["op": "create", "id": 4, "kind": "text", "props": ["text": "8.30%"], "style": styleBase],
+            ["op": "create", "id": 5, "kind": "text", "props": ["text": "8.30%"], "style": boxDrawnStyle],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 5]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
+            ["op": "frame", "id": 2, "x": 10.0, "y": 10.0, "w": 120.0, "h": 36.0],
+            ["op": "frame", "id": 3, "x": 10.0, "y": 60.0, "w": 120.0, "h": 36.0],
+            ["op": "frame", "id": 4, "x": 200.0, "y": 10.0, "w": 120.0, "h": 36.0],
+            ["op": "frame", "id": 5, "x": 200.0, "y": 60.0, "w": 120.0, "h": 36.0],
+        ]))
+        let plain = try XCTUnwrap(p.views[2]), boxed = try XCTUnwrap(p.views[3])
+        let plainRef = try XCTUnwrap(p.views[4]), boxedRef = try XCTUnwrap(p.views[5])
+        hostedWindow.layoutIfNeeded()
+        // Force both target nodes to paint initial fallback text ("8.90%") directly
+        // into their CALayer backing store before async rasterization lands.
+        RegionTextExecutor.queue.isSuspended = true
+        p.textRasters.dropKept()
+        for node in [plain, boxed] {
+            node.dropTextRaster()
+            p.textRasters.ensure(node, urgent: false)
+            let failedKey = try XCTUnwrap(node.textRasterKey, "ensure assigned a raster key")
+            node.showTextRaster(nil, for: failedKey)
+            node.layer.displayIfNeeded()
+            XCTAssertTrue(node.drewFallbackText, "node \(node.id) painted fallback text into its backing store")
+            XCTAssertNotNil(node.layer.contents, "fallback paint populated backing store for node \(node.id)")
+            // Clear the failed bit so subsequent rasterization succeeds, leaving
+            // stale "8.90%" pixels in the backing store.
+            node.textRasterFailed = false
+            node.textRasterKey = nil
+        }
+        XCTAssertFalse(plain.boxDrawn, "plain paragraph uses layer fast path (clears contents on display)")
+        XCTAssertTrue(boxed.boxDrawn, "multi-color bordered paragraph exercises backing-store repaint branch")
+        RegionTextExecutor.queue.isSuspended = false
+        // Settle initial rasters ("8.90%" for targets, "8.30%" for references).
+        p.paintVisibleText()
+        p.textRasters.settleVisible([plain, boxed, plainRef, boxedRef])
+        for node in [plain, boxed, plainRef, boxedRef] {
+            XCTAssertFalse(node.drewFallbackText, "showTextRaster cleared fallback flag for node \(node.id)")
+            node.layer.displayIfNeeded()
+            node.textRasterLayer?.displayIfNeeded()
+        }
+        XCTAssertNil(plain.layer.contents, "plain paragraph dropped its fallback backing store once rasterised")
+        // Equal-width wordsOnly update: "8.90%" -> "8.30%" (no frame op, boxChanged == false).
+        p.apply(wireBatch([
+            ["op": "props", "id": 2, "set": ["text": "8.30%"]],
+            ["op": "props", "id": 3, "set": ["text": "8.30%"]],
+        ]))
+        p.paintVisibleText()
+        p.textRasters.settleVisible([plain, boxed])
+        for node in [plain, boxed] {
+            node.layer.displayIfNeeded()
+            node.textRasterLayer?.displayIfNeeded()
+        }
+        func render(_ view: NodeView) -> [UInt8] {
+            let w = Int(view.bounds.width), h = Int(view.bounds.height)
+            let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.translateBy(x: 0, y: CGFloat(h))
+            ctx.scaleBy(x: 1, y: -1)
+            view.layer.render(in: ctx)
+            return Array(UnsafeBufferPointer(start: ctx.data!.bindMemory(to: UInt8.self, capacity: w * h * 4), count: w * h * 4))
+        }
+        XCTAssertEqual(render(plain), render(plainRef), "plain paragraph shows only 8.30% with no stale 8.90% overlap")
+        XCTAssertEqual(render(boxed), render(boxedRef), "boxDrawn paragraph shows only 8.30% with no stale 8.90% overlap")
+    }
 }
 #endif

@@ -81,6 +81,12 @@ impl<D: DataSource> Host<D> {
             };
             shown.filter = Some(exact_kernel::motion::filter_list(&f, text));
         }
+        // @ref LLP 1003.003 D7 — the clip the engine samples, drawn and
+        // hit-tested as the box's own
+        shown.clip = self
+            .engine
+            .presented_clip(node)
+            .and_then(|c| exact_kernel::clip::ClipPath::from_motion(&c));
         shown
     }
 

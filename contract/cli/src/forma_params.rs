@@ -56,6 +56,19 @@ impl std::fmt::Debug for ShownIndex {
 }
 
 impl AppParams {
+    /// Resolve names against this snapshot's params and component identities.
+    pub fn resolver(&self) -> params::Resolver<'_> {
+        params::Resolver::new(&self.tokens, &self.identities)
+    }
+
+    /// A wire reply with param names in their authored spelling.
+    pub fn present(&self, v: Value) -> Value {
+        if self.tokens.is_empty() {
+            return v;
+        }
+        serde_json::from_str(&self.shown(&v.to_string())).unwrap_or(v)
+    }
+
     /// `message` with each param's token name written as its full name
     /// ([`params::shown`]), the index built once for the app's params.
     pub fn shown(&self, message: &str) -> String {

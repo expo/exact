@@ -255,6 +255,13 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     const left = (await storage.fs.recentDocuments()).length;
     return {text: [listed.map((d) => `${d.path} ${d.kind} ${d.mode}`).join(","), left, again].join(" | ")};
   }
+  if (op === "kept-forget") {
+    let err = "ok";
+    try { await storage.fs.forgetDocument(value); }
+    catch (e: any) { err = `${e.kind} ${e.code}`; }
+    const keptNow = (await storage.fs.recentDocuments()).map((d) => d.path).join(",");
+    return {text: `${err} | ${keptNow}`};
+  }
   // LLP 1069.010.000 D4: the app's own atomic save of a kept file.
   if (op === "kept-save") {
     try { await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved")); }

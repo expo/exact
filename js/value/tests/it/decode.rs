@@ -127,6 +127,20 @@ fn nested_duplicate_errors_can_be_overwritten_and_error_order_is_declared_order(
     }
 }
 
+/// The extra field a shape error names is the least extra key, on both
+/// paths, whatever order serde_json's map keeps (its `preserve_order`
+/// feature keeps insertion order). Run with and without
+/// `--features serde_json/preserve_order`.
+#[test]
+fn the_extra_field_named_does_not_follow_the_map_order() {
+    let text = r#"{"z":0,"name":"one","count":2,"enabled":null,"b":1,"a":1}"#;
+    let expected = Err("field `a` is not in the shape".to_string());
+    for shape in [record(), Shape::Option(Box::new(record()))] {
+        equal(from_json_text(text, &shape), expected.clone(), text);
+        equal(legacy(text, &shape), expected.clone(), text);
+    }
+}
+
 #[test]
 fn recursion_limit_also_applies_inside_discarded_values_and_envelopes() {
     for depth in [63, 64, 65, 125, 126, 127, 128, 129, 140] {

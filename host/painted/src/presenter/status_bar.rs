@@ -2,6 +2,7 @@
 //! covering scope, using iOS's declaration order and the winner's scheme;
 //! `system-bars-hidden` by the same rule, apart from the style.
 use super::*;
+use exact_kernel::props::Presentation;
 use std::cell::Cell;
 
 #[derive(Clone, Copy)]
@@ -127,13 +128,14 @@ impl<D: DataSource> Presenter<D> {
             .into_iter()
             .filter_map(|stack| stack.last().copied())
             .filter(|id| {
-                kernel.node(*id).is_some_and(|n| {
-                    match n.props.str(PropId::NavigationPresentation) {
-                        Some("fullscreen") => true,
-                        Some("modal") => !sheets,
-                        _ => false,
-                    }
-                }) && !self.host.navigation.visibility_of(kernel, *id, false).0
+                kernel
+                    .node(*id)
+                    .is_some_and(|n| match n.props.presentation() {
+                        Some(Presentation::FullScreen) => true,
+                        Some(_) => !sheets,
+                        None => false,
+                    })
+                    && !self.host.navigation.visibility_of(kernel, *id, false).0
                     && self.status_bar_in_page(*id)
             })
             .collect();

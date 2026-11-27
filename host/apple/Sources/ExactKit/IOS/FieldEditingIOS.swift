@@ -38,9 +38,11 @@ extension NodeView {
     /// different one is held while text is marked and applied when the
     /// composition ends; with nothing marked it replaces the text, the
     /// caret carried through the changed middle.
-    func writeValue(_ value: String, into f: UITextField) {
+    func writeValue(_ value: String, into f: UITextField, heldFilter: Bool? = nil) {
+        let filtered = heldFilter ?? (presenter?.fieldSelections.inputSource == id && fieldIsTextEntry)
         if (f.text ?? "").utf16.elementsEqual(value.utf16) { pendingValue = nil; return }
-        if f.markedTextRange != nil { pendingValue = value; return }
+        if f.markedTextRange != nil { pendingFiltered = filtered; pendingValue = value; return }
+        let direction = filtered ? presenter?.fieldSelections.current(self).direction : nil
         pendingValue = nil
         toldText = nil
         guard let edit = minimalTextEdit(from: f.text ?? "", to: value) else { return }
@@ -51,10 +53,11 @@ extension NodeView {
         // Native undo ranges describe the buffer being replaced.
         f.undoManager?.removeAllActions()
         f.text = value
-        let carried = carrySelection(selection, through: edit)
+        let carried = carrySelection(selection, through: edit, filtered: filtered)
         if let start = f.position(from: f.beginningOfDocument, offset: carried.location), let end = f.position(from: start, offset: carried.length) {
             f.selectedTextRange = f.textRange(from: start, to: end)
         }
+        presenter?.fieldSelections.carried(self, direction: direction)
     }
     @objc func fieldChanged() {
         if props["emojiPicker"] == "true", let field {
@@ -70,7 +73,7 @@ extension NodeView {
         // held value in place of the committed text.
         if !disabled { typedText(field?.text ?? "") }
         if stepper != nil { updateNumberStepper() } // the stepper shows what the field holds (LLP 1116.007 D4)
-        if let f = field, f.markedTextRange == nil, let held = pendingValue { writeValue(held, into: f) }
+        if let f = field, f.markedTextRange == nil, let held = pendingValue { writeValue(held, into: f, heldFilter: pendingFiltered) }
         applyFieldDirection() // a `direction` that came while it composed
         // The edit's `input` ran: the field and what follows it are shown
         // again, as a browser scrolls a field into view as it is typed into,

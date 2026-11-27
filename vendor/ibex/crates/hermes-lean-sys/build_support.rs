@@ -1592,7 +1592,8 @@ pub(crate) fn prepare_apple_simulator_link_archives_with_lipo(
             let derivative_architectures = lipo_architectures(lipo, &destination)?;
             if derivative_architectures != [arch] {
                 return Err(format!(
-                    "lipo produced {} with architectures {}, expected only {arch}",
+                    "{} -thin {arch} produced {} with architectures {}, expected only {arch}",
+                    lipo.display(),
                     destination.display(),
                     derivative_architectures.join(", ")
                 ));
@@ -1914,7 +1915,8 @@ fn lipo_architectures(lipo: &Path, archive: &Path) -> Result<Vec<String>, String
         .collect();
     if architectures.is_empty() {
         return Err(format!(
-            "lipo -archs reported no architectures for {}",
+            "{} -archs reported no architectures for {}",
+            lipo.display(),
             archive.display()
         ));
     }

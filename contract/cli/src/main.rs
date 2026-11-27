@@ -48,6 +48,7 @@ mod forma;
 mod forma_contract;
 mod forma_explain;
 mod forma_export;
+#[path = "forma_gen_cli.rs"]
 mod forma_gen;
 mod forma_history;
 mod forma_import;
@@ -82,7 +83,7 @@ fn usage() -> String {
   contract types <file.contract> [-o <app.d.ts>] [--check]
   contract rust <file.contract> [-o <shapes.rs>]
   contract module-rust <file.contract> [-o <modules.rs>]
-  contract test <file.test.contract>
+  contract test <file.test.contract> [--app <directory>]
   contract lean <file.contract> [--components] [--name <ident>] [-o <file.lean>]
   {verify}
   contract vocab [--json] [--all] [<name> …]
@@ -359,7 +360,7 @@ fn sources(args: &[String]) -> ExitCode {
                     eprintln!("{error}");
                     ExitCode::FAILURE
                 }
-            }
+            };
         }
         [flag] if matches!(flag.as_str(), "--help" | "-h") => {
             println!("{USAGE}");
@@ -544,16 +545,79 @@ fn warning(finding: contract::CompileError) -> contract::CompileError {
     }
 }
 
-/// `contract test <file.test.contract>`: the tests as JSON for the agent
+/// An explicit app is the one the driver will launch. For a standalone
+/// invocation, a fixture can own its test even inside a larger app.
+fn test_program(test: &std::path::Path, app: Option<&str>) -> Result<std::path::PathBuf, String> {
+    use std::path::Path;
+    if let Some(app) = app {
+        let entry = Path::new(app).join("app.contract");
+        return entry
+            .is_file()
+            .then_some(entry)
+            .ok_or_else(|| format!("--app {app} has no app.contract"));
+    }
+    let dir = test
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let paired = test
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".test.contract"))
+        .map(|stem| format!("{stem}.contract"));
+    if let Some(entry) = paired
+        .as_ref()
+        .map(|name| dir.join(name))
+        .filter(|p| p.is_file())
+    {
+        return Ok(entry);
+    }
+    let beside = dir.join("app.contract");
+    if beside.is_file() {
+        return Ok(beside);
+    }
+    let looked_for = paired.map_or(String::new(), |name| format!("{name} or "));
+    let missing = || {
+        format!(
+            "no test program: looked for {looked_for}app.contract in {} and app.json there or in a parent directory",
+            dir.display()
+        )
+    };
+    let resolved = dir
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", missing()))?;
+    for parent in resolved.ancestors() {
+        let manifest = parent.join("app.json");
+        if manifest.is_file() {
+            // The main app entry is fixed by resolveApp in scripts/app.mjs.
+            let entry = parent.join("app.contract");
+            return entry.is_file().then_some(entry).ok_or_else(|| {
+                format!(
+                    "found {} but its app.contract is missing",
+                    manifest.display()
+                )
+            });
+        }
+    }
+    Err(missing())
+}
+
+/// `contract test <file.test.contract> [--app <directory>]`: the tests as JSON for the agent
 /// driver (`bun scripts/agent.mjs <host> --test <file>` runs them).
 fn tests(args: &[String]) -> ExitCode {
-    const USAGE: &str = "usage: contract test <file.test.contract>";
+    const USAGE: &str = "usage: contract test <file.test.contract> [--app <directory>]";
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let input = match args {
-        [input] if !input.is_empty() && !input.starts_with('-') => input,
+    let operand = |s: &String| !s.is_empty() && !s.starts_with('-');
+    let (input, selected) = match args {
+        [input] if operand(input) => (input, None),
+        [input, flag, dir] | [flag, dir, input]
+            if flag == "--app" && operand(input) && operand(dir) =>
+        {
+            (input, Some(dir.as_str()))
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -568,15 +632,38 @@ fn tests(args: &[String]) -> ExitCode {
     };
     match contract_syntax::parse(&src) {
         Ok(file) => {
-            let test = std::path::Path::new(input);
-            let paired = test.with_file_name(
-                test.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .replace(".test.contract", ".contract"),
-            );
-            let app = test.with_file_name("app.contract");
-            let app = if app.is_file() { app } else { paired };
+            let app = match test_program(std::path::Path::new(input), selected) {
+                Ok(app) => app,
+                Err(why) => {
+                    // Plain drive steps can also be compiled without an app.
+                    use contract_syntax::{StateOperand, Step};
+                    fn needs_program(step: &Step) -> bool {
+                        match step {
+                            Step::PreferExtension { .. }
+                            | Step::ExpectState {
+                                value: StateOperand::State(_),
+                                ..
+                            } => true,
+                            Step::Perf { steps, .. } => steps.iter().any(needs_program),
+                            _ => false,
+                        }
+                    }
+                    if selected.is_some()
+                        || !file.properties.is_empty()
+                        || file
+                            .launch
+                            .iter()
+                            .chain(file.tests.iter().flat_map(|t| &t.steps))
+                            .any(needs_program)
+                    {
+                        eprintln!("{input}: {why}");
+                        return ExitCode::from(1);
+                    }
+                    let tests = contract::tests_with_defaults(file.tests, &file.launch);
+                    println!("{}", contract::authored_json(&tests, &[]));
+                    return ExitCode::SUCCESS;
+                }
+            };
             let substitutes = contract::check_test_substitutes(&app, &file, None);
             let mut t = contract::tests_with_defaults(file.tests, &file.launch);
             let mut p = file.properties;

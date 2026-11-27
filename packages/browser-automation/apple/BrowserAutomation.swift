@@ -78,11 +78,14 @@ public final class BrowserAutomationModule: ExactPackage {
         request["pathFile"] = nil
         request["destinationFolderFile"] = nil
         request["owner"] = context.temporary.standardizedFileURL.path
-        // A path option is the app's own file (`app:/`), admitted by the runner against the app's `fs.write` lines.
-        for option in ["path", "destinationFolder"] {
-            guard let path = args[option] as? String else { continue }
+        // A path option is the app's own file or folder (`app:/`), admitted by the runner against the app's `fs.write` lines.
+        if let path = args["path"] as? String {
             guard let file = context.file(path) else { return reply(["error": "SyntaxError", "message": "\(name): \(path) names no app file"]) }
-            request["\(option)File"] = file.path
+            request["pathFile"] = file.path
+        }
+        if let folder = args["destinationFolder"] as? String {
+            guard let directory = context.directory(folder) else { return reply(["error": "SyntaxError", "message": "\(name): \(folder) names no app folder"]) }
+            request["destinationFolderFile"] = directory.path
         }
         guard JSONSerialization.isValidJSONObject(request), var body = try? JSONSerialization.data(withJSONObject: request) else {
             return reply(["error": "SyntaxError", "message": "\(name): its arguments are not JSON"])

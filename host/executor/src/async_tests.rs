@@ -520,9 +520,11 @@ fn a_parked_upload_starts_when_its_bytes_drain_and_is_not_crowded_out() {
     let mut b = Request::get("https://b.example.test/").independent_http(1024);
     b.method = "POST".into();
     b.body = vec![0; 3 << 20];
-    assert_eq!(
-        core.run(job(3, b), None),
-        Err("native executor admission limit reached")
+    let why = core.run(job(3, b), None).unwrap_err();
+    assert!(
+        why.contains("bytes for independent requests requested")
+            && why.ends_with(&format!("maximum {})", BYTES[1])),
+        "{why}"
     );
     assert_eq!(script.settle(), 1, "A waits for X");
     script.answer("https://x.example.test/", b"x");
@@ -1221,9 +1223,11 @@ fn a_parked_upload_behind_an_origin_blocked_head_reserves_its_future_bytes() {
     let mut crowded = Request::get("https://b.example.test/").independent_http(1024);
     crowded.method = "POST".into();
     crowded.body = vec![0; 3 << 20];
-    assert_eq!(
-        core.run(job(9, crowded), None),
-        Err("native executor admission limit reached")
+    let why = core.run(job(9, crowded), None).unwrap_err();
+    assert!(
+        why.contains("bytes for independent requests requested")
+            && why.ends_with(&format!("maximum {})", BYTES[1])),
+        "{why}"
     );
     script.answer("https://x.example.test/", b"x");
     assert_eq!(collect(&core, &woke, 1)[0].0, 6);

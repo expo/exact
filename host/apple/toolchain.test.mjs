@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { decodeProfile, xcodeRefusal } from './devices.mjs';
 import { appleCrossReport, CROSS_IOS_ROWS, distributionToolchain, ensureWatchSDK, installWatchSDK } from './sdk.mjs';
 import { iosTestRuns } from './xctest.mjs';
+import { appleCargo, cargoDiagnosticsCommand } from '../../scripts/cargo-check.mjs';
 
 test.skipIf(process.platform !== 'darwin')('certificate signing names its identity, bounds keychain waits and explains failures', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-signing-'));
@@ -187,6 +188,41 @@ test('Cargo subprocesses receive an executable xcrun with the current SDK config
   }
 }));
 
+test.skipIf(process.platform === 'win32')('Linux Apple Cargo resolves the LLVM override before the diagnostics relay changes directory', () => fixture(({ root, env }) => {
+  const metadata = resolve(root, 'swift-sdk.json'), sdk = JSON.parse(readFileSync(metadata, 'utf8'));
+  sdk.targetTriples['arm64-apple-ios'] = sdk.targetTriples['arm64-apple-ios-simulator'];
+  writeFileSync(metadata, JSON.stringify(sdk));
+  const tools = resolve(root, 'installed/tools with spaces');
+  mkdirSync(tools, { recursive: true });
+  mkdirSync(resolve(root, 'installed/version'));
+  symlinkSync('installed/version', resolve(root, 'active'));
+  const bin = `${relative(process.cwd(), root)}/active/../tools with spaces`;
+  const absolute = `${process.cwd()}/${bin}`;
+  for (const tool of ['llvm-lipo', 'llvm-strip']) {
+    writeFileSync(resolve(tools, tool), '#!/bin/sh\nprintf "%s\\n" "${0##*/}"\n', { mode: 0o755 });
+  }
+  writeFileSync(resolve(root, 'cargo'), '#!/bin/sh\nprintf "%s\\n" "$EXACT_APPLE_LLVM_BIN"\nexec "$EXACT_APPLE_LLVM_BIN/llvm-lipo"\n', { mode: 0o755 });
+  const options = { cwd: root, env: { ...env, PATH: `${root}:${process.env.PATH}`, EXACT_APPLE_LLVM_BIN: bin },
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] };
+  const prepare = args => appleCargo('cargo', args, options, 'linux');
+  for (const target of [['--target', 'aarch64-apple-ios'], ['--target=aarch64-apple-ios-sim']]) {
+    const args = ['build', ...target];
+    for (const command of [cargoDiagnosticsCommand(...prepare(args)), appleCommand('cargo', args, options, 'linux')]) {
+      const result = spawnSync(...command);
+      expect(result.status, result.error?.message).toBe(0);
+      expect(result.stdout).toBe(`${absolute}\nllvm-lipo\n`);
+    }
+  }
+  const strip = spawnSync(...appleCommand('strip', [], options, 'linux'));
+  expect(strip.status, strip.error?.message).toBe(0);
+  expect(strip.stdout).toBe('llvm-strip\n');
+  expect(options.env.EXACT_APPLE_LLVM_BIN).toBe(bin);
+  for (const target of [['--target', 'aarch64-apple-ios'], ['--target=aarch64-apple-ios-sim']]) {
+    const args = ['rustc', '--target', 'x86_64-unknown-linux-gnu', '--', ...target];
+    expect(prepare(args)).toEqual(['cargo', args, options]);
+  }
+}));
+
 test('portable IPA packaging retains the Payload root, executable modes and relative symlinks', () => {
   const root = mkdtempSync(resolve(tmpdir(), "exact IPA's "));
   try {
@@ -229,14 +265,14 @@ test('SDK discovery uses installed metadata and preserves paths containing space
 
 test('Linux setup names missing cross tools and uses the selected LLVM directory', () => fixture(({ env }) => {
   const calls = [], llvm = '/selected LLVM/bin';
-  const rows = appleCrossReport({ ...env, EXACT_APPLE_LLVM_BIN: llvm }, (command, args) => {
+  const rows = appleCrossReport({ ...env, EXACT_APPLE_LLVM_BIN: `${llvm}/` }, (command, args) => {
     calls.push(command); return spawnSync('/usr/bin/false', args, { encoding: 'utf8' });
   });
   expect(rows.map(row => row.name)).toEqual(CROSS_IOS_ROWS);
   expect(rows.every(row => !row.ok && row.fix)).toBe(true);
   expect(rows[0].have).toContain('no iphoneos compiler configuration');
-  expect(calls).toContain(resolve(llvm, 'llvm-lipo'));
-  expect(appleCommand('lipo', ['-archs', 'App'], { env: { EXACT_APPLE_LLVM_BIN: llvm } }, 'linux')[0]).toBe(resolve(llvm, 'llvm-lipo'));
+  expect(calls).toContain(`${llvm}/llvm-lipo`);
+  expect(appleCommand('lipo', ['-archs', 'App'], { env: { EXACT_APPLE_LLVM_BIN: llvm } }, 'linux')[0]).toBe(`${llvm}/llvm-lipo`);
 }));
 
 test.each([

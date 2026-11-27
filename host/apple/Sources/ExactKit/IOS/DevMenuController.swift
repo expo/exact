@@ -52,15 +52,6 @@ final class DevMenuController: UITableViewController {
         if WidgetGallery.available { project.append(Command(title: "Widgets…", symbol: "square.grid.2x2", action: WidgetGallery.show)) }
         #endif
         var diagnostics = [Self.frameHealth(DevMenu.session?.frameHealth, container: DevMenu.frameHealthContainer != nil)]
-        if TextDiagnostics.shared.recording {
-            diagnostics[0].unavailable = ("Text Recording Is Active", "Share or stop the text recording before showing Frame Health. The recording keeps the card hidden to avoid its drawing cost.")
-            diagnostics.append(Command(title: "Stop Text Diagnostics", symbol: "stop.circle", action: { TextDiagnostics.shared.finish() }))
-        } else {
-            diagnostics.append(Command(title: "Record Text Diagnostics (30 seconds)", symbol: "record.circle", action: { TextDiagnostics.shared.start() }))
-        }
-        if TextDiagnostics.shared.recording || TextDiagnostics.shared.saved != nil {
-            diagnostics.append(Command(title: "Share Text Diagnostics", symbol: "square.and.arrow.up.on.square", action: { TextDiagnostics.shared.share() }))
-        }
         if FrameSampler.measured { diagnostics.append(Command(title: "Save Trace", symbol: "square.and.arrow.up", action: DevMenu.saveTrace)) }
         groups = [project, diagnostics]
         titles = ["Project", "Diagnostics"]

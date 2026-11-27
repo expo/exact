@@ -34,6 +34,39 @@ class ExactModuleTest {
 
     @Before fun clearDeliveries() { Host.handed.clear() }
 
+    @Test fun identityAdmissionNeedsNoTurnOfMainInEitherKindOfSession() {
+        val body = """{"extension":"sign-in","sync":"getIdentityCapabilitiesSync","args":{}}"""
+        val answer = """{"providers":{"google":{"active":true}}}"""
+        val reader = SynchronousExtension({ _, request ->
+            assertNotSame(Looper.getMainLooper(), Looper.myLooper())
+            if (request.getString("sync") == "getIdentityCapabilitiesSync" && !request.has("owner")) JSONObject(answer) else null
+        }) { error("a read cannot construct a UI extension") }
+        exact.app.ExactExtensions.process(mapOf("sign-in" to reader))
+        val app = RuntimeEnvironment.getApplication() as android.app.Application
+        Extensions.bind(app)
+        val presenter = android.os.HandlerThread("identity admission").apply { start() }
+        try {
+            val owner = android.os.Handler(presenter.looper)
+            fun read(call: () -> String): String {
+                val task = java.util.concurrent.FutureTask(call)
+                owner.post(task)
+                return task.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            }
+            assertEquals("=$answer", read { ModuleSession.sync(body) })
+            val session = checkNotNull(ModuleSession.open(app))
+            try {
+                assertEquals("=$answer", read { session.call(body) })
+            } finally { session.end() }
+            val refused = JSONObject(read { ModuleSession.sync("""{"extension":"sign-in","sync":"getIdentityCapabilitiesSync","owner":"other"}""") }.removePrefix("="))
+            assertEquals("NotSupportedError", refused.getString("error"))
+            assertFalse(refused.has("message"))
+        } finally {
+            presenter.quitSafely()
+            presenter.join(5000)
+            exact.app.ExactExtensions.process()
+        }
+    }
+
     @Test fun aModuleThatCannotBeConstructedDoesNotBecomeAvailable() {
         Module.broken = true
         try {

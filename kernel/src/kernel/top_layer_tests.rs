@@ -155,6 +155,125 @@ fn a_dialog_returns_its_native_sheet_block_to_the_viewport() {
     assert_eq!(frame(&k, 3).width, 100.);
 }
 
+#[test]
+fn a_closed_dialog_that_is_a_layout_root_has_no_box() {
+    let mut k = Kernel::with_monospace();
+    k.apply(
+        0,
+        1,
+        &[
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            style(1, &[(StyleId::Width, n(300.)), (StyleId::Height, n(200.))]),
+            Op::SetProp {
+                id: 1,
+                prop: PropId::SemanticTag,
+                value: "dialog".into(),
+            },
+            Op::AttachRoot { id: 1 },
+        ],
+    )
+    .unwrap();
+    let size = |k: &Kernel| (frame(k, 1).width, frame(k, 1).height);
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(size(&k), (0., 0.));
+    assert!(k.measure_dialog(1, true));
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(size(&k), (300., 200.));
+    assert!(k.measure_dialog(1, false));
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(size(&k), (0., 0.));
+}
+
+#[test]
+fn a_content_region_allows_a_plain_dialogs_native_sheet_block() {
+    for measured in [false, true] {
+        let mut k = page(
+            &[(StyleId::Width, t("100%")), (StyleId::Height, t("50%"))],
+            None,
+        );
+        let mut ops = vec![
+            Op::ClearProp {
+                id: 3,
+                prop: PropId::Popover,
+            },
+            Op::SetProp {
+                id: 3,
+                prop: PropId::SemanticTag,
+                value: "dialog".into(),
+            },
+        ];
+        for id in 6..=8 {
+            ops.push(Op::CreateView {
+                id,
+                node_type: NodeType::View,
+            });
+        }
+        ops.extend([
+            style(
+                6,
+                &[
+                    (StyleId::PositionType, t("relative")),
+                    (StyleId::Width, n(120.)),
+                    (StyleId::Height, n(80.)),
+                    (StyleId::OverflowX, t("hidden")),
+                    (StyleId::OverflowY, t("hidden")),
+                ],
+            ),
+            style(8, &[(StyleId::PositionType, t("absolute"))]),
+            Op::SetChildren {
+                id: 6,
+                children: vec![7, 8],
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![2, 5, 6],
+            },
+        ]);
+        k.apply(1, 2, &ops).unwrap();
+        let key = |id| k.node(id).unwrap().key;
+        k.set_content_region(Some(crate::ContentRegion {
+            owner: key(6),
+            content: key(7),
+            pending: key(8),
+        }))
+        .unwrap();
+        let inputs = crate::RegionInputs {
+            catalog: 1,
+            consumer_revision: 1,
+        };
+        k.compute_region_layout(1, OFFER, inputs).unwrap();
+        assert_eq!(frame(&k, 3).width, 0.);
+        let sheet = HostBlock {
+            tactic: Default::default(),
+            width: BlockAxis::Is(320.),
+            height: BlockAxis::AtMost(240.),
+        };
+        assert!(
+            k.set_host_block(2, Some(sheet)).is_err(),
+            "an ordinary box still cannot take a block"
+        );
+        k.measure_dialog(3, measured);
+        k.set_host_block(3, Some(sheet)).unwrap();
+        let shown = k.compute_region_layout(1, OFFER, inputs).unwrap();
+        assert_eq!((frame(&k, 3).width, frame(&k, 3).height), (320., 120.));
+        assert_eq!((frame(&k, 6).width, frame(&k, 6).height), (120., 80.));
+        k.set_host_block(3, None).unwrap();
+        k.measure_dialog(3, false);
+        let closed = k.compute_region_layout(1, OFFER, inputs).unwrap();
+        assert_eq!(frame(&k, 3).width, 0.);
+        match (shown.selection, closed.selection) {
+            (
+                crate::region::RegionSelection::Accepted(a),
+                crate::region::RegionSelection::Accepted(b),
+            ) => assert_eq!(a.ticket(), b.ticket()),
+            _ => panic!("the region must keep its accepted content"),
+        }
+    }
+}
+
 /// QUEUE's repro: `width: 50%` in a 100-point positioned box is half the
 /// viewport, as on the web, not 50 points; a percentage height likewise.
 #[test]

@@ -362,3 +362,40 @@ fn a_native_ranges_step_answers_whether_it_moved() {
     settle(&mut p);
     assert_eq!(p.range_value(seek.view), Some(240.0));
 }
+
+#[test]
+fn non_pressable_contextmenu_emits_long_click_and_pressable_article_keeps_group_role() {
+    const SRC: &str = r#"component App
+  state opened = 0
+  state tapped = 0
+  action openMenu
+    opened = opened + 1
+  action pick
+    tapped = tapped + 1
+  view
+    column width=320 height=400
+      column contextmenu=openMenu testId="msg"
+        text "Message body"
+      column role="article" press=pick testId="card"
+        text "Article card"
+      column role="group" press=pick testId="grp"
+        text "Group item"
+"#;
+    let mut p = boot(SRC, (320., 400.), 0);
+    p.serve_windows(Box::new(Blank));
+    let nodes = statement(&mut p).nodes;
+    let msg = named(&nodes, "Message body");
+    assert_eq!(msg.role, role::GROUP);
+    assert_eq!(msg.flags & flag::LONG_CLICK, flag::LONG_CLICK);
+    assert_eq!(msg.flags & flag::CLICK, 0);
+    assert!(p.access_act(msg.id, act::LONG_CLICK, 0.0, 0.0));
+    settle(&mut p);
+    assert_eq!(p.host.runner().slot("opened"), Some(&Value::Number(1.0)));
+
+    let card = named(&nodes, "Article card");
+    assert_eq!(card.role, role::GROUP);
+    assert_eq!(card.flags & flag::CLICK, flag::CLICK);
+    let grp = named(&nodes, "Group item");
+    assert_eq!(grp.role, role::GROUP);
+    assert_eq!(grp.flags & flag::CLICK, flag::CLICK);
+}

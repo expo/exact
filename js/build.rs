@@ -35,6 +35,7 @@ fn main() {
         "src/binary.js",
         "src/time.js",
         "src/crypto.js",
+        "src/blob.js",
         "src/module-work.js",
         "src/fetch.js",
         "src/auth.js",
@@ -156,6 +157,7 @@ fn main() {
         "src/binary.js",
         "src/time.js",
         "src/crypto.js",
+        "src/blob.js",
         "src/module-work.js",
         "src/fetch.js",
         "src/auth.js",
@@ -280,6 +282,7 @@ fn main() {
         "native-init",
         "error-events",
         "error-events-load",
+        "llp1195",
     ] {
         let source = manifest.join(format!("tests/fixtures/{name}.ts"));
         println!("cargo:rerun-if-changed={}", source.display());

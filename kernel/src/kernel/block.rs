@@ -273,6 +273,8 @@ pub(crate) struct Blocks(
     Vec<(u32, [f32; 4])>,
     /// The owners in `.1`, for a lookup that finds no owner at once.
     crate::sorted::SlotSet,
+    /// The window's aspect-fit guide a host fits the first root to (LLP 1123 D16, `root_fit.rs`).
+    super::root_fit::RootFits,
 );
 
 /// One node's block: the one in force, the host's or else the one the
@@ -313,6 +315,13 @@ pub(crate) struct Held {
 }
 
 impl Blocks {
+    pub(crate) fn root_fits(&self) -> &super::root_fit::RootFits {
+        &self.3
+    }
+    pub(crate) fn root_fits_mut(&mut self) -> &mut super::root_fit::RootFits {
+        &mut self.3
+    }
+
     /// The block `slot` has, its host's or the kernel's.
     pub(crate) fn get(&self, slot: u32) -> Option<HostBlock> {
         self.held(slot).map(|b| b.block)
@@ -470,7 +479,8 @@ impl Blocks {
 /// host replaced whole, which hides every block in it (a tab not yet built,
 /// LLP 1075.003 §9.12); under a box a bar replaced with no block its host
 /// gave on the way down to `slot`, `slot`'s own included, since the bar shows
-/// such a block in a view of its own; or, with `authored`, under a box
+/// such a block in a view of its own; under a box a bar keeps the room of,
+/// which shows nothing it holds; or, with `authored`, under a box
 /// authored `display: none`. `itself`: `slot`'s own cover counts too.
 fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool {
     let mut given = false;
@@ -481,6 +491,7 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
             match arena.cover(s) {
                 Some(super::HostCover::Whole) => return true,
                 Some(super::HostCover::Bar) if !given => return true,
+                Some(super::HostCover::Room(_)) if above => return true,
                 _ => {}
             }
         }
@@ -494,7 +505,9 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
 }
 
 pub(crate) fn closed_dialog(arena: &NodeArena, slot: u32) -> bool {
-    !arena.is_root(slot)
+    // A root takes no block: measuring it lays it out in its offer
+    let measured_root = arena.is_root(slot) && arena.alert_state.measured_dialogs.contains(slot);
+    !measured_root
         && !arena.blocks.holds(slot)
         && arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
 }
@@ -526,7 +539,10 @@ pub(crate) fn publication_start(arena: &mut NodeArena, root: u32) -> (bool, bool
         hidden_above(arena, root) || arena.cover(root).is_some_and(super::HostCover::replaces);
     let whole = arena.flags(root).has(NodeFlags::ATTACHED);
     let Some(held) = arena.blocks.held_mut(root) else {
-        return (false, false, (0.0, 0.0));
+        // A root the window's aspect-fit guide places starts at the guide's origin (LLP 1123 D16)
+        let key = arena.key(root);
+        let (origin, moved) = arena.blocks.root_fits_mut().publish(key);
+        return (false, moved, origin);
     };
     let was = std::mem::replace(&mut held.hidden, hidden);
     let [top, _, _, left] = held.cleared;
@@ -706,8 +722,11 @@ impl Kernel {
                 Some("a root is laid out in its offer")
             } else if self.arena.in_paragraph(slot) {
                 Some("an inline run or image has no box of its own")
-            } else if self.region.is_some() && !self.arena.top_layer_slots.contains(slot) {
-                Some("only a top-layer block while a content region is registered")
+            } else if self.region.is_some()
+                && !self.arena.top_layer_slots.contains(slot)
+                && self.arena.props(slot).str(crate::PropId::SemanticTag) != Some("dialog")
+            {
+                Some("only a top-layer or dialog block while a content region is registered")
             } else {
                 None
             };
@@ -911,7 +930,7 @@ impl Kernel {
 
     /// `slot`'s block root styled again, as its block or what is above it
     /// now says.
-    fn restyle_block(&mut self, slot: u32) {
+    pub(super) fn restyle_block(&mut self, slot: u32) {
         let buried = replaced_above(&self.arena, slot);
         if let Some(held) = self.arena.blocks.held_mut(slot) {
             held.buried = buried;

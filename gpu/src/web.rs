@@ -3,7 +3,10 @@
 
 use crate::{json, Frame, Module, Registry, SurfaceRef};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use wasm_bindgen::prelude::*;
+
+static MODULE_ALIVE: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
@@ -18,8 +21,16 @@ fn with<T>(f: impl FnOnce(&mut Module) -> T) -> Option<T> {
 extern "C" {
     #[wasm_bindgen(js_namespace = ["globalThis", "exact", "gpu"], js_name = deviceLost)]
     fn device_lost();
+    #[wasm_bindgen(js_namespace = ["globalThis", "exact", "gpu"], js_name = wake)]
+    fn host_wake();
     #[wasm_bindgen(js_namespace = console, js_name = error)]
     pub(crate) fn console_error(message: &str);
+}
+
+pub(crate) fn notify_wake() {
+    if MODULE_ALIVE.load(Ordering::Acquire) {
+        host_wake();
+    }
 }
 
 pub(crate) fn notify_loss(lost: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
@@ -67,6 +78,7 @@ pub async fn load(
                 m.get_or_insert_with(|| Module::new(registry).with_requirements(requirements))
                     .set_gpu(gpu);
             });
+            MODULE_ALIVE.store(true, Ordering::Release);
             Ok(())
         }
         Err(e) => {
@@ -126,10 +138,12 @@ pub async fn recover(
             let config = inst.config.as_ref().unwrap();
             inst.surface
                 .device_ready(gpu.device.features(), gpu.device.limits());
+            let destination = crate::ColorTarget::of(config);
+            inst.surface.color_space_granted(destination.space);
+            inst.set_color_target(destination)
+                .map_err(|e| crate::recovery::RecoveryFailure::other(e.0))?;
             inst.surface
-                .color_space_granted(crate::target::granted(Some(config)));
-            inst.surface
-                .prepare_assets(&gpu.device, &gpu.queue, crate::view_format(config));
+                .prepare_assets(&gpu.device, &gpu.queue, destination.format);
             inst.presentation = Some(SurfaceRef::new(target));
         }
         if module
@@ -446,8 +460,14 @@ pub fn dirty(id: u32) -> bool {
     with(|m| m.dirty(id)).unwrap_or(false)
 }
 
+/// Whether a canvas has unrendered inputs or preparation aside from a wake.
+pub fn dirty_without_wake(id: u32) -> bool {
+    with(|m| m.dirty_without_wake(id)).unwrap_or(false)
+}
+
 /// Drop all surfaces and release the module's device.
 pub fn unload() {
+    MODULE_ALIVE.store(false, Ordering::Release);
     MODULE.with(|m| {
         if let Some(module) = m.borrow_mut().take() {
             module.unload();
@@ -767,6 +787,12 @@ macro_rules! module {
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_dirty(id: u32) -> bool {
             $crate::web::dirty(id)
+        }
+
+        /// Whether a canvas has unrendered inputs or preparation aside from a wake.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_dirty_no_wake(id: u32) -> bool {
+            $crate::web::dirty_without_wake(id)
         }
 
         /// Drop a canvas's surface.

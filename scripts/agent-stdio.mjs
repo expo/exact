@@ -16,6 +16,8 @@ import { iosTouchInput, openTouches } from '../host/apple/touches.mjs';
 import { nativeKey, mouseContact } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
 import { platformWheel } from './agent-wheel.mjs';
+import { missingInputChanges } from './cargo-dep-info.mjs';
+import { withSeedTempFile } from './agent-secrets.mjs';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 // A descendant can retain the pipes after its carrier exits, even after the parent kills the carrier.
@@ -28,24 +30,29 @@ export async function closeStdio(child, closed, cleanup) {
   });
 }
 
+/** When Linux drives a live dev loop (`--url`), Contract and TypeScript edits reload over HTTP without rebuilding the native binary (LLP 1156.008.000 D9.4). */
+export const linuxDevStaleChanges = (changes, liveUrl) =>
+  liveUrl ? changes.filter(path => !/\.(?:contract|tsx?)$/.test(path)) : changes;
+
 /** The command that builds what an Android drive runs: the APK (`reader`), else the Linux host for Android. */
 export function androidRebuild(a, reader) {
   const selected = reader && apkRecord(a)?.abis, abis = selected?.length ? ` --abis ${selected.join(',')}` : '';
   return ownVerb(a, reader ? `android${abis}` : 'android --headless') ?? `bun scripts/agent-android.mjs build ${a.name}${reader ? ` --apk${abis}` : ''}`;
 }
 /** What changed since the APK was built, by the record its build left (agent-android.mjs `apkRecord`): each library's
- * Cargo inputs and separate bake inputs, the Kotlin by time, and the icons by digest. */
+ * Cargo inputs and separate bake inputs, the Kotlin source inventory, and the icons by digest. */
 export function apkChanges(a, apk) {
   const record = apkRecord(a, apk);
   if (!record?.libraries?.length) return [`${apk} (no complete ABI build record beside it: build it again)`];
   const since = Date.parse(record.started), digest = (file) => { try { return createHash('sha256').update(readFileSync(file)).digest('hex'); } catch { return null; } };
-  const baked = (record.bakes ?? []).flatMap(({ paths, missing, watchedDirectories, products }) => {
+  const baked = (record.bakes ?? []).flatMap(({ paths, missing, watchedDirectories, products, unstable }) => {
+    if (unstable) return [shown(unstable)];
     const bound = new Map(products.map(({path, sha256}) => [path, sha256]));
     return [
       ...watchedNewer(Date.parse(record.bakeStarted), paths.filter(path => !missing.includes(path) && !bound.has(path)),
         watchedDirectories, bound, [a.target]),
       ...[...bound].filter(([path, sha256]) => digest(path) !== sha256).map(([path]) => shown(path)),
-      ...missing.filter(existsSync).map(shown),
+      ...missingInputChanges(missing, watchedDirectories ?? []).map(shown),
     ];
   });
   return [...new Set([...baked, ...record.libraries.flatMap(library => depInfoNewer(since, library, library.replace(/\.so$/, '.d'), record.workspace))]),
@@ -93,7 +100,7 @@ export async function phoneScreenshot({ ask, udid, appId, container, path, windo
 /** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. `reader`: on Android, the app
  * on the Canvas reader (its APK), not the Linux host headless; unsaid, EXACT_ANDROID_READER decides (how a script
  * that opens a drive says it). */
-export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, touch = 'agent', reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
+export async function openStdio({ host, plan, world, size, app, appServerUrl, env: extra = {}, session, documents = [], device = false, phone: pick, touch = 'agent', reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
   const a = resolveApp(app);
   const linux = host === 'linux', android = host === 'android'; // @ref LLP 1107 — Android: the Linux host on a phone, under adb
   const windows = host === 'windows', portable = linux || windows || android;
@@ -114,10 +121,11 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;
   // `missingBuild`: every test of a run would fail on it alike, so a test run stops at the first (LLP 1156.006.000 D8).
   if (!existsSync(device ? deviceBundle : bin)) throw Object.assign(new Error(rebuild ? `run ${rebuild} first` : `EXACT_MAC_BIN names no file: ${bin}`), { missingBuild: !!rebuild });
+  let backend;
   if (!macBuild) {
     const receipt = portable ? undefined : device ? resolve(deviceBundle, 'receipt.json')
       : /\.app\/Contents\/MacOS\/[^/]+$/.test(resolve(bin)) ? resolve(bin, '../../Resources/receipt.json') : resolve(dirname(bin), 'receipt.json');
-    refuseBinaryBackend(bin, a, { receipt, packaged: windows, command: rebuild });
+    backend = refuseBinaryBackend(bin, a, { receipt, packaged: windows, command: rebuild });
   }
   if (!portable) assertAppleIdentity(a, device ? resolve(deviceBundle, artifacts.executable) : bin);
   if (portable && process.env.EXACT_PROOF_PRODUCTS) refuseStale(host, bin, proofProductChanges(process.env.EXACT_PROOF_PRODUCTS, bin, a), 'rerun the proof'); else if (windows && process.env.EXACT_WINDOWS_BIN) unchecked('windows', 'EXACT_WINDOWS_BIN');
@@ -127,7 +135,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   }
   else if ((linux && process.env.EXACT_LINUX_BIN) || (android && process.env.EXACT_ANDROID_BIN)) unchecked(host, android ? 'EXACT_ANDROID_BIN' : 'EXACT_LINUX_BIN');
   else if (android && bin.endsWith('.apk')) refuseStale(host, bin, [...apkChanges(a, bin), ...bakedSettingChanges(bin, a)], androidRebuild(a, true));
-  else if (linux || android) refuseStale(host, bin, [...depInfoChanges(bin, a), ...bakedSettingChanges(bin, a, { launch: linux ? childEnv : null })], android ? androidRebuild(a, false) : linuxRebuild(a));
+  else if (linux || android) refuseStale(host, bin, [...(linux ? linuxDevStaleChanges(depInfoChanges(bin, a), !!(extra.EXACT_DEV_PLAN || process.env.EXACT_DEV_PLAN)) : depInfoChanges(bin, a)), ...bakedSettingChanges(bin, a, { launch: linux ? childEnv : null })], android ? androidRebuild(a, false) : linuxRebuild(a));
   else if (!device && process.env.EXACT_MAC_BIN) unchecked(host, 'EXACT_MAC_BIN');
   if (device && (plan || extra.EXACT_PLAN || extra.EXACT_ASSETS)) throw new Error('a phone cannot read host-local plan/assets paths; use --url or its embedded app');
   const ph = device ? phone(pick) : null;
@@ -143,6 +151,12 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     if (world) extra = { ...extra, EXACT_WORLD: copyFixture(world, 'exact-agent.world') };
     if (extra.EXACT_AGENT_SUBSTITUTES?.startsWith('@')) {
       extra = { ...extra, EXACT_AGENT_SUBSTITUTES: '@' + copyFixture(extra.EXACT_AGENT_SUBSTITUTES.slice(1), 'exact-agent-substitutes.json') };
+    }
+    if (extra.EXACT_AGENT_STORED) {
+      const seedName = `exact-agent-stored-${process.pid}-${Date.now().toString(36)}.json`;
+      const remote = withSeedTempFile(extra.EXACT_AGENT_STORED, (file) => copyFixture(file, seedName));
+      const { EXACT_AGENT_STORED: _omitted, ...rest } = extra;
+      extra = { ...rest, EXACT_AGENT_STORED_FILE: remote };
     }
   };
   // A Mac bundle carries its own assets (bundle.mjs copies the capture into Contents/Resources); a bare binary
@@ -166,7 +180,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     if (!android) env.EXACT_FONT ??= 'DejaVu Sans';
   }
   Object.assign(env, extra);
-  const bridge = device ? await phoneBridge() : null, droid = android ? androidDeploy(a, bin, { ...env, ...extra }) : null;
+  const bridge = device ? await phoneBridge() : null, droid = android ? androidDeploy(a, bin, env, appServerUrl, backend) : null;
   let touches = null;
   try {
     if (device && touch !== 'agent') {

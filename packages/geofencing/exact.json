@@ -2,6 +2,7 @@
   "kind": "interface",
   "name": "@exact/geofencing",
   "version": "1.0.0",
+  "start": "load",
   "grants": [
     "device.geolocation-background",
     "device.geolocation"

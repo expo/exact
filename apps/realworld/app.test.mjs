@@ -160,6 +160,39 @@ test('replies from a previous reader leave the next reader alone', async () => {
     await settle();
     reply(3, 200, { article: { slug: 'story', title: 'Story', favorited: false, favoritesCount: 0, author: {} } });
     expect(await shown).toMatchObject({ favorited: false, favoritesCount: 0 });
+
+    // A saveSettings reply arriving after logout must not re-authenticate the user.
+    kept.set('realworld.jwt', 'alice');
+    const save = answer('saveSettings', ['', 'alice', '', 'alice@example.invalid', ''], store);
+    await settle();
+    await answer('logout', [], store);
+    expect(kept.has('realworld.jwt')).toBe(false);
+    reply(4, 200, { user: { username: 'alice', token: 'alice-new' } });
+    await save;
+    expect(kept.has('realworld.jwt')).toBe(false);
+
+    // Overlapping logins resolving out of order must keep the newer session's token.
+    const loginA = answer('login', ['alice@example.invalid', 'secret'], store);
+    await settle();
+    const loginB = answer('login', ['bob@example.invalid', 'secret'], store);
+    await settle();
+    reply(6, 200, { user: { username: 'bob', token: 'bob-jwt' } });
+    expect((await loginB).ok).toBe(true);
+    expect(kept.get('realworld.jwt')).toBe('bob-jwt');
+    reply(5, 200, { user: { username: 'alice', token: 'alice-jwt' } });
+    await loginA;
+    expect(kept.get('realworld.jwt')).toBe('bob-jwt');
+
+    // A stale currentUser 401 arriving before a newer login resolves must not discard the new login.
+    const checkBob = answer('currentUser', [], store);
+    await settle();
+    const loginC = answer('login', ['carol@example.invalid', 'secret'], store);
+    await settle();
+    reply(7, 401, { errors: { token: ['expired'] } });
+    await checkBob;
+    reply(8, 200, { user: { username: 'carol', token: 'carol-jwt' } });
+    expect((await loginC).ok).toBe(true);
+    expect(kept.get('realworld.jwt')).toBe('carol-jwt');
   } finally {
     globalThis.fetch = realFetch;
   }

@@ -32,7 +32,7 @@
 #include <stdint.h>
 
 /* The ABI's version: part of the compatibility id (LLP 1030 D3a). */
-#define EXACT_ABI_VERSION 20
+#define EXACT_ABI_VERSION 21
 
 #ifdef __cplusplus
 extern "C" {
@@ -632,6 +632,7 @@ uint32_t exact_share_land(ExactRuntime rt);
  * 19 = media (UTF-8 event name, newline, payload; numeric times in seconds),
  * 21 = select (formats + newline + mixed 0/1 + newline + unavailable + newline + link);
  * 22 = refresh (the platform's pull-to-refresh control fired; no payload);
+ * 67 = pinch, 68 = pinchrelease (UTF-8 scale,clientX,clientY).
  * 28 = panrelease (UTF-8 vx,vy; px/s, once when a pan that began ends; a
  *      cancelled contact releases at 0,0; LLP 1057 §10.6);
  * 29 = pointerdown, 30 = pointerup, 31 = pointermove, 65 = pointercancel (UTF-8
@@ -654,7 +655,7 @@ uint32_t exact_share_land(ExactRuntime rt);
  *      then `0` (no relatedTarget) or `1<related id>`;
  * 64 = host look states (UTF-8 bits: 1 hover, 2 focus-visible); presentation only.
  * 66 = swipe (no payload; the platform's discrete swipe in the node's
- *      swipe-direction, LLP 1057.001 §8).
+ *      `swipe-flick` direction, LLP 1057.001 §8).
  * any other kind is refused with an error batch.
  * Format lists are space-separated command tokens. Link keeps the remaining bytes.
  * A change's text, key's name, or guest message is the payload in the input
@@ -1009,7 +1010,9 @@ uint32_t exact_screen(ExactRuntime rt, float width, float height);
  * viewport's width and height, the regions' count (20 or 0) and their insets,
  * then, with 16, the rects' count and each rect's x y w h, on the grid
  * exact_segments set, then, with 32, the software keyboard's overlap with the
- * viewport (exactViewport().keyboardHeight), then, with 64, block,
+ * viewport (exactViewport().keyboardHeight), then, with 128, the window's
+ * aspect-fit guide for the first root (LLP 1123 D16), its x, y, width and
+ * height in the view's points, a zero size clearing it, then, with 64, block,
  * placement and owner update records as exact_host_covers kinds 4, 5, 6,
  * 7, 13 and 21, each update checked and applied as exact_host_covers does.
  * The call is exact_screen, exact_insets, exact_regions, exact_resize and a
@@ -1115,17 +1118,24 @@ uint32_t exact_radio_group(ExactRuntime rt, uint32_t view);
  * it; with none, the key is consumed where it is; null for no key or one that is
  * not the group's. */
 uint32_t exact_role_keys(ExactRuntime rt, uint32_t view, uint32_t focused, size_t len);
-/* Whether the stack whose root route is `view` shows that route as a list beside
- * its detail, by the runner's rule (LLP 1115.002 D4), JSON in the output buffer,
- * not a batch: {"list":view|null,"width":number|null,"rows":[[route,row]...],
- * "locations":[[route,url]...],"current":view|null,"pressWrites":bool|null}, the list whose row pushes,
+/* The runner's answer for the stack whose root route is `view` (LLP 1115.002 D4, LLP 1127 D1), JSON in the
+ * output buffer, not a batch: {"asked":bool,"placeholder":view|null,"list":view|null,"width":number|null,
+ * "rows":[[route,row]...],"locations":[[route,url]...],"current":view|null}: whether
+ * the root route asks for the split (LLP 1127 D1), the route's own placeholder box, which the split shows
+ * while nothing is selected, the list whose row pushes,
  * the list column's width where `navigationSplit` names one, each route above the
  * root that is a row's detail with that row, each route above the root with its
- * location, the current row, and whether the press of `pressed` writes the router; null for a stack
- * that pushes. */
-/* `retained` is a previous list to keep while empty and still eligible, or 0;
- * `pressed` is a view being pressed, or 0. */
-uint32_t exact_stack_split(ExactRuntime rt, uint32_t view, uint32_t retained, uint32_t pressed);
+ * location, and the current row. null for a view that is
+ * no route, for a root route presented as a sheet (`modal`, `fullscreen`) or saying "none", and for one
+ * that does not ask and has no list whose rows push, nor an eligible `retained` list. Each host admits a split from the answer by its own
+ * rule (LLP 1127 D22): the Mac where `asked` or where `list` is found. */
+/* `retained` is a previous list to keep while empty and still eligible, or 0. */
+uint32_t exact_stack_split(ExactRuntime rt, uint32_t view, uint32_t retained);
+/* Whether the press of `view` writes the router (LLP 1127 D16), a fact of the plan at the view's site, not a
+ * batch: 1 where it does, 0 where it does not, 2 for a view that hears no press or a runtime that refuses the
+ * call (gone, or busy). Read before the press is dispatched, it answers for a press that then removes or
+ * recycles its view. */
+uint32_t exact_press_writes_router(ExactRuntime rt, uint32_t view);
 /* A button's face, custom or native (LLP 1069.011.000 D1), JSON in the output
  * buffer, not a batch: {"button":bool,"title":string|null,"symbol":apple-name|null,
  * "raster","leading","fits":bool,"label":string|null,"style",...the native style}. */

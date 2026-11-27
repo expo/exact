@@ -49,6 +49,14 @@ pub struct Presented {
     pub lowered: u8,
     /// Whether its `:hover` and `:focus-visible` looks hold (LLP 1121 D8).
     pub looks: [bool; 2],
+    /// How far the box reaches past its laid-out border box, top right bottom left (LLP 1123 D13,
+    /// `crate::safe_area`): its surface and its hits go that far; its children stay.
+    pub reach: [f32; 4],
+    /// A scroller's claim (LLP 1123 D13, D14): its scrollport and hits reach, its range widens by its insets.
+    pub(crate) scroll: Option<crate::safe_area::ScrollClaim>,
+    /// How far its colour-only extension paints its background colour past its border box, top right bottom left
+    /// (LLP 1123 D13, `Painter::extension_strip`).
+    pub(crate) extension: [f32; 4],
 }
 
 impl Presented {
@@ -70,6 +78,9 @@ impl Presented {
         layout: [0.0; 4],
         lowered: 0,
         looks: [false; 2],
+        reach: [0.0; 4],
+        scroll: None,
+        extension: [0.0; 4],
     };
 
     /// The committed style's values (what the engine starts from).
@@ -97,6 +108,9 @@ impl Presented {
             layout: Presented::IDENTITY.layout,
             lowered: 0,
             looks: [false; 2],
+            reach: [0.0; 4],
+            scroll: None,
+            extension: [0.0; 4],
         }
     }
 
@@ -162,6 +176,26 @@ impl Presented {
         let [.., dw, dh] = self.layout;
         (x, y, (w + dw).max(0.0), (h + dh).max(0.0))
     }
+
+    /// `rect` outset by the box's reach (LLP 1123 D13).
+    pub(super) fn reached(&self, rect: Rect4) -> Rect4 {
+        outset(rect, self.reach)
+    }
+
+    /// `rect` outset by a scroller's reach, its scrollport's and its hits' (LLP 1123 D13); `rect` for any other box.
+    pub(super) fn port_reached(&self, rect: Rect4) -> Rect4 {
+        self.scroll.map_or(rect, |c| outset(rect, c.reach))
+    }
+
+    /// Whether its surface, its scrollport or its range is not what its layout gives (LLP 1123 D13, D14).
+    pub(super) fn claimed(&self) -> bool {
+        self.reach != [0.0; 4] || self.scroll.is_some() || self.extension != [0.0; 4]
+    }
+}
+
+/// `(x, y, w, h)` outset by `[top, right, bottom, left]`.
+pub(super) fn outset((x, y, w, h): Rect4, [top, right, bottom, left]: [f32; 4]) -> Rect4 {
+    (x - left, y - top, w + left + right, h + top + bottom)
 }
 
 impl PaintedBox {

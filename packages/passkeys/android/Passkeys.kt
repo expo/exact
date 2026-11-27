@@ -61,15 +61,18 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
         private val MARK = "exact-lock:".toByteArray()
     }
 
+    private class Conditional(val pending: PendingGetCredentialRequest, val signal: CancellationSignal)
+
     private val manager by lazy { CredentialManager.create(context.application) }
-    /** A pending conditional `get`: the fields it is set on, and how it ends. */
-    private var conditional: Pair<PendingGetCredentialRequest, (JSONObject) -> Unit>? = null
+    /** A pending conditional `get`: the fields it is set on, its request id, and how it ends. */
+    private var conditional: Conditional? = null
     private val fields = LinkedHashSet<EditText>()
     /** No `*ProviderConfigurationException` on the last call (D4's `android.providerConfigured`). */
     private var configured = true
     /** Each registration's RP ID by credential id, for `dispose` (D11). */
     private val made = HashMap<String, String>()
-    private val signals = mutableSetOf<CancellationSignal>()
+    /** Active modal ceremonies by their send's request id, cancelled when let go or on session end. */
+    private val calls = linkedMapOf<CancellationSignal, Pair<Int?, () -> Unit>>()
 
     override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
 
@@ -90,9 +93,13 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
 
     override fun webauthnField(view: EditText, present: Boolean) {
         if (present) fields.add(view) else fields.remove(view)
-        val pending = conditional?.first
+        val pending = conditional?.pending
         if (Build.VERSION.SDK_INT >= 35 && pending != null) view.pendingGetCredentialRequest = if (present) pending else null
         if (Build.VERSION.SDK_INT >= 35) context.changed("passkeys.getClientCapabilities")
+    }
+
+    override fun cancel(request: Int) {
+        context.credentials.cancelAll(calls.values.filter { it.first == request }.map { it.second })
     }
 
     override fun dispose(ids: List<String>) {
@@ -106,8 +113,7 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     override fun destroy(done: () -> Unit) {
-        signals.toList().forEach { it.cancel() }
-        endConditional("the session ended")
+        context.credentials.endSession()
         done()
     }
 
@@ -141,32 +147,59 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
         return false
     }
 
+    private fun hold(cause: Cause, replaceable: Boolean, reply: (JSONObject) -> Unit,
+                     start: (CancellationSignal, (JSONObject) -> Unit) -> Unit) {
+        val activity = context.activity!!
+        val signal = CancellationSignal()
+        fun finish(answer: JSONObject) {
+            if (calls.remove(signal) == null) return
+            context.credentials.finish(signal) {
+                if (context.activity !== activity || activity.isDestroyed || activity.isFinishing)
+                    reply(JSONObject().put("error", "AbortError").put("message", "the initiating activity ended"))
+                else reply(answer)
+            }
+        }
+        fun abort() {
+            try {
+                if (conditional?.signal === signal) detachConditional()
+                signal.cancel()
+            } finally { finish(JSONObject().put("error", "AbortError").put("message", "the call was let go")) }
+        }
+        calls[signal] = cause.request to ::abort
+        context.credentials.enqueue(signal, activity, replaceable, ::abort) {
+            if (context.activity !== activity || activity.isDestroyed || activity.isFinishing) abort()
+            else try { start(signal, ::finish) }
+            catch (e: Exception) { finish(JSONObject().put("error", "UnknownError").put("message", e.message)) }
+        }
+    }
+
     private fun create(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         if (refused(cause, reply)) return
         val options = args.optJSONObject("publicKey") ?: return reply(JSONObject().put("error", "TypeError"))
         if (marked(options.optJSONObject("user")?.optString("id"))) return reply(JSONObject().put("error", "NotAllowedError").put("message", "a lock's user handle is the lock's alone"))
         if (args.optString("mediation") == "conditional") return reply(JSONObject().put("error", "NotSupportedError").put("message", "conditional create is not built on Android"))
-        endConditional("a newer ceremony replaced this conditional one")
-        val json = options.toString()
-        val ours = CreatePublicKeyCredentialRequest(json)
-        val request = createRequest?.invoke(ours)?.let { if (it.requestJson == json) it else { context.log("passkeys: the create hatch changed the options' JSON, which the module owns; not used (LLP 1133.011 D5)"); ours } } ?: ours
-        val signal = CancellationSignal().also { signals.add(it) }
-        val activity = context.activity!!
-        manager.createCredentialAsync(activity, request, signal, activity.mainExecutor, object : CredentialManagerCallback<CreateCredentialResponse, CreateCredentialException> {
-            override fun onResult(result: CreateCredentialResponse) {
-                signals.remove(signal)
-                configured = true
-                val made = (result as? CreatePublicKeyCredentialResponse)?.registrationResponseJson ?: return reply(JSONObject().put("error", "UnknownError"))
-                val answer = withheld(JSONObject(made))
-                options.optJSONObject("rp")?.optString("id")?.let { this@PasskeysModule.made[answer.optString("id")] = it }
-                reply(answer)
-            }
-            override fun onError(e: CreateCredentialException) {
-                signals.remove(signal)
-                reply(failure(e, e.type, e.errorMessage, if (e is CreatePublicKeyCredentialDomException) e.domError.type else null,
-                    e is CreateCredentialCancellationException, e is CreateCredentialProviderConfigurationException))
-            }
-        })
+        hold(cause, false, reply) { signal, done ->
+            val json = options.toString()
+            val ours = CreatePublicKeyCredentialRequest(json)
+            val request = createRequest?.invoke(ours)?.let { if (it.requestJson == json) it else { context.log("passkeys: the create hatch changed the options' JSON, which the module owns; not used (LLP 1133.011 D5)"); ours } } ?: ours
+            val activity = context.activity!!
+            manager.createCredentialAsync(activity, request, signal, activity.mainExecutor, object : CredentialManagerCallback<CreateCredentialResponse, CreateCredentialException> {
+                override fun onResult(result: CreateCredentialResponse) {
+                    configured = true
+                    val made = (result as? CreatePublicKeyCredentialResponse)?.registrationResponseJson ?: return done(JSONObject().put("error", "UnknownError"))
+                    val answer = withheld(made) ?: return done(JSONObject().put("error", "UnknownError"))
+                    options.optJSONObject("rp")?.optString("id")?.let { this@PasskeysModule.made[answer.optString("id")] = it }
+                    if (signal.isCanceled || context.activity !== activity || activity.isFinishing || activity.isDestroyed) {
+                        try { dispose(listOf(answer.optString("id"))) } finally { done(answer) }
+                    } else done(answer)
+                }
+                override fun onError(e: CreateCredentialException) {
+                    if (signal.isCanceled) return
+                    done(failure(e, e.type, e.errorMessage, if (e is CreatePublicKeyCredentialDomException) e.domError.type else null,
+                        e is CreateCredentialCancellationException, e is CreateCredentialProviderConfigurationException))
+                }
+            })
+        }
     }
 
     private fun get(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
@@ -176,51 +209,59 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
         val conditionally = args.optString("mediation") == "conditional"
         if (conditionally && (Build.VERSION.SDK_INT < 35 || fields.isEmpty()))
             return reply(JSONObject().put("error", "NotSupportedError").put("message", "conditional get needs Android 15 and a field whose autocomplete ends in webauthn"))
-        endConditional("a newer ceremony replaced this conditional one")
-        val discoverable = (options.optJSONArray("allowCredentials")?.length() ?: 0) == 0
-        val ours = GetCredentialRequest.Builder()
-            .addCredentialOption(GetPublicKeyCredentialOption(json))
-            .setPreferImmediatelyAvailableCredentials(args.optBoolean("preferImmediatelyAvailableCredentials"))
-            .build()
-        val request = getRequest?.invoke(ours)?.let { r ->
-            val same = r.credentialOptions.size == 1 && (r.credentialOptions[0] as? GetPublicKeyCredentialOption)?.requestJson == json
-            if (same) r else { context.log("passkeys: the get hatch changed the credential options, which the module owns; not used (LLP 1133.011 D5)"); ours }
-        } ?: ours
-        val answered = { result: GetCredentialResponse ->
-            configured = true
-            val credential = result.credential as? PublicKeyCredential
-            if (credential == null) reply(JSONObject().put("error", "UnknownError"))
-            else {
-                val answer = withheld(JSONObject(credential.authenticationResponseJson))
-                val handle = answer.optJSONObject("response")?.optString("userHandle")
-                // A lock's assertion, or a discoverable one with no user handle, is never delivered (§7 item 3).
-                if (marked(handle) || (discoverable && handle.isNullOrEmpty())) reply(JSONObject().put("error", "NotAllowedError")) else reply(answer)
+        hold(cause, conditionally, reply) { signal, done ->
+            val discoverable = (options.optJSONArray("allowCredentials")?.length() ?: 0) == 0
+            val ours = GetCredentialRequest.Builder()
+                .addCredentialOption(GetPublicKeyCredentialOption(json))
+                .setPreferImmediatelyAvailableCredentials(args.optBoolean("preferImmediatelyAvailableCredentials"))
+                .build()
+            val request = getRequest?.invoke(ours)?.let { r ->
+                val same = r.credentialOptions.size == 1 && (r.credentialOptions[0] as? GetPublicKeyCredentialOption)?.requestJson == json
+                if (same) r else { context.log("passkeys: the get hatch changed the credential options, which the module owns; not used (LLP 1133.011 D5)"); ours }
+            } ?: ours
+            val answered = { result: GetCredentialResponse ->
+                configured = true
+                val credential = result.credential as? PublicKeyCredential
+                if (credential == null) done(JSONObject().put("error", "UnknownError"))
+                else {
+                    val answer = withheld(credential.authenticationResponseJson)
+                    val handle = answer?.optJSONObject("response")?.optString("userHandle")
+                    // A lock's assertion, or a discoverable one with no user handle, is never delivered (§7 item 3).
+                    if (answer == null) done(JSONObject().put("error", "UnknownError"))
+                    else if (marked(handle) || (discoverable && handle.isNullOrEmpty())) done(JSONObject().put("error", "NotAllowedError")) else done(answer)
+                }
             }
-        }
-        if (conditionally && Build.VERSION.SDK_INT >= 35) {
-            val pending = PendingGetCredentialRequest(request) { result -> endConditional(null); answered(result) }
-            conditional = pending to reply
-            fields.forEach { it.pendingGetCredentialRequest = pending }
-            return
-        }
-        val signal = CancellationSignal().also { signals.add(it) }
-        val activity = context.activity!!
-        manager.getCredentialAsync(activity, request, signal, activity.mainExecutor, object : CredentialManagerCallback<GetCredentialResponse, GetCredentialException> {
-            override fun onResult(result: GetCredentialResponse) { signals.remove(signal); answered(result) }
-            override fun onError(e: GetCredentialException) {
-                signals.remove(signal)
-                reply(failure(e, e.type, e.errorMessage, if (e is GetPublicKeyCredentialDomException) e.domError.type else null,
-                    e is GetCredentialCancellationException || e is NoCredentialException, e is GetCredentialProviderConfigurationException))
+            if (conditionally && Build.VERSION.SDK_INT >= 35) {
+                if (fields.isEmpty()) {
+                    done(JSONObject().put("error", "NotSupportedError").put("message", "conditional get needs a field whose autocomplete ends in webauthn"))
+                    return@hold
+                }
+                lateinit var entry: Conditional
+                val pending = PendingGetCredentialRequest(request) { result ->
+                    if (conditional !== entry) return@PendingGetCredentialRequest
+                    detachConditional()
+                    answered(result)
+                }
+                entry = Conditional(pending, signal)
+                conditional = entry
+                fields.forEach { it.pendingGetCredentialRequest = pending }
+                return@hold
             }
-        })
+            val activity = context.activity!!
+            manager.getCredentialAsync(activity, request, signal, activity.mainExecutor, object : CredentialManagerCallback<GetCredentialResponse, GetCredentialException> {
+                override fun onResult(result: GetCredentialResponse) { if (!signal.isCanceled) answered(result) }
+                override fun onError(e: GetCredentialException) {
+                    if (signal.isCanceled) return
+                    done(failure(e, e.type, e.errorMessage, if (e is GetPublicKeyCredentialDomException) e.domError.type else null,
+                        e is GetCredentialCancellationException || e is NoCredentialException, e is GetCredentialProviderConfigurationException))
+                }
+            })
+        }
     }
 
-    /** The pending conditional `get` ends: with `AbortError` and [why], or answered already (null). */
-    private fun endConditional(why: String?) {
-        val (_, reply) = conditional ?: return
+    private fun detachConditional() {
         conditional = null
         if (Build.VERSION.SDK_INT >= 35) fields.forEach { it.pendingGetCredentialRequest = null }
-        if (why != null) reply(JSONObject().put("error", "AbortError").put("message", why))
     }
 
     private fun signal(request: SignalCredentialStateRequest, args: JSONObject, reply: (JSONObject) -> Unit) {
@@ -249,7 +290,8 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** No PRF output leaves the implementation (D10). */
-    private fun withheld(answer: JSONObject): JSONObject {
+    private fun withheld(json: String): JSONObject? {
+        val answer = try { JSONObject(json) } catch (_: org.json.JSONException) { return null }
         answer.optJSONObject("clientExtensionResults")?.optJSONObject("prf")?.remove("results")
         return answer
     }

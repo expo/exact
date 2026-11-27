@@ -16,7 +16,7 @@ pub(super) fn create(
     node: NodesId,
     axis: ListAxis,
     frames: &[Frame],
-    children: &mut Vec<Child>,
+    children: &mut Children,
 ) -> Result<(RegionsId, Option<Fixed>), InstanceError> {
     let plan = u.env.plan;
     let sites = u.sites.children(Some(node), plan.node(node).arm);
@@ -51,17 +51,13 @@ pub(super) fn create(
             ));
         }
     }
-    for (i, (_, site)) in sites.iter().enumerate() {
-        if i == split {
-            continue;
-        }
+    let mut fixed_sites = sites[..split].iter().chain(&sites[split + 1..]);
+    *children = Children::realize_n(u, sites.len() - 1, |u| {
+        let &(_, site) = fixed_sites.next().expect("fixed child site");
         // All arms are inspected: an inactive virtualized list is refused too.
-        refuse_nested(plan, u.sites, *site)?;
-        children.push(match site {
-            Site::Node(n) => Child::Node(NodeInst::create(u, *n, frames)?),
-            Site::Region(r) => Child::Region(RegionInst::create(u, *r, frames)?),
-        });
-    }
+        refuse_nested(plan, u.sites, site)?;
+        realize_child(u, site, frames)
+    })?;
     Ok((
         region,
         Some(Fixed {

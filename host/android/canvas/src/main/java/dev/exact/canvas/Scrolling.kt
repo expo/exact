@@ -56,11 +56,13 @@ internal class Scrolling(private val view: ExactView) {
         /** Whether a statement has said where it is. */
         var told = false
         /** Logical offsets for drag travel, in pixels. */
-        var nowX = 0f; var nowY = 0f; var maxX = 0f; var maxY = 0f
-        /** Current and farthest logical offsets, in points. */
-        var pointsX = 0f; var pointsY = 0f; var maxPointsX = 0f; var maxPointsY = 0f
+        var nowX = 0f; var nowY = 0f; var minX = 0f; var maxX = 0f; var maxY = 0f
+        /** Current, least and farthest logical offsets, in points. */
+        var pointsX = 0f; var pointsY = 0f; var minPointsX = 0f; var maxPointsX = 0f; var maxPointsY = 0f
         /** The offset of the recording, in device pixels. */
         var drawnX = 0f; var drawnY = 0f
+        /** How far past its offset its content is painted under a claim (LLP 1123 D14), in points; 0 unclaimed. */
+        var claimX = 0f; var claimY = 0f
         /** What the reader moved it by that no stream it has taken includes yet. */
         var pendX = 0f; var pendY = 0f
         /** The reader has moved it: its rows are placed here, not by exact2's moves. */
@@ -105,6 +107,7 @@ internal class Scrolling(private val view: ExactView) {
         /** Its `keyboardDismissMode`: 0 nothing, [Dismissal.ON_DRAG] or [Dismissal.INTERACTIVE]. */
         val dismiss get() = (flags shr 6) and 3
         fun at(sideways: Boolean) = if (sideways) nowX + pendX else nowY + pendY
+        fun start(sideways: Boolean) = if (sideways) minX else 0f
         fun end(sideways: Boolean) = if (sideways) maxX else maxY
     }
 
@@ -249,7 +252,7 @@ internal class Scrolling(private val view: ExactView) {
 
     /** [e], a touch event after the down, once exact2 has answered for the touch: whether the scroll took it. */
     private fun take(e: MotionEvent, disallowIntercept: Boolean = false): Boolean {
-        if (zooming.touch(e)) {
+        if (zooming.touch(e, disallowIntercept)) {
             if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
                 if (mode != FLINGING) mode = IDLE
                 tracker?.recycle(); tracker = null
@@ -314,6 +317,7 @@ internal class Scrolling(private val view: ExactView) {
     /** This sequence no longer belongs to scrolling; unrelated refreshes and edge effects stay visible. */
     fun yieldToHosted() {
         settleSheet(0f)
+        caughtSharedFling = false
         zooming.stopped()
         if (mode == WATCHING || mode == DRAGGING) mode = IDLE
         forget()
@@ -467,7 +471,7 @@ internal class Scrolling(private val view: ExactView) {
         val d = down
         if (d != null && !replaying) {
             val z = links.firstOrNull { it.zoom }
-            val pans = z != null && links.first() === z && claims == 0 && (z.s.maxX > 0f || z.s.maxY > 0f)
+            val pans = z != null && links.first() === z && claims == 0 && (z.s.minX < 0f || z.s.maxX > 0f || z.s.maxY > 0f)
             zooming.down(d, z?.s, z?.taps == true, pans)
         }
     }
@@ -605,7 +609,7 @@ internal class Scrolling(private val view: ExactView) {
         var waits = false
         for ((k, s) in active.withIndex()) {
             val at = s.at(sideways)
-            val took = (at + rest).coerceIn(0f, s.end(sideways)) - at
+            val took = (at + rest).coerceIn(s.start(sideways), s.end(sideways)) - at
             if (abs(took) < 0.01f) continue
             s.own = true
             if (mover == null) mover = s
@@ -630,7 +634,7 @@ internal class Scrolling(private val view: ExactView) {
 
     /** A zoomable scroller's pan ([Zooming]) moved [s] by ([dx], [dy]) px, both axes at once, within its travel. */
     private fun panBoth(s: Scroller, dx: Float, dy: Float) {
-        val tx = (s.at(true) + dx).coerceIn(0f, max(0f, s.maxX)) - s.at(true)
+        val tx = (s.at(true) + dx).coerceIn(minOf(0f, s.minX), max(0f, s.maxX)) - s.at(true)
         val ty = (s.at(false) + dy).coerceIn(0f, max(0f, s.maxY)) - s.at(false)
         if (abs(tx) < 0.01f && abs(ty) < 0.01f) return
         s.own = true
@@ -657,15 +661,16 @@ internal class Scrolling(private val view: ExactView) {
 
     private fun predictedPixel(s: Scroller, sideways: Boolean): Float {
         var points = if (sideways) s.pointsX else s.pointsY
+        val min = if (sideways) s.minPointsX else 0f
         val max = if (sideways) s.maxPointsX else s.maxPointsY
         // Apply each pending sample in the same order as CanvasHost.scrolled and reader_sample_at.
         for (move in sent) {
             if (move.s === s) {
                 val delta = if (sideways) move.dx else move.dy
-                points = (points + delta / scale).coerceIn(0f, max)
+                points = (points + delta / scale).coerceIn(min, max)
             }
         }
-        return paintedOffset(points * scale)
+        return paintedOffset((points + if (sideways) s.claimX else s.claimY) * scale)
     }
 
     // Match the painter's 1/64-pixel quantization and half-up rounding (paint/grid.rs).
@@ -689,14 +694,22 @@ internal class Scrolling(private val view: ExactView) {
     fun told(w: IntArray) {
         scale = f(w[0])
         var i = 1
+        val stated = HashSet<Int>()
         while (i + STATEMENT_WORDS <= w.size) {
+            val claimed = w[i + 1] and CLAIMED_FLAG != 0
+            if (claimed && i + STATEMENT_WORDS + CLAIM_WORDS > w.size) break
             val s = scrollers.getOrPut(w[i]) { Scroller(w[i]) }
+            stated.add(s.id)
             s.flags = w[i + 1]
             s.pointsX = f(w[i + 3]); s.pointsY = f(w[i + 4])
             s.drawnX = f(w[i + 5]); s.drawnY = f(w[i + 6])
-            s.maxPointsX = f(w[i + 7]); s.maxPointsY = f(w[i + 8])
+            s.maxPointsX = f(w[i + 7]); s.maxPointsY = f(w[i + 8]); s.minPointsX = f(w[i + 9])
+            // A claimed scroller's record: its content painted past its offset, and its reached port, as the claim
+            // moves them, which a touch's answer told only as it began
+            s.claimX = if (claimed) f(w[i + 10]) else 0f; s.claimY = if (claimed) f(w[i + 11]) else 0f
+            if (claimed) s.port.set(f(w[i + 12]), f(w[i + 13]), f(w[i + 12]) + f(w[i + 14]), f(w[i + 13]) + f(w[i + 15]))
             s.nowX = s.pointsX * scale; s.nowY = s.pointsY * scale
-            s.maxX = s.maxPointsX * scale; s.maxY = s.maxPointsY * scale
+            s.minX = s.minPointsX * scale; s.maxX = s.maxPointsX * scale; s.maxY = s.maxPointsY * scale
             if (s.told && w[i + 2] != s.rev) {
                 // The app moved it: what the reader sent under the old revision is dropped there and here, and a
                 // fling that was moving it ends. A finger that is dragging it goes on from where the app put it.
@@ -709,13 +722,12 @@ internal class Scrolling(private val view: ExactView) {
             s.told = true
             // A refresh this reader's pull began ends when the app's `refreshing` that followed it does.
             s.pull?.takeIf { it.spinning && !it.leaving }?.let { if (s.refreshing) s.seen = true else if (s.seen) unpull(s) }
-            i += STATEMENT_WORDS
+            i += STATEMENT_WORDS + if (claimed) CLAIM_WORDS else 0
         }
         // A scroller the statement no longer has is gone (its node went, or a driver took it over): what the reader
         // kept for it goes with it.
-        val count = (w.size - 1) / STATEMENT_WORDS
-        if (scrollers.size <= count) return
-        for (s in scrollers.values.filter { s -> s.told && (0 until count).none { w[1 + it * STATEMENT_WORDS] == s.id } }) {
+        if (scrollers.size <= stated.size) return
+        for (s in scrollers.values.filter { s -> s.told && s.id !in stated }) {
             scrollers.remove(s.id)
             sent.removeAll { it.s === s }
             s.clearBar(); s.clearPull()
@@ -776,7 +788,7 @@ internal class Scrolling(private val view: ExactView) {
         val edged = edged()
         val stretched = edged != null && STRETCH && edged.edges.any { it != null && it.distance != 0f }
         if (edged != null) { for (e in edged.edges) e?.onRelease(); if (stretched) stretching() }
-        if (!stretched && snap(v)) { lifted(v, mode == FLINGING); return }
+        if (!stretched && snap(v) != null) { lifted(v, mode == FLINGING); return }
         if (stretched || abs(v) < minFling || active.isEmpty()) { lifted(v, false); mode = IDLE; return }
         mode = FLINGING
         flingAt = 0
@@ -794,17 +806,18 @@ internal class Scrolling(private val view: ExactView) {
     /**
      * The drag's innermost scroller snaps along the drag's axis (LLP 1008 §9): it comes to rest where [snapRest] says,
      * from where the platform's fling at [v] px/s would have left it, and settles there in ViewPager's time. At its end
-     * and flung on past it, it does not: the fling goes on to the scrollers outside. Whether it took the release; a
-     * list's `proximity` snap that the areas the touch told leave free does not, and may still take it once the
+     * and flung on past it, it does not: the fling goes on to the scrollers outside. Its target before clamping to the latest range; a
+     * list's `proximity` snap that the areas the touch told leave free returns null, and may still settle once the
      * areas around the projection arrive ([aimAgain]).
      */
-    private fun snap(v: Float): Boolean {
-        val s = active.firstOrNull() ?: return false
+    private fun snap(v: Float): Float? {
+        val s = active.firstOrNull() ?: return null
         val axis = if (sideways) 0 else 1
-        if (s.snapPort[axis] <= 0f || s.snaps[axis].isEmpty()) return false
+        if (s.snapPort[axis] <= 0f || s.snaps[axis].isEmpty()) return null
         val at = s.at(sideways)
+        val start = s.start(sideways)
         val end = s.end(sideways)
-        if ((v < 0f && at <= 0f) || (v > 0f && at >= end)) return false
+        if ((v < 0f && at <= start) || (v > 0f && at >= end)) return null
         val flung = abs(v) >= minFling
         var projected = at
         if (flung) {
@@ -815,9 +828,11 @@ internal class Scrolling(private val view: ExactView) {
         }
         val way = if (flung) (if (v > 0f) 1 else -1) else 0
         val target = snapRest(s.snaps[axis], s.stops[axis], projected, at, dragFrom, way, s.snapMandatory, s.snapPort[axis])
-        if (target == null && !s.snapList) return false
+        if (target == null && !s.snapList) return null
         if (target != null) {
-            val d = (target.coerceIn(0f, end) - at).roundToInt()
+            val d = (target.coerceIn(start, end) - at).roundToInt()
+            val landing = at + d
+            tell { Native.snapTarget(s.id, axis == 1, target, landing) }
             // ViewPager's settle: four times as long as the finger's speed would take to cover it, within its bound;
             // a release too slow to fling takes the platform's default scroll duration.
             settle(d, if (flung) settleMs(d, v) else SNAP_MS)
@@ -828,7 +843,7 @@ internal class Scrolling(private val view: ExactView) {
             val aim = Aim(serial, s.rev, axis, projected, at, dragFrom, way, target != null)
             snapsAround(s.id, !sideways, at, projected) { w -> aimAgain(s, aim, w) }
         }
-        return target != null
+        return target
     }
 
     /** ViewPager's settle time over [d] px for a finger, or a fling, moving at [v] px/s. */
@@ -867,7 +882,10 @@ internal class Scrolling(private val view: ExactView) {
         mergeSnaps(s, aim.axis, w)
         val target = snapRest(s.snaps[aim.axis], s.stops[aim.axis], aim.projected, aim.release, aim.start, aim.way, s.snapMandatory,
             s.snapPort[aim.axis]) ?: return
-        val d = (target.coerceIn(0f, s.end(sideways)) - s.at(sideways)).roundToInt()
+        val at = s.at(sideways)
+        val d = (target.coerceIn(s.start(sideways), s.end(sideways)) - at).roundToInt()
+        val landing = at + d
+        tell { Native.snapTarget(s.id, aim.axis == 1, target, landing) }
         if (d == 0 && mode == IDLE) return
         val ms = when {
             aim.settles -> (settleEnds - SystemClock.uptimeMillis()).toInt().coerceIn(100, SNAP_MAX_MS)
@@ -1006,7 +1024,8 @@ internal class Scrolling(private val view: ExactView) {
         holder.setPosition(0, 0, view.width, view.height)
         val c = holder.beginRecording()
         if (!live) c.drawRenderNode(g) else {
-            val l = s.port.left.roundToInt(); val t = s.port.top.roundToInt()
+            val l = (s.port.left - view.groupParentOffsetX(s.id)).roundToInt()
+            val t = (s.port.top - view.groupParentOffsetY(s.id)).roundToInt()
             val w = max(1, s.port.width().roundToInt()); val h = max(1, s.port.height().roundToInt())
             val port = RenderNode("exact port")
             port.setPosition(l, t, l + w, t + h)
@@ -1079,9 +1098,9 @@ internal class Scrolling(private val view: ExactView) {
         val b = s.bar ?: Indicator(view.context).also { s.bar = it; attach(s, parent, it) }
         size(b, w, h)
         place(b, s)
-        b.rangeX = if (s.flags and 1 != 0) (s.maxX + w).roundToInt() else 0
+        b.rangeX = if (s.flags and 1 != 0) (s.maxX - s.minX + w).roundToInt() else 0
         b.rangeY = if (s.flags and 2 != 0) (s.maxY + h).roundToInt() else 0
-        b.atX = s.at(true).roundToInt(); b.atY = s.at(false).roundToInt()
+        b.atX = (s.at(true) - s.minX).roundToInt(); b.atY = s.at(false).roundToInt()
         b.wake()
     }
 
@@ -1093,7 +1112,10 @@ internal class Scrolling(private val view: ExactView) {
     private fun f(bits: Int) = java.lang.Float.intBitsToFloat(bits)
 
     internal companion object {
-        private const val STATEMENT_WORDS = 9
+        private const val STATEMENT_WORDS = 10
+        /** A statement's claimed scroller, whose claim's record of [CLAIM_WORDS] follows (`presenter/scrollers.rs`). */
+        const val CLAIMED_FLAG = 1024
+        private const val CLAIM_WORDS = 6
         /** A touch's answer: the scroller zooms, and a double tap there zooms it (`presenter/scrollers.rs`). */
         const val ZOOM_FLAG = 256
         const val DOUBLE_TAP_FLAG = 512

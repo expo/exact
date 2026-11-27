@@ -850,6 +850,14 @@ extension Agent {
             presenter.textSelection.clear()
             return delivered(["tapped": Int(text.id), "at": at, "selection": "cleared"], hit)
         }
+        if plain, let surface = hit as? any SharedSelectionSurface, let owner = surface.owner,
+           presenter.textSelection.owns(surface) {
+            presenter.textSelection.clear()
+            return delivered(["tapped": Int(owner.id), "at": at, "selection": "cleared"], hit)
+        }
+        if plain, presenter.textSelection.hasActiveSelection, !presenter.textSelection.owns(hit) {
+            presenter.textSelection.clear()
+        }
         if plain, req["at"] != nil, let stepped = steppedTap(v, hit: hit, at: p, tapped: at) { return delivered(stepped, hit) }
         #endif
         // What the finger reaches, taken where it lands (`fingerReach`):
@@ -905,6 +913,10 @@ extension Agent {
     /// one on the way, which stops it.
     func pressReach(_ v: NodeView, at p: CGPoint, in win: UIWindow) -> PressReach? {
         guard let hit = win.hitTest(p, with: nil), obscured(v, at: p, hit: hit) == nil else { return nil }
+        return pressReach(from: hit, at: p)
+    }
+
+    func pressReach(from hit: UIView, at p: CGPoint) -> PressReach {
         // A grouped list's cell: every cell is in the list's node, so its row
         // (LLP 1084) is what a finger there selects, or its switch or detail
         // button is what it presses (`TouchLog.landing`'s projection).
@@ -947,7 +959,8 @@ extension Agent {
                 if n.disabled || !declared && n.authoredInert { return .blocked(n) }
                 let box = presenter.pressBox(of: n, from: node)
                 if n.takesPress(bubbled: box !== n) {
-                    return box.bounds.contains((box as? NodeView)?.local(p) ?? box.convert(p, from: nil)) ? .node(n) : .nothing
+                    let inside = (box as? NodeView)?.pressInside(at: p) ?? box.bounds.contains(box.convert(p, from: nil))
+                    return inside ? .node(n) : .nothing
                 }
             }
             declared = declared || presenter.declaredParent(of: cur) != nil
@@ -994,6 +1007,9 @@ extension Agent {
         // A child lifted over the tab container is still the target's (LLP 1083.000 D4)
         let inside = sequence(first: hit, next: { self.presenter.layoutParent(of: $0) }).contains { $0 === v }
         if hit === v || inside || (hit is NodeView && v.isDescendant(of: hit)) { return nil }
+        if presenter.flightHost.hasFlyingAncestor(v) {
+            return "it is in an active sharedElement flight (flight views take no touches until they land; run `clock settle` first)"
+        }
         return Agent.covers(hit, at: location)
     }
 
@@ -1425,5 +1441,35 @@ extension Agent {
         window.windowScene?.traitOverrides.accessibilityContrast = more ? .high : .normal
         window.updateTraitsIfNeeded()
     }
+    #if os(iOS)
+    /// `prefer ask-siri` (LLP 1094.000 D10): whether UIKit adds its Ask Siri
+    /// item to a context menu. UIKit reads that from a private scene trait,
+    /// which the simulator leaves unavailable, having no Siri to offer.
+    private static let askSiriTrait: AnyClass? = NSClassFromString("_UITraitIntelligentAssistantAvailability")
+    /// Why `prefer ask-siri` cannot be set here, when it cannot.
+    var askSiriRefusal: String? {
+        if Self.askSiriTrait == nil { return "prefer: ask-siri: this iOS adds no Ask Siri to menus" }
+        if session.presenter.viewport.window?.windowScene == nil { return "prefer: ask-siri: the app has no window scene yet" }
+        return nil
+    }
+    func systemAskSiri(available: Bool) {
+        guard let scene = session.presenter.viewport.window?.windowScene, let trait = Self.askSiriTrait else { return }
+        let overrides = (scene as NSObject).value(forKey: "traitOverrides") as AnyObject
+        if available {
+            let set = NSSelectorFromString("setNSIntegerValue:forTrait:")
+            typealias Set = @convention(c) (AnyObject, Selector, Int, AnyClass) -> Void
+            unsafeBitCast(overrides.method(for: set), to: Set.self)(overrides, set, 1, trait)
+        } else {
+            _ = overrides.perform(NSSelectorFromString("removeTrait:"), with: trait)
+        }
+        scene.windows.forEach { $0.updateTraitsIfNeeded() }
+    }
+    var systemAskSiri: Bool {
+        guard let traits = session.presenter.viewport.window?.windowScene?.traitCollection, let trait = Self.askSiriTrait else { return false }
+        let read = NSSelectorFromString("valueForNSIntegerTrait:")
+        typealias Read = @convention(c) (AnyObject, Selector, AnyClass) -> Int
+        return unsafeBitCast(traits.method(for: read), to: Read.self)(traits, read, trait) != 0
+    }
+    #endif
 }
 #endif

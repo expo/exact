@@ -61,17 +61,29 @@ extension TextArea {
 
     /// A press on an atom: it is selected, then the field's `atompress`
     /// carries it (D5, D7). The modifiers held: Shift, Control, Option, Command.
-    package func pressAtom(_ range: NSRange, held: (shift: Bool, ctrl: Bool, alt: Bool, meta: Bool) = (false, false, false, false)) {
-        guard let owner, let storage = atomStorage, let atom = storage.attribute(.markupAtom, at: range.location, effectiveRange: nil) as? MarkupAtom else { return }
+    @discardableResult
+    package func pressAtom(_ range: NSRange, held: (shift: Bool, ctrl: Bool, alt: Bool, meta: Bool) = (false, false, false, false)) -> Bool {
+        func liveAtom() -> (owner: NodeView, storage: NSAttributedString, atom: MarkupAtom)? {
+            guard let owner, !owner.disabled, !owner.inert, isSelectable, let storage = atomStorage,
+                  range.location >= 0, range.length > 0, NSMaxRange(range) <= storage.length,
+                  storage.atomRange(at: range.location) == range,
+                  let atom = storage.attribute(.markupAtom, at: range.location, effectiveRange: nil) as? MarkupAtom else { return nil }
+            return (owner, storage, atom)
+        }
+        guard liveAtom() != nil else { return false }
         #if os(macOS)
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        guard let current = liveAtom() else { return false }
+        let source = (current.storage.string as NSString).substring(with: range)
         setSelectedRange(range)
         #else
         if !isFirstResponder { _ = becomeFirstResponder() }
+        guard let current = liveAtom() else { return false }
+        let source = (current.storage.string as NSString).substring(with: range)
         selectedRange = range
         #endif
-        let source = (storage.string as NSString).substring(with: range)
-        owner.pressAtom(kind: atom.kind, source: source, href: atom.href, range: range, held: held)
+        current.owner.pressAtom(kind: current.atom.kind, source: source, href: current.atom.href, range: range, held: held)
+        return true
     }
 
     /// The atoms changed (a restyle, a new width, a new face, markup turned
@@ -181,7 +193,7 @@ extension TextArea: NSViewToolTipOwner {
     /// click through its own gesture recognizers, before any `mouseDown`, so
     /// a pill's click goes to a view of its own (`AtomCatcher`) instead.
     func atomHit(_ point: NSPoint) -> NSView? {
-        guard markup != nil, isSelectable, atom(at: convert(point, from: superview)) != nil else { return nil }
+        guard markup != nil, isSelectable, let owner, !owner.disabled, !owner.inert, atom(at: convert(point, from: superview)) != nil else { return nil }
         if let catcher = subviews.first(where: { $0 is AtomCatcher }) { return catcher }
         let catcher = AtomCatcher(field: self)
         addSubview(catcher)
@@ -189,10 +201,9 @@ extension TextArea: NSViewToolTipOwner {
     }
     /// A press on a pill: the atom's, not the text's.
     func pressAtom(with event: NSEvent) -> Bool {
-        guard markup != nil, isSelectable, let hit = atom(at: convert(event.locationInWindow, from: nil)) else { return false }
+        guard markup != nil, isSelectable, let owner, !owner.disabled, !owner.inert, let hit = atom(at: convert(event.locationInWindow, from: nil)) else { return false }
         let flags = event.modifierFlags
-        pressAtom(hit.range, held: (flags.contains(.shift), flags.contains(.control), flags.contains(.option), flags.contains(.command)))
-        return true
+        return pressAtom(hit.range, held: (flags.contains(.shift), flags.contains(.control), flags.contains(.option), flags.contains(.command)))
     }
 }
 
@@ -346,28 +357,39 @@ package final class AtomElement: NSAccessibilityElement, InspectionOwned {
         return window.convertToScreen(field.convert(frame, to: nil))
     }
     package override func accessibilityPerformPress() -> Bool {
-        guard let field else { return false }
-        field.pressAtom(range)
-        return true
+        guard let field, field.atomsAccessibilityExposed else { return false }
+        return field.pressAtom(range)
     }
 }
 #else
 extension TextArea {
+    var atomsAccessibilityExposed: Bool {
+        guard let owner, !owner.inert else { return false }
+        var ancestor: UIView? = self
+        while let view = ancestor {
+            if view.isHidden || view.accessibilityElementsHidden { return false }
+            ancestor = view.superview
+        }
+        return true
+    }
+
     private final class AtomTap: NSObject, UIGestureRecognizerDelegate {
         weak var field: TextArea?
         init(_ field: TextArea) { self.field = field }
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard let field else { return false }
+            guard let field, field.isSelectable, let owner = field.owner, !owner.disabled, !owner.inert else { return false }
             return field.atom(at: g.location(in: field)) != nil
         }
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { false }
         @objc func tapped(_ g: UITapGestureRecognizer) {
-            guard let field, g.state == .ended, let hit = field.atom(at: g.location(in: field)) else { return }
-            field.pressAtom(hit.range)
+            guard let field, field.isSelectable, let owner = field.owner, !owner.disabled, !owner.inert,
+                  g.state == .ended, let hit = field.atom(at: g.location(in: field)) else { return }
+            guard field.pressAtom(hit.range) else { return }
             // UIKit's own tap may place a caret after this: the atom stays
             // selected, if it is still there.
             DispatchQueue.main.async { [weak field] in
-                guard let field, field.selectedRange.length == 0, field.textStorage.atomRange(at: hit.range.location) == hit.range else { return }
+                guard let field, field.isSelectable, let owner = field.owner, !owner.disabled, !owner.inert,
+                      field.selectedRange.length == 0, field.textStorage.atomRange(at: hit.range.location) == hit.range else { return }
                 field.selectedRange = hit.range
             }
         }
@@ -429,9 +451,8 @@ package final class AtomElement: UIAccessibilityElement {
         set {}
     }
     package override func accessibilityActivate() -> Bool {
-        guard let field else { return false }
-        field.pressAtom(range)
-        return true
+        guard let field, field.atomsAccessibilityExposed else { return false }
+        return field.pressAtom(range)
     }
 }
 #endif

@@ -435,6 +435,67 @@ test('judging: WCAG ratios, the floors, a clamp asked for, a reachable cover, th
 });
 
 // LLP 1115.000 D4: a role known only by its drawn value is read in what its host draws, as the page says it (`palette`).
+test('target counts the region a press reaches, including clipped and competing hit slop', async () => {
+  const session = await open({ host: 'web', url: await built('hit-slop', `component App
+  state taps = 0
+  action go
+    taps = taps + 1
+  view
+    column padding=24 gap=16 align-items="flex-start"
+      button press=go appearance="none" min-height=36 padding="0px 12px" border-radius=18 -exact-hit-slop="4px 0px" testId="pill"
+        text "Edit"
+      column press=go width=53 height=36 testId="bare"
+      column press=go width=53 height=36 -exact-hit-slop="3px 0px" testId="short"
+      column width=53 height=36 overflow="hidden"
+        column press=go width=53 height=36 -exact-hit-slop="4px 0px" testId="clipped"
+      column press=go width=53 height=36 overflow="hidden" -exact-hit-slop="4px 0px" testId="own-clip"
+      column press=go width=36 height=36 -exact-hit-slop="1px 6px 7px 2px" testId="asymmetric"
+      row gap=4
+        column press=go width=36 height=44 -exact-hit-slop-right="8px" testId="back"
+        column press=go width=36 height=44 -exact-hit-slop-left="8px" testId="front"
+`) });
+  try {
+    const obs = await session.op({ op: 'check' });
+    const names = new Map((await session.op({ op: 'tree' })).nodes.map(n => [n.id, n.props?.testId]));
+    // Use the phone minimum without the web's spacing exception to inspect the measured regions.
+    const sizes = Object.fromEntries(judge({ ...obs, target: 44 }, null, { host: 'ios' })
+      .filter(f => f.kind === 'target').map(f => [names.get(f.id), f.detail.tap]));
+    expect(sizes).toEqual({ bare: [53, 36], short: [53, 42], clipped: [53, 36], 'own-clip': [53, 36], back: [32, 44] });
+    expect(judge({ ...obs, target: 44 }, null).filter(f => f.kind === 'target').map(f => names.get(f.id))).toEqual(['back']);
+    // A transform scales the clipping ancestor's padding box too.
+    await session.carrier.evaluate(`(() => {
+      const child = document.querySelector('[data-testid="clipped"]');
+      child.parentElement.style.cssText = 'position:relative;overflow:hidden;width:10px;height:16px;box-sizing:content-box;border:solid transparent;border-width:0 5px 0 8px;scale:2;transform-origin:top left';
+      child.style.cssText = 'position:absolute;left:-8px;top:0;width:23px;height:16px';
+    })()`);
+    const scaled = await session.op({ op: 'check' });
+    expect(judge({ ...scaled, target: 44 }, null, { host: 'ios' })
+      .find(f => f.kind === 'target' && names.get(f.id) === 'clipped').detail.tap).toEqual([20, 32]);
+  } finally { await session.close(); }
+}, 120_000);
+
+test('an interrupted tap region must fit the minimum in one rectangle', () => {
+  const item = { id: 1, x: 10, y: 10, w: 36, h: 44, control: 'press', sized: 'author' };
+  const finding = reach => judge({ items: [{ ...item, reach }], viewport: { w: 200, h: 200 }, target: 44 },
+    null, { host: 'ios' }).find(f => f.kind === 'target');
+  // A front control has taken the top-right 10×10. Neither remaining rectangle fits 44×44.
+  expect(finding([[10, 10, 44, 20], [10, 20, 54, 54]]).detail.tap.sort((a, b) => a - b)).toEqual([34, 44]);
+  // A 44×44 square fits across both adjoining strips.
+  expect(finding([[10, 10, 64, 32], [20, 32, 64, 54]])).toBeUndefined();
+  expect(finding([]).detail.tap).toEqual([0, 0]);
+  const underKeyboard = { ...item, y: 100, vis: { h: 0 }, reach: [[10, 76, 46, 100]] };
+  expect(judge({ items: [underKeyboard], target: 44, viewport: { w: 200, h: 200 }, keyboard: 100 }, null, { host: 'ios' })
+    .find(f => f.kind === 'target').detail.tap).toEqual([36, 24]);
+  const partial = { ...item, w: 16, h: 16, reach: [[10, 10, 26, 20]], scrollGain: [0, 6] };
+  const obs = { items: [partial], viewport: { w: 200, h: 200 }, target: 24 };
+  expect(judge(obs, null, { host: 'ios' }).find(f => f.kind === 'target').detail.tap).toEqual([16, 10]);
+  const clippedPeer = { ...item, id: 2, x: 6, y: 68, w: 24, h: 24, reach: [[6, 68, 30, 70]], scrollGain: [0, 22] };
+  expect(judge({ ...obs, items: [{ ...item, x: 13, y: 50, w: 10, h: 10 }, clippedPeer] }, null)
+    .filter(f => f.kind === 'target')).toEqual([]);
+  const link = { ...item, id: 2, x: 27, w: 20, h: 16, inline: true };
+  expect(judge({ ...obs, items: [partial, link] }, null).filter(f => f.kind === 'target').map(f => f.id)).toEqual([1]);
+});
+
 test('an ink and a page\'s ground are known by what the page draws each role in', () => {
   const png = { width: 40, height: 20, data: new Uint8Array(40 * 20 * 4).fill(255) };
   const obs = (items, extra = {}) => ({ viewport: { w: 40, h: 20 }, scheme: 'light', target: 24, items, ...extra });

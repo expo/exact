@@ -41,7 +41,8 @@ fn wide(s: &str) -> Vec<u16> {
 pub(crate) enum Heard {
     /// An icon's callback.
     Callback(Callback),
-    /// Explorer started again: no icon is shown.
+    /// The taskbar was created again: Explorer started again and shows no
+    /// icon, or the display scale changed and each is still shown.
     TaskbarCreated,
     /// The system's light or dark mode changed, which the taskbar follows.
     Theme,
@@ -245,10 +246,12 @@ impl Shell {
         }
     }
 
-    /// Explorer started again with none of the icons: each is added anew.
+    /// The taskbar was created again: each icon is removed, to be added
+    /// anew. One the shell still shows would refuse a second `NIM_ADD`;
+    /// after Explorer starts again, the removal fails harmlessly.
     pub(crate) fn forget(&mut self) {
-        for placed in self.icons.drain(..) {
-            unsafe { DestroyIcon(placed.hicon) };
+        for icon in self.icons.iter().map(|p| p.icon).collect::<Vec<_>>() {
+            self.remove(icon);
         }
     }
 }
@@ -454,5 +457,29 @@ unsafe extern "system" fn receive(
             }
         }
         DefSubclassProc(window, message, wparam, lparam)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tray::tip;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW;
+
+    #[test]
+    #[ignore = "requires the interactive Windows desktop's notification area"]
+    fn an_icon_still_shown_when_the_taskbar_is_created_again_is_shown_anew() {
+        let mut shell = Shell::new("TaskbarCreated test").unwrap();
+        let icon = Icon { id: 1, guid: None };
+        let hicon = || super::icon(&[0xFF; 16 * 16 * 4], 16).unwrap();
+        assert_eq!(shell.show(icon, tip("Before"), hicon()), Shown::AsAsked);
+        // A display scale change sends it with the icon still shown.
+        unsafe { SendMessageW(shell.window, shell.state.taskbar_created, 0, 0) };
+        let heard = shell.take();
+        assert!(heard.iter().any(|h| matches!(h, Heard::TaskbarCreated)));
+        // As `App::tray_input` does, before the next sync shows each icon.
+        shell.forget();
+        assert_eq!(shell.show(icon, tip("Again"), hicon()), Shown::AsAsked);
+        assert_eq!(shell.show(icon, tip("Changed"), hicon()), Shown::AsAsked);
     }
 }

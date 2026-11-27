@@ -135,15 +135,24 @@ private func errors(_ by: [String: Any]?) -> [Error] {
         "postalCode": CNPostalAddressPostalCodeKey, "region": CNPostalAddressStateKey, "dependentLocality": CNPostalAddressSubLocalityKey,
     ]
     for (field, text) in (by?["shippingAddress"] as? [String: Any]) ?? [:] {
-        guard let text = text as? String, let key = keys[field] else { continue }
+        guard let text = text as? String, !text.isEmpty, let key = keys[field] else { continue }
         out.append(PKPaymentRequest.paymentShippingAddressInvalidError(withKey: key, localizedDescription: text))
     }
     for (field, text) in (by?["payer"] as? [String: Any]) ?? [:] {
-        guard let text = text as? String else { continue }
+        guard let text = text as? String, !text.isEmpty else { continue }
         let f: PKContactField = field == "email" ? .emailAddress : field == "phone" ? .phoneNumber : .name
         out.append(PKPaymentRequest.paymentContactInvalidError(withContactField: f, localizedDescription: text))
     }
     return out
+}
+
+/// JSON-encode any handler `data` value (object, array, or primitive), omitting `nil` and `NSNull`.
+/// Guards with `isValidJSONObject([value])` because `JSONSerialization.data` raises an uncaught
+/// Objective-C exception for invalid top-level or non-finite values.
+internal func paymentDataJSON(_ value: Any?) -> String? {
+    guard let value, !(value is NSNull), JSONSerialization.isValidJSONObject([value]),
+          let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed) else { return nil }
+    return String(decoding: data, as: UTF8.self)
 }
 
 public final class PaymentsModule: NSObject, ExactPackage, PKPaymentAuthorizationControllerDelegate {
@@ -153,7 +162,7 @@ public final class PaymentsModule: NSObject, ExactPackage, PKPaymentAuthorizatio
     private let context: ExactPackageContext
 
     /// The sheet up: its call's number, handlers, request and result.
-    private final class Sheet {
+    final class Sheet {
         let request: Int, id: String, args: [String: Any], controller: PKPaymentAuthorizationController
         let reply: ([String: Any]) -> Void
         var authorizing = false, letGo = false
@@ -165,7 +174,7 @@ public final class PaymentsModule: NSObject, ExactPackage, PKPaymentAuthorizatio
             self.details = (args["details"] as? [String: Any]) ?? [:]; self.items = items; self.methods = methods
         }
     }
-    private var sheet: Sheet?
+    var sheet: Sheet?
 
     public init(context: ExactPackageContext) { self.context = context }
 
@@ -282,9 +291,11 @@ public final class PaymentsModule: NSObject, ExactPackage, PKPaymentAuthorizatio
     /// An update's summary items and shipping methods, merged into the last accepted details.
     private func updated(_ s: Sheet, _ update: [String: Any]?) -> (items: [PKPaymentSummaryItem], methods: [PKShippingMethod], errors: [Error]) {
         var details = s.details
-        for key in ["total", "displayItems", "shippingOptions"] where update?[key] != nil { details[key] = update?[key] }
+        for key in ["total", "displayItems", "shippingOptions"] {
+            if let v = update?[key], !(v is NSNull) { details[key] = v }
+        }
         var all = errors(["shippingAddress": update?["shippingAddressErrors"] as Any, "payer": update?["payerErrors"] as Any])
-        if let text = update?["error"] as? String, all.isEmpty {
+        if let text = update?["error"] as? String, !text.isEmpty, all.isEmpty {
             all.append(PKPaymentRequest.paymentShippingAddressUnserviceableError(withLocalizedDescription: text))
         }
         do {
@@ -349,6 +360,11 @@ public final class PaymentsModule: NSObject, ExactPackage, PKPaymentAuthorizatio
         ask(s, "onpaymentauthorized", response) { [weak self] value in
             s.authorizing = false
             if let retry = value?["retry"] as? [String: Any] {
+                if s.letGo {
+                    completion(PKPaymentAuthorizationResult(status: .failure, errors: nil))
+                    s.controller.dismiss()
+                    return
+                }
                 return completion(PKPaymentAuthorizationResult(status: .failure, errors: errors(retry)))
             }
             let result = (value?["result"] as? String).flatMap { ["success", "fail", "unknown"].contains($0) ? $0 : nil } ?? "fail"
@@ -359,7 +375,7 @@ public final class PaymentsModule: NSObject, ExactPackage, PKPaymentAuthorizatio
                 "apple": ["paymentMethod": methodJSON(token.paymentMethod)],
             ]
             if value == nil { out["message"] = "authorize-timeout" }
-            if let data = value?["data"], let text = try? JSONSerialization.data(withJSONObject: data) { out["data"] = String(decoding: text, as: UTF8.self) }
+            if let text = paymentDataJSON(value?["data"]) { out["data"] = text }
             s.result = out
             self?.context.log("payments: \(s.id): \(result)")
             completion(PKPaymentAuthorizationResult(status: result == "success" ? .success : .failure, errors: nil))

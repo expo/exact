@@ -12,12 +12,16 @@ extension Presenter {
             documentLanguage = language.payload["lang"] as? String ?? ""
             documentDirection = language.payload["dir"] as? String ?? "ltr"
         }
-        guard language != nil || batch.ops.contains(where: { [.create, .style, .props, .children].contains($0.op) }) else { return }
         let changed: [NodeView]
         if language != nil {
             changed = Array(views.values)
         } else {
-            changed = Set(batch.ops.compactMap(\.nodeID)).compactMap { views[$0] }
+            var ids = Set<UInt32>()
+            for op in batch.ops where [.create, .style, .props, .children].contains(op.op) {
+                if let id = op.nodeID { ids.insert(id) }
+            }
+            guard !ids.isEmpty else { return }
+            changed = ids.compactMap { views[$0] }
         }
         #if os(macOS)
         root.userInterfaceLayoutDirection = documentDirection == "rtl" ? .rightToLeft : .leftToRight

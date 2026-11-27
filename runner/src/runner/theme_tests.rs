@@ -539,3 +539,37 @@ component Candidate
     assert_ne!(after, before);
     assert_eq!(tuples(&r), (after, after));
 }
+
+#[test]
+fn an_unresolved_surface_retries_at_the_same_place() {
+    let mut runner = boot(plan(
+        "surface-colour-retry",
+        "component App\n  view\n    canvas surface=board(color(\"brand\"))\n",
+    ));
+    let initial = runner.take_surface_updates();
+    assert_eq!(initial.len(), 1);
+    runner.set_token("brand", "not-a-colour", &[]).unwrap();
+    assert!(runner.take_surface_updates().is_empty());
+    runner.refresh_surface_colors();
+    assert!(crate::bridge::edit_token(
+        &runner.plan,
+        "brand",
+        "#c8102e",
+        &[]
+    ));
+    runner.refresh_surface_colors();
+    let recovered = runner.take_surface_updates();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].arguments_json(), initial[0].arguments_json());
+    assert_eq!(
+        runner
+            .journal()
+            .filter(|line| line.contains("board")
+                && line.contains("brand")
+                && line.contains("refused"))
+            .count(),
+        1
+    );
+    runner.refresh_surface_colors();
+    assert!(runner.take_surface_updates().is_empty());
+}

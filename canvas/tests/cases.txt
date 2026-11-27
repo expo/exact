@@ -159,6 +159,17 @@ strokeStyle = g
 globalCompositeOperation = "copy"
 globalCompositeOperation = "xor"
 
+## a flat ellipse strokes through each quarter turn
+ellipse(50, 50, 0, 20, 0, 0, 6.283185307179586)
+stroke()
+beginPath()
+ellipse(50, 50, 20, 0, 0.5, 0, 6.283185307179586, true)
+stroke()
+beginPath()
+ellipse(50, 50, 0, 20, 0, 0.3, 4, false)
+ellipse(50, 50, 0, 0, 0, 0, 3)
+stroke()
+
 ## arcTo nearly doubles back to the corner
 moveTo(0, 50)
 arcTo(100, 50, 0, 50.0000001, 5)
@@ -206,6 +217,18 @@ fontVariantCaps = "small-caps"
 font = "bold 12px serif"
 ? fontVariantCaps => normal
 
+## font writes its size with at most six significant digits, as Chrome does
+font = "10pt serif"
+? font => 13.3333px serif
+font = "smaller serif"
+? font => 8.33333px serif
+font = "12.3456789px serif"
+? font => 12.3457px serif
+font = "2cm serif"
+? font => 75.5906px serif
+font = "12.5px serif"
+? font => 12.5px serif
+
 ## stage 2: the text attributes ignore unknown values
 ? textAlign => start
 textAlign = "center"
@@ -231,6 +254,10 @@ fontStretch = "expanded"
 fontStretch = "wide"
 ? fontStretch => expanded
 
+## font quotes a family as Chrome does: a keyword's name in another case, a CSS-wide keyword, and a name that is not one identifier
+font = "12px 'Serif', 'Inherit', 'default', --a, '-1a', '-', 'Math', -webkit-body, 'Arial'"
+? font => 12px "Serif", "Inherit", "default", "--a", "-1a", "-", "Math", -webkit-body, Arial
+
 ## stage 2: letterSpacing and wordSpacing take lengths with units
 ? letterSpacing => 0px
 letterSpacing = "2px"
@@ -243,6 +270,18 @@ letterSpacing = "bad"
 ? letterSpacing => 1em
 wordSpacing = "-1.5px"
 ? wordSpacing => -1.5px
+
+## font reads numbers as CSS does: a unitless 0, an exponent weight, a weight's fraction dropped, no trailing dot
+font = "0 serif"
+? font => 0px serif
+font = "1e2 12px serif"
+? font => 100 12px serif
+font = "500.6 12px serif"
+? font => 500 12px serif
+font = "1.px monospace"
+? font => 500 12px serif
+font = "12px/1. monospace"
+? font => 500 12px serif
 
 ## stage 2: shadows ignore invalid values
 ? shadowColor => rgba(0, 0, 0, 0)
@@ -269,6 +308,18 @@ imageSmoothingQuality = "best"
 ? imageSmoothingEnabled => false
 ? imageSmoothingQuality => high
 
+## font reads family names as Chrome does: a string ends its token and may be unclosed, a name is identifiers
+font = "12px 'Open Sans"
+? font => 12px "Open Sans"
+font = "12px a inherit, default b"
+? font => 12px "a inherit", "default b"
+font = "12px a.b"
+? font => 12px "a inherit", "default b"
+font = "12px 'a'b"
+? font => 12px "a inherit", "default b"
+font = "12px serif font"
+? font => 12px "a inherit", "default b"
+
 ## stage 2: wide colours keep their own serialisation
 fillStyle = "lab(50% 40 59.5)"
 ? fillStyle => lab(50 40 59.5)
@@ -278,6 +329,21 @@ strokeStyle = "color(srgb 1 0 0.5)"
 ? strokeStyle => color(srgb 1 0 0.5)
 fillStyle = "lab(50, 40, 59.5)"
 ? fillStyle => oklch(0.7 0.1 200 / 0.5)
+
+## a colour CSS refuses is ignored, and color(xyz) reads back as xyz-d65
+fillStyle = "#123456"
+fillStyle = "rgb(90deg 0 0)"
+fillStyle = "rgb(255 0 0 / 90deg)"
+fillStyle = "hsl(120 90deg 50%)"
+fillStyle = "lab(50 40deg 20)"
+fillStyle = "rgb (255, 0, 0)"
+fillStyle = "rgb(none, 0, 0)"
+fillStyle = "rgb(5., 0, 0)"
+? fillStyle => #123456
+fillStyle = "hsl(0.5turn 100% 50%)"
+? fillStyle => #00ffff
+strokeStyle = "color(xyz 0.5 0.5 0.5)"
+? strokeStyle => color(xyz-d65 0.5 0.5 0.5)
 
 ## a display-p3 canvas keeps each colour's serialisation (display-p3)
 fillStyle = "red"
@@ -341,6 +407,12 @@ fill()
 fillText("X", 10, 60, Infinity)
 strokeText("X", 10, 60, Infinity)
 fillText("X", 10, 60, 100)
+
+## font holds its size to 10000px, as Chrome does
+font = "20000px serif"
+? font => 10000px serif
+font = "1e9px serif"
+? font => 10000px serif
 
 ## clip under a singular matrix is ignored, as Chrome ignores it
 beginPath()

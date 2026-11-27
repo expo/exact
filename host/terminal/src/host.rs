@@ -136,6 +136,7 @@ enum ById {
     /// `openURL(url, "id")`: `change` there hears whether the URL was
     /// handed to the system's opener.
     Opened(String, bool),
+    PictureInPictureRefused(String),
 }
 
 impl ById {
@@ -146,6 +147,7 @@ impl ById {
             | ById::Focus(id)
             | ById::IntoView(id, _)
             | ById::ScrollBy(id, _)
+            | ById::PictureInPictureRefused(id)
             | ById::Opened(id, _) => id,
         }
     }
@@ -458,6 +460,24 @@ impl<D: DataSource> Host<D> {
         for root in self.runner.roots() {
             let _ = self.runner.kernel_mut().compute_layout(root, offer);
         }
+        // Answer the geometry facts from the layout (LLP 1123 D6), laying out again after each
+        // commit their answers make; the runner ends a chain of them at its bound, so this ends
+        loop {
+            match self.runner.refresh_geometry() {
+                Ok(Some(_)) => {
+                    for root in self.runner.roots() {
+                        let _ = self.runner.kernel_mut().compute_layout(root, offer);
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    crate::term::diagnostic(format_args!(
+                        "terminal geometry: the commit that answered the geometry facts again failed, so they keep their last answers: {error:?}"
+                    ));
+                    break;
+                }
+            }
+        }
         let t_layout = t0.elapsed();
         let mut layer_ops = Vec::new();
         for command in self.runner.take_commands() {
@@ -503,6 +523,9 @@ impl<D: DataSource> Host<D> {
                 ("panel", _) => self
                     .runner
                     .log("panel unsupported: the terminal has no application window"),
+                ("requestPictureInPicture", Some(id)) => {
+                    layer_ops.push(ById::PictureInPictureRefused(id));
+                }
                 ("preventDefault", _) => self.prevented = true,
                 ("openURL", Some(url)) => {
                     let opened = self.open_url(&url);
@@ -555,6 +578,11 @@ impl<D: DataSource> Host<D> {
                 _ => self.find(|n| n.props.str(PropId::Id) == Some(op.id())),
             };
             let Some(node) = named else {
+                if let ById::PictureInPictureRefused(id) = op {
+                    self.runner.log(format!(
+                        "requestPictureInPicture \"{id}\" refused: no live node with that id"
+                    ));
+                }
                 continue;
             };
             match op {
@@ -564,6 +592,22 @@ impl<D: DataSource> Host<D> {
                 ById::Focus(_) => self.focus(Some(node)),
                 ById::IntoView(_, block) => self.reveal_to(node, &block),
                 ById::ScrollBy(_, y) => self.scroll_node_by(node, y),
+                ById::PictureInPictureRefused(id) => {
+                    let reason = "picture in picture is unavailable on terminal";
+                    self.runner.log(format!(
+                        "requestPictureInPicture \"{id}\" refused: {reason}"
+                    ));
+                    if self
+                        .runner
+                        .handlers_of(node)
+                        .contains(&EventKind::Pictureinpictureerror)
+                    {
+                        self.dispatch(
+                            node,
+                            Event::Media(EventKind::Pictureinpictureerror, reason.into()),
+                        );
+                    }
+                }
                 ById::Opened(_, opened) => {
                     let answer = if opened { "opened" } else { "failed" };
                     self.dispatch(node, Event::Change(ControlValue::Text(answer.into())));

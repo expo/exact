@@ -190,48 +190,61 @@ pub(crate) fn repeated_owner(
     }
 }
 
-/// A package's component that owns a request to a source its own package's
-/// module does not declare (LLP 1035.005.004 D7): the app grants what a
-/// package's module declares, so a package asks and sends only through its
+/// A package's component that owns a request to a source or send its own
+/// package's module does not declare (LLP 1035.005.004 D7): the app grants what
+/// a package's module declares, so a package asks and sends only through its
 /// own.
 pub(crate) fn foreign_source(file: &contract_syntax::File, child: &Component) -> Option<TypeError> {
+    use contract_syntax::ModuleKind;
     let package = child.params.package.as_deref()?;
-    let declared = |source: &str| {
-        file.modules.iter().any(|m| {
-            m.kind == contract_syntax::ModuleKind::Source
-                && m.package == package
-                && (m.name == source || m.declared == source)
-        })
+    let own = || file.modules.iter().filter(|m| m.package == package);
+    let reads = |source: &str| {
+        own().any(|m| m.kind == ModuleKind::Source && (m.name == source || m.declared == source))
     };
+    // A send's declared name without its `use` is the app's data, so only its
+    // name in scope counts.
+    let sends = |source: &str| {
+        reads(source) || own().any(|m| m.kind == ModuleKind::Send && m.name == source)
+    };
+    let effects: BTreeSet<_> = file
+        .modules
+        .iter()
+        .filter(|m| m.kind == ModuleKind::Send && m.answers.is_none())
+        .map(|m| m.name.as_str())
+        .collect();
     let name = &child.name;
     let foreign = |what: String, source: &str, span| {
+        let passed = if effects.contains(source) {
+            "an action prop that sends it"
+        } else {
+            "its answer as a prop"
+        };
         TypeError {
         id: "type-package-source",
         message: format!(
-            "`{name}` comes from the package `{package}`, and its {what} asks `{source}`, which `{package}`'s module does not declare: a package's component owns requests only to its own package's sources, which the app grants. Declare `{source}` in `{package}`'s `exact.json`, or make the request in the app and pass `{name}` its answer as a prop"
+            "`{name}` comes from the package `{package}`, and its {what} asks `{source}`, which `{package}`'s module does not declare: a package's component owns requests only to its own package's sources, which the app grants. Declare `{source}` in `{package}`'s `exact.json`, or make the request in the app and pass `{name}` {passed}"
         ),
         span,
     }
     };
-    if let Some(r) = child
-        .resources
-        .iter()
-        .find(|r| !contract_syntax::inline::reads_device(r) && !declared(&r.source))
-    {
+    if let Some(r) = child.resources.iter().find(|r| {
+        !contract_syntax::inline::DEVICE_FACTS.contains(&r.source.as_str()) && !reads(&r.source)
+    }) {
         return Some(foreign(format!("`resource {}`", r.name), &r.source, r.span));
     }
     child.actions.iter().find_map(|a| {
-        let (target, source, span) = first_send(&a.body, &|source| !declared(source))?;
-        Some(foreign(format!("`send {target}`"), source, span))
+        let (what, source, span) = first_send(&a.body, &|source| !sends(source), &effects)?;
+        Some(foreign(what, source, span))
     })
 }
 
-/// The first `send` in `stmts`, through `if` and `match`, whose source
-/// `pick` takes: its mutation, source and span.
+/// The first send in `stmts` whose source `pick` takes, including a module's
+/// no-answer send written as a command: its description, source and span.
 fn first_send<'a>(
     stmts: &'a [contract_syntax::Stmt],
     pick: &dyn Fn(&str) -> bool,
-) -> Option<(&'a str, &'a str, contract_syntax::Span)> {
+    effects: &BTreeSet<&str>,
+) -> Option<(String, &'a str, contract_syntax::Span)> {
     use contract_syntax::Stmt;
     stmts.iter().find_map(|st| match st {
         Stmt::Send {
@@ -239,14 +252,17 @@ fn first_send<'a>(
             source,
             span,
             ..
-        } if pick(source) => Some((target.as_str(), source.as_str(), *span)),
+        } if pick(source) => Some((format!("`send {target}`"), source.as_str(), *span)),
+        Stmt::Command { name, span, .. } if effects.contains(name.as_str()) && pick(name) => {
+            Some((format!("`{name}(…)`"), name.as_str(), *span))
+        }
         Stmt::If {
             then, otherwise, ..
-        } => first_send(then, pick).or_else(|| first_send(otherwise, pick)),
+        } => first_send(then, pick, effects).or_else(|| first_send(otherwise, pick, effects)),
         Stmt::Match { some, none, .. } => {
-            first_send(&some.1, pick).or_else(|| first_send(none, pick))
+            first_send(&some.1, pick, effects).or_else(|| first_send(none, pick, effects))
         }
-        Stmt::Call { body, .. } => first_send(body, pick),
+        Stmt::Call { body, .. } => first_send(body, pick, effects),
         _ => None,
     })
 }

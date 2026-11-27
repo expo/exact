@@ -81,6 +81,9 @@ impl<T: DataSource + ?Sized> DataSourceWrapper for Box<T> {
     fn app_id(&self) -> &str {
         (**self).app_id()
     }
+    fn ambient_taint(&self, source: &str) -> (bool, bool) {
+        (**self).ambient_taint(source)
+    }
     fn launch(&self) -> Option<crate::request::Launch> {
         (**self).launch()
     }

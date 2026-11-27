@@ -899,6 +899,47 @@ fn reorder_wrappers_contain_absolute_descendants_before_and_after_preview() {
 }
 
 #[test]
+fn a_grouped_list_in_a_reorder_group_is_told_it_reorders_alone() {
+    let fixture = include_str!("../../../../host/web-js/conformance/grouped-settings.contract");
+    let source = fixture.replace(
+        "reorderdrop=drop",
+        "reorderdrop=drop reorderGroup=\"board\"",
+    );
+    let e = contract::compile(&source).unwrap_err();
+    assert_eq!(e.id, "lower-reorder-group");
+    // Not `virtualized=true`, which a grouped list refuses too
+    let message = "a grouped list's rows move only within it, so it joins no `reorderGroup`: remove `reorderGroup`, or, for rows that move between lists, give up the grouping: write `list appearance=\"none\" virtualized=true` without `listStyle`, its sections flattened into one keyed `for` directly in the list";
+    assert_eq!(e.message, message);
+    assert_eq!((e.span.line, e.span.col), (12, 79), "{e}");
+    // Each spelling of a grouped list
+    for (spelling, prefix) in [
+        ("listStyle=\"inset-grouped\"", ""),
+        (
+            "class=SettingsList",
+            "style SettingsList\n  appearance=\"auto\"\n",
+        ),
+    ] {
+        let source = format!(
+            "{prefix}{}",
+            source.replace("appearance=\"auto\"", spelling)
+        );
+        let e = contract::compile(&source).unwrap_err();
+        assert_eq!(e.message, message, "{spelling}");
+    }
+    // The repair, applied as the message says, compiles
+    let (head, _) = source.split_once("      list id=").unwrap();
+    let flat = format!("{head}      list id=\"settings\" testId=\"settings\" appearance=\"none\" virtualized=true reorderdrop=drop reorderGroup=\"board\" flex=1\n        for name in rows key=name\n          row testId=`row-${{name}}`\n            text name\n            box reorderFor=\"settings\" testId=`move-${{name}}` aria-label=`Move ${{name}}` width=\"2.5rem\" height=36 touch-action=\"none\"\n              text \"≡\"\n");
+    contract::compile(&flat).unwrap_or_else(|e| panic!("{e}\n{flat}"));
+    // Only the flattened list: its sections are refused under `virtualized`
+    let sectioned = source.replace(
+        "appearance=\"auto\"",
+        "appearance=\"none\" virtualized=true",
+    );
+    let e = contract::compile(&sectioned).unwrap_err();
+    assert_eq!(e.id, "lower-collection-template", "{e}");
+}
+
+#[test]
 fn a_grouped_reorder_needs_a_single_vertical_list() {
     let fixture = include_str!("../../../../host/web-js/conformance/grouped-settings.contract");
     for (spelling, expected) in [

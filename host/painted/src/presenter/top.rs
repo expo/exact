@@ -48,6 +48,7 @@ use exact_kernel::NodeKey;
 
 pub(super) mod area;
 mod input;
+mod inspect;
 mod invoke;
 pub(super) mod look;
 mod overlay;
@@ -181,8 +182,9 @@ struct Open {
     drag: Option<(f32, f32, bool)>,
     focused: Option<usize>,
     hovered: Option<usize>,
-    /// The kernel epoch its plan was read at.
+    /// The kernel epoch its plan was read at, and the palette revision it measured with.
     epoch: u64,
+    palette: u64,
     /// A status item's menu, in its host's window of its own, not the page's.
     detached: bool,
 }
@@ -193,7 +195,7 @@ impl Open {
     fn outside(&self) -> bool {
         match &self.plan {
             Plan::Alert { outside, .. } => *outside,
-            Plan::Menu(_) => true,
+            Plan::Menu { .. } => true,
         }
     }
 }
@@ -356,13 +358,20 @@ impl<D: DataSource> Presenter<D> {
                     return None;
                 }
             }
-            shape::menu(kernel, pop, &pressed, |node| {
+            let mut plan = shape::menu(kernel, pop, &pressed, |node| {
                 if self.top.overlay.enabled {
                     shape::row(kernel, node, false)
                 } else {
                     self.menu_row(node)
                 }
-            })
+            });
+            // Desktop overlays (WinUI MenuFlyout) ignore authored container overrides.
+            if self.top.overlay.enabled {
+                if let Some(Plan::Menu { surface, .. }) = &mut plan {
+                    *surface = None;
+                }
+            }
+            plan
         });
         self.with_exit(pop, plan)
     }
@@ -411,6 +420,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// `plan` measured for `pop` in the look of this host's top layer.
     fn measure_surface(&mut self, plan: &Plan, pop: ViewId, inputs: &Inputs) -> Layout {
+        let _roles = self.host.runner().bind_roles();
         let measure = if self.top.overlay.enabled {
             Layout::desktop
         } else {
@@ -479,44 +489,47 @@ impl<D: DataSource> Presenter<D> {
     ) -> bool {
         // Its session's roles (LLP 1121 stage 5): the surface's look resolves them.
         let _roles = self.host.runner().bind_roles();
-        // A popover its author placed by `left` or `top` opens at that point,
-        // as a context menu opens at the pointer (LLP 1021 D2).
-        let point = point.or_else(|| {
-            let node = self.host.kernel().node_by_key(target?)?;
-            let style = node.computed_style(exact_kernel::StyleMask::INHERITED);
-            let popover = !modal && node.props.str(PropId::Popover).is_some();
-            popover
-                .then(|| {
-                    area::inset_point(&style, &self.host.kernel().env_of(node.id), self.viewport)
-                })
-                .flatten()
-        });
         if self.neutral_alerts() {
+            let point = point.or_else(|| self.popover_inset_point(target, modal));
             return self.alert_present(target, name, invoker, point, modal, now_ms);
         }
-        let kernel = self.host.kernel();
-        let pop = (target.and_then(|key| kernel.node_by_key(key)))
+        let mut pop = (target.and_then(|key| self.host.kernel().node_by_key(key)))
             .map(|node| (node.id, node.key, node.parent));
-        let plan = pop.and_then(|(id, ..)| self.surface_plan(id, modal));
-        // A dialog whose author painted its surface (its own background
-        // colour or image) is the author's box in HTML's top layer, not a
-        // window of the platform's (LLP 1035.001 D11, as on iOS): on a shell
-        // that makes windows it is painted in the page, as on the desktop
-        // hosts (alert.rs). A chooser and a plain dialog stay refused here.
+        let mut plan = pop.and_then(|(id, ..)| self.surface_plan(id, modal));
+        let (toggled, replaced) = if !modal && plan.is_none() {
+            self.eager_open_popover_toggle(target, invoker, now_ms)
+        } else {
+            (false, None)
+        };
+        if toggled {
+            pop = (target.and_then(|key| self.host.kernel().node_by_key(key)))
+                .map(|node| (node.id, node.key, node.parent));
+            plan = pop.and_then(|(id, ..)| self.surface_plan(id, modal));
+        }
+        let point = point.or_else(|| self.popover_inset_point(target, modal));
         let painted = modal
-            && pop.and_then(|(id, ..)| kernel.node(id)).is_some_and(|n| {
-                n.style.written.has(exact_kernel::StyleId::BackgroundColor)
-                    || n.style.written.has(exact_kernel::StyleId::BackgroundImage)
-            });
+            && pop
+                .and_then(|(id, ..)| self.host.kernel().node(id))
+                .is_some_and(|n| {
+                    n.style.written.has(exact_kernel::StyleId::BackgroundColor)
+                        || n.style.written.has(exact_kernel::StyleId::BackgroundImage)
+                });
         if plan.is_none() && (self.top.overlay.enabled || (painted && self.has_windows())) {
-            return self.alert_present(target, name, invoker, point, modal, now_ms);
+            return self.present_overlay(
+                target,
+                name,
+                (invoker, point),
+                modal,
+                now_ms,
+                (toggled, replaced),
+            );
         }
         let shows =
             |parent: Option<ViewId>| !parent.is_some_and(|p| self.host.route_visibility(p).1);
         let refusal = match (pop, &plan) {
             (None, _) => Some("no live node has that id"),
             (Some((_, _, parent)), _) if !shows(parent) => Some("it is on a route that does not show"),
-            (_, Some(Plan::Menu(_))) if modal => Some("it is a menu, which its invoker opens"),
+            (_, Some(Plan::Menu { .. })) if modal => Some("it is a menu, which its invoker opens"),
             (_, None) => Some("this host presents an alert-shaped alertdialog (text, one cancel, at most three buttons) and a menu popover (button rows); this host presents an authored dialog only when its author painted its surface (a background colour or image, LLP 1035.001 D11); a chooser, a plain dialog and a popover that is no menu are not built (LLP 1115.001 D10)"),
             _ => None,
         };
@@ -524,42 +537,34 @@ impl<D: DataSource> Presenter<D> {
             let what = if modal { "showModal" } else { "popover" };
             let why = refusal.unwrap_or_default();
             self.host.log(format!("{what} \"{name}\" refused: {why}"));
+            if toggled {
+                self.settle_eager_toggle(target, false);
+            }
             return false;
         };
-        self.open_surface((id, key), plan, modal, (invoker, point), now_ms);
-        // Alerts need an initial action even when a pointer or a response
-        // opens them. TV surfaces also start at their first row (LLP 1115.001.003 D3).
-        let desktop_alert = self.top.overlay.enabled
-            && self
-                .top
-                .open
-                .as_ref()
-                .is_some_and(|open| open.kind == SurfaceKind::Alert);
-        if self.remote() || desktop_alert {
-            self.surface_step(false);
+        if !self.open_surface((id, key), plan, modal, (invoker, point), replaced, now_ms) {
+            if toggled {
+                self.settle_eager_toggle(Some(key), false);
+            }
+            return false;
         }
-        self.queue_toggle(key, true);
-        self.surface_changed();
+        self.finish_surface_open(key, toggled);
         true
     }
 
-    /// Open `plan`, what `id` (its node's `key`) is, as the surface, opened
-    /// by `invoker` or at `point`: the surface open closes, the pointer's
-    /// contact ends, and the new one is measured and placed. The focus
-    /// moves in, and the page's node loses it, but a select keeps it, as a
-    /// combobox does while its listbox is open.
+    /// Open `plan` for `id`/`key`: closes any prior surface, clears pointer/focus,
+    /// revalidates after blur handlers, then measures and places the surface.
     fn open_surface(
         &mut self,
         (id, key): (ViewId, NodeKey),
-        plan: Plan,
+        _plan: Plan,
         modal: bool,
         (invoker, point): (Option<ViewId>, Option<(f32, f32)>),
+        replaced: Option<NodeKey>,
         now_ms: f64,
-    ) {
+    ) -> bool {
         let request = self.request_back_layer(5);
-        let restore = self
-            .replace_surface(invoker, now_ms)
-            .and_then(|key| self.host.kernel().node_by_key(key).map(|n| n.id));
+        let restore_key = self.replace_surface(invoker, now_ms).or(replaced);
         self.report_top_layer();
         if let Err(e) = self.pointer_cancel(now_ms) {
             self.host.log(e);
@@ -569,9 +574,17 @@ impl<D: DataSource> Presenter<D> {
                 self.host.log(e);
             }
         }
+        let Some((id, plan)) = self.revalidate_surface(key, modal, restore_key, request, now_ms)
+        else {
+            return false;
+        };
+        let restore = restore_key.and_then(|k| self.host.kernel().node_by_key(k).map(|n| n.id));
         let serial = request.unwrap_or_else(|| self.next_surface_serial());
         let inputs = self.surface_inputs(id);
         let layout = self.measure_surface(&plan, id, &inputs);
+        if layout.non_uniform_radius {
+            self.host.log("menu border-radius: Android PopupWindow honors only one uniform circular radius; keeping 4 dp");
+        }
         self.top.open = Some(Open {
             serial,
             revision: 0,
@@ -581,7 +594,7 @@ impl<D: DataSource> Presenter<D> {
             modal,
             kind: match plan {
                 Plan::Alert { .. } => SurfaceKind::Alert,
-                Plan::Menu(_) => SurfaceKind::Menu,
+                Plan::Menu { .. } => SurfaceKind::Menu,
             },
             invoker,
             point,
@@ -600,6 +613,7 @@ impl<D: DataSource> Presenter<D> {
             focused: None,
             hovered: None,
             epoch: self.host.kernel().epoch(),
+            palette: self.colors.revision(),
             detached: self.top.status.is_some(),
         });
         self.resolve_back_layer(request);
@@ -608,6 +622,7 @@ impl<D: DataSource> Presenter<D> {
             open.anchor = anchor;
         }
         self.place_surface();
+        true
     }
 
     /// Close the previous surface and carry its original focus return target.
@@ -664,7 +679,7 @@ impl<D: DataSource> Presenter<D> {
         };
         let may = match &open.plan {
             Plan::Alert { cancellable, .. } => *cancellable,
-            Plan::Menu(_) => true,
+            Plan::Menu { .. } => true,
         };
         let (serial, node, modal) = (open.serial, open.node, open.modal);
         if may
@@ -1215,24 +1230,37 @@ impl<D: DataSource> Presenter<D> {
         };
         let inputs = self.surface_inputs(pop);
         let anchor = self.surface_anchor();
-        let again = (self.top.open.as_ref()).is_some_and(|o| plan != o.plan || inputs != o.inputs);
+        let palette = self.colors.revision();
+        let again = (self.top.open.as_ref())
+            .is_some_and(|o| plan != o.plan || inputs != o.inputs || palette != o.palette);
         let layout = again.then(|| self.measure_surface(&plan, pop, &inputs));
+        let warn_radius = layout.as_ref().is_some_and(|l| l.non_uniform_radius)
+            && !(self.top.open.as_ref()).is_some_and(|o| o.layout.non_uniform_radius);
+        if warn_radius {
+            self.host.log("menu border-radius: Android PopupWindow honors only one uniform circular radius; keeping 4 dp");
+        }
         let Some(open) = self.top.open.as_mut() else {
             return;
         };
         open.epoch = epoch;
-        if let Some(layout) = layout {
+        if let Some(mut layout) = layout {
+            if let Some((offset, _)) = open.layout.menu_scroll() {
+                layout.scroll_content(offset);
+            }
+            let same_targets = open.layout.same_targets(&layout);
             // The focus follows its row's node, not its index.
             let focused = (open.focused).and_then(|i| open.layout.targets.get(i).map(|t| t.node));
             open.layout = layout;
-            (open.plan, open.inputs) = (plan, inputs);
-            open.pressed = None;
-            open.ripple = None;
-            open.hovered = None;
+            (open.plan, open.inputs, open.palette) = (plan, inputs, palette);
+            if !same_targets {
+                (open.pressed, open.ripple, open.hovered, open.drag) = (None, None, None, None);
+            }
             let targets = &open.layout.targets;
             open.focused = focused.and_then(|node| targets.iter().position(|t| t.node == node));
-            if let Some(index) = open.focused {
-                open.layout.reveal_menu_target(index);
+            if !same_targets {
+                if let Some(index) = open.focused {
+                    open.layout.reveal_menu_target(index);
+                }
             }
             open.revision += 1;
             open.measured = open.revision;
@@ -1334,7 +1362,7 @@ impl<D: DataSource> Presenter<D> {
         });
         let cancellable = match &open.plan {
             Plan::Alert { cancellable, .. } => *cancellable,
-            Plan::Menu(_) => true,
+            Plan::Menu { .. } => true,
         };
         Some(Surface {
             serial: open.serial,
@@ -1433,45 +1461,6 @@ impl<D: DataSource> Presenter<D> {
             }
             open.revision += 1;
         }
-    }
-
-    /// The open surface for the agent's `state`: what it is, the authored
-    /// node, what it says, and each row's node and box in the window.
-    pub fn surface_json(&self) -> serde_json::Value {
-        if self.alert.is_some() {
-            return self.alert_json();
-        }
-        let Some(shown) = self.surface() else {
-            return serde_json::Value::Null;
-        };
-        let rows: Vec<_> = (shown.plan.rows().zip(shown.targets))
-            .map(|(row, target)| {
-                let (x, y, w, h) = target.rect;
-                serde_json::json!({"id": row.node, "title": row.title, "enabled": row.enabled,
-                    "destructive": row.destructive, "cancel": row.cancel,
-                    "x": r2(x), "y": r2(y), "w": r2(w), "h": r2(h)})
-            })
-            .collect();
-        let (title, message) = match shown.plan {
-            Plan::Alert { title, message, .. } => (title.clone(), message.clone()),
-            Plan::Menu(_) => (None, None),
-        };
-        // A menu's section titles, in order.
-        let headers: Vec<&str> = match shown.plan {
-            Plan::Menu(entries) => (entries.iter())
-                .filter_map(|e| match e {
-                    shape::Entry::Header(title, _, _) => Some(title.as_str()),
-                    _ => None,
-                })
-                .collect(),
-            Plan::Alert { .. } => Vec::new(),
-        };
-        serde_json::json!({
-            "serial": shown.serial,
-            "kind": match shown.kind { SurfaceKind::Alert => "alert", SurfaceKind::Menu => "menu" },
-            "node": shown.node, "title": title, "message": message,
-            "w": r2(shown.size.0), "h": r2(shown.size.1), "rows": rows, "headers": headers,
-        })
     }
 }
 

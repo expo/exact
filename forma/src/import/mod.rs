@@ -138,6 +138,8 @@ pub fn reconcile(
             None => ops.push(Op::AddAxis {
                 name: name.clone(),
                 values: values.clone(),
+                before: None,
+                comment: None,
                 under_dark: false,
             }),
             Some(a) => {

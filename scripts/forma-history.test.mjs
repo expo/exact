@@ -62,6 +62,16 @@ async function paramHistory(before, after, run) {
   }
 }
 
+test('reverting an added axis removes its conditional parameter in the same proposal', async () => {
+  const before = PARAM_DESIGN.replace('  dark-style = black | dim\n', '').replace('    when dark-style=dim: 4px\n', '');
+  await paramHistory(before, PARAM_DESIGN, async ({ call, commit, read }) => {
+    const held = await call({ method: 'revert', commit });
+    expect(held.ok?.ops.map(item => item.op.op), JSON.stringify(held)).toEqual(['unset-param', 'remove-axis']);
+    expect((await call({ method: 'accept', proposal: held.ok.proposal })).status).toBe(200);
+    expect(read()).toBe(before);
+  });
+}, 120_000);
+
 test.each([
   ['PostButton.radius', 'post.contract#PostButton.radius'],
   ['post.contract#PostButton.radius', 'PostButton.radius'],

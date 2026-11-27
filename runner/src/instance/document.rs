@@ -462,6 +462,16 @@ impl Build<'_> {
         for (i, b) in row.bindings.iter().enumerate() {
             let binding = plan.binding(b);
             let Some(value) = n.emitted(plan, self.sites, i) else {
+                if n.is_trapped(b) && binding.kind == BindingKind::Style && shared.is_none() {
+                    if let Some(style) = StyleId::from_bit(binding.id as u32) {
+                        patch.clear(exact_kernel::StyleMask::of(style));
+                        if binding.written {
+                            patch.written.set(style);
+                        } else {
+                            patch.written.clear(style);
+                        }
+                    }
+                }
                 continue;
             };
             let value = &value;
@@ -501,10 +511,13 @@ impl Build<'_> {
                 // kernel's `ClearStyle` does (`NodeInst::emit_bindings`).
                 BindingKind::Style if matches!(value, Value::Option(None)) => {}
                 BindingKind::Style if bridge::unsets(binding.id, value) => {
-                    if let (true, Some(style)) =
-                        (binding.written, StyleId::from_bit(binding.id as u32))
-                    {
-                        patch.written.set(style);
+                    if let Some(style) = StyleId::from_bit(binding.id as u32) {
+                        patch.clear(exact_kernel::StyleMask::of(style));
+                        if binding.written {
+                            patch.written.set(style);
+                        } else {
+                            patch.written.clear(style);
+                        }
                     }
                 }
                 BindingKind::Style => {
@@ -520,6 +533,11 @@ impl Build<'_> {
                     } else {
                         bridge::set_binding_style(&mut patch, &binding, family_value, plan)
                     };
+                    if let Ok(style) = styled {
+                        if !binding.written {
+                            patch.written.clear(style);
+                        }
+                    }
                     match styled {
                         Ok(StyleId::Animation) => {
                             self.sites.keyframes.resolve(&mut patch.animation);
@@ -543,10 +561,13 @@ impl Build<'_> {
                         Err(
                             bridge::BridgeError::Style(_) | bridge::BridgeError::StyleKind { .. },
                         ) => {
-                            if let (true, Some(style)) =
-                                (binding.written, StyleId::from_bit(binding.id as u32))
-                            {
-                                patch.written.set(style);
+                            if let Some(style) = StyleId::from_bit(binding.id as u32) {
+                                patch.clear(exact_kernel::StyleMask::of(style));
+                                if binding.written {
+                                    patch.written.set(style);
+                                } else {
+                                    patch.written.clear(style);
+                                }
                             }
                         }
                         Err(e) => return Err(DocTreeError::Refused(format!("{e:?}"))),

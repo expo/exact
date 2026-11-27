@@ -260,7 +260,7 @@ pub fn own_from(f: Facts<'_>) -> Own {
             && props.bool(PropId::Disabled) == Some(true)
             && !matches!(style, "bordered" | "gray"))
         || props.str(PropId::BackgroundMaterial).is_some()
-        || props.str(PropId::NavigationPresentation) == Some("modal")
+        || props.presentation().is_some_and(crate::props::Presentation::sheet_like)
         // A root traps what its children let escape, as a native host's
         // root view does: a negative z-index stays above its background.
         || f.root;

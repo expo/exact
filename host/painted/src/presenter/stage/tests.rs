@@ -324,7 +324,8 @@ fn a_sheet_drags_to_its_tallest_detent_and_down_out_of_the_window() {
     // From the handle, up past half way to the top: it rests at the top.
     let y = frame.1 + 10.0;
     p.pointer_down(200., y, t).unwrap();
-    for (k, dy) in [-4.0, -100.0, -250.0, -300.0].iter().enumerate() {
+    // The sheet moves from the sample that crosses the slop.
+    for (k, dy) in [-4.0, -10.0, -100.0, -250.0, -300.0].iter().enumerate() {
         p.pointer_move(200., y + dy, t + 50. * (k + 1) as f64)
             .unwrap();
     }
@@ -336,6 +337,7 @@ fn a_sheet_drags_to_its_tallest_detent_and_down_out_of_the_window() {
     let t = p.host().now();
     let y = frame.1 + 10.0;
     p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 10., t + 10.).unwrap();
     p.pointer_move(200., y + 200., t + 50.).unwrap();
     p.pointer_move(200., y + 500., t + 100.).unwrap();
     p.pointer_up(200., y + 520., t + 110.).unwrap();
@@ -480,6 +482,55 @@ fn a_sheets_drag_and_a_back_preview_follow_the_finger() {
     assert!(p.back_progress(0, 0.0, 1, t));
     assert!(p.back_progress(1, 0.2, 1, t + 8.));
     assert!(p.stage_follows_finger(), "Back's preview");
+}
+
+/// A sheet dragged directly moves from the event that crossed the slop, as
+/// Material's `ViewDragHelper` captures its view there: that event moves
+/// nothing, however far past the slop it lands, and the sheet follows the
+/// finger one to one after it (expo/exact#656).
+#[test]
+fn a_sheets_drag_starts_from_the_event_that_crossed_the_slop() {
+    let mut p = phone();
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.0);
+    let (_, rest) = p.top_sheet().unwrap();
+    let top = |p: &Presenter<()>| p.top_sheet().unwrap().1 .1;
+    // Down, from just past the slop, then on.
+    let t = p.host().now();
+    let y = rest.1 + 10.0;
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 12., t + 16.).unwrap();
+    assert!(p.stage_follows_finger(), "past the slop");
+    assert!(
+        near(top(&p), rest.1),
+        "the crossing moves nothing: {}",
+        top(&p)
+    );
+    p.pointer_move(200., y + 30., t + 32.).unwrap();
+    assert!(near(top(&p), rest.1 + 18.), "then 1:1: {}", top(&p));
+    p.pointer_cancel(t + 40.).unwrap();
+    after(&mut p, 1000.0);
+    assert!(near(top(&p), rest.1), "back at rest: {}", top(&p));
+    // A first sample 100 points down is no jump either.
+    let t = p.host().now();
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 100., t + 16.).unwrap();
+    assert!(
+        near(top(&p), rest.1),
+        "a large crossing moves nothing: {}",
+        top(&p)
+    );
+    p.pointer_move(200., y + 120., t + 32.).unwrap();
+    assert!(near(top(&p), rest.1 + 20.), "{}", top(&p));
+    p.pointer_cancel(t + 40.).unwrap();
+    after(&mut p, 1000.0);
+    // Upward, the same.
+    let t = p.host().now();
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y - 60., t + 16.).unwrap();
+    assert!(near(top(&p), rest.1), "{}", top(&p));
+    p.pointer_move(200., y - 70., t + 32.).unwrap();
+    assert!(near(top(&p), rest.1 - 10.), "{}", top(&p));
 }
 
 #[test]

@@ -676,7 +676,10 @@ fn known_arms(v: &Expr, names: &Substituted, budget: &mut usize) -> Option<Expr>
 /// rows. The driver runs this when an earlier pass refused, so a misspelled
 /// tag or a bad colour is reported in the same run as a type error.
 pub fn lint(file: &File) -> Vec<LowerError> {
-    lint_components(file, |_| true, &Default::default())
+    let mut out = lint_components(file, |_| true, &Default::default());
+    // The written views' swipe rules, which lowering checks beside the anatomy (LLP 1057.001 §8)
+    out.extend(crate::handlers::swipe::judge_written(file));
+    out
 }
 
 /// A bad literal value (`color="notacolor"`) in a component of the root's
@@ -804,6 +807,8 @@ fn lint_components(
                             a.name != "class"
                                 && a.name != "delete"
                                 && a.name != "slot"
+                                // A swipe's selectors, which the written-view walk judges (LLP 1057.001 §8)
+                                && !(matches!(a.name.as_str(), "swipe-flick" | "swipe-follow") && !native::is_module_tag(tag))
                                 && a.name != crate::row_look::ROW_LOOK
                                 && !native::leftover(tag, a)
                                 && !native::declared(tag, a)

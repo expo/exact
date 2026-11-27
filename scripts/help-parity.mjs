@@ -20,6 +20,15 @@ export function parsed(...sources) {
   return [...flags].sort();
 }
 
+export const SCRIPT_FILES = [
+  'scripts/exact.mjs', 'scripts/app-cli.mjs', 'scripts/forma-pairing.mjs',
+  'host/apple/build.mjs', 'host/apple/devices.mjs', 'host/apple/link.mjs', 'host/apple/bundle.mjs',
+  'host/web/dev.mjs', 'host/web/dev-keys.mjs', 'host/web/serve.mjs', 'scripts/install-page.mjs',
+  'scripts/forma-remote.mjs', 'scripts/forma-relay.mjs', 'host/web/build.mjs',
+  'scripts/agent-launch.mjs', 'scripts/agent-widget.mjs', 'scripts/verify.mjs',
+  'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'host/windows/build.mjs', 'scripts/feedback.mjs',
+];
+
 /** Each verb whose script's flags are read from source, with the flags it parses: `[verb, flags]`. Throws when a
  * source moved out from under a slice this reads. */
 export function scriptFlags(root) {
@@ -37,8 +46,10 @@ export function scriptFlags(root) {
   const pairTtl = slice('scripts/forma-pairing.mjs', read('scripts/forma-pairing.mjs'), 'export function pairTtlOf(', '\n}\n');
   const apple = parsed(read('host/apple/build.mjs'), read('host/apple/devices.mjs'), read('host/apple/link.mjs'), read('host/apple/bundle.mjs'));
   const agent = parsed(read('scripts/agent-launch.mjs'), read('scripts/agent-widget.mjs'));
+  const web = parsed(read('host/web/dev.mjs'), read('host/web/dev-keys.mjs'), read('scripts/install-page.mjs'), read('scripts/forma-remote.mjs'), read('scripts/forma-relay.mjs'), pairTtl, readiness);
   return [
-    ['web', parsed(read('host/web/dev.mjs'), read('scripts/install-page.mjs'), read('scripts/forma-remote.mjs'), read('scripts/forma-relay.mjs'), pairTtl, readiness)],
+    ['dev', web],
+    ['web', web],
     ['web-build', parsed(read('host/web/build.mjs'))],
     ['serve', parsed(read('host/web/serve.mjs'))],
     ['agent', agent], ['test', agent], ['verify', parsed(read('scripts/verify.mjs'))],

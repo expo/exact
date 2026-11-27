@@ -43,7 +43,7 @@ export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, refuseStdLockfile, c
 import { configTarget, nativePackageConfig } from '../js/bake/src/package-config.mjs';
 export { gpuModules } from './app-shells.mjs';
 import { installProblems } from './install-page.mjs';
-import { gameDefaults, lintGame, prepareGame } from '../game/app/shells.mjs';
+import { gameCargoEnv, gameDefaults, lintGame, prepareGame } from '../game/app/shells.mjs';
 import { generatedInputFiles } from '../game/inputs.mjs';
 import { shareTargetProblems, webShareTarget } from './share-target.mjs';
 import { bakedSettings, noteBunLoaded, settingChanges } from '../js/bake/src/__exact_env.mjs';
@@ -304,8 +304,8 @@ export function authClientMetadata(app, callbacks) {
 /** A build's module artifact against the app's roster (LLP 1024 D1, D8.4):
  * a roster tag the artifact has no factory for fails a release build, named,
  * and is a warning in development, where the node reports its status. */
-export function checkModuleRoster(app, provided, where, release) {
-  const missing = app.modules.tags.filter((tag) => !provided.includes(tag));
+export function checkModuleRoster(required, provided, where, release) {
+  const missing = required.filter((tag) => !provided.includes(tag));
   if (!missing.length) return;
   const message = `${where}: the roster (app.json modules) names ${missing.join(', ')}, which the module artifact lacks${provided.length ? ` (it serves ${provided.join(', ')})` : ''}`;
   if (release) throw new Error(message);
@@ -479,6 +479,7 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
       return metadata;
     }
   };
+  const roster = moduleRoster(manifest.modules);
   const platformKind = kind => platformCrateKind(dir, kind);
   const crate = kind => `${name}-${platformKind(kind)}`;
   const cargoPackage = kind => {
@@ -502,23 +503,19 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
       const gpu = resolve(dir, 'gpu');
       if (generated && joinsGpu(dir, crate('gpu'))) return true;
       const pkg = existsSync(resolve(gpu, 'Cargo.toml')) && !generated ? cargoPackage('gpu') : false;
+      if (pkg === false && existsSync(resolve(gpu, 'src/lib.rs'))) throw new Error(`${gpu}/src/lib.rs did not join ${generated ? '../.exact/gpu' : 'the Cargo workspace'}: add ${gpu}/Cargo.toml with package name "${crate('gpu')}"${generated ? ' and an exact-gpu dependency' : ' and list "gpu" in workspace members'}`);
       if (pkg === false || pkg && realpathSync(dirname(pkg.manifest_path)) === realpathSync(gpu)) return pkg !== false;
       const named = (() => { try { return Bun.TOML.parse(readFileSync(resolve(gpu, 'Cargo.toml'), 'utf8')).package?.name; } catch { return undefined; } })();
       throw new Error(named === crate('gpu') ? `${gpu}/Cargo.toml (${named}) is not a member of the app's Cargo workspace: add "gpu" to its members` : `${gpu}/Cargo.toml names the package ${named ?? 'nothing'}; the app's GPU module must be named ${crate('gpu')}`);
     },
-    /** The native-module roster (LLP 1024 D1) and its sources: the Swift under
-     * `modules/apple` that becomes `libexact_modules.dylib`, and the web
-     * executor `modules/web/index.js`. Empty tags: the app has no module
-     * views; its web executor may still answer `native.later` on the page
-     * (LLP 1067 D5), and its Swift still makes the artifact, for `later` and
-     * the hatches (LLP 1075.003 §3.2). */
-    modulesFor(platform) {
-      const folder = moduleDirectory(dir, platform);
+    /** Native view tags and artifact sources for the selected host (LLP 1024 D1). */
+    modulesFor(platform, sourcePlatform = platform) {
+      const folder = moduleDirectory(dir, sourcePlatform);
       const under = suffix => existsSync(folder) ? readdirSync(folder).filter(f => f.endsWith(suffix)).sort().map(f => resolve(folder, f)) : [];
-      return { tags: manifest.modules ?? [], apple: under('.swift'), frameworks: under('.xcframework'), web: existsSync(resolve(folder, 'index.js')) ? resolve(folder, 'index.js') : null };
+      return { tags: roster.tagsFor(platform), apple: under('.swift'), frameworks: under('.xcframework'), web: existsSync(resolve(folder, 'index.js')) ? resolve(folder, 'index.js') : null };
     },
     get modules() {
-      return { ...this.modulesFor('apple'), web: this.modulesFor('web').web };
+      return { ...this.modulesFor('apple'), tags: [...roster.hostsByTag.keys()], web: this.modulesFor('web').web };
     },
     /** The manifest, validated; the derived defaults when the app has none. */
     manifest,
@@ -536,11 +533,11 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
 /** Android's store identity (LLP 1030 D2); the shared id remains the default. */
 export const androidPackageId = manifest => (manifest.host?.android?.id ?? manifest.app.id).replaceAll('-', '_');
 
-/** An app's authored tests (LLP 1017 P7), the files that exist: `app.test.contract`, then every other `*.test.contract`
- * beside it in name order (an app's tests split by area under the line cap). `test`, `verify` and the smoke run these. */
+/** An app's authored tests (LLP 1017 P7): `app.test.contract`, other root `*.test.contract`, then `tests/*.test.contract`. */
 export function authoredTests(dir) {
   const others = readdirSync(dir).filter((n) => n.endsWith('.test.contract') && n !== 'app.test.contract').sort();
-  return [...(existsSync(resolve(dir, 'app.test.contract')) ? ['app.test.contract'] : []), ...others].map((n) => resolve(dir, n));
+  const sub = resolve(dir, 'tests'), nested = existsSync(sub) && statSync(sub).isDirectory() ? readdirSync(sub).filter((n) => n.endsWith('.test.contract')).sort().map((n) => resolve(sub, n)) : [];
+  return [...(existsSync(resolve(dir, 'app.test.contract')) ? ['app.test.contract'] : []), ...others].map((n) => resolve(dir, n)).concat(nested);
 }
 
 /** app.json's text as JSON. A byte-order mark, which some Windows editors write and JSON does not allow, is named
@@ -582,7 +579,7 @@ export function readManifest(dir, name) {
 }
 import { androidHostMetadata, permissionProblems } from './android-manifest.mjs';
 import { DOCUMENT_UTIS, ownDocumentType, documentTypeProblems, canonicalizeDocumentExtensions } from './document-utis.mjs';
-import { launchModules, moduleDirectory } from './launch-modules.mjs';
+import { launchModules, moduleDirectory, moduleRoster } from './launch-modules.mjs';
 export { moduleDirectory } from './launch-modules.mjs';
 import { webManifestAtBase, webCspProblems, webHeadProblems } from './web-head.mjs';
 import { appIconProblems, publishedIcons } from './app-icons.mjs';
@@ -590,20 +587,22 @@ import { claimVariant, resolveVariant, selectedVariant, variantProblems } from '
 import { REMOVED_DOMAINS, appleLinkDomains, androidLinkFilters, linkProblems, protocolHandlerProblems, isWebScheme, rawAppleDomains } from './links.mjs';
 export { DOCUMENT_UTIS, isWebScheme, ownDocumentType };
 
-// Check both launch pictures wherever a build reads the manifest.
+// Check both launch pictures wherever a build reads the manifest: each is a PNG
+// file inside the app directory, a link out of it refused like a path (#1595).
 function launchImageProblems(manifest, dir) {
-  return ['ios', 'android'].flatMap((host) => {
-    const launch = manifest.host?.[host]?.launchImage;
-    if (launch === true) return [`host.${host}.launchImage: true is not a picture; false shows no icon, { "src", "width" } a picture`];
-    if (launch?.src && !existsSync(resolve(dir, launch.src))) return [`host.${host}.launchImage: ${launch.src}, the launch screen's picture, does not exist`];
-    const dark = launch?.color_scheme_dark?.src;
-    if (!dark) return [];
-    const path = resolve(dir, dark), key = `host.${host}.launchImage.color_scheme_dark`;
-    if (isAbsolute(dark) || !under(dir, path) || (existsSync(path) && !under(realpathSync(dir), realpathSync(path)))) {
-      return [`${key}: ${dark} must name a PNG inside the app directory`];
+  const picture = (key, src) => {
+    const path = resolve(dir, src);
+    if (isAbsolute(src) || !under(dir, path) || (existsSync(path) && !under(realpathSync(dir), realpathSync(path)))) {
+      return [`${key}: ${src} must name a PNG inside the app directory`];
     }
-    if (!existsSync(path)) return [`${key}: ${dark}, the launch screen's picture, does not exist`];
-    return statSync(path).isFile() ? [] : [`${key}.src: ${dark} must be a PNG file`];
+    if (!existsSync(path)) return [`${key}: ${src}, the launch screen's picture, does not exist`];
+    return statSync(path).isFile() ? [] : [`${key}.src: ${src} must be a PNG file`];
+  };
+  return ['ios', 'android'].flatMap((host) => {
+    const launch = manifest.host?.[host]?.launchImage, key = `host.${host}.launchImage`, dark = launch?.color_scheme_dark?.src;
+    if (launch === true) return [`${key}: true is not a picture; false shows no icon, { "src", "width" } a picture`];
+    const base = launch?.src ? picture(key, launch.src) : [];
+    return base.length || !dark ? base : picture(`${key}.color_scheme_dark`, dark);
   });
 }
 
@@ -687,12 +686,13 @@ export function validate(value, node, at, root) {
   if (actual === 'number' && (!Number.isFinite(value) || (node.minimum != null && value < node.minimum) || (node.exclusiveMinimum != null && value <= node.exclusiveMinimum) || (node.maximum != null && value > node.maximum))) problems.push(`${where}: outside the allowed numeric range`);
   if (actual === 'array' && node.minItems != null && value.length < node.minItems) problems.push(`${where}: fewer than ${node.minItems} items`);
   if (actual === 'array' && node.maxItems != null && value.length > node.maxItems) problems.push(`${where}: more than ${node.maxItems} items`);
+  if (actual === 'array' && node['x-uniqueModuleTag']) moduleRoster(value, problems);
   if (actual === 'array' && node.items) value.forEach((v, i) => problems.push(...validate(v, node.items, `${at}[${i}]`, root)));
   if (actual === 'object') {
     if (node.maxProperties != null && Object.keys(value).length > node.maxProperties) problems.push(`${where}.${Object.keys(value)[node.maxProperties]}.name: at most ${node.maxProperties} entries`); if (node.propertyNames) for (const key of Object.keys(value)) problems.push(...validate(key, node.propertyNames, `${at}.${key}.name`, root));
     for (const key of node.required ?? []) if (!(key in value)) problems.push(`${where}: missing required ${JSON.stringify(key)}`);
     for (const [key, v] of Object.entries(value)) {
-      const sub = node.properties?.[key];
+      const sub = node.properties && Object.hasOwn(node.properties, key) ? node.properties[key] : null;
       const path = at ? `${at}.${key}` : key;
       if (sub) problems.push(...validate(v, sub, path, root));
       else if (node.additionalProperties && typeof node.additionalProperties === 'object') problems.push(...validate(v, node.additionalProperties, path, root));
@@ -865,7 +865,7 @@ export function hermesLeanSysRoots(env = process.env) {
  * Apple app through host/apple/build.mjs, the Linux host by `linuxBuild`.
  * What ships is baked at `release`. */
 export const HOST_DEV = 'host-dev';
-export const appleFrameSources = ['FrameAutomation.swift', 'FrameBrowser.swift', 'FrameCapture.swift', 'FrameFiles.swift', 'FrameInspector.swift', 'FramePDF.swift', 'FramePrint.swift', 'FrameWindows.swift', 'ScriptMessageQueue.swift'];
+export const appleFrameSources = ['FrameAutomation.swift', 'FrameBrowser.swift', 'FrameCapture.swift', 'FrameFiles.swift', 'FrameInsets.swift', 'FrameInspector.swift', 'FramePDF.swift', 'FramePrint.swift', 'FrameWindows.swift', 'ScriptMessageQueue.swift'];
 const linuxTarget = app => app.hasGpu || gpuModules(app.manifest, 'linux').length ? bakeTarget('linux') : null;
 /** The Linux host an agent drives: the app's development executable, or
  * another binary of its Linux crate (`<app>-render`). */
@@ -984,8 +984,7 @@ export function bakedBackendOrigin(baked) {
   const moduleReceipt = resolve(baked, 'app.module.json');
   return existsSync(moduleReceipt) ? JSON.parse(readFileSync(moduleReceipt, 'utf8')).backendOrigin : null;
 }
-
-function completeBuild(app, platform, target, graph, messages, roots, env, prepared = new Map(), generatedInputs = {products:[], watchedDirectories:[]}, privacyManifests = []) {
+function completeBuild(app, platform, target, graph, messages, roots, env, prepared = new Map(), generatedInputs = {products:[], watchedDirectories:[]}, privacyManifests = [], since = Infinity, captureBake) {
   const scripts = messages.filter((m) => m.reason === 'build-script-executed' && graph.roles.has(m.package_id));
   const targetDirs = [app.target, graph.metadata.build_directory].map(dir => resolve(dir, target));
   const roleOf = (path) => targetDirs.some(dir => under(dir, path)) ? target : 'host';
@@ -1070,6 +1069,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
       for (const path of compilerPaths(dep,compiler.cargo.workspace)) add(path, false, pkg);
     }
     const output = scriptOutput(m); const environment = [];
+    if (resolve(m.out_dir) === rootOutput && baked === rootOutput) captureBake?.(baked, output, compat.embedded?.plan?.sha256);
     for (const line of output.split('\n')) {
       const changed = /^cargo::?(rerun-if-changed|metadata=exact-optional-input)=(.*)$/.exec(line);
       if (changed) sourceInputs.add(resolve(dirname(pkg.manifest_path), changed[2]));
@@ -1124,7 +1124,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     }
     const swift=JSON.parse(readFileSync(described,'utf8'));
     swiftTargetInputs(swift,packageRoot,platform==='ios'?'ExactIOS':'ExactMac',add);
-    add(resolve(packageRoot,'Package.swift'));add(resolve(packageRoot,'webarm/WebArm.swift'));for (const file of appleFrameSources) add(resolve(packageRoot, 'webarm', file));add(resolve(packageRoot,'videoarm/VideoArm.swift'));add(resolve(packageRoot,'videoarm/PictureInPicture.swift'));add(resolve(packageRoot,'build.mjs'));add(resolve(packageRoot,'assets.mjs'));add(resolve(packageRoot,'bundle.mjs'));add(resolve(packageRoot,'extensions.mjs'));add(resolve(packageRoot,'widgets.mjs'));add(resolve(packageRoot,'intents.mjs'));add(resolve(packageRoot,'controls.mjs'));
+    add(resolve(packageRoot,'Package.swift'));add(resolve(packageRoot,'webarm/WebArm.swift'));for (const file of appleFrameSources) add(resolve(packageRoot, 'webarm', file));add(resolve(packageRoot,'videoarm/VideoArm.swift'));add(resolve(packageRoot,'videoarm/PictureInPicture.swift'));add(resolve(packageRoot,'videoarm/VideoBackgroundPlayback.swift'));add(resolve(packageRoot,'build.mjs'));add(resolve(packageRoot,'assets.mjs'));add(resolve(packageRoot,'bundle.mjs'));add(resolve(packageRoot,'extensions.mjs'));add(resolve(packageRoot,'widgets.mjs'));add(resolve(packageRoot,'intents.mjs'));add(resolve(packageRoot,'controls.mjs'));
     const entries=platform==='ios'&&(app.manifest.widgets?.length||app.manifest.live_activities?.length); if(entries)add(resolve(packageRoot,'widget'),true); if(entries||env.EXACT_WIDGET_GALLERY==='1')add(resolve(packageRoot,'Sources/ExactSnapshot'),true);
   }
   if(platform==='web') {
@@ -1173,7 +1173,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     .concat(generatedInputs.products);
   hashes.save();
   const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, watchOutputs)} : {};
-  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs],watchOutputs), ...generatedInputs.watchedDirectories],...(platform==='android'?{androidOut:baked}:{}),...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{sourceInputs:sourceInputsRecord,...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inventories,inputs:files,watchOutputs,links:[...links.values()],directories:[...directories.values()],missing:[...absent.values()]},products};
+  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs],watchOutputs,since), ...generatedInputs.watchedDirectories],...(platform==='android'?{androidOut:baked}:{}),...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{sourceInputs:sourceInputsRecord,...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inventories,inputs:files,watchOutputs,links:[...links.values()],directories:[...directories.values()],missing:[...absent.values()]},products};
 }
 // The permanent companion inode owns exclusion; the JSON claim is only its diagnostic record.
 export function claimBuildOutput(app, path) {
@@ -1232,6 +1232,7 @@ export const bakeWatchEnv = app => ({ EXACT_ASSET_ROOTS: ['assets', 'deck', ...(
 export const devBinRun = (app, devBin, env) => ({ args: ['run', '-q', ...(devBin ? injectedProfiles(app) : []), '--profile', HOST_DEV, '-p', devBin ? app.crate('web') : 'exact-web', '--bin', devBin ?? 'exact-dev'], cwd: devBin ? app.workspace : ROOT, env: { ...env, ...bakeWatchEnv(app) } });
 /** Build the target and optional GPU, returning Cargo's actual receipt. `check` builds no linked product; `options.kind` selects a crate kind independently of the receipt's platform. */
 export function buildBake(app, platform, target, options = {}) {
+  const started = Date.now();
   launchModules(app.dir, app.manifest, [options.kind === 'android' ? 'android' : platform]);
   // `kind` names another crate for the platform's cohort: Android's Canvas host bakes as Linux from `<app>-android`.
   const kind=options.kind??platformCrateKind(app.dir,platform), apple=['apple','ios','macos','tvos'].includes(kind);
@@ -1239,7 +1240,7 @@ export function buildBake(app, platform, target, options = {}) {
   env.EXACT_RUST_BINDINGS = '1';
   const privacyManifests = apple ? [capturePrivacyManifest(resolve(app.dir, 'PrivacyInfo.xcprivacy'))] : [], watch = target.includes('apple-watchos');
   if(platform==='web'||watch){env=webToolchainEnv(env,{linksWasm:target==='wasm32-unknown-unknown'&&!options.check});refuseStdLockfile(env,app.dir,app.name);}
-  if(options.analysis && env.EXACT_UPDATE_TRUST==='production')env.EXACT_BAKE_ANALYSIS='1';else delete env.EXACT_BAKE_ANALYSIS;
+  if(app.manifest.game)env=gameCargoEnv(env);if(options.analysis && env.EXACT_UPDATE_TRUST==='production')env.EXACT_BAKE_ANALYSIS='1';else delete env.EXACT_BAKE_ANALYSIS;
   mkdirSync(env.EXACT_BAKE_OUTPUT,{recursive:true});
   if(platform!=='web')prepareLibrary(app.dir,target); // a package's library, fetched and checked before Cargo links it (LLP 1154 D3)
   const rustBundle=prepareRustBundle(app,platform,target,env);
@@ -1330,7 +1331,7 @@ export function buildBake(app, platform, target, options = {}) {
     // host bake output to classify when only the surface graph was selected.
     return {products:messages.filter(m=>m.reason==='compiler-artifact' && bakeSelection(graph,'gpu').some(pkg=>pkg.id===m.package_id)).flatMap(m=>m.filenames).map(f=>preparedProducts.get(f)??f)};
   }
-  const receipt=completeBuild(app,platform,target,graph,messages,roots,env,preparedProducts,generatedInputs,privacyManifests);
+  const receipt=completeBuild(app,platform,target,graph,messages,roots,env,preparedProducts,generatedInputs,privacyManifests,started,options.captureBake);
   if (options.record !== false) writeFileSync(resolve(env.EXACT_BAKE_OUTPUT,`${platform}-${target}.build.json`),JSON.stringify(receipt)+'\n');
   options.capture?.(receipt);
   return receipt;

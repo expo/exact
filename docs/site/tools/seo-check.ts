@@ -24,6 +24,9 @@ const text = (where: string, field: string, value: unknown, max = Infinity) => {
   if (typeof value !== 'string' || !value.trim()) fail(where, `${field} is missing or empty`);
   else if (value.length > max) fail(where, `${field} is ${value.length} characters, over ${max}`);
 };
+const https = (where: string, field: string, value: unknown) => {
+  if (typeof value !== 'string' || !URL.canParse(value) || new URL(value).protocol !== 'https:') fail(where, `${field} is ${JSON.stringify(value)}, not an https URL`);
+};
 
 type Node = Record<string, unknown>;
 const RULES: Record<string, (where: string, node: Node) => void> = {
@@ -38,6 +41,15 @@ const RULES: Record<string, (where: string, node: Node) => void> = {
     const part = node.isPartOf as Node | undefined;
     if (!part || part['@type'] !== 'WebSite') fail(where, 'TechArticle.isPartOf is not a WebSite');
     if (ORIGIN) absolute(where, 'TechArticle.url', node.url);
+    if (ORIGIN && node.image !== ORIGIN + SHARE_IMAGE) fail(where, `TechArticle.image is ${JSON.stringify(node.image)}, not the og:image ${ORIGIN}${SHARE_IMAGE}`);
+  },
+  Organization(where, node) {
+    https(where, 'Organization.@id', node['@id']);
+    text(where, 'Organization.name', node.name);
+    https(where, 'Organization.url', node.url);
+    const logo = node.logo as Node | undefined;
+    if (logo?.['@type'] !== 'ImageObject') fail(where, 'Organization.logo is not an ImageObject');
+    https(where, 'Organization.logo.url', logo?.url);
   },
   BreadcrumbList(where, node) {
     const items = node.itemListElement;
@@ -50,6 +62,7 @@ const RULES: Record<string, (where: string, node: Node) => void> = {
     });
   },
 };
+const BY_ORGANIZATION: Record<string, string[]> = { WebSite: ['publisher'], TechArticle: ['author', 'publisher'] };
 
 for (const p of pages) {
   const file = join(DIST, p.path === '/' ? 'index.html' : `${p.path.slice(1)}/index.html`);
@@ -67,11 +80,17 @@ for (const p of pages) {
     if (!rule) fail(p.path, `@type ${JSON.stringify(type)} is not one this site uses`);
     else rule(p.path, node);
   }
+  const organizations = nodes.filter(node => node['@type'] === 'Organization');
+  if (organizations.length !== 1) fail(p.path, `${organizations.length} Organizations, not 1`);
+  for (const node of nodes)
+    for (const field of BY_ORGANIZATION[node['@type'] as string] ?? [])
+      if ((node[field] as Node | undefined)?.['@id'] !== organizations[0]?.['@id']) fail(p.path, `${node['@type']}.${field} is not the Organization's @id`);
   const main = nodes[0];
   const shown = main.headline ?? main.name;
   if (p.path !== '/' && shown !== p.title) fail(p.path, `headline ${JSON.stringify(shown)} is not the page title`);
   for (const href of ICONS) if (!html.includes(` href="${href}"`)) fail(p.path, `no link to ${href}`);
   if (!html.includes(`<meta property="og:locale" content="${site.locale}">`)) fail(p.path, 'no og:locale');
+  if (!html.includes(`<meta name="twitter:site" content="${site.twitterSite}">`)) fail(p.path, 'no twitter:site');
   if (!html.includes('<link rel="llms-txt" href="/llms.txt">')) fail(p.path, 'no llms-txt link');
   if (ORIGIN) for (const tag of ['property="og:image"', 'name="twitter:image"']) if (!html.includes(`<meta ${tag} content="${ORIGIN}${SHARE_IMAGE}">`)) fail(p.path, `no ${tag} for ${SHARE_IMAGE}`);
   const canonical = html.match(/<link rel="canonical" href="([^"]*)">/)?.[1];

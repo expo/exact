@@ -939,3 +939,154 @@ fn a_bar_on_a_lists_scrollport_is_no_section_where_the_kernel_lays_such_bars_out
         assert_eq!(sections, expected, "scrollport bars {on}");
     }
 }
+
+#[test]
+fn authored_text_style_carries_its_weight_in_grouped_list_text_look() {
+    use crate::style::metrics;
+    let headline = crate::TEXT_STYLES
+        .iter()
+        .find(|s| s.name == "headline")
+        .unwrap()
+        .weights[crate::style::relative::column_index(metrics::column())];
+    let weight_bit = TextFont::SAID[1];
+
+    // 1. Compiler-implied `-exact-body` (as the grouped sheet emits) leaves weight unsaid.
+    let implied = row(true, 1, 3, &[(StyleId::FontSize, "-exact-body")], false);
+    assert!(implied.title_look.font.is_none());
+
+    // 2. Authored `font="-exact-headline"` sets `fontShorthand` and authored `font-size`,
+    //    leaving `font-weight` unwritten; TextLook::of must still report weight as said.
+    let mut k = Kernel::with_monospace();
+    let mut ops = vec![
+        Op::CreateView {
+            id: 1,
+            node_type: NodeType::List,
+        },
+        Op::CreateView {
+            id: 2,
+            node_type: NodeType::View,
+        },
+        Op::CreateView {
+            id: 3,
+            node_type: NodeType::View,
+        },
+        Op::CreateView {
+            id: 4,
+            node_type: NodeType::View,
+        },
+        Op::CreateView {
+            id: 5,
+            node_type: NodeType::Text,
+        },
+        Op::CreateView {
+            id: 6,
+            node_type: NodeType::View,
+        },
+        Op::CreateView {
+            id: 7,
+            node_type: NodeType::Text,
+        },
+        Op::CreateView {
+            id: 8,
+            node_type: NodeType::View,
+        },
+        Op::CreateView {
+            id: 9,
+            node_type: NodeType::Text,
+        },
+        Op::SetProp {
+            id: 1,
+            prop: PropId::ListStyle,
+            value: "inset-grouped".into(),
+        },
+        // Row A (4 -> 5): shorthand `font="-exact-headline"` on text 5
+        Op::SetProp {
+            id: 5,
+            prop: PropId::Text,
+            value: "Account".into(),
+        },
+        Op::SetProp {
+            id: 5,
+            prop: PropId::FontShorthand,
+            value: true.into(),
+        },
+        style(
+            5,
+            &[
+                (StyleId::FontStyle, "normal"),
+                (StyleId::FontSize, "-exact-headline"),
+            ],
+            true,
+        ),
+        // Row B (6 -> 7): bare `font-size="-exact-headline"` on text 7
+        Op::SetProp {
+            id: 7,
+            prop: PropId::Text,
+            value: "Bare".into(),
+        },
+        style(7, &[(StyleId::FontSize, "-exact-headline")], true),
+        // Row C (8 -> 9): authored `font="-exact-headline"` on row 8, compiler-implied body on text 9
+        Op::SetProp {
+            id: 8,
+            prop: PropId::FontShorthand,
+            value: true.into(),
+        },
+        style(
+            8,
+            &[
+                (StyleId::FontStyle, "normal"),
+                (StyleId::FontSize, "-exact-headline"),
+            ],
+            true,
+        ),
+        Op::SetProp {
+            id: 9,
+            prop: PropId::Text,
+            value: "Inherited".into(),
+        },
+        style(9, &[(StyleId::FontSize, "-exact-body")], false),
+        Op::SetChildren {
+            id: 1,
+            children: vec![2],
+        },
+        Op::SetChildren {
+            id: 2,
+            children: vec![3],
+        },
+        Op::SetChildren {
+            id: 3,
+            children: vec![4, 6, 8],
+        },
+        Op::SetChildren {
+            id: 4,
+            children: vec![5],
+        },
+        Op::SetChildren {
+            id: 6,
+            children: vec![7],
+        },
+        Op::SetChildren {
+            id: 8,
+            children: vec![9],
+        },
+        Op::AttachRoot { id: 1 },
+    ];
+    for id in [4, 6, 8] {
+        ops.push(style(id, &[(StyleId::Display, "flex")], false));
+    }
+    k.apply(0, 1, &ops).unwrap();
+    let rows = &k.grouped_list(1).unwrap().sections[0].rows;
+    for (i, label) in [
+        (0, "shorthand"),
+        (1, "bare font-size"),
+        (2, "inherited shorthand"),
+    ] {
+        let font = rows[i].title_look.font.expect(label);
+        assert_ne!(
+            font.said & weight_bit,
+            0,
+            "{label}: weight must be marked said"
+        );
+        assert_eq!(font.weight, headline, "{label}: headline weight");
+    }
+}

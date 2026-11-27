@@ -392,15 +392,17 @@ fn the_row_map_of_a_reused_build_is_a_fresh_ones() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The row trigger's budget (the planned design's fold included): 102
-/// distinct rows (six row names over seventeen tokens, each
-/// an alias of one base), every one reached by a write to the base, after
-/// the best of ten. The Bluesky clone's map is 833 distinct rows (73,151
-/// as written), and a write to one of its tokens reaches at most 7 (a
-/// probe, not this test).
-/// A passing write binds once; a breaking one folds and binds `before` too.
+/// A write to the base reaches all 102 distinct rows, six properties for
+/// each of seventeen aliases. A write in the Bluesky clone reached at most
+/// seven of its 833 distinct rows.
+/// The passing write binds the new design once. The breaking write also
+/// folds and binds the old design to identify newly broken rows.
 #[test]
 fn a_worst_case_write_is_checked_within_the_budget() {
+    use contract_lower::rows::{Place, Row};
+    use contract_syntax::{Attr, Expr, Span};
+    use std::time::Duration;
+
     let names = [
         "padding",
         "margin-top",
@@ -409,35 +411,28 @@ fn a_worst_case_write_is_checked_within_the_budget() {
         "border-radius",
         "width",
     ];
-    let tokens: String = (0..17).map(|i| format!("  t{i} = base\n")).collect();
-    let design = |base: &str| format!("forma t\n\ntheme\n  base = {base}\n{tokens}");
-    let rows: Vec<contract_lower::rows::Row> = (0..102)
-        .map(|i| contract_syntax::Attr {
-            name: names[i % names.len()].into(),
-            value: contract_syntax::Expr::Str(
-                format!("t{}", i / names.len()),
-                contract_syntax::Span::default(),
-            ),
-            span: contract_syntax::Span::default(),
-            written: true,
-        })
-        .map(|attr| contract_lower::rows::Row {
-            attr,
-            places: vec![contract_lower::rows::Place::plain(
-                contract_syntax::Span::default(),
-            )],
-            fonts: None,
-            computed: None,
-            within: None,
+    let rows: Vec<Row> = (0..102)
+        .map(|i| {
+            let span = Span::point(i as u32 + 1, 1);
+            Row {
+                attr: Attr {
+                    name: names[i % names.len()].into(),
+                    value: Expr::Str(format!("t{}", i / names.len()), span),
+                    span,
+                    written: true,
+                },
+                places: vec![Place::plain(span)],
+                fonts: None,
+                computed: None,
+                within: None,
+            }
         })
         .collect();
-    let vocab = contract_lower::forma_vocab();
-    let parse = |t: &str| exact_forma::parse(t).unwrap();
+    let tokens: String = (0..17).map(|i| format!("  t{i} = base\n")).collect();
+    let design = |base: &str| format!("forma t\n\ntheme\n  base = {base}\n{tokens}");
     let before = design("8px");
-    // This thread's CPU time, not the wall clock: a loaded machine (the
-    // suite's other tests and servers, another agent's builds) takes the
-    // core away mid-run, which is no work the check did (x2-perf4's run at
-    // load 28 read 15.7 ms of wall clock).
+    let vocab = contract_lower::forma_vocab();
+    // Thread CPU time excludes the time other work keeps this test off the core.
     let cpu = || {
         let mut t = libc::timespec {
             tv_sec: 0,
@@ -446,38 +441,56 @@ fn a_worst_case_write_is_checked_within_the_budget() {
         // SAFETY: a valid timespec for the call to fill.
         let read = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
         assert_eq!(read, 0, "this thread's CPU clock");
-        std::time::Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
+        Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
     };
-    let run = |base: &str| {
-        let began = cpu();
-        let after = parse(&design(base));
-        let folded = exact_forma::check_design(after.clone(), &vocab).unwrap();
-        let broken = contract_lower::rows::check(
-            &rows,
-            &["base"],
-            &folded.design,
-            &folded,
-            || Some(parse(&before)),
-            &[],
-            &[],
-        );
-        (broken.len(), cpu() - began)
-    };
-    // The best of ten (a run takes a few ms of CPU).
-    let best = |base: &str, want: usize| {
-        (0..10)
-            .map(|_| {
-                let (n, took) = run(base);
-                assert_eq!(n, want);
-                took
-            })
-            .min()
-            .unwrap()
-    };
-    let took = best("12px", 0);
-    assert!(took.as_millis() < 10, "a passing write: {took:?}");
-    let took = best("#202020", 102);
-    assert!(took.as_millis() < 10, "a breaking write: {took:?}");
+    // This JSON workload exercises strings and allocations independently of both
+    // Exact parsers. In debug on an M4 Pro it took 9 ms. A breaking write took
+    // 5.2 ms, or 9.8 ms when both row judgements ran twice.
+    let reference = format!(
+        "[{}]",
+        [r#"{"name":"padding","value":"8px","line":17}"#; 102].join(",")
+    );
+    let mut reference_times = [Duration::ZERO; 10];
+    let mut writes = [
+        (design("12px"), 0, Duration::MAX),
+        (design("#202020"), 102, Duration::MAX),
+    ];
+    for sample in &mut reference_times {
+        let start = cpu();
+        for _ in 0..100 {
+            std::hint::black_box(serde_json::from_str::<Value>(&reference).unwrap());
+        }
+        *sample = cpu() - start;
+        for (after, expected, best) in &mut writes {
+            let start = cpu();
+            let parsed = exact_forma::parse(after).unwrap();
+            let folded = exact_forma::check_design(parsed, &vocab).unwrap();
+            let broken = contract_lower::rows::check(
+                &rows,
+                &["base"],
+                &folded.design,
+                &folded,
+                || Some(exact_forma::parse(&before).unwrap()),
+                &[],
+                &[],
+            );
+            *best = (*best).min(cpu() - start);
+            assert_eq!(broken.len(), *expected);
+        }
+    }
+    // Use the second-fastest reference so one unusually fast sample cannot set the limit.
+    reference_times.sort_unstable();
+    let budget = reference_times[1];
+    let [(_, _, passing), (_, _, breaking)] = writes;
+    eprintln!("102 rows: passing {passing:?}, breaking {breaking:?}, budget {budget:?}");
+    assert!(
+        passing <= budget,
+        "passing write {passing:?}, budget {budget:?}"
+    );
+    assert!(
+        breaking <= budget,
+        "breaking write {breaking:?}, budget {budget:?}"
+    );
 }
 
 /// `reading(tag)` with the fonts fixture's two files in its assets, and the

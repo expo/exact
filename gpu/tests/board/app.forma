@@ -1,0 +1,7 @@
+forma board
+axes
+  ink = plain | bright
+theme
+  surface.board = light-dark(#ececef, #141416)
+    when ink=bright: #ff7638
+  board.dot = color(display-p3 0.6 0.4 0.3 / 50%)

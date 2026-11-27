@@ -22,7 +22,10 @@ mod local;
 mod presence;
 pub mod process;
 mod windows_path;
-pub use local::{is_cloud_metadata, is_local_network, is_service_type, DEVELOPMENT, LOCAL_NETWORK};
+pub use local::{
+    is_cloud_metadata, is_local_network, is_loopback, is_service_type, DEVELOPMENT, LOCAL_NETWORK,
+    LOOPBACK,
+};
 pub use presence::{
     line_presence, presence_words, Policy, Presence, PLATFORM_WORDS, PRESENCE_PREFIX,
 };
@@ -220,6 +223,11 @@ pub enum Grant {
     WebSocketLocalNetwork {
         loopback: bool,
     },
+    /// `net.fetch loopback` (LLP 1016 D6): an `http:` or `https:` origin whose
+    /// host as written is loopback ([`is_loopback`]), at any port.
+    FetchLoopback,
+    /// `net.websocket loopback` (LLP 1016 D6): the same hosts, for `ws:` and `wss:`.
+    WebSocketLoopback,
     FsRead(PathPrefix),
     FsWrite(PathPrefix),
     EnvRead(String),
@@ -255,6 +263,12 @@ impl Grant {
             (Grant::WebSocketLocalNetwork { loopback }, Operation::WebSocket { origin }) => {
                 matches!(origin.scheme.as_str(), "ws" | "wss")
                     && is_local_network(&origin.host, *loopback)
+            }
+            (Grant::FetchLoopback, Operation::Fetch { origin }) => {
+                matches!(origin.scheme.as_str(), "http" | "https") && is_loopback(&origin.host)
+            }
+            (Grant::WebSocketLoopback, Operation::WebSocket { origin }) => {
+                matches!(origin.scheme.as_str(), "ws" | "wss") && is_loopback(&origin.host)
             }
             (Grant::FsRead(prefix), Operation::FsRead { path }) => prefix.covers(path),
             (Grant::FsWrite(prefix), Operation::FsWrite { path }) => prefix.covers(path),
@@ -452,6 +466,13 @@ impl GrantSet {
                         Grant::FetchLocalNetwork { loopback }
                     } else {
                         Grant::WebSocketLocalNetwork { loopback }
+                    }
+                }
+                "net.fetch" | "net.websocket" if target == LOOPBACK => {
+                    if capability == "net.fetch" {
+                        Grant::FetchLoopback
+                    } else {
+                        Grant::WebSocketLoopback
                     }
                 }
                 // A scheme source, as CSP writes one (`https:`): every origin
@@ -927,6 +948,63 @@ mod tests {
             "net.fetch local-network production",
             "net.fetch local-network development extra",
             "net.fetch local-network:",
+        ] {
+            assert!(GrantSet::parse(bad).is_err(), "{bad} parsed");
+        }
+    }
+
+    #[test]
+    fn a_loopback_line_admits_only_loopback_hosts_of_its_family() {
+        let set = GrantSet::parse("net.fetch loopback\nnet.websocket loopback").unwrap();
+        let fetch = |origin: Origin| set.permits(&Operation::Fetch { origin });
+        let socket = |origin: Origin| set.permits(&Operation::WebSocket { origin });
+        for (host, port) in [
+            ("127.0.0.1", 0),
+            ("127.0.0.1", 49152),
+            ("127.9.8.7", 80),
+            ("[::1]", 7420),
+            ("[::ffff:127.0.0.1]", 8443),
+            ("localhost", 3000),
+            ("LOCALHOST.", 443),
+        ] {
+            assert!(fetch(Origin::new("http", host, port)), "http {host}:{port}");
+            assert!(
+                fetch(Origin::new("https", host, port)),
+                "https {host}:{port}"
+            );
+            assert!(socket(Origin::new("ws", host, port)), "ws {host}:{port}");
+            assert!(socket(Origin::new("wss", host, port)), "wss {host}:{port}");
+        }
+        for host in [
+            "192.168.1.40",
+            "10.0.0.1",
+            "169.254.169.254",
+            "[fd00::1]",
+            "desk.local",
+            "foo.localhost",
+            "localhost..",
+            "localhost.evil.com",
+            "0.0.0.0",
+            "[::]",
+            "example.com",
+        ] {
+            assert!(!fetch(Origin::new("http", host, 80)), "http {host}");
+            assert!(!socket(Origin::new("ws", host, 80)), "ws {host}");
+        }
+        // Families stay disjoint.
+        let fetch_only = GrantSet::parse("net.fetch loopback").unwrap();
+        assert!(!fetch_only.permits(&Operation::WebSocket {
+            origin: Origin::new("ws", "127.0.0.1", 8080),
+        }));
+        let ws_only = GrantSet::parse("net.websocket loopback").unwrap();
+        assert!(!ws_only.permits(&Operation::Fetch {
+            origin: Origin::new("http", "127.0.0.1", 8080),
+        }));
+        for bad in [
+            "net.fetch loopback development",
+            "net.websocket loopback development",
+            "net.fetch loopback:",
+            "net.fetch LOOPBACK",
         ] {
             assert!(GrantSet::parse(bad).is_err(), "{bad} parsed");
         }

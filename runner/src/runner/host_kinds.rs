@@ -115,6 +115,37 @@ impl ScrollDrag {
 }
 
 impl Event {
+    /// Decode the scroll event: `left,top,scrollWidth,scrollHeight,
+    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative,
+    /// then a zoomable container's zoom, above 0; a scroller that does not
+    /// zoom leaves it out.
+    pub fn scroll_payload(payload: &str) -> Option<Self> {
+        let (payload, zoom) = match payload.matches(',').count() {
+            6 => {
+                let (rest, zoom) = payload.rsplit_once(',')?;
+                (rest, exact_num::parse_f64(zoom).ok()?)
+            }
+            _ => (payload, 1.0),
+        };
+        let [left, top, width, height, client_width, client_height] =
+            super::event::tuple::<6>(payload)?;
+        ([left, top].iter().all(|v| v.is_finite())
+            && [width, height, client_width, client_height]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0)
+            && zoom.is_finite()
+            && zoom > 0.0)
+            .then_some(Self::Scroll(super::ScrollEvent {
+                left,
+                top,
+                width,
+                height,
+                client_width,
+                client_height,
+                zoom,
+            }))
+    }
+
     /// Decode ABI kind 6 (`key`), 43 (`keyup`) or 44 (`keycapture`),
     /// 10 (contextmenu, its point when it has one), 13
     /// (scroll), 19 (media), 20 (pan), 21 (select), 28 (panrelease, LLP
@@ -174,6 +205,15 @@ impl Event {
                 .ok_or("invalid scroll drag"),
             // The platform's discrete swipe (LLP 1057.001 §8.2).
             66 => Ok(Event::Swipe),
+            67 | 68 => {
+                let [s, x, y] = super::event::tuple(payload).ok_or("invalid pinch")?;
+                let event = if kind == 67 {
+                    Event::Pinch(s, x, y)
+                } else {
+                    Event::PinchRelease(s, x, y)
+                };
+                event.invalid_payload().map_or(Ok(event), Err)
+            }
             37 => super::WheelEvent::parse(payload)
                 .map(Event::Wheel)
                 .ok_or("invalid wheel event"),

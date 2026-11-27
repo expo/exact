@@ -643,7 +643,7 @@ pub trait Modules<D: DataSource> {
     /// The host refused a handler's request at admission: it settles in
     /// its turn, as a failure, an ordered one only once earlier ordered work
     /// has.
-    fn refuse_tool(&self, r: &mut Runner<D>, ticket: u64, reason: &'static str, ordered: bool) {}
+    fn refuse_tool(&self, r: &mut Runner<D>, ticket: u64, reason: String, ordered: bool) {}
 
     /// The substitute's readers no resource holds any longer are let go, with
     /// their grids and cursors (a released source's acquisition stops).
@@ -761,7 +761,7 @@ pub trait Modules<D: DataSource> {
     }
 
     /// A handler's refused request that may settle now.
-    fn tool_refusal(&self, r: &mut Runner<D>, allow_ordered: bool) -> Option<(u64, &'static str)> {
+    fn tool_refusal(&self, r: &mut Runner<D>, allow_ordered: bool) -> Option<(u64, String)> {
         None
     }
 
@@ -826,6 +826,11 @@ pub trait Modules<D: DataSource> {
 
     /// Whether `token` is a held module request.
     fn holds_token(&self, r: &Runner<D>, token: Option<u64>) -> bool {
+        false
+    }
+
+    /// Whether pending request `ticket` is waiting on a held data-code module call.
+    fn holds_data_request(&self, r: &Runner<D>, ticket: u64) -> bool {
         false
     }
 

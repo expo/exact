@@ -41,6 +41,50 @@ const FIELDS: [&str; 3] = ["name", "email", "picture"];
 /// An identity request's refusal: the error, and why.
 type Refused = (&'static str, String);
 
+/// The Android identity words apply to an offered provider on both the bound and ticket paths.
+fn android_identity_words(words: &Json, mode: &str, context: &Json) -> Result<(), Refused> {
+    if words.is_null() {
+        return Ok(());
+    }
+    let Some(words) = words.as_object() else {
+        return Err(("TypeError", "android must be an object".into()));
+    };
+    for (word, value) in words {
+        if !matches!(
+            word.as_str(),
+            "autoSelectEnabled" | "filterByAuthorizedAccounts" | "requestVerifiedPhoneNumber"
+        ) {
+            return Err(("TypeError", format!("unknown android.{word}")));
+        }
+        if !value.is_boolean() {
+            return Err(("TypeError", format!("invalid type for android.{word}")));
+        }
+    }
+    if words
+        .get("requestVerifiedPhoneNumber")
+        .and_then(Json::as_bool)
+        == Some(true)
+    {
+        if mode != "passive" || context != "signup" {
+            return Err((
+                "NotSupportedError",
+                "requestVerifiedPhoneNumber requires passive signup".into(),
+            ));
+        }
+        if words
+            .get("filterByAuthorizedAccounts")
+            .and_then(Json::as_bool)
+            == Some(true)
+        {
+            return Err((
+                "TypeError",
+                "requestVerifiedPhoneNumber requires filterByAuthorizedAccounts false".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl<D: DataSource> Runner<D> {
     /// Every member bound to `row`'s name: its option and its row.
     pub(super) fn members_of(&self, row: &ModulesRow) -> Vec<(String, ModulesRow)> {
@@ -199,6 +243,18 @@ impl<D: DataSource> Runner<D> {
                 format!("{option}.mode is \"active\" or \"passive\", not {mode:?}"),
             ));
         }
+        if target() == "android"
+            && !request["context"].is_null()
+            && !matches!(
+                request["context"].as_str(),
+                Some("signin" | "signup" | "continue" | "use")
+            )
+        {
+            return Err((
+                "TypeError",
+                format!("{option}.context must be signin, signup, continue or use"),
+            ));
+        }
         if matches!(mediation, "silent" | "conditional") {
             return Err(unsupported(format!(
                 "mediation {mediation:?} beside {option}: no target can keep it"
@@ -221,7 +277,7 @@ impl<D: DataSource> Runner<D> {
                 target()
             )));
         }
-        let grants = self.data.grants();
+        let grants = self.module_grants();
         let granted = |line: &str, id: &str| {
             grants.lines().any(|l| {
                 let mut words = l.split_whitespace();
@@ -268,19 +324,29 @@ impl<D: DataSource> Runner<D> {
                     )));
                 };
                 if !fetches(grants, back) {
-                    return Err(("SecurityError", format!("grant-missing (web.redirectURI={back} is outside every `net.fetch` line)")));
+                    return Err((
+                        "SecurityError",
+                        format!(
+                            "grant-missing (web.redirectURI={back} is outside every `net.fetch` line)"
+                        ),
+                    ));
                 }
             }
             let can = &status["providers"][name];
             // Beside a passkey, a provider counts only where one sheet holds both (D1).
             let shares = !with_key || can["withPublicKey"] == true;
             match (mode, can[mode] == true && shares) {
-                (_, true) => kept += 1,
+                (_, true) => {
+                    if target() == "android" {
+                        android_identity_words(&provider["android"], mode, &request["context"])?;
+                    }
+                    kept += 1;
+                }
                 ("active", false) => {
                     return Err(unsupported(format!(
                         "{name} offers no active request on {}",
                         target()
-                    )))
+                    )));
                 }
                 // A passive request leaves out what this target cannot offer (D3).
                 _ => {}
@@ -340,7 +406,7 @@ impl<D: DataSource> Runner<D> {
                             Json::Null => json!(FIELDS),
                             given => given.clone(),
                         };
-                        json!({
+                        let mut described = json!({
                             "provider": known["name"],
                             "configURL": config,
                             "clientId": p["clientId"],
@@ -351,7 +417,11 @@ impl<D: DataSource> Runner<D> {
                             "domainHint": p["domainHint"],
                             "token": if relay { "relay" } else { "native" },
                             "redirectURI": if relay { p["web"]["redirectURI"].clone() } else { Json::Null },
-                        })
+                        });
+                        if target() == "android" && !p["android"].is_null() {
+                            described["android"] = p["android"].clone();
+                        }
+                        described
                     })
                     .collect();
                 let described = json!({
@@ -431,4 +501,43 @@ fn fetches(grants: &str, url: &str) -> bool {
         let target = target.trim_end_matches('/');
         url == target || url.starts_with(&format!("{target}/"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_android_identity_ticket_applies_the_platform_word_rules() {
+        for name in [
+            "autoSelectEnabled",
+            "filterByAuthorizedAccounts",
+            "requestVerifiedPhoneNumber",
+        ] {
+            for wrong in [json!("true"), Json::Null] {
+                let (error, message) =
+                    android_identity_words(&json!({name: wrong}), "passive", &Json::Null)
+                        .unwrap_err();
+                assert_eq!(error, "TypeError");
+                assert!(message.contains(name));
+            }
+        }
+        let mut words = json!({"requestVerifiedPhoneNumber": true});
+        for (mode, context) in [("passive", Json::Null), ("active", json!("signup"))] {
+            assert_eq!(
+                android_identity_words(&words, mode, &context)
+                    .unwrap_err()
+                    .0,
+                "NotSupportedError"
+            );
+        }
+        assert!(android_identity_words(&words, "passive", &json!("signup")).is_ok());
+        words["filterByAuthorizedAccounts"] = json!(true);
+        assert_eq!(
+            android_identity_words(&words, "passive", &json!("signup"))
+                .unwrap_err()
+                .0,
+            "TypeError"
+        );
+    }
 }

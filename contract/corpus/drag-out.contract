@@ -1,5 +1,5 @@
 // A drag out of the app (LLP 1094.000): a card's link that carries its
-// photo, a row that carries a title and a page's address and that a state
+// photo, named by the card's title (D14), a row that carries a title and a page's address and that a state
 // turns off, and an `app:/` export, which the runner admits where the grants
 // cover it and the host can carry it.
 shape Card
@@ -16,7 +16,7 @@ component App
       button press=toggle testId="edit"
         text (editing ? "Done" : "Edit")
       for c in cards key=c.id
-        link href=`/card/${c.id}` draggable=true dataTransfer=DataTransfer(files=[`assets/${c.id}.jpg`]) testId=`card-${c.id}` aria-label=c.title
+        link href=`/card/${c.id}` draggable=true dataTransfer=DataTransfer(files=[`assets/${c.id}.jpg`], names=[c.title]) testId=`card-${c.id}` aria-label=c.title
           image `assets/${c.id}.jpg` width=120 height=80 object-fit="cover" aria-hidden=true
           text c.title
       row draggable=(not editing) dataTransfer=DataTransfer(text="Mount Fuji", url="https://example.com/landmarks/1016") testId="row"

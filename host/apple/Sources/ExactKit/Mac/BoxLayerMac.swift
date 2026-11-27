@@ -160,12 +160,18 @@ extension NodeView {
         return !p.drawn && (p.radius == 0 || (p.corners == all && p.curve == .circular))
     }
 
+    /// The box's background colour as its picture paints it, which the extension's strip takes before macOS 26 (LLP
+    /// 1123 D13).
+    var pictureFill: CGColor? { boxPlan.fill }
+
     /// The box onto the layer, or nothing on it when `draw(_:)` paints it.
     /// The web's box: background and border inside the border box, a
     /// uniform border following the curve, the radius clipping children
     /// only where the overflow clips.
     package func applyBoxLayer() {
         defer { syncEllipticalClip(); syncScrollCorner(); applyColorRanges() }
+        // The extension first, so the picture paints where it now goes (LLP 1123 D13, `ExtensionMac.swift`)
+        updateExtension()
         guard layerBoxEligible else { applyClipOnly(); return }
         let p = boxPlan
         applyBoxLayer(p)
@@ -198,17 +204,20 @@ extension NodeView {
         let fill = onLayer && !away && !cssVisibilityHidden ? p.fill : nil
         let fillsSublayer = fill != nil && p.radius > 0 && layerRadius == 0
         let bg = fillsSublayer ? nil : fill
-        if layer.backgroundColor != bg { layer.backgroundColor = bg }
+        // An extended box's picture paints in its extension, at the border box (LLP 1123 D13)
+        let host = pictureHost ?? layer, box = host.bounds
+        if host !== layer, layer.backgroundColor != nil { layer.backgroundColor = nil }
+        if host.backgroundColor != bg { host.backgroundColor = bg }
         if fillsSublayer, let fill {
             // CALayer.render ignores maskedCorners. A path preserves the same
             // outline in the window and in a filtered ancestor's picture.
             if let old = boxFill, (old is CAShapeLayer) != p.partialCorners { old.removeFromSuperlayer(); boxFill = nil }
             let f = boxFill ?? (p.partialCorners ? CAShapeLayer() : CALayer())
             boxFill = f
-            if f.superlayer !== layer { insertBoxSublayer(f) }
-            if f.frame != bounds { f.frame = bounds }
+            if f.superlayer !== host { insertBoxSublayer(f) }
+            if f.frame != box { f.frame = box }
             if let shape = f as? CAShapeLayer {
-                shape.path = BorderPaint.roundedRect(bounds, cornerSizes(in: bounds), shape: CornerShape(style["corner_shape"]))
+                shape.path = BorderPaint.roundedRect(box, cornerSizes(in: box), shape: CornerShape(style["corner_shape"]))
                 shape.fillColor = fill
             } else {
                 if f.backgroundColor != fill { f.backgroundColor = fill }
@@ -263,35 +272,42 @@ extension NodeView {
     }
 
     /// As on UIKit (`Backdrop.swift`): a scroller's children are its scroll view's document's, so the scroll view
-    /// takes the corner that clips them, a painted menu's panel's while the panel is there, else its author's one
-    /// radius (`BoxPlan.scrollRadius`) at the padding edge. With no border that edge is the scroll view's bounds and
-    /// its layer's radius says it. With one the curve lies inside the bounds and the scroll view masks its layer
-    /// with it (`ChainingScrollView.clip(toPaddingEdge:inset:)`), so a translucent border shows the box's ground and
-    /// not the children. The scroll view stays the node's own subview, at the border box. A layout transition's
+    /// takes the corner that clips them, a painted menu's panel's while the panel is there, else its author's corners
+    /// at the padding edge. With no border and one circular or Apple-continuous radius on all four corners
+    /// (`BoxPlan.scrollRadius`), that edge is the scroll view's bounds and its layer's radius says it. With a border,
+    /// partial, differing or elliptical corners, or another `corner-shape`, the scroll view masks its layer with the
+    /// padding edge (`ChainingScrollView.clip(toPaddingEdge:inset:)`), so a translucent border shows the box's ground
+    /// and not the children. The scroll view stays the node's own subview, at the border box. A layout transition's
     /// surface masks the scroll view itself until it ends (`Surface.swift`).
     func syncScrollCorner() {
         guard let scroll else { return }
-        var radius: CGFloat = 0, curve = CALayerCornerCurve.circular, widths: [CGFloat] = [0, 0, 0, 0]
+        var radius: CGFloat = 0, curve = CALayerCornerCurve.circular, widths: [CGFloat] = [0, 0, 0, 0], edge: CGPath?
         if materialView != nil, paintedMenuRadius != nil {
             radius = effectiveCornerSizes(in: bounds).first?.width ?? 0
-        } else {
+        } else if NSEdgeInsetsEqual(reach, NSEdgeInsetsZero) {
             let p = boxPlan
-            (radius, curve) = (p.scrollRadius, p.scrollRadius > 0 ? p.curve : .circular)
-            if radius > 0 { widths = p.widths.map(devicePixels) }
+            let sizes = cornerSizes(in: bounds)
+            let borderWidths = p.widths.map(devicePixels)
+            if borderWidths.contains(where: { $0 > 0 }) {
+                widths = borderWidths
+                let inner = CGRect(x: widths[3], y: widths[0], width: max(0, bounds.width - widths[1] - widths[3]),
+                                   height: max(0, bounds.height - widths[0] - widths[2]))
+                // Each radius less the borders beside it. No radius of a layer the size of the border box is that curve.
+                edge = BorderPaint.roundedRect(inner, BorderPaint.contentRadii(sizes, outer: bounds, inner: inner),
+                                               shape: CornerShape(style["corner_shape"]))
+            } else if !clipsItself, sizes.contains(where: { $0.width > 0 && $0.height > 0 }) {
+                if p.scrollRadius > 0 {
+                    radius = p.scrollRadius
+                    curve = p.curve
+                } else {
+                    edge = BorderPaint.roundedRect(bounds, sizes, shape: CornerShape(style["corner_shape"]))
+                }
+            }
         }
         let inset = NSEdgeInsets(top: widths[0], left: widths[3], bottom: widths[2], right: widths[1])
         if surface != nil {
             scroll.clipInsets = inset
             return
-        }
-        var edge: CGPath?
-        if widths.contains(where: { $0 > 0 }) {
-            let inner = CGRect(x: widths[3], y: widths[0], width: max(0, bounds.width - widths[1] - widths[3]),
-                               height: max(0, bounds.height - widths[0] - widths[2]))
-            // Each radius less the borders beside it. No radius of a layer the size of the border box is that curve.
-            edge = BorderPaint.roundedRect(inner, BorderPaint.contentRadii(cornerSizes(in: bounds), outer: bounds, inner: inner),
-                                           shape: CornerShape(style["corner_shape"]))
-            radius = 0
         }
         scroll.clip(toPaddingEdge: edge, inset: inset)
         guard radius > 0 || (scroll.layer?.cornerRadius ?? 0) > 0 else { return }
@@ -326,17 +342,18 @@ extension NodeView {
         defer { CATransaction.commit() }
         let g = boxGradient ?? CAGradientLayer()
         boxGradient = g
-        if g.superlayer !== layer { insertBoxSublayer(g) }
-        if g.frame != layer.bounds { g.frame = layer.bounds }
+        let host = pictureHost ?? layer
+        if g.superlayer !== host { insertBoxSublayer(g) }
+        if g.frame != host.bounds { g.frame = host.bounds }
         let radius = p.radius
         let round = radius > 0 && p.oneRadius && !p.partialCorners
         if g.cornerRadius != (round ? radius : 0) { g.cornerRadius = round ? radius : 0 }
         if round, g.maskedCorners != p.corners { g.maskedCorners = p.corners }
         if g.cornerCurve != p.curve { g.cornerCurve = p.curve }
         if g.masksToBounds != round { g.masksToBounds = round }
-        g.mask = p.partialCorners ? ClipPath.mask(BorderPaint.roundedRect(bounds,
-            cornerSizes(in: bounds), shape: CornerShape(style["corner_shape"]))) : nil
-        gradient.apply(g, bounds: layer.bounds, box: gradientBox, dark: drawsDark, limit: style["dynamic_range_limit"]?.string)
+        g.mask = p.partialCorners ? ClipPath.mask(BorderPaint.roundedRect(host.bounds,
+            cornerSizes(in: host.bounds), shape: CornerShape(style["corner_shape"]))) : nil
+        gradient.apply(g, bounds: host.bounds, box: gradientBox, dark: drawsDark, limit: style["dynamic_range_limit"]?.string)
     }
 
     /// Repeating linear gradients as patterns Core Animation tiles
@@ -352,7 +369,8 @@ extension NodeView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         boxPattern = g
-        if g.superlayer !== layer { insertBoxSublayer(g) }
+        let host = pictureHost ?? layer
+        if g.superlayer !== host { insertBoxSublayer(g) }
         let radius = p.radius
         let round = radius > 0 && p.oneRadius && !p.partialCorners
         if g.cornerRadius != (round ? radius : 0) { g.cornerRadius = round ? radius : 0 }
@@ -360,9 +378,9 @@ extension NodeView {
         if g.cornerCurve != p.curve { g.cornerCurve = p.curve }
         // Each gradient's layer is turned and overhangs the box.
         if !g.masksToBounds { g.masksToBounds = true }
-        g.mask = p.partialCorners ? ClipPath.mask(BorderPaint.roundedRect(bounds,
-            cornerSizes(in: bounds), shape: CornerShape(style["corner_shape"]))) : nil
-        g.show(layers, bounds: layer.bounds, box: gradientBox, dark: drawsDark, scale: pixelScale ?? layer.contentsScale)
+        g.mask = p.partialCorners ? ClipPath.mask(BorderPaint.roundedRect(host.bounds,
+            cornerSizes(in: host.bounds), shape: CornerShape(style["corner_shape"]))) : nil
+        g.show(layers, bounds: host.bounds, box: gradientBox, dark: drawsDark, scale: pixelScale ?? layer.contentsScale)
     }
 
     /// The viewport in this view's coordinates: a `background-attachment:
@@ -409,7 +427,7 @@ extension NodeView {
             defer { CATransaction.commit() }
             let l = imageLayer ?? CALayer()
             imageLayer = l
-            if l.superlayer !== layer { insertBoxSublayer(l) }
+            if l.superlayer !== (pictureHost ?? layer) { insertBoxSublayer(l) }
             l.frame = crop.shown
             l.contentsRect = crop.unit
             l.contentsGravity = .resize
@@ -428,8 +446,8 @@ extension NodeView {
         defer { CATransaction.commit() }
         let l = imageLayer ?? CALayer()
         imageLayer = l
-        // Where `draw(_:)` paints it: over the box, under the border and the children.
-        if l.superlayer !== layer { insertBoxSublayer(l) }
+        // Where `draw(_:)` paints it: over the box, under the border and the children, in an extended box's extension
+        if l.superlayer !== (pictureHost ?? layer) { insertBoxSublayer(l) }
         if l.frame != plan.shown { l.frame = plan.shown }
         if l.contentsRect != plan.unit { l.contentsRect = plan.unit }
         if l.contentsGravity != .resize { l.contentsGravity = .resize }
@@ -448,13 +466,13 @@ extension NodeView {
     /// The box's sublayers keep CSS's paint order, all under the children:
     /// shadow, fill, gradient, image, border.
     package func insertBoxSublayer(_ l: CALayer) {
-        guard let layer else { return }
+        guard let own = layer, let host = pictureLayers.contains(where: { $0 === l }) ? pictureHost : own else { return }
         let order: [CALayer?] = [shadowCaster, boxFill, boxGradient, boxPattern, insetCaster, imageLayer, boxBorder]
         guard let rank = order.firstIndex(where: { $0 === l }) else { return }
-        if let below = order[..<rank].reversed().compactMap({ $0 }).first(where: { $0.superlayer === layer }) {
-            layer.insertSublayer(l, above: below)
+        if let below = order[..<rank].reversed().compactMap({ $0 }).first(where: { $0.superlayer === host }) {
+            host.insertSublayer(l, above: below)
         } else {
-            layer.insertSublayer(l, at: 0)
+            host.insertSublayer(l, at: 0)
         }
     }
 

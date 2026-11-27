@@ -14,6 +14,9 @@ struct Methods {
     app: jmethodID,
     timer: jmethodID,
     end: jmethodID,
+    /// `ModuleSession.sync(String)`: a package's synchronous form with no
+    /// app module (`Extensions.sync`); absent from an older canvas.
+    sync: Option<jmethodID>,
 }
 // SAFETY: the class reference is global and its method IDs live as long as the class.
 unsafe impl Sync for Methods {}
@@ -50,6 +53,18 @@ pub unsafe fn attach(env: *mut JNIEnv) {
                 app: method(c"app", c"(Ljava/lang/String;Z)V")?,
                 timer: method(c"timer", c"(I)V")?,
                 end: method(c"end", c"()V")?,
+                sync: {
+                    let id = ((**env).GetStaticMethodID?)(
+                        env,
+                        class,
+                        c"sync".as_ptr(),
+                        c"(Ljava/lang/String;)Ljava/lang/String;".as_ptr(),
+                    );
+                    if id.is_null() {
+                        ((**env).ExceptionClear?)(env);
+                    }
+                    (!id.is_null()).then_some(id)
+                },
                 class: ((**env).NewGlobalRef?)(env, class),
             };
             (!methods.class.is_null()).then_some(methods)
@@ -101,34 +116,6 @@ impl Instance {
         }
     }
 
-    fn call(&self, body: &[u8]) -> Result<Vec<u8>, String> {
-        let thread = attach_application()?;
-        let env = thread.env.cast::<JNIEnv>();
-        let text = std::str::from_utf8(body).map_err(|e| e.to_string())?;
-        unsafe {
-            let arg = crate::canvas::field::java(env, text);
-            if thread.threw() {
-                return Err("cannot allocate module request".into());
-            }
-            let value = ((**env).CallObjectMethodA.expect("jni"))(
-                env,
-                self.object,
-                self.methods.call,
-                [jvalue { l: arg }].as_ptr(),
-            );
-            ((**env).DeleteLocalRef.expect("jni"))(env, arg);
-            if thread.threw() || value.is_null() {
-                return Err("the Kotlin module call failed".into());
-            }
-            let answer = crate::canvas::field::text(env, value);
-            ((**env).DeleteLocalRef.expect("jni"))(env, value);
-            match answer.strip_prefix('=') {
-                Some(json) => Ok(json.as_bytes().to_vec()),
-                None => Err(answer.strip_prefix('!').unwrap_or(&answer).to_owned()),
-            }
-        }
-    }
-
     fn notify(&self, method: jmethodID, args: &[jvalue]) {
         if let Ok(thread) = attach_application() {
             let env = thread.env.cast::<JNIEnv>();
@@ -136,6 +123,44 @@ impl Instance {
                 ((**env).CallVoidMethodA.expect("jni"))(env, self.object, method, args.as_ptr());
             }
             thread.threw();
+        }
+    }
+}
+
+/// A package read goes to the reader even when the APK contains no app module.
+fn call(methods: &Methods, module: Option<&Instance>, body: &[u8]) -> Result<Vec<u8>, String> {
+    let thread = attach_application()?;
+    let env = thread.env.cast::<JNIEnv>();
+    let text = std::str::from_utf8(body).map_err(|e| e.to_string())?;
+    unsafe {
+        let arg = crate::canvas::field::java(env, text);
+        if thread.threw() {
+            return Err("cannot allocate module request".into());
+        }
+        let args = [jvalue { l: arg }];
+        let value = match module {
+            Some(module) => ((**env).CallObjectMethodA.expect("jni"))(
+                env,
+                module.object,
+                methods.call,
+                args.as_ptr(),
+            ),
+            None => ((**env).CallStaticObjectMethodA.expect("jni"))(
+                env,
+                methods.class,
+                methods.sync.expect("package entry"),
+                args.as_ptr(),
+            ),
+        };
+        ((**env).DeleteLocalRef.expect("jni"))(env, arg);
+        if thread.threw() || value.is_null() {
+            return Err("the Kotlin module call failed".into());
+        }
+        let answer = crate::canvas::field::text(env, value);
+        ((**env).DeleteLocalRef.expect("jni"))(env, value);
+        match answer.strip_prefix('=') {
+            Some(json) => Ok(json.as_bytes().to_vec()),
+            None => Err(answer.strip_prefix('!').unwrap_or(&answer).to_owned()),
         }
     }
 }
@@ -153,23 +178,32 @@ impl Drop for Instance {
 #[derive(Default)]
 pub(crate) struct Session {
     looked: bool,
-    instance: Option<Arc<Instance>>,
+    instance: Arc<Option<Instance>>,
     pub(crate) timers: crate::hatches::session::Afters<i32>,
 }
 
 impl Session {
     pub(crate) fn call(&self) -> Option<NativeCall> {
-        let module = Arc::downgrade(self.instance.as_ref()?);
+        let methods = METHODS.get()?.as_ref()?;
+        if !self.looked || (self.instance.is_none() && methods.sync.is_none()) {
+            return None;
+        }
+        let instance = Arc::downgrade(&self.instance);
         Some(Arc::new(move |request| {
-            module
-                .upgrade()
-                .ok_or("the module's session ended")?
-                .call(request)
+            let module = instance.upgrade().ok_or("the module's session ended")?;
+            call(methods, module.as_ref().as_ref(), request)
         }))
     }
 
+    /// Whether the app has a Kotlin data module of its own.
+    pub(crate) fn hosts(&self) -> bool {
+        self.instance.is_some()
+    }
+
     pub(crate) fn app(&self, app: &crate::hatches::App) {
-        let Some(module) = &self.instance else { return };
+        let Some(module) = self.instance.as_ref() else {
+            return;
+        };
         let Ok(thread) = attach_application() else {
             return;
         };
@@ -197,7 +231,7 @@ impl Session {
 
     pub(crate) fn fire(&self, timer: i32, now: f64) {
         crate::canvas::clock::advance(now);
-        if let Some(module) = &self.instance {
+        if let Some(module) = self.instance.as_ref() {
             module.notify(module.methods.timer, &[jvalue { i: timer }]);
         }
     }
@@ -209,13 +243,12 @@ impl<D: DataSource> Presenter<D> {
         if std::mem::replace(&mut session.looked, true) {
             return;
         }
-        let Some(module) = Instance::open() else {
-            return;
-        };
-        session.instance = Some(Arc::new(module));
-        self.hatches
-            .install
-            .get_or_insert_with(|| crate::hatches::install_with_reader::<()>(&[]));
+        session.instance = Arc::new(Instance::open());
+        if session.hosts() {
+            self.hatches
+                .install
+                .get_or_insert_with(|| crate::hatches::install_with_reader::<()>(&[]));
+        }
         self.install_shell_handlers();
     }
 

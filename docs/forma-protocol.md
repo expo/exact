@@ -1,7 +1,7 @@
 # The Forma protocol, `forma/1`
 
 The reference for the design server's wire (LLP 1121 D13), versioned with it. This page
-describes **`forma/1.18`**, the version `hello` reports. The design and the reasons are in LLP 1121
+describes **`forma/1.20`**, the version `hello` reports. The design and the reasons are in LLP 1121
 D13 and LLP 1122 D2, D9 and D10; what was built and how it differs from them is in each RFC's §10.
 The recipe is `docs/recipes/forma.md`. Each change to the wire changes this page in the same
 commit.
@@ -11,7 +11,7 @@ on macOS and Linux.
 
 ## Versions
 
-- `hello` reports the protocol (`"forma/1.18"`) and the IR's format number (`format`).
+- `hello` reports the protocol (`"forma/1.20"`) and the IR's format number (`format`).
 - **A minor version** adds requests or fields. A client ignores fields it doesn't know.
 - **No request carries a client's version.** A client checks `hello`'s `protocol` itself and stops
   on a major version it doesn't speak.
@@ -214,13 +214,17 @@ on macOS and Linux.
   so a reload or another client sees it; an `accept` with no `items` takes it, one naming an older `choiceAt` answers
   409 `{stale: true, choice, choiceBy, choiceAt}` (the check is optional), and `edit-held` carries it, refused alike
   when it names an older `choiceAt` (see Held proposals).
+- `forma/1.19` adds `remove-axis` and the optional `before` and `comment` fields on `add-axis`.
+
+- `forma/1.20` adds the optional `rendered` build sequence to `status`.
 
 ## Where it runs
 
 - **In the dev loop.** Both dev loops (`host/web/dev.mjs`, `host/web-js/dev.mjs`) mount the server
   at their own origin when the app has a design. The JS loop's resident `--serve-as` producer
   mounts none: it relays the main loop's batches and commands to its devices (see the build
-  channel).
+  channel). The JS loop mounts Forma when the design file appears. Removing it releases the
+  writer and returns its Forma routes to 404. Open pages reconnect to the new channel.
 - **Framed by the design tool.** Every HTML response a dev loop sends (the page, its install
   pages, the auth callback, `/__dev/open`) carries
   `Content-Security-Policy: frame-ancestors 'self' http://127.0.0.1:7740` (*1.3*): the tool's
@@ -231,10 +235,12 @@ on macOS and Linux.
   URL as the iframe source. No `X-Frame-Options`. Development only; the tool never scripts the frame.
 - **Alone.** `bun exact.mjs forma serve <app> [--port <n>] [--lan] [--remote <host:port>] [--trust-tunnel <port>]` runs it with no app running.
   It binds loopback unless `--lan`, and a client reaching it over the LAN still can't get the token.
-- **One writer per project.** The design process holds `.exact/forma.lock`. When a second server
+- **One writer per project.** The design process holds `.exact/forma.lock`. When a standalone server
   for the same app can't take the lock, its design process exits. Its `POST /__forma` and
   `/__forma/subscribe` then answer 503 with the lock error, and its long poll answers as in
-  "The change stream".
+  "The change stream". The JS dev loop waits for the writer to release the lock and takes
+  over automatically. While it waits, the local token endpoint answers 200. Authenticated
+  requests to `/__forma`, `/__forma/subscribe` and `/__forma/events` answer 503.
 - **Layers.** `scripts/forma-server.mjs` is the HTTP wire. It speaks JSON lines to
   `contract forma serve --stdio <app>`, which owns the files: the digests, the lock, the journal
   and every write. The wire writes no design file itself.
@@ -833,7 +839,8 @@ design (a `set-state` or `unset-state`: the Contract source that declares its `s
 | `add-token` | `name`, `kind?`, `value`, `meta?: ["key=value"]`, `whens?: [{when, value, comment?}]`, `comment?`, `before?` | structure |
 | `rename-token` | `from`, `to` | structure |
 | `remove-token` | `name` | structure |
-| `add-axis` | `name`, `values`, `under?: "scheme=dark"` | structure |
+| `add-axis` | `name`, `values`, `under?: "scheme=dark"`, `before?`, `comment?` | structure |
+| `remove-axis` (*1.19*) | `name` | structure |
 | `add-axis-value` | `axis`, `value`, `before?` | structure |
 | `remove-axis-value` | `axis`, `value` | structure |
 | `set-param` (*1.10*) | `name`, `when?: [{axis, value}]`, `value` | the app's value of a component's param (LLP 1121 D15): its line in the design's `params` block, or one `when` line of it |
@@ -873,7 +880,18 @@ design (a `set-state` or `unset-state`: the Contract source that declares its `s
     tokens each naming the next more than once, or a sum of many, is refused where it passes;
   - (*1.17*) a chain of tokens naming one another, with the functions their values nest, is at most 512 deep (`forma-reference-depth`), past
     the importers' 256 links;
-  - naming a dial, token, `when` or axis value the design doesn't have is refused.
+  - naming a dial, token, `when`, axis or axis value the design doesn't have is refused.
+  - `remove-axis` and `remove-axis-value` report each surviving `when` that uses the
+    removed axis or value, with its file, line, owner and full condition. This includes
+    parameter overrides and inherited package tokens. In the app, use `unset-token-when`
+    or `unset-param` with `when` in the same transaction. For a package condition,
+    edit the package declaration or override the token in the app. A condition added by
+    the transaction cites its owner on disk, or its proposed line for a new owner. One `undo`
+    restores its original bytes. To remove the last value, use `remove-axis`.
+    When replacing an axis and renaming a token in one transaction, unset the old axis's conditions before the rename.
+    An axis's only `under` is the host trait `scheme=dark`. Dials have scalar defaults,
+    component declarations have unconditional defaults, and exports name tokens. Icons
+    accept no conditional values.
 - **A param's value** (*1.10*): `name` is a param's full name (`post.contract#PostButton.radius`)
   or its short one (`PostButton.radius`); a name no param of the app answers, or a short name two
   components share (whichever has the param, or neither), is refused (`forma-param-unknown`,
@@ -1246,10 +1264,12 @@ list is unchanged: it keeps its own.
     block's header);
   - the `.contract` file is not one of the app's own Contract sources now;
   - it added or removed a dial;
-  - it added an axis, reordered an axis's values, or changed an axis's `under`;
+  - it reordered an axis's values or changed an axis's `under`;
   - it changed a kind, a range, metadata, the design's name, exports, icons or a `component` block.
 
-  A removed axis is restored with `add-axis`.
+  A removed axis is restored with `add-axis`, before the next surviving axis in its
+  original order, with its ordered values, `under` and trailing comment. An axis the
+  commit added is reverted with `remove-axis` if its declaration still matches.
 - **Other refusals:**
   - everything is undone already: 409 with `already`;
   - a commit that touched no design file, or only a Contract source's code: 400;
@@ -1541,6 +1561,9 @@ A write reaches every running development build at once. Release builds take non
 ## The build channel (LLP 1122 D4, *1.2*)
 
 The dev loop's running development builds register with it, report up and take commands down.
+An authored frame at `/__dev/frames/<name>/` registers on its own `__dev/stream` under that page.
+Its client ID addresses that frame. Selections resolve through its own plan map, and value
+batches and snapshots carry the tokens and sheet properties its frame compiled.
 The tool drives no input into an app; a command changes only what `prefer` would.
 
 - **Registration.** A build's dev stream hello (`/__dev`; the JS target's `/__dev/page`) carries
@@ -1613,6 +1636,29 @@ The tool drives no input into an app; a command changes only what `prefer` would
     host), reported when it moves. A pinned copy also says `app` (*1.14*): `{scheme?, mode?,
     rootFontSize?}`, what the app asked instead of its pin (strings; `mode` `{axis: value}`; at
     most 1 KiB), or nothing.
+    **`rendered: N`** (*1.20*) means this document completed a rendering update containing
+    build N's first commit with a nonzero viewport width and height while
+    `document.visibilityState` was `visible`. A frame loaded without a viewport (for
+    example, under `display:none`) waits until it has one. A frame with `transform: scale(0)`
+    still has a layout viewport and reports.
+
+    Only the embedder knows whether it hid the frame with `visibility:hidden`, covered it
+    with an overlay or hid its native view. None of these delays a document that meets the
+    conditions above. A report can arrive just after the embedder hid the frame. It does
+    not establish that a person could see the build or give the compositor a deadline.
+    A capture taken at the same instant can show the previous frame.
+
+    N is the JS page's reload number or the wasm producer's generation sequence. Compare it
+    within one client's current stream. The app, gallery and frame pages report separately.
+    During a reload, the last status still describes the old document until the replacement
+    registers. Registration clears status. The new document or applied build omits the field
+    until it earns its own report. A failed compile keeps the last good build's report.
+    Value batches and scrub previews retain N even when they change pixels.
+
+    Native macOS, iOS, tvOS, Linux and Android clients omit `rendered`: their channel
+    implementations have no equivalent per-build rendering receipt. Windows has no such
+    channel client.
+
     Sent on connect and on any change, the app's own `setScheme`, `setMode` and
     `setRootFontSize` included (at most once a turn). A scrub's frames move the design without a
     status each: the web pages report it once, about 150 ms after the drag rests. A native host

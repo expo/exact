@@ -125,6 +125,20 @@ impl HitClip {
     }
 }
 
+/// The clip a box shows at its size: the one a transition moves (LLP 1003.003 D7), else its row's.
+pub(super) fn shown_clip<'n>(
+    scene: &super::Scene<'_>,
+    node: &'n exact_kernel::NodeRef<'_>,
+    width: f32,
+    height: f32,
+) -> std::borrow::Cow<'n, exact_kernel::clip::ClipPath> {
+    match (scene.clips)(node.id) {
+        // A moving clip is a path, which its size does not resolve
+        Some(moving) => std::borrow::Cow::Owned(moving),
+        None => node.style.rare.clip_path.resolved(width, height),
+    }
+}
+
 pub(super) fn clip_hits(
     boxes: &mut [super::PaintedBox],
     css: &exact_kernel::clip::ClipPath,
@@ -199,6 +213,28 @@ fn path_hits(
 }
 
 impl super::PaintedBox {
+    /// Map a viewport point into this box's border-box coordinates, inverting
+    /// its hit transforms.
+    pub(crate) fn local_point(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        if self.hit.is_some() {
+            return self.for_hit().local_point(x, y);
+        }
+        let (x, y) = self
+            .projective
+            .map_or((x, y), |(inv, ..)| crate::placement::map(&inv, x, y));
+        let (lx, ly) = match self.affine {
+            Some((ts, _)) => {
+                let inverse = super::space::inverse_affine(ts)?;
+                let mut point = tiny_skia::Point::from_xy(x, y);
+                inverse.map_point(&mut point);
+                (point.x, point.y)
+            }
+            None => (x, y),
+        };
+        let rect = self.scroll_rect();
+        Some((lx - rect.0, ly - rect.1))
+    }
+
     /// Whether the point survives the border's corner cutouts, in hit space.
     pub(crate) fn inside_rounded_border(&self, x: f32, y: f32) -> bool {
         let Some(outline) = &self.rounded_border else {

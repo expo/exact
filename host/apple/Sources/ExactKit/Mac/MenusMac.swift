@@ -164,7 +164,9 @@ package final class MenuHost: NSObject {
     /// Open as a popover, here or as the alert a confirmation becomes
     func showsAsPopover(_ node: NodeView) -> Bool { isOpen(node) || presenter?.alerts.isOpenAsPopover(node) == true }
     /// Open by `show-modal`, which HTML's popover commands leave open
-    private func showsModally(_ node: NodeView) -> Bool { presenter?.alerts.isOpen(node) == true && !showsAsPopover(node) }
+    private func showsModally(_ node: NodeView) -> Bool {
+        (presenter?.alerts.isOpen(node) == true || presenter?.dialogs.owns(node) == true) && !showsAsPopover(node)
+    }
     /// `entry` out of the open popovers while `body` runs (PopoversMac.swift).
     func apart(_ entry: Entry, _ body: () -> Void) {
         guard let index = entries.firstIndex(where: { $0 === entry }) else { return body() }
@@ -326,7 +328,7 @@ package final class MenuHost: NSObject {
               seen.insert(ObjectIdentifier(e)).inserted { source = e.source }
         if source === row, let picked { source = picked }
         let bubbled = bubbled && source.map { presenter?.dialogs.isBehindModal($0) == true } == true
-        guard let presenter, !isOpen(pop), live(pop), source.map(live) ?? true, pop.props["popover"] != nil,
+        guard let presenter, !isOpen(pop), !showsModally(pop), live(pop), source.map(live) ?? true, pop.props["popover"] != nil,
               connected(pop), source.map(connected) ?? true, !pop.inert,
               source.map({ !(bubbled ? $0.authoredInert : $0.inert) && !(contextMenu ? $0.formDisabled : $0.disabled) }) ?? true,
               pop.style["display"]?.string != "none", let page = presenter.viewport.window,
@@ -469,13 +471,15 @@ package final class MenuHost: NSObject {
     func close(_ pop: NodeView, restoreFocus: Bool = true, cancelling: Bool = true) {
         presenter?.mouseChain.bubbledPress?.cancel(in: pop)
         if presenter?.alerts.close(pop) == true { return }
-        guard let index = entries.firstIndex(where: { $0.popover === pop }) else { return }
+        guard let initial = entries.firstIndex(where: { $0.popover === pop }) else { return }
         // Hiding an auto stack never hides a manual popover above it.
-        if entries[index].value != "manual" {
-            for entry in entries[(index + 1)...].reversed() where entry.value != "manual" {
+        if entries[initial].value != "manual" {
+            for entry in entries[(initial + 1)...].reversed() where entry.value != "manual" {
                 close(entry.popover, restoreFocus: restoreFocus)
             }
         }
+        // Nested closes can move focus and run blur handlers that mutate `entries`.
+        guard let index = entries.firstIndex(where: { $0.popover === pop }) else { return }
         // AppKit's popover held the keyboard in its own window, and the
         // window under it kept its first responder: nothing to give back.
         let entry = entries[index], window = entry.native == nil ? presenter?.viewport.window : nil
@@ -583,7 +587,7 @@ package final class MenuHost: NSObject {
         }
         popovers = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
         for pop in current {
-            let hidden = !owns(pop) || pop.style["display"]?.string == "none"
+            let hidden = (!owns(pop) && !presenter.dialogs.owns(pop)) || pop.style["display"]?.string == "none"
             if pop.isHidden != hidden { pop.isHidden = hidden; changed = true }
         }
         if changed { refresh() }

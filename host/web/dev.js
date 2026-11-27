@@ -1,3 +1,5 @@
+import { whenRendered } from './engagement.js';
+import { digest } from './sha256.js';
 // The dev connection owns complete, verified generations (LLP 1023 D3).
 // A new epoch resets ordering; each commit replaces the entire asset roster.
 const es = typeof EventSource === "undefined" ? null : new EventSource("/__dev");
@@ -15,41 +17,6 @@ function show(message, source = "app") {
   overlay.onclick = () => { errors.clear(); overlay.remove(); overlay = null; };
 }
 
-// SHA-256 also works on trusted-LAN HTTP pages where SubtleCrypto is absent.
-// The constants are the fractional square/cube roots of the first primes.
-// All integer additions below are reduced modulo 2^32.
-let hashConstants;
-async function digest(bytes) {
-  if (globalThis.crypto?.subtle) return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (n) => n.toString(16).padStart(2, "0")).join("");
-  if (!hashConstants) {
-    const primes = [];
-    for (let n = 2; primes.length < 64; n++) if (primes.every((p) => n % p)) primes.push(n);
-    hashConstants = { initial: primes.slice(0, 8).map((n) => (Math.sqrt(n) % 1 * 0x100000000) | 0),
-      round: primes.map((n) => (Math.cbrt(n) % 1 * 0x100000000) | 0) };
-  }
-  const hash = hashConstants.initial.slice(), words = new Int32Array(64);
-  const padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64);
-  padded.set(bytes); padded[bytes.length] = 128;
-  const view = new DataView(padded.buffer);
-  view.setUint32(padded.length - 8, Math.floor(bytes.length / 0x20000000));
-  view.setUint32(padded.length - 4, bytes.length * 8);
-  const rotate = (n, by) => n >>> by | n << (32 - by);
-  for (let start = 0; start < padded.length; start += 64) {
-    for (let i = 0; i < 16; i++) words[i] = view.getInt32(start + i * 4);
-    for (let i = 16; i < 64; i++) {
-      const a = words[i - 15], b = words[i - 2];
-      words[i] = words[i - 16] + (rotate(a, 7) ^ rotate(a, 18) ^ a >>> 3) + words[i - 7] + (rotate(b, 17) ^ rotate(b, 19) ^ b >>> 10);
-    }
-    let [a, b, c, d, e, f, g, h] = hash;
-    for (let i = 0; i < 64; i++) {
-      const t1 = (h + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)) + (e & f ^ ~e & g) + hashConstants.round[i] + words[i]) | 0;
-      const t2 = ((rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)) + (a & b ^ a & c ^ b & c)) | 0;
-      h = g; g = f; f = e; e = d + t1 | 0; d = c; c = b; b = a; a = t1 + t2 | 0;
-    }
-    [a, b, c, d, e, f, g, h].forEach((n, i) => { hash[i] = hash[i] + n | 0; });
-  }
-  return hash.map((n) => (n >>> 0).toString(16).padStart(8, "0")).join("");
-}
 const validIdentity = (m) => m && /^[0-9a-f]{32}$/.test(m.epoch) && Number.isSafeInteger(m.seq) && m.seq >= 0 && /^[0-9a-f]{64}$/.test(m.generation);
 const utf8Compare = (a, b) => {
   const aa = encoder.encode(a), bb = encoder.encode(b);
@@ -179,14 +146,19 @@ async function fetchGeneration(message, signal, first = false, held = () => null
 
 // Fetches may finish in any order. Only the latest request can enter the
 // host's acceptance/commit operation; a failed candidate keeps the live one.
-function generationClient({ fetchGeneration, apply, applied = () => {}, failed = () => {}, programChanged = () => {} }) {
+function generationClient({ fetchGeneration, apply, applied = () => {}, retained = () => {}, failed = () => {}, programChanged = () => {} }) {
   let epoch = null, queued = -1, committed = null, attempt = 0, inFlight = null, controller = null;
   const retired = new Set();
+  const isCommitted = build => committed?.epoch === build.epoch && committed.generation === build.generation;
   let program = null, stopped = false;
   const stop = () => { stopped = true; attempt++; controller?.abort(); inFlight = null; programChanged(); };
   return {
     // The page booted this generation itself (its first boot): never again.
-    adopt(generation) { committed = generation; },
+    adopt(build) {
+      committed = build;
+      if (epoch === null) { epoch = build.epoch; queued = build.seq; }
+    },
+    current(build) { return !stopped && build?.epoch === epoch && build.seq === queued; },
     receive(message) {
       if (stopped) return Promise.resolve(false);
       if (message?.rebuilt) { stop(); return Promise.resolve(false); }
@@ -201,19 +173,20 @@ function generationClient({ fetchGeneration, apply, applied = () => {}, failed =
       controller = new AbortController();
       const signal = controller.signal;
       const request = ++attempt, current = () => request === attempt;
-      if (committed === message.generation) { inFlight = null; return Promise.resolve(false); }
+      if (isCommitted(message)) { inFlight = null; retained(message); return Promise.resolve(false); }
       const activeController = controller;
       const timeout = setTimeout(() => activeController.abort(), 15000);
       const pending = (async () => {
         try {
           const candidate = await fetchGeneration(message, signal);
-          if (!current() || committed === candidate.generation) return false;
+          if (!current()) return false;
+          if (isCommitted(candidate)) { retained(candidate); return false; }
           let accepted;
           try { accepted = await apply(candidate, current); }
           catch (error) { throw Object.assign(new Error(String(error)), { hostRefused: true }); }
           if (!current()) return false;
           if (!accepted) throw Object.assign(new Error("the host refused the current generation"), { hostRefused: true });
-          committed = candidate.generation;
+          committed = candidate;
           applied(candidate);
           return true;
         } catch (error) { if (current()) { failed(error, current); } return false; }
@@ -287,7 +260,16 @@ if (es) {
     // and the design its runner runs (read from it: /__dev/design is 204 when the
     // plan's own is the one to run, so no live answer would say it).
     // An inspect outline drawn on the old generation's boxes goes.
-    applied: (candidate) => { clearTimeout(retry); if (stillUntil) stillEnds(); show(null); generations += 1; outlineNone(); delete globalThis.exact.designDigest; syncDesign(); channel.plan = candidate?.generation ?? channel.plan; knownPlan(candidate?.planSha256); if (channel.held) command(channel.held); else if (channel.nonce) status(); rehold(); },
+    applied: (candidate) => { clearTimeout(retry); if (stillUntil) stillEnds(); show(null); generations += 1; outlineNone(); delete globalThis.exact.designDigest; syncDesign(); channel.plan = candidate?.generation ?? channel.plan; knownPlan(candidate?.planSha256); watchBuild(candidate); if (channel.held) command(channel.held); else if (channel.nonce) status(); rehold(); },
+    // Bytes identical to the live generation need no restart. Its new sequence still
+    // waits for a rendering update with those bytes before it can be acknowledged.
+    retained(message) {
+      const live = activeGeneration;
+      if (live?.generation !== message.generation || (live.epoch === message.epoch && live.seq === message.seq)) return;
+      activeGeneration = { ...live, epoch: message.epoch, seq: message.seq };
+      watchBuild(activeGeneration);
+      if (channel.nonce) status();
+    },
     failed: (error, current) => {
       clearTimeout(retry);
       if (trapped()) return; // said once, by `onTrap`; the next generation reloads
@@ -313,7 +295,12 @@ if (es) {
     slot.provide = async () => {
       try {
         const candidate = await fetchGeneration(JSON.parse(firstMeta.content), AbortSignal.timeout(15000), true);
-        if (!candidate.rust) { client.adopt(candidate.generation); activeGeneration = candidate; }
+        if (!candidate.rust) {
+          client.adopt(candidate);
+          activeGeneration = candidate;
+          channel.plan = candidate.generation;
+          watchBuild(candidate);
+        }
         // A Rust module is applied as an update of this generation, which keeps these assets.
         else firstAssets = candidate.assets;
         return candidate;
@@ -397,6 +384,26 @@ if (es) {
   // the design server's clients; the other commands are reserved, and
   // answered unsupported. Every report waits for the stream's registration.
   const channel = { nonce: null, registered: null, revision: null, before: null, held: null, hold: null, holdLatest: null, plan: null, told: null };
+  let stopWitness;
+  function watchBuild(build) {
+    stopWitness?.();
+    channel.rendered = null;
+    const begin = () => {
+      stopWitness = whenRendered(() => {
+        if (activeGeneration !== build) return;
+        channel.rendered = build;
+        if (channel.nonce) status();
+      });
+    };
+    // The numbered first plan is fetched before boot. Its successful DOM commit sets bootMs.
+    const root = document.getElementById('exact-root');
+    if (root.dataset.bootMs !== undefined) begin();
+    else {
+      const boot = new MutationObserver(() => { boot.disconnect(); begin(); });
+      boot.observe(root, { attributes: true, attributeFilter: ['data-boot-ms'] });
+      stopWitness = () => boot.disconnect();
+    }
+  }
   let applying = null;
   // The tab's own id, kept across its reloads (sessionStorage); a duplicated
   // tab, which copies that storage, takes another when this one answers.
@@ -431,13 +438,16 @@ if (es) {
   // to the frame's status). A new stream starts its own queue, and a post
   // gives up after 10 s, so one stuck request holds up nothing for long.
   let reports = { nonce: null, tail: Promise.resolve() };
-  const report = (body) => {
+  const earned = build => build && build === activeGeneration && build === channel.rendered && build.epoch === channel.streamEpoch && client.current(build);
+  const report = (body, generation) => {
     const { nonce, registered } = channel;
     if (!nonce) return Promise.resolve();
     if (reports.nonce !== nonce) reports = { nonce, tail: Promise.resolve() };
     const queue = reports;
     return (queue.tail = queue.tail.then(async () => {
       if (!(await registered) || channel.nonce !== nonce || channel.registered !== registered) return;
+      if (body.kind === 'status' && generation !== activeGeneration) return;
+      if (body.rendered !== undefined && !earned(generation)) delete body.rendered;
       await post(nonce, body, 10_000).catch(() => {});
     }));
   };
@@ -466,11 +476,15 @@ if (es) {
     }
     return planDigestNow;
   };
-  const facts = async () => {
+  const facts = async (generation) => {
+    const nonce = channel.nonce, epoch = channel.streamEpoch;
     const rootStyle = getComputedStyle(document.documentElement), cs = rootStyle.colorScheme;
     const scheme = /dark/.test(cs) && !/light/.test(cs) ? "dark" : /light/.test(cs) && !/dark/.test(cs) ? "light" : globalThis.exact.systemScheme ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
     const contrast = matchMedia("(prefers-contrast: more)").matches ? "more" : matchMedia("(prefers-contrast: less)").matches ? "less" : "no-preference";
-    return { kind: "status", scheme, contrast, mode: await modes(), rootFontSize: parseFloat(rootStyle.fontSize), plan: channel.plan, planDigest: await planDigest(), design: globalThis.exact.designDigest ?? await designNow(), revision: channel.revision, location: here(), app: appAsked() ?? undefined };
+    const body = { kind: "status", scheme, contrast, mode: await modes(), rootFontSize: parseFloat(rootStyle.fontSize), plan: channel.plan, planDigest: await planDigest(), design: globalThis.exact.designDigest ?? await designNow(), revision: channel.revision, location: here(), app: appAsked() ?? undefined };
+    if (generation !== activeGeneration || nonce !== channel.nonce || epoch !== channel.streamEpoch) return null;
+    if (earned(generation) && generation.generation === body.plan) body.rendered = generation.seq;
+    return body;
   };
   // In a copy the design tool pins (LLP 1122 T7, theme2's F2 ruling), the
   // pin holds over the app's own setScheme, setMode and setRootFontSize for
@@ -502,7 +516,15 @@ if (es) {
     if (out?.asked) asked = out.asked;
     return out;
   };
-  const status = async () => { clearTimeout(statusLater); statusLater = null; const body = await facts(); channel.told = JSON.stringify(body); report(body); };
+  const sendStatus = async (onlyChanged) => {
+    const generation = activeGeneration, body = await facts(generation);
+    if (!body) return;
+    const told = JSON.stringify(body);
+    if (onlyChanged && told === channel.told) return;
+    channel.told = told;
+    report(body, generation);
+  };
+  const status = () => { clearTimeout(statusLater); statusLater = null; return sendStatus(false); };
   // The facts change under the page too, and by the app's own `setScheme`,
   // `setMode` and `setRootFontSize`: after its commits, once a turn, a status
   // when they moved.
@@ -517,8 +539,7 @@ if (es) {
         due = false;
         if (copy && channel.releasing) channel.releasing = !!(await holdFacts("-"))?.error;
         if (copy && channel.held) await holdFacts("?");
-        const body = await facts();
-        if (JSON.stringify(body) !== channel.told) { channel.told = JSON.stringify(body); report(body); }
+        await sendStatus(true);
       }).catch((error) => console.error("exact dev:", String(error)));
     }, 0);
   };
@@ -1083,7 +1104,7 @@ if (es) {
     if (message.kind === "navigate") message.stream = channel.nonce;
     if (message.kind === "pin" || message.kind === "inspect" || message.kind === "outline" || message.kind === "hold" || message.kind === "navigate") { command(message); return; }
     if (message.hello && message.nonce && message.nonce !== channel.nonce) {
-      const nonce = channel.nonce = message.nonce;
+      const nonce = channel.nonce = message.nonce; channel.streamEpoch = message.epoch;
       // A new stream may be a new server's: a hold of the one before ends nothing, and says nothing, now.
       epoch += 1; ended.clear(); lastRevision = 0;
       channel.plan ??= message.generation ?? null;

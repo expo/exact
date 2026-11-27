@@ -17,20 +17,26 @@ impl<D: DataSource> Presenter<D> {
 
     /// The target a press at `(x, y)` on `hit` follows: the link run under
     /// the point in a painted paragraph, else the nearest `href` at or above
-    /// the hit node.
+    /// the hit node. A link or run that has its own `press` handler runs that
+    /// handler instead of following `href`, as on the web and Apple hosts.
     pub(crate) fn link_at(&self, hit: ViewId, x: f32, y: f32) -> Option<String> {
         let kernel = self.host.kernel();
         let node = kernel.node(hit)?;
         if node.node_type == NodeType::Text {
-            if let Some(href) = self.run_link(hit, x, y) {
-                return Some(href);
+            if let Some(run) = self.run_link_target(hit, x, y) {
+                return run;
             }
         }
         let mut at = Some(hit);
         while let Some(id) = at {
             let node = kernel.node(id)?;
             if let Some(href) = node.props.link() {
-                return Some(href.to_string());
+                return (!self
+                    .host
+                    .runner()
+                    .handlers_of(id)
+                    .contains(&EventKind::Press))
+                .then(|| href.to_string());
             }
             at = node.parent;
         }
@@ -41,18 +47,29 @@ impl<D: DataSource> Presenter<D> {
     /// link: a Markdown run's own target, or an inline run's `href` (its
     /// leaf or an inline ancestor below the paragraph).
     pub(super) fn run_link(&self, id: ViewId, x: f32, y: f32) -> Option<String> {
+        self.run_link_target(id, x, y).flatten()
+    }
+
+    fn run_link_target(&self, id: ViewId, x: f32, y: f32) -> Option<Option<String>> {
         let run = self.inline_run_at(id, x, y)?;
         let kernel = self.host.kernel();
         let node = kernel.node(id)?;
         if node.props.str(PropId::Markup) == Some("markdown") {
             let href = &self.paragraph(id)?.runs().get(run)?.href;
-            return (!href.is_empty()).then(|| href.clone());
+            return (!href.is_empty()).then(|| Some(href.clone()));
         }
         let mut at = inline_sources(&node).get(run).copied();
         while let Some(leaf) = at.filter(|leaf| *leaf != id) {
             let leaf = kernel.node(leaf)?;
             if let Some(href) = leaf.props.link() {
-                return Some(href.to_string());
+                return Some(
+                    (!self
+                        .host
+                        .runner()
+                        .handlers_of(leaf.id)
+                        .contains(&EventKind::Press))
+                    .then(|| href.to_string()),
+                );
             }
             at = leaf.parent;
         }
@@ -594,6 +611,57 @@ component App
     }
 
     #[test]
+    fn a_refused_open_url_journals_its_scheme_and_none_of_the_url() {
+        let source = r#"component App
+  view
+    text "x"
+"#;
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (300., 500.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        p.compat = r#"{"inputs":{"capabilities":{"openUrlSchemes":["demo"]}}}"#.into();
+        p.serve_requests();
+        for url in [
+            "unknown:/route?token=private",
+            "JavaScript:alert('private')",
+            "demo:\0private",
+            "/route?token=private",
+            "not a url: private",
+        ] {
+            p.open_url(&[exact_plan::Value::from(url)]);
+        }
+        assert!(p.take_requests().is_none());
+        let refused: Vec<String> = p
+            .host
+            .runner()
+            .journal()
+            .filter_map(|l| l.find("openURL refused").map(|at| l[at..].to_owned()))
+            .collect();
+        let head = |l: &String| l.split(" is not ").next().unwrap_or_default().to_owned();
+        assert_eq!(
+            refused.iter().map(head).collect::<Vec<_>>(),
+            [
+                "openURL refused: unknown:",
+                "openURL refused: javascript:",
+                "openURL refused: demo:",
+                "openURL refused: a URL with no scheme",
+                "openURL refused: a URL with no scheme",
+            ]
+        );
+        assert!(
+            refused.iter().all(|l| !l.contains("private")),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
     fn desktop_links_and_open_url_commands_use_the_registered_handler() {
         use std::{
             cell::{Cell, RefCell},
@@ -674,5 +742,64 @@ component App
             .runner()
             .journal()
             .any(|line| line.contains("no registered handler")));
+    }
+
+    #[test]
+    fn a_link_with_both_href_and_press_runs_press_without_following_href() {
+        let source = r#"routes nav
+  home "/"
+  step "/step/:n"
+component App
+  state taps = 0
+  action follow(url: string)
+    nav = go(nav, url)
+  action count
+    taps = taps + 1
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` position="absolute" inset=0
+          link href="/step/1" press=count testId="both" height=40
+            text "Go to step"
+          link href="/step/2" testId="plain" height=40
+            text "Plain link"
+          text `depth ${depth(nav)} taps ${taps}` testId="status"
+"#;
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (400., 300.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let status = |p: &Presenter<()>| {
+            let k = p.host.kernel();
+            let key = k.find_by_test_id("status")[0];
+            k.node_by_key(key)
+                .unwrap()
+                .props
+                .str(PropId::Text)
+                .unwrap()
+                .to_string()
+        };
+        let node_id = |p: &Presenter<()>, tid: &str| {
+            let k = p.host.kernel();
+            k.node_by_key(k.find_by_test_id(tid)[0]).unwrap().id
+        };
+        // Pointer tap on a link with both `href` and `press`: runs `press`, does not follow `href`.
+        let both = node_id(&p, "both");
+        p.tap(both).unwrap();
+        assert_eq!(status(&p), "depth 1 taps 1");
+        // Keyboard Enter on the same link: runs `press`, does not follow `href`.
+        p.set_focus(Some(both), 10.);
+        p.key_down("Enter", 10.);
+        assert_eq!(status(&p), "depth 1 taps 2");
+        // A link with `href` alone still follows it.
+        let plain = node_id(&p, "plain");
+        p.tap(plain).unwrap();
+        assert_eq!(status(&p), "depth 2 taps 2");
     }
 }

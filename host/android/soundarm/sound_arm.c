@@ -1,10 +1,11 @@
-// AAudio owns the realtime callback; JNI and decoding stay on the main thread.
+// AAudio owns the realtime callback; JNI open/resume/pause/close run on SoundOutput's serial executor.
 #include "sound_wav.h"
 #include "sound_mixer.h"
 #include <aaudio/AAudio.h>
 #include <jni.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,8 @@ typedef struct {
     AAudioStream *stream;
     ExactMixer *mixer;
     float **sounds;
+    uint32_t *sound_frames;
+    uint32_t *sound_channels;
     uint32_t count;
     int32_t rate;
     _Atomic int32_t error;
@@ -76,12 +79,39 @@ static void failed(AAudioStream *stream, void *context, aaudio_result_t error) {
     atomic_store(&((Arm *)context)->error, error);
 }
 
-static void close_arm(Arm *arm) {
+static void pause_stream(Arm *arm) {
     if (!arm) return;
-    if (arm->stream) { AAudioStream_requestStop(arm->stream); AAudioStream_close(arm->stream); }
+    if (arm->stream) {
+        AAudioStream_requestStop(arm->stream);
+        AAudioStream_close(arm->stream);
+        arm->stream = NULL;
+    }
+    arm->first_callback = 0;
+    arm->stamp_frame = 0;
+    arm->stamp_nanos = 0;
+    atomic_store(&arm->error, 0);
+    atomic_store(&arm->latency, 0);
+    atomic_store(&arm->timestamp, false);
+}
+
+static void free_sounds(Arm *arm) {
+    if (!arm) return;
     exact_sound_mixer_free(arm->mixer);
+    arm->mixer = NULL;
     for (uint32_t i = 0; i < arm->count; i++) free(arm->sounds[i]);
     free(arm->sounds);
+    free(arm->sound_frames);
+    free(arm->sound_channels);
+    arm->sounds = NULL;
+    arm->sound_frames = NULL;
+    arm->sound_channels = NULL;
+    arm->count = 0;
+}
+
+static void close_arm(Arm *arm) {
+    if (!arm) return;
+    pause_stream(arm);
+    free_sounds(arm);
     free(arm);
 }
 
@@ -113,14 +143,13 @@ static char *file_path(JNIEnv *env, jstring file) {
     return path;
 }
 
-JNIEXPORT jlong JNICALL JNI(open)(JNIEnv *env, jclass klass, jobjectArray files, jint usage, jint content, jbooleanArray decoded) {
-    (void)klass;
-    Arm *arm = calloc(1, sizeof(Arm));
+static bool open_stream(Arm *arm, jint usage, jint content, int32_t *out_rate, char *reason, size_t reason_size) {
     AAudioStreamBuilder *builder = NULL;
-    char reason[512] = "no memory for sound output";
-    if (!arm) goto fail;
     aaudio_result_t result = AAudio_createStreamBuilder(&builder);
-    if (result != AAUDIO_OK) goto aaudio_fail;
+    if (result != AAUDIO_OK) {
+        snprintf(reason, reason_size, "AAudio: %s", AAudio_convertResultToText(result));
+        return false;
+    }
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setChannelCount(builder, 2);
@@ -132,49 +161,125 @@ JNIEXPORT jlong JNICALL JNI(open)(JNIEnv *env, jclass klass, jobjectArray files,
     AAudioStreamBuilder_setErrorCallback(builder, failed, arm);
     result = AAudioStreamBuilder_openStream(builder, &arm->stream);
     AAudioStreamBuilder_delete(builder);
-    builder = NULL;
-    if (result != AAUDIO_OK) goto aaudio_fail;
-    arm->rate = AAudioStream_getSampleRate(arm->stream);
-    if (AAudioStream_getFormat(arm->stream) != AAUDIO_FORMAT_PCM_FLOAT ||
-        AAudioStream_getChannelCount(arm->stream) != 2 || arm->rate <= 0) {
-        snprintf(reason, sizeof(reason), "AAudio did not provide stereo float output"); goto fail;
+    if (result != AAUDIO_OK) {
+        snprintf(reason, reason_size, "AAudio: %s", AAudio_convertResultToText(result));
+        return false;
     }
-    arm->mixer = exact_sound_mixer(2, arm->rate);
-    if (!arm->mixer) goto fail;
-    arm->count = (uint32_t)(*env)->GetArrayLength(env, files);
-    arm->sounds = calloc(arm->count, sizeof(float *));
-    if (!arm->sounds) { arm->count = 0; goto fail; }
-    for (uint32_t i = 0; i < arm->count; i++) {
+    int32_t rate = AAudioStream_getSampleRate(arm->stream);
+    if (AAudioStream_getFormat(arm->stream) != AAUDIO_FORMAT_PCM_FLOAT ||
+        AAudioStream_getChannelCount(arm->stream) != 2 || rate <= 0) {
+        snprintf(reason, reason_size, "AAudio did not provide stereo float output");
+        pause_stream(arm);
+        return false;
+    }
+    *out_rate = rate;
+    return true;
+}
+
+static bool decode_files(JNIEnv *env, Arm *arm, jobjectArray files, jbooleanArray decoded, int32_t rate, char *reason, size_t reason_size) {
+    free_sounds(arm);
+    arm->rate = rate;
+    arm->mixer = exact_sound_mixer(2, rate);
+    if (!arm->mixer) return false;
+    uint32_t count = (uint32_t)(*env)->GetArrayLength(env, files);
+    if (count > 0) {
+        arm->sounds = calloc(count, sizeof(float *));
+        arm->sound_frames = calloc(count, sizeof(uint32_t));
+        arm->sound_channels = calloc(count, sizeof(uint32_t));
+        if (!arm->sounds || !arm->sound_frames || !arm->sound_channels) {
+            free_sounds(arm);
+            return false;
+        }
+    }
+    arm->count = count;
+    for (uint32_t i = 0; i < count; i++) {
         jstring file = (*env)->GetObjectArrayElement(env, files, (jsize)i);
-        if (!file) goto fail;
+        if (!file) return false;
         char *path = file_path(env, file);
-        if (!path) { (*env)->DeleteLocalRef(env, file); goto fail; }
-        uint32_t frames, channels;
-        arm->sounds[i] = exact_sound_read_wav(path, arm->rate, &frames, &channels, reason, sizeof(reason));
+        if (!path) { (*env)->DeleteLocalRef(env, file); return false; }
+        uint32_t frames = 0, channels = 0;
+        arm->sounds[i] = exact_sound_read_wav(path, rate, &frames, &channels, reason, reason_size);
         free(path);
         (*env)->DeleteLocalRef(env, file);
         jboolean ok = arm->sounds[i] != NULL;
         (*env)->SetBooleanArrayRegion(env, decoded, (jsize)i, 1, &ok);
-        if ((*env)->ExceptionCheck(env)) goto fail;
+        if ((*env)->ExceptionCheck(env)) return false;
         if (!ok) continue;
+        arm->sound_frames[i] = frames;
+        arm->sound_channels[i] = channels;
         exact_sound_set(arm->mixer, i, arm->sounds[i], frames, channels);
     }
-    result = AAudioStream_requestStart(arm->stream);
-    if (result != AAUDIO_OK) goto aaudio_fail;
+    return true;
+}
+
+static bool rebind_cached(JNIEnv *env, Arm *arm, jbooleanArray decoded) {
+    ExactMixer *fresh = exact_sound_mixer(2, arm->rate);
+    if (!fresh) return false;
+    exact_sound_mixer_free(arm->mixer);
+    arm->mixer = fresh;
+    for (uint32_t i = 0; i < arm->count; i++) {
+        jboolean ok = arm->sounds[i] != NULL;
+        (*env)->SetBooleanArrayRegion(env, decoded, (jsize)i, 1, &ok);
+        if ((*env)->ExceptionCheck(env)) return false;
+        if (ok) exact_sound_set(arm->mixer, i, arm->sounds[i], arm->sound_frames[i], arm->sound_channels[i]);
+    }
+    return true;
+}
+
+JNIEXPORT jlong JNICALL JNI(open)(JNIEnv *env, jclass klass, jobjectArray files, jint usage, jint content, jbooleanArray decoded) {
+    (void)klass;
+    Arm *arm = calloc(1, sizeof(Arm));
+    char reason[512] = "no memory for sound output";
+    int32_t rate = 0;
+    if (!arm) goto fail;
+    if (!open_stream(arm, usage, content, &rate, reason, sizeof(reason))) goto fail;
+    if (!decode_files(env, arm, files, decoded, rate, reason, sizeof(reason))) goto fail;
+    aaudio_result_t result = AAudioStream_requestStart(arm->stream);
+    if (result != AAUDIO_OK) {
+        snprintf(reason, sizeof(reason), "AAudio: %s", AAudio_convertResultToText(result));
+        goto fail;
+    }
     return (jlong)(intptr_t)arm;
-aaudio_fail:
-    snprintf(reason, sizeof(reason), "AAudio: %s", AAudio_convertResultToText(result));
 fail:
-    if (builder) AAudioStreamBuilder_delete(builder);
     close_arm(arm);
     if (!(*env)->ExceptionCheck(env)) throw_error(env, reason);
     return 0;
 }
 
+JNIEXPORT jboolean JNICALL JNI(resume)(JNIEnv *env, jclass klass, jlong handle, jobjectArray files, jint usage, jint content, jbooleanArray decoded) {
+    (void)klass;
+    Arm *arm = (Arm *)(intptr_t)handle;
+    char reason[512] = "no memory for sound output";
+    if (!arm) { throw_error(env, "sound output is closed"); return JNI_FALSE; }
+    pause_stream(arm);
+    int32_t rate = 0;
+    if (!open_stream(arm, usage, content, &rate, reason, sizeof(reason))) goto fail;
+    uint32_t count = (uint32_t)(*env)->GetArrayLength(env, files);
+    bool ok = (rate == arm->rate && count == arm->count && arm->mixer != NULL)
+        ? rebind_cached(env, arm, decoded)
+        : decode_files(env, arm, files, decoded, rate, reason, sizeof(reason));
+    if (!ok) goto fail;
+    aaudio_result_t result = AAudioStream_requestStart(arm->stream);
+    if (result != AAUDIO_OK) {
+        snprintf(reason, sizeof(reason), "AAudio: %s", AAudio_convertResultToText(result));
+        goto fail;
+    }
+    return JNI_TRUE;
+fail:
+    pause_stream(arm);
+    if (!(*env)->ExceptionCheck(env)) throw_error(env, reason);
+    return JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL JNI(pause)(JNIEnv *env, jclass klass, jlong handle) {
+    (void)env; (void)klass;
+    pause_stream((Arm *)(intptr_t)handle);
+}
+
 JNIEXPORT jboolean JNICALL JNI(op)(JNIEnv *env, jclass klass, jlong handle, jint kind, jlong id, jint sound, jdouble at, jfloat gain, jfloat rate, jfloat pan, jdouble ramp) {
     (void)env; (void)klass;
     Arm *arm = (Arm *)(intptr_t)handle;
-    if (!exact_sound_room(arm->mixer)) return JNI_FALSE;
+    if (!arm || !arm->mixer || !exact_sound_room(arm->mixer)) return JNI_FALSE;
     bool pushed = kind == 4 ? exact_sound_change(arm->mixer, id, at, gain, rate, pan, ramp)
                             : exact_sound_push(arm->mixer, kind, id, sound, at, gain, rate, pan);
     return pushed ? JNI_TRUE : JNI_FALSE;
@@ -187,7 +292,7 @@ JNIEXPORT jdoubleArray JNICALL JNI(counts)(JNIEnv *env, jclass klass, jlong hand
         exact_sound_live(arm->mixer), exact_sound_dropped(arm->mixer), exact_sound_late(arm->mixer),
         atomic_load(&arm->latency), arm->rate, atomic_load(&arm->timestamp) ? 1 : 0,
         atomic_load(&arm->error), EXACT_SOUND_RING - exact_sound_room(arm->mixer),
-        AAudioStream_getXRunCount(arm->stream),
+        arm->stream ? AAudioStream_getXRunCount(arm->stream) : 0,
     };
     jdoubleArray out = (*env)->NewDoubleArray(env, 9);
     if (out) (*env)->SetDoubleArrayRegion(env, out, 0, 9, values);

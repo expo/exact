@@ -105,6 +105,30 @@ fn a_route_opted_out_of_its_top_starts_under_the_bar() {
     assert_eq!(y(&runner, "hero-text").0, 106.0);
 }
 
+/// `auto`, the row's initial value as `contract vocab` lists it, is a
+/// keyword of the row's bits like `none`: written alone or as a ternary's
+/// arm, every edge is cleared, as with nothing written.
+#[test]
+fn auto_clears_every_edge_alone_or_as_a_ternary_arm() {
+    for safe in [
+        r#"-exact-safe-area="auto""#,
+        r#"-exact-safe-area=(e.id == 99 ? "top" : "auto")"#,
+    ] {
+        let mut runner = boot(safe);
+        covered(&mut runner);
+        assert_eq!(
+            y(&runner, "hero").0,
+            0.0,
+            "{safe}: the background under the bar"
+        );
+        assert_eq!(
+            y(&runner, "hero-text").0,
+            106.0,
+            "{safe}: its text below it"
+        );
+    }
+}
+
 #[test]
 fn the_opt_out_belongs_to_a_content_owner() {
     let source = r#"component App

@@ -39,7 +39,7 @@ impl SurfacePainter for Windows {
         // finished as a frame is: a frame's begin and finish keep the
         // page's own groups, layers and last stream for the thread, and a
         // surface has none of those.
-        let mut recorder = Recorder::new();
+        let mut recorder = Recorder::for_surface();
         recorder.scale = scale;
         paint(&mut recorder);
         std::mem::take(&mut recorder.ops)
@@ -94,6 +94,11 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The descriptor used only for drawable arrivals.
     pub fn acquire_fd(&self) -> i32 {
         crate::surfaces::acquire_fd()
+    }
+
+    /// The descriptor signaled when a resting GPU surface calls `SurfaceWaker::wake`.
+    pub fn surface_wake_fd(&self) -> i32 {
+        self.p.surface_wake_fd()
     }
 
     /// Drain drawable arrivals and finish owed canvases while the reader runs.

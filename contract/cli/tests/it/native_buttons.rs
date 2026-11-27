@@ -567,10 +567,12 @@ fn a_label_guard_does_not_reach_the_next_sibling() {
     assert_unlabelled_warning(&src.replace("appearance=\"auto\"", "appearance=\"none\""));
 }
 
+/// LLP 1069.011 D6: the author places and sizes a native button's box, and its layout transition moves it by its
+/// centre (LLP 1063)
 #[test]
-fn its_box_carries_place_size_opacity_transforms_and_accent_only() {
+fn its_box_carries_place_size_motion_opacity_transforms_and_accent_only() {
     boot(&app(
-        "button appearance=\"auto\" press=go key=keys width=120 margin-top=8 align-self=\"center\" display=(busy ? \"none\" : \"flex\") opacity=0.5 translate=\"4px 0px\" accent-color=\"#34c759\" transition=\"opacity 200ms\" animation=\"fade 300ms\"\n  text \"Go\"",
+        "button appearance=\"auto\" press=go key=keys width=120 margin-top=8 align-self=\"center\" display=(busy ? \"none\" : \"flex\") opacity=0.5 translate=\"4px 0px\" accent-color=\"#34c759\" transition=\"opacity 200ms\" animation=\"fade 300ms\" -exact-layout-transition=\"-exact-spring(290, 34, 1)\"\n  text \"Go\"",
     ));
     for body in [
         "button appearance=\"auto\" press=go background-color=\"#ff0000\"\n  text \"Go\"",
@@ -628,6 +630,25 @@ fn it_goes_where_a_button_goes_and_admits_dialog_and_popover_invokers() {
             message.contains("custom `button`") || message.contains("`\"button\"`"),
             "{body}: {message}"
         );
+    }
+}
+
+#[test]
+fn a_nested_popover_supplies_its_own_native_rows() {
+    for body in [
+        "column popover=\"auto\"\n  button appearance=\"auto\" press=go\n    text \"Outer\"\ncolumn popover=\"auto\"\n  button appearance=\"auto\" press=go\n    text \"Inner\"",
+        "column popover=\"auto\"\n  column popover=\"auto\"\n    button appearance=\"auto\" press=go\n      text \"Inner\"\n  button appearance=\"auto\" press=go\n    text \"Outer\"",
+        "column popover=\"auto\"\n  column role=\"group\"\n    column popover=\"auto\"\n      column role=\"group\"\n        button appearance=\"auto\" press=go\n          text \"Inner\"",
+        "column popover=\"auto\"\n  if busy\n    column popover=\"manual\"\n      column popover=\"auto\"\n        button appearance=\"auto\" press=go\n          text \"Inner\"",
+    ] {
+        contract::compile(&app(body)).unwrap_or_else(|e| panic!("{body}: {e}"));
+    }
+    for body in [
+        "column popover=\"auto\"\n  column popover=\"auto\"\n    row\n      button appearance=\"auto\" press=go\n        text \"Too deep\"",
+        "column popover=\"auto\"\n  column popover=\"auto\"\n    button press=go\n      button appearance=\"auto\" press=go\n        text \"Nested button\"",
+    ] {
+        let (id, message) = refused(body);
+        assert_eq!(id, "lower-button-context", "{body}: {message}");
     }
 }
 
@@ -835,6 +856,19 @@ fn platform_rows_belong_only_to_native_buttons_and_roundtrip_through_classes() {
             assert!(message.contains("native button"), "{body}: {message}");
         }
     }
+    // A segmented control takes a size, not a corner style (LLP 1069.011.001 D8)
+    for role in ["tablist", "radiogroup"] {
+        let item = if role == "tablist" { "tab" } else { "radio" };
+        let segments = format!(
+            "  button role=\"{item}\"\n    text \"A\"\n  button role=\"{item}\"\n    text \"B\""
+        );
+        let body = format!("row role=\"{role}\" -exact-control-size=\"large\"\n{segments}");
+        contract::compile(&app(&body)).unwrap_or_else(|e| panic!("{body}: {e}"));
+        let (id, message) = refused(&format!(
+            "row role=\"{role}\" -exact-corner-style=\"capsule\"\n{segments}"
+        ));
+        assert_eq!(id, "lower-button-style-attr", "{role}: {message}");
+    }
     let mut r = boot(&format!("style A\n  -exact-control-size=\"large\"\n  -exact-corner-style=\"capsule\"\nstyle B\n  opacity=1\n{}", app("button appearance=\"auto\" class=(n == 0 ? A : B) press=go testId=\"b\"\n  text \"Go\"")));
     let b = view_of(&r, "b");
     let style = r.kernel().button_face_style(b).unwrap();
@@ -909,6 +943,10 @@ fn the_default_is_native_and_explicit_none_is_bare() {
         ("", true),
         ("appearance=\"auto\"", true),
         ("appearance=\"none\"", false),
+        (
+            "-exact-layout-transition=\"-exact-spring(290, 34, 1)\"",
+            true,
+        ),
     ] {
         assert_eq!(
             appearance_of(&app(&format!("button {attrs} testId=\"b\"\n  text \"Go\""))),
@@ -1148,6 +1186,11 @@ fn bare_reasons_live_only_in_the_development_map_and_migration_uses_merged_rows(
         ),
         (
             "button display=(n == 0 ? \"none\" : \"flex\") testId=\"b\"\n  text \"Go\"",
+            false,
+        ),
+        // A layout transition only moves the native button between its places
+        (
+            "button -exact-layout-transition=\"-exact-spring(290, 34, 1)\" testId=\"b\"\n  text \"Go\"",
             false,
         ),
     ] {

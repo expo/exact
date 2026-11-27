@@ -3,7 +3,6 @@
 use super::*;
 
 impl Instance {
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn offscreen_format(&self) -> wgpu::TextureFormat {
         if self.surface.srgb_target() {
             wgpu::TextureFormat::Rgba8UnormSrgb
@@ -29,6 +28,7 @@ impl Instance {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 self.readback = None;
+                self.sampled = None;
             }
             self.seen.store(false, Ordering::Release);
             #[cfg(target_os = "android")]

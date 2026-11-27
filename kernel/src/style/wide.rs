@@ -214,3 +214,21 @@ use reclaim::{stale, table};
 
 mod marks;
 mod reclaim;
+
+impl ColorValue {
+    /// Straight linear-light sRGB at this appearance, retaining a wide colour's gamut.
+    pub fn linear_rgba(self, dark: bool) -> [f32; 4] {
+        let color = super::roles::painted_override(self).unwrap_or(self);
+        if let ColorValue::Wide(id) = color {
+            if let Some(wide) = wide(id) {
+                let half = wide.half(dark);
+                let [r, g, b] = half.linear_srgb();
+                return [r as f32, g as f32, b as f32, half.alpha as f32];
+            }
+        }
+        let c = color.resolve(dark);
+        let [r, g, b] =
+            [c.r(), c.g(), c.b()].map(|v| exact_color::srgb_to_linear(f64::from(v) / 255.) as f32);
+        [r, g, b, f32::from(c.a()) / 255.]
+    }
+}

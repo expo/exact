@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import nodePath, { basename, dirname, relative, resolve } from 'node:path';
+import { buildScriptOutput } from './cargo-dep-info.mjs';
 import { within } from './paths.mjs';
 
 /** Entries kept per group, and groups kept: at 5 MB an entry, under 1 GB. */
@@ -127,11 +128,26 @@ export function keptProducts({ root, cache: name, env, tools = [], skip = [], la
     }
     return [...files].sort();
   };
-  /** Each variable a build script of the product asked to be rerun for. */
+  /** Each variable a build script of the product asked to be rerun for, across stable and nightly Cargo layouts. */
   const asked = (spec) => {
     const names = new Set();
-    for (const builds of spec.buildDirs ?? []) for (const dir of existsSync(builds) ? readdirSync(builds) : []) {
-      for (const m of (text(resolve(builds, dir, 'output')) ?? '').matchAll(/^cargo::?rerun-if-env-changed=(.+)$/gm)) names.add(m[1]);
+    for (const builds of spec.buildDirs ?? []) {
+      if (!existsSync(builds)) continue;
+      for (const entry of readdirSync(builds, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const dir = resolve(builds, entry.name);
+        const outputs = [];
+        const direct = buildScriptOutput(dir);
+        if (direct) outputs.push(direct);
+        else for (const sub of readdirSync(dir, { withFileTypes: true })) {
+          if (!sub.isDirectory()) continue;
+          const nested = buildScriptOutput(resolve(dir, sub.name));
+          if (nested) outputs.push(nested);
+        }
+        for (const file of outputs) {
+          for (const m of (text(file) ?? '').matchAll(/^cargo::?rerun-if-env-changed=(.+)$/gm)) names.add(m[1]);
+        }
+      }
     }
     return [...names].sort();
   };

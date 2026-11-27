@@ -123,6 +123,8 @@ final class Canvas2DHost: Canvas2DEnv {
     /// running when its view was retired never shows on the view that
     /// reuses its id (found by the GPU stress test, 2026-09-29).
     private var nextSeq = 0
+    /// Sequence watermark at the last `reset()`: replies from earlier replays drop cleanly.
+    private var resetSeq = 0
     private var born: [UInt32: Int] = [:]
     /// Each canvas's lifetime as the main thread last applied it: a
     /// retirement removes only what that lifetime made on the replay queue,
@@ -336,7 +338,7 @@ final class Canvas2DHost: Canvas2DEnv {
         lock.unlock()
         DispatchQueue.main.async { [weak self] in
             // Released unless another replay has come to wait since.
-            guard let self else { return }
+            guard let self, job.seq > self.resetSeq else { return }
             self.lock.lock(); let still = self.waiting[id] != nil; self.lock.unlock()
             if !still { self.onHeld?(id, false) }
         }
@@ -412,6 +414,7 @@ final class Canvas2DHost: Canvas2DEnv {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.pending -= 1
+                guard job.seq > self.resetSeq else { return }
                 self.drew(drawn, missed: missed)
                 for _ in 0..<unreadable { self.errors.append("canvas \(id): unreadable list") }
                 guard let contents, self.sequence[id] != nil, job.seq >= self.born[id] ?? .max, job.seq > self.shown[id] ?? 0,
@@ -470,6 +473,7 @@ final class Canvas2DHost: Canvas2DEnv {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.pending -= 1
+            guard job.seq > self.resetSeq else { return }
             self.drew(drawn, missed: missed)
             for _ in 0..<unreadable { self.errors.append("canvas \(id): unreadable list") }
             // The newest replay done of a canvas still mounted shows: the
@@ -585,6 +589,38 @@ final class Canvas2DHost: Canvas2DEnv {
             if self.kept[id] == nil { self.undrawn.remove(id); self.completed.removeValue(forKey: id) }
         }
         layers.removeValue(forKey: id)?.removeFromSuperlayer()
+    }
+
+    func reset() {
+        resetSeq = nextSeq
+        placements.removeAll()
+        naturalSizes.removeAll()
+        sequence.removeAll()
+        shown.removeAll()
+        born.removeAll()
+        lifetimes.removeAll()
+        recorders.removeAll()
+        lock.lock()
+        for job in waiting.values { job.cancelled = true }
+        waiting.removeAll()
+        lock.unlock()
+        for layer in layers.values { layer.removeFromSuperlayer() }
+        layers.removeAll()
+        images.removeAll()
+        loading.removeAll()
+        failed.removeAll()
+        drawnAt.removeAll()
+        imageBytes = 0
+        reported = 0
+        errors.removeAll()
+        replay.async { [weak self] in
+            guard let self else { return }
+            self.replayers.removeAll()
+            self.kept.removeAll()
+            self.gpus.removeAll()
+            self.undrawn.removeAll()
+            self.completed.removeAll()
+        }
     }
 }
 

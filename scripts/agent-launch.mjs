@@ -24,7 +24,7 @@ import { besidePattern } from '../host/web/beside.mjs';
 import { chooseSimulator, phone, simulatorLaunch, simulatorTempDirectory } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
 import { bakeOutput, gpuModules, linuxBinary, moduleDirectory, pendingBuildInputs, readBuilds, resolveApp, windowsFile, shaderWatchRoots, webDist } from './app.mjs';
-import { directoryInputSnapshot, outputRoots, packageTests, watchedTree, watchOutput } from './cargo-dep-info.mjs';
+import { directoryInputSnapshot, missingInputChanges, outputRoots, packageTests, sameWatchedDirectory, sameWatchedFile, watchedTree, watchLinkTrace, watchOutput } from './cargo-dep-info.mjs';
 import { HOST_CRATES } from './cargo-check.mjs';
 import { partitionWebRoots, webSourceRoots } from '../host/web/build.mjs';
 import { changedContractReads } from './web-build.mjs';
@@ -617,7 +617,7 @@ export function parseFlags(argv) {
     else if (argv[i] === '--timing') flags.timing = value();
     else if (argv[i] === '--touch') flags.touch = value();
     else if (argv[i] === '--chrome') flags.chrome = value();
-    else if (argv[i] === '--phone' || argv[i] === '--display') flags[argv[i].slice(2)] = value(); // --display: a Mac drive's window's display (LLP 1012, "where a driven Mac window opens")
+    else if (argv[i] === '--phone' || argv[i] === '--display' || argv[i] === '--only') flags[argv[i].slice(2)] = value(); // --display: a Mac drive's window's display (LLP 1012, "where a driven Mac window opens")
     else if (argv[i] === '--sim') flags.sim = value();
     else if (argv[i] === '--variant') { process.env.EXACT_VARIANT = value(); delete process.env.EXACT_VARIANT_APP; }
     else if (argv[i] === '--storage') flags.storage = value();
@@ -776,16 +776,10 @@ export function launchFacts({seed, locale, formatLocale, timeZone, epoch, failFe
 }
 
 export function launchEnvironment(facts, host) {
-  return {...(facts.substitutes && host !== 'web' ? {EXACT_AGENT_SUBSTITUTES: JSON.stringify({ values: facts.substitutes, restore: !!facts.restoreSubstitutes, target: host })} : {}), EXACT_AGENT_SEED: String(facts.seed), EXACT_AGENT_LOCALE: facts.locale, EXACT_AGENT_TIME_ZONE: facts.timeZone, EXACT_AGENT_EPOCH: String(facts.epoch), ...(facts.formatLocale ? {EXACT_AGENT_FORMAT_LOCALE: facts.formatLocale} : {}), ...(facts.failFetch ? {EXACT_AGENT_FAIL_FETCH: facts.failFetch} : {})};
+  return {...(facts.substitutes && host !== 'web' ? {EXACT_AGENT_SUBSTITUTES: JSON.stringify({ values: facts.substitutes, restore: !!facts.restoreSubstitutes, target: host })} : {}), ...(host !== 'web' ? {TZ: facts.timeZone} : {}), EXACT_AGENT_SEED: String(facts.seed), EXACT_AGENT_LOCALE: facts.locale, EXACT_AGENT_TIME_ZONE: facts.timeZone, EXACT_AGENT_EPOCH: String(facts.epoch), ...(facts.formatLocale ? {EXACT_AGENT_FORMAT_LOCALE: facts.formatLocale} : {}), ...(facts.failFetch ? {EXACT_AGENT_FAIL_FETCH: facts.failFetch} : {})};
 }
 
-// A build older than what it was made from is refused before launch
-// (LLP 1012.001.000 D1), so a drive never verifies yesterday's app. Each build
-// answers from its own record of its inputs: Cargo's dep-info, the Apple
-// receipt, and the web marker's source digests and dependency roots.
-// These detect staleness; passing them is not proof of freshness. A
-// binary the caller names (EXACT_LINUX_BIN, EXACT_MAC_BIN) is the caller's
-// own: the driver says it did not check. A served page (--url) is its server's.
+// Each carrier checks the inputs its build recorded (LLP 1012.001.000 D1).
 export const shown = path => within(ROOT, path) ? relative(ROOT, path) : path;
 const listed = changed => changed.slice(0, 3).join(', ') + (changed.length > 3 ? ` and ${changed.length - 3} more` : '');
 
@@ -853,13 +847,11 @@ export function watchedNewer(since, paths, directories = [], products = new Map(
   for (const root of paths) {
     const output = watchOutput(outputs, [root], roots);
     const ignored = skipFor(root), skip = (path, directory) => products.has(path) || ignored(path, directory);
-    const filtered = snapshot => ({...snapshot,
-      entries:snapshot.entries?.filter(({name, directory}) => !skip(resolve(snapshot.path, name), directory)) ?? null});
     // Captured entries already exclude outputs. Resolving them against today's
     // links would erase a source that has since been retargeted into an output.
     const previousRoot = inventory.get(root);
     let rootLink; try { rootLink = readlinkSync(root); } catch { /* not a link */ }
-    if (previousRoot && previousRoot.link !== rootLink) changed.push(shown(root));
+    if (previousRoot && (previousRoot.link !== rootLink || (previousRoot.via ?? undefined) !== watchLinkTrace(root))) changed.push(shown(root));
     for (const node of watchedTree([root], {outputs, skip, roots})) {
       const {path, info, link, snapshot, error, cycle} = node;
       if (error) {
@@ -868,11 +860,11 @@ export function watchedNewer(since, paths, directories = [], products = new Map(
       } else if (snapshot) {
         const previous = inventory.get(path);
         if (previous) {
-          if (JSON.stringify(filtered(snapshot)) !== JSON.stringify(filtered(previous))) changed.push(shown(path));
+          if (!sameWatchedDirectory(previous, snapshot, skip)) changed.push(shown(path));
         } else if (info.mtimeMs > since) {
           // Without an inventory, a skipped entry's birth can explain a directory's newer mtime.
           let created = -Infinity;
-          for (const entry of directoryInputSnapshot(path).entries ?? []) {
+          for (const entry of directoryInputSnapshot(path, undefined, false).entries ?? []) {
             const child = resolve(path, entry.name);
             if (skip(child, entry.directory) || output(child, entry.directory)) {
               try { created = Math.max(created, statSync(child).birthtimeMs || -Infinity); } catch { /* gone */ }
@@ -880,8 +872,11 @@ export function watchedNewer(since, paths, directories = [], products = new Map(
           }
           if (packageTests(path) || info.mtimeMs > created + 1) changed.push(shown(path));
         }
-      } else if (!cycle && ((inventory.has(path) && inventory.get(path).error !== 'ENOTDIR') || info.mtimeMs > since)) changed.push(shown(path));
-      if (link !== undefined && !inventory.has(path) && lstatSync(path).mtimeMs > since) changed.push(shown(path));
+      } else if (!cycle && (path === root || !inventory.has(dirname(path)))) {
+        const prior = inventory.get(path) ?? inventory.get(dirname(path))?.entries?.find(entry => entry.name === basename(path));
+        if (prior ? prior.link !== link || !sameWatchedFile(path, prior) : info.mtimeMs > since || (link !== undefined && lstatSync(path).mtimeMs > since)) changed.push(shown(path));
+      }
+      if (link !== undefined && !inventory.has(path) && !inventory.has(dirname(path)) && lstatSync(path).mtimeMs > since) changed.push(shown(path));
     }
   }
   return [...new Set(changed)];
@@ -1074,7 +1069,7 @@ export function refuseBackendOrigin(build, app, command = null) {
     `Rebuild for ${selected.origin}${command ? ` (${command})` : ''}, or select this baked backend explicitly with --backend ${actual}`);
 }
 
-/** Backend metadata for carriers without the default Apple build check. A portable executable's record is bound
+/** Check and return the baked backend for carriers without the default Apple build check. A portable executable's record is bound
  * to its bytes; an interrupted bake cannot authorize the executable left from the preceding build. A packaged
  * Windows directory carries its own receipt (host/windows/build.mjs `writePackagedReceipt`), since the bake cache
  * keeps only a target's latest build and a directory packaged before it would lose its record. */
@@ -1092,6 +1087,7 @@ export function refuseBinaryBackend(bin, app, { receipt, packaged = false, comma
     if (existsSync(receipt)) build = JSON.parse(readFileSync(receipt, 'utf8')).build;
   } else build = boundSettings(bin);
   refuseBackendOrigin(build, app, command);
+  return build?.backendOrigin;
 }
 
 /** An Apple build's receipt: its Rust and Swift inputs by digest, then by mtime the app's own files the receipt leaves out on purpose (the root build script's watches: the contract, app.json, data, shaders, assets — what the baked plan and bundle are made from). */
@@ -1113,7 +1109,6 @@ export function receiptChanges(receipt, app, { hashed = false, launch, retained 
   // The Apple crates are read by digest below; every other host's are no input.
   const hosts = otherHosts(app);
   const own = newerThan(since, [app.dir], path => hosts(path) || skip(path));
-  own.push(...sourceInputChanges(build?.typescriptSources).map(shown));
   // Platform-local modules live under the host crate directory skipped above,
   // but their separate dylib's sources are absent from the binary receipt.
   const platform = target.includes('-ios') ? 'ios' : 'macos';
@@ -1144,13 +1139,16 @@ export function receiptChanges(receipt, app, { hashed = false, launch, retained 
     if (record) {
       ({paths:baked, missing} = record);
       directories = [...directories, ...record.watchedDirectories];
-      unread = missing.filter(existsSync).map(shown);
+      unread = missingInputChanges(missing, record.watchedDirectories).map(shown);
+      if (record.unstable) unread.push(shown(record.unstable));
     } else unread = [shown(resolve(build.linkedPlan, 'inputs.json'))];
   }
   // Absence recorded by Cargo or the linked bake is unchanged while absent; first creation counts even at an old mtime.
   const absent = new Set([...(build?.binary?.missing ?? []), ...missing]), stillAbsent = path => { const at = resolve(ROOT, path); return absent.has(at) && !existsSync(at); };
   const tools = info || retained ? [...(info ? depInfoNewer(since, null, info, app.workspace, directories, products, outputs) : []), ...watchedNewer(since, baked, directories, products, outputs)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path)) : [];
-  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build, { launch }) : []), ...own.filter(path => !products.has(resolve(ROOT, path))), ...tools, ...unread, ...replaced])];
+  const recorded = new Map(directories.flatMap(row => row.entries?.map(entry => [resolve(row.path, entry.name), entry]) ?? [[row.path, row]]));
+  const newer = own.filter(name => { const path = resolve(ROOT, name), file = recorded.get(path); return !products.has(path) && !(file?.sha256 && sameWatchedFile(path, file)); });
+  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build, { launch }) : []), ...newer, ...sourceInputChanges(build?.typescriptSources).filter(path => !products.has(resolve(path))).map(shown), ...tools, ...unread, ...replaced])];
 }
 
 /** What a web build of `app` reads, modified after `since` (every file by default):
@@ -1201,7 +1199,7 @@ export function webInputPresent(app, path) {
 }
 
 /** Changed inputs of the build in `dist`; modification times nominate candidates, digests compare their bytes. */
-export function webChanges(dist, app) {
+export function webChanges(dist, app, sourceRoots = webSourceRoots) {
   const marker = resolve(dist, '.exact-build.json');
   if (!existsSync(marker)) return { app: [], shared: [], all: [] };
   const built = JSON.parse(readFileSync(marker, 'utf8'));
@@ -1212,7 +1210,7 @@ export function webChanges(dist, app) {
   const since = typeof built.inputsAt === 'number' ? built.inputsAt - 2000 : statSync(marker).mtimeMs;
   let inputRoots = built.inputRoots;
   // A root query that fails (Cargo's lock, a manifest) leaves the build unverified: the build says why.
-  if (!inputRoots) try { inputRoots = webSourceRoots(app, built.target === 'js'); } catch { return { app: [], shared: [shown(marker)], all: [shown(marker)] }; }
+  if (!inputRoots) try { inputRoots = sourceRoots(app, built.target === 'js'); } catch { return { app: [], shared: [shown(marker)], all: [shown(marker)] }; }
   const recorded = new Set(inputRoots.filter(root => root.file).map(root => resolve(root.file)));
   const unusedContract = notBuildInput(app.dir, shaderWatchRoots(app), new Set());
   const byContractReceipt = path => contract && path.endsWith('.contract') && !recorded.has(resolve(ROOT, path))
@@ -1401,7 +1399,8 @@ export const cdpEscape = (call) => async () => { for (const type of ['rawKeyDown
 
 /** The lock file of a simulator's display (`['display', udid]`) or of one app on it (`[udid, bundle]`). */
 const simulatorLock = (key) => createHash('sha256').update(JSON.stringify(key)).digest('hex') + '/.lock';
-export const simulatorDisplayLockPath = udid => resolve(simulatorTempDirectory(), 'exact-ios-drives', simulatorLock(['display', udid]));
+const simulatorLockDir = () => resolve(simulatorTempDirectory(), 'exact-ios-drives');
+export const simulatorDisplayLockPath = udid => resolve(simulatorLockDir(), simulatorLock(['display', udid]));
 /** Runs `fn` holding the simulator lock `key`, trying again every 100 ms while another process holds it: `waiting`
  *  is called at the first refusal, and after `timeout` the error says `busy(seconds)`. */
 async function holdSimulator(key, fn, { directory, timeout, busy, waiting = () => {} }) {
@@ -1420,14 +1419,14 @@ async function holdSimulator(key, fn, { directory, timeout, busy, waiting = () =
 
 /** One simulator's display, across every drive and checkout: a capture that reads it (`withDisplay`) holds it, and so
  *  does a launch, which brings its app to the front over another drive's. Runs `fn` holding it. */
-export async function simulatorDisplay(udid, fn, { directory = resolve(simulatorTempDirectory(), 'exact-ios-drives'), timeout = 60000 } = {}) {
+export async function simulatorDisplay(udid, fn, { directory = simulatorLockDir(), timeout = 60000 } = {}) {
   return holdSimulator(['display', udid], fn, { directory, timeout, busy: (s) => `simulator ${udid}'s display busy: another drive still held it after ${s}s` });
 }
 
 /** Runs `fn`, an install or a launch outside a drive (`exact.mjs ios`), holding the lock of each of `bundles` on the
  *  simulator. A drive holds its app's from launch to close (`exclusiveIOS`), and an install over that app, or another
  *  launch of it, ends it under the drive: another checkout of the app (a git worktree) has the same bundle id. */
-export async function simulatorApps(udid, bundles, fn, { name = udid, directory = resolve(tmpdir(), 'exact-ios-drives'), timeout = 60000 } = {}) {
+export async function simulatorApps(udid, bundles, fn, { name = udid, directory = simulatorLockDir(), timeout = 60000 } = {}) {
   const [bundle, ...rest] = bundles;
   if (!bundle) return fn();
   return holdSimulator([udid, bundle], () => simulatorApps(udid, rest, fn, { name, directory, timeout }), {
@@ -1440,7 +1439,7 @@ export async function simulatorApps(udid, bundles, fn, { name = udid, directory 
 /** The simulator has one running process per bundle id, across every checkout.
  * Hold an OS lock through launch and close; a crashed driver releases it through
  * the helper's stdin. Permanent lock files avoid unlink/reacquire races. */
-export async function exclusiveIOS(udid, bundle, launch, { directory = resolve(tmpdir(), 'exact-ios-drives'), timeout = 60000 } = {}) {
+export async function exclusiveIOS(udid, bundle, launch, { directory = simulatorLockDir(), timeout = 60000 } = {}) {
   const path = simulatorLock([udid, bundle]);
   const started = Date.now();
   let release, holding;

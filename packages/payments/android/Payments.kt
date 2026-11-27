@@ -49,6 +49,20 @@ internal fun objectOf(value: Any?): JSONObject? = when (value) {
     else -> null
 }
 
+/** Non-null, non-empty string at [key], ignoring `JSONObject.NULL` (which `optString` turns into `"null"`). */
+private fun JSONObject.text(key: String): String? =
+    if (isNull(key)) null else (opt(key) as? String)?.ifEmpty { null }
+
+/** Any JSON value (object, array, or primitive) encoded as JSON text, or null for JSON `null`. */
+internal fun jsonText(value: Any?): String? = when (value) {
+    null, JSONObject.NULL -> null
+    is JSONObject, is JSONArray -> value.toString()
+    is String -> JSONObject.quote(value)
+    is Boolean -> value.toString()
+    is Number -> try { JSONObject.numberToString(value) } catch (_: org.json.JSONException) { null }
+    else -> null
+}
+
 class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
     companion object {
         /** The app's access hatch (D11): each request, after the module's words are set; its replacement. */
@@ -111,8 +125,8 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    private fun amount(value: JSONObject?): String = value?.optJSONObject("amount")?.optString("value") ?: "0.00"
-    private fun currency(value: JSONObject?): String = value?.optJSONObject("amount")?.optString("currency") ?: "USD"
+    private fun amount(value: JSONObject?): String = value?.optJSONObject("amount")?.text("value") ?: "0.00"
+    private fun currency(value: JSONObject?): String = value?.optJSONObject("amount")?.text("currency") ?: "USD"
 
     /** The details as Google's `transactionInfo`. */
     private fun transaction(details: JSONObject, country: String?): JSONObject {
@@ -166,8 +180,8 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
             for (i in 0 until methods.length()) methods.getJSONObject(i).optJSONObject("parameters")?.put("billingAddressRequired", true)
         }
         val intents = JSONArray().put("PAYMENT_AUTHORIZATION")
-        if (shipping && args.has("onshippingaddresschange")) intents.put("SHIPPING_ADDRESS")
-        if (shipping && args.has("onshippingoptionchange")) intents.put("SHIPPING_OPTION")
+        if (shipping && !args.isNull("onshippingaddresschange")) intents.put("SHIPPING_ADDRESS")
+        if (shipping && !args.isNull("onshippingoptionchange")) intents.put("SHIPPING_OPTION")
         request.put("callbackIntents", intents)
         val ours = PaymentDataRequest.fromJson(request.toString())
         val made = paymentDataRequest?.invoke(ours) ?: ours
@@ -209,12 +223,12 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** Run the app's handler named by [keyword] for the sheet up; null past the budget or on an error. */
     private fun ask(s: Sheet, keyword: String, arg: JSONObject, done: (JSONObject?) -> Unit) {
-        val handler = s.args.optString(keyword).ifEmpty { return done(null) }
+        val handler = s.args.text(keyword) ?: return done(null)
         var answered = false
         val finish = { value: JSONObject? -> if (!answered) { answered = true; done(value) } }
         main.postDelayed({ if (!answered) { context.log("payments: $handler for ${s.id}: past its budget"); finish(null) } }, BUDGET)
         context.invoke("request:${s.request}", handler, arg) { answer ->
-            finish(answer.optString("text").ifEmpty { null }?.let { objectOf(it) })
+            finish(answer.text("text")?.let { objectOf(it) })
         }
     }
 
@@ -240,17 +254,18 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
                 .put("city", it.optString("locality")).put("postalCode", it.optString("postalCode")) } ?: JSONObject.NULL)
         val keyword = if (trigger == "SHIPPING_OPTION") "onshippingoptionchange" else "onshippingaddresschange"
         ask(s, keyword, shown) { u ->
+            if (s.letGo) return@ask complete("{}")
             val update = JSONObject()
             val details = s.details
             if (u == null) return@ask complete(update.put("error", JSONObject().put("reason", "OTHER_ERROR").put("message", "unavailable").put("intent", "SHIPPING_ADDRESS")).toString())
-            for (k in listOf("total", "displayItems", "shippingOptions")) if (u.has(k)) details.put(k, u.get(k))
+            for (k in listOf("total", "displayItems", "shippingOptions")) if (!u.isNull(k)) details.put(k, u.get(k))
             update.put("newTransactionInfo", transaction(details, null))
             shippingOptions(details.optJSONArray("shippingOptions"))?.let { p ->
                 s.option?.let { chosen -> p.put("defaultSelectedOptionId", chosen) }
                 update.put("newShippingOptionParameters", p)
             }
-            val error = u.optString("error").ifEmpty { u.optJSONObject("shippingAddressErrors")?.let { e -> e.keys().asSequence().map { e.optString(it) }.firstOrNull() } ?: "" }
-            if (error.isNotEmpty()) update.put("error", JSONObject().put("reason", "SHIPPING_ADDRESS_UNSERVICEABLE").put("message", error).put("intent", "SHIPPING_ADDRESS"))
+            val error = u.text("error") ?: u.optJSONObject("shippingAddressErrors")?.let { e -> e.keys().asSequence().mapNotNull { e.text(it) }.firstOrNull() }
+            if (error != null) update.put("error", JSONObject().put("reason", "SHIPPING_ADDRESS_UNSERVICEABLE").put("message", error).put("intent", "SHIPPING_ADDRESS"))
             complete(update.toString())
         }
     }
@@ -269,24 +284,24 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
         val info = payment.optJSONObject("paymentMethodData")
         val response = JSONObject().put("requestId", s.id).put("methodName", GOOGLE).put("details", payment)
             .put("shippingAddress", address(ship) ?: JSONObject.NULL).put("shippingOption", s.option ?: JSONObject.NULL)
-            .put("payerName", ship?.optString("name") ?: JSONObject.NULL).put("payerEmail", payment.optString("email").ifEmpty { null } ?: JSONObject.NULL)
-            .put("payerPhone", ship?.optString("phoneNumber")?.ifEmpty { null } ?: JSONObject.NULL)
+            .put("payerName", ship?.text("name") ?: JSONObject.NULL).put("payerEmail", payment.text("email") ?: JSONObject.NULL)
+            .put("payerPhone", ship?.text("phoneNumber") ?: JSONObject.NULL)
         s.authorizing = true
         ask(s, "onpaymentauthorized", response) { value ->
             s.authorizing = false
             val retry = value?.optJSONObject("retry")
             if (retry != null) {
-                val field = retry.optJSONObject("shippingAddress")?.let { e -> e.keys().asSequence().map { e.optString(it) }.firstOrNull() }
+                val field = retry.optJSONObject("shippingAddress")?.let { e -> e.keys().asSequence().mapNotNull { e.text(it) }.firstOrNull() }
                 return@ask complete(if (field != null) failed(field, "SHIPPING_ADDRESS", "SHIPPING_ADDRESS_INVALID")
-                    else failed(retry.optString("error").ifEmpty { "Try another card." }, "PAYMENT_AUTHORIZATION", "PAYMENT_DATA_INVALID"))
+                    else failed(retry.text("error") ?: "Try another card.", "PAYMENT_AUTHORIZATION", "PAYMENT_DATA_INVALID"))
             }
-            val result = value?.optString("result")?.takeIf { it in listOf("success", "fail", "unknown") } ?: "fail"
+            val result = value?.text("result")?.takeIf { it in listOf("success", "fail", "unknown") } ?: "fail"
             val out = JSONObject().put("requestId", s.id).put("methodName", GOOGLE).put("result", result)
                 .put("shippingAddress", response.opt("shippingAddress")).put("shippingOption", response.opt("shippingOption"))
                 .put("payerName", response.opt("payerName")).put("payerEmail", response.opt("payerEmail")).put("payerPhone", response.opt("payerPhone"))
-                .put("android", JSONObject().put("paymentMethodDescription", info?.optString("description") ?: "").put("cardNetwork", info?.optJSONObject("info")?.optString("cardNetwork") ?: ""))
+                .put("android", JSONObject().put("paymentMethodDescription", info?.text("description") ?: "").put("cardNetwork", info?.optJSONObject("info")?.text("cardNetwork") ?: ""))
             if (value == null) out.put("message", "authorize-timeout")
-            value?.opt("data")?.let { out.put("data", it.toString()) }
+            if (value != null && !value.isNull("data")) jsonText(value.opt("data"))?.let { out.put("data", it) }
             s.result = out
             context.log("payments: ${s.id}: $result")
             // Past the budget the request ends for the app (D6): the send answers the failure now, though Google's

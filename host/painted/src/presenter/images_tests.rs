@@ -954,3 +954,108 @@ fn compare_placement(cases: &[serde_json::Value]) -> Vec<String> {
     }
     failures
 }
+
+#[derive(Default)]
+struct RoleCanvas(Vec<[u8; 3]>);
+
+impl DataSource for RoleCanvas {
+    fn query(
+        &mut self,
+        name: &str,
+        _: &[exact_runner::Value],
+    ) -> Result<exact_runner::Value, exact_runner::DataError> {
+        Err(exact_runner::DataError::UnknownSource(name.into()))
+    }
+
+    fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+        vec![("ink".into(), 0)]
+    }
+
+    fn draw(
+        &mut self,
+        q: &exact_runner::DrawRequest<'_>,
+        ctx: &exact_canvas::Context2d,
+    ) -> exact_runner::Drawn {
+        let c = q.current_color.unwrap();
+        assert_eq!(c.a, 1.);
+        self.0.push([c.r, c.g, c.b]);
+        ctx.set_fill_style_str("currentColor");
+        ctx.fill_rect(0., 0., 8., 8.);
+        exact_runner::Drawn::Now(exact_runner::DrawReply {
+            lists: ctx.take_lists(),
+            ..Default::default()
+        })
+    }
+}
+
+fn picture_turn_roles(turn: impl Fn(&mut Presenter<RoleCanvas>)) {
+    use exact_kernel::style::{roles, ColorValue};
+
+    let plan = crate::test_plan(
+        "component App\n  view\n    canvas surface=ink() color=\"CanvasText\" width=8 height=8\n",
+    );
+    let boot = |color| {
+        let (p, error) = Presenter::boot_with_fixture_fonts(
+            &plan,
+            RoleCanvas::default(),
+            (8., 8.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host.runner().roles().set(&[(
+            roles::role("CanvasText").unwrap(),
+            ColorValue::Fixed(exact_kernel::Color(color)),
+        )]);
+        p
+    };
+    for bound in [false, true] {
+        let mut first = boot(0xff0000ff);
+        let mut second = boot(0x0000ffff);
+        // A caller can already have another session bound; the turn restores it.
+        let _other = bound.then(|| second.host.runner().bind_roles());
+        turn(&mut first);
+        turn(&mut second);
+        assert_eq!(first.host.runner().data_ref().0, [[255, 0, 0]]);
+        assert_eq!(second.host.runner().data_ref().0, [[0, 0, 255]]);
+        for (p, expected) in [(&first, [255, 0, 0, 255]), (&second, [0, 0, 255, 255])] {
+            let snapshots = p.host.canvas_snapshots().borrow();
+            let pixels = &snapshots.values().next().unwrap().pixels;
+            let color = pixels.pixel(4, 4).unwrap().demultiply();
+            assert_eq!(
+                [color.red(), color.green(), color.blue(), color.alpha()],
+                expected
+            );
+        }
+        if bound {
+            let role = ColorValue::Role(roles::role("CanvasText").unwrap());
+            assert_eq!(role.resolve(false).0, 0x0000ffff);
+        }
+    }
+}
+
+#[test]
+fn waiting_for_pictures_binds_the_canvases_session_roles() {
+    picture_turn_roles(|p| {
+        p.wait_images(Duration::ZERO);
+    });
+}
+
+#[test]
+fn settling_pictures_binds_the_canvases_session_roles() {
+    picture_turn_roles(|p| {
+        p.settle_pictures(Duration::ZERO);
+    });
+}
+
+#[test]
+fn polling_a_canvas_picture_binds_the_canvases_session_roles() {
+    picture_turn_roles(|p| {
+        p.images
+            .canvas_answers
+            .push(("missing.png".into(), Err("not found".into())));
+        assert!(p.poll_images());
+    });
+}

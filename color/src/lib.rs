@@ -152,7 +152,7 @@ pub enum Parsed {
 
 /// Parse a CSS colour, or `None` when it is not one.
 pub fn parse(input: &str) -> Option<Parsed> {
-    let s = input.trim().to_ascii_lowercase();
+    let s = trim(input).to_ascii_lowercase();
     if s == "currentcolor" {
         return Some(Parsed::Current);
     }
@@ -199,19 +199,19 @@ pub fn refusal(input: &str) -> Option<&'static str> {
     if parse(input).is_some() {
         return None;
     }
-    let s = input.trim().to_ascii_lowercase();
+    let s = trim(input).to_ascii_lowercase();
     let open = s.find('(')?;
     let name = &s[..open];
     let body = s[open + 1..].strip_suffix(')')?;
     let reads = |name: &str, body: &str| parse(&format!("{name}({body})")).is_some();
     if !FUNCTIONS.contains(&name) {
-        let name = name.trim_end();
+        let name = name.trim_end_matches(SPACE);
         return (FUNCTIONS.contains(&name) && reads(name, body)).then_some(
             "a function's `(` follows its name with no space between: `rgb(…)`, not `rgb (…)` \
              (CSS Syntax 3 §4.3.4)",
         );
     }
-    if name == "color" && body.trim_start().starts_with("--") {
+    if name == "color" && body.trim_start_matches(SPACE).starts_with("--") {
         return None;
     }
     // Each word written as a number that CSS Syntax 3's grammar refuses
@@ -257,7 +257,7 @@ pub fn refusal(input: &str) -> Option<&'static str> {
         _ => parts.join(" "),
     };
     if !body.contains(',') {
-        let words: Vec<&str> = body.split_whitespace().collect();
+        let words: Vec<&str> = words(body).collect();
         let count = if name == "color" { 5 } else { 4 };
         let slashed = match words.split_last() {
             Some((alpha, c)) if words.len() == count => format!("{} / {alpha}", c.join(" ")),
@@ -268,7 +268,7 @@ pub fn refusal(input: &str) -> Option<&'static str> {
              (CSS Color 4 §4.1.1)",
         );
     }
-    let parts: Vec<&str> = body.split(',').map(str::trim).collect();
+    let parts: Vec<&str> = body.split(',').map(trim).collect();
     if !matches!(name, "rgb" | "rgba" | "hsl" | "hsla") {
         return reads(name, &spaced(&parts)).then_some(
             "only `rgb()` and `hsl()` take the comma-separated syntax: separate the \
@@ -408,11 +408,24 @@ fn scans(b: &[u8]) -> bool {
     i == b.len()
 }
 
+/// CSS's white space: a space, a tab or a newline, of which `\r` and `\f`
+/// are two (CSS Syntax 3 §3.3, §4.2), not every Unicode space.
+const SPACE: [char; 5] = [' ', '\t', '\n', '\r', '\x0c'];
+
+fn trim(s: &str) -> &str {
+    s.trim_matches(SPACE)
+}
+
+/// The words of `s` between CSS's white space.
+fn words(s: &str) -> impl Iterator<Item = &str> {
+    s.split(SPACE).filter(|w| !w.is_empty())
+}
+
 /// `a, b, c[, d]` or `a b c [/ d]`.
 fn args(body: &str) -> Option<(Vec<&str>, Option<&str>)> {
-    let body = body.trim();
+    let body = trim(body);
     if body.contains(',') {
-        let parts: Vec<&str> = body.split(',').map(str::trim).collect();
+        let parts: Vec<&str> = body.split(',').map(trim).collect();
         if parts
             .iter()
             // The comma-separated syntax takes no `none` (CSS Color 4 §4.1.2).
@@ -427,10 +440,10 @@ fn args(body: &str) -> Option<(Vec<&str>, Option<&str>)> {
         };
     }
     let (main, alpha) = match body.split_once('/') {
-        Some((m, a)) => (m, Some(a.trim())),
+        Some((m, a)) => (m, Some(trim(a))),
         None => (body, None),
     };
-    let parts: Vec<&str> = main.split_whitespace().collect();
+    let parts: Vec<&str> = words(main).collect();
     (parts.len() == 3 && alpha != Some("")).then_some((parts, alpha))
 }
 
@@ -551,8 +564,8 @@ fn wide(name: &str, body: &str) -> Option<Wide> {
         "oklab" => (Space::Oklab, body),
         "oklch" => (Space::Oklch, body),
         "color" => {
-            let body = body.trim_start();
-            let end = body.find(char::is_whitespace)?;
+            let body = body.trim_start_matches(SPACE);
+            let end = body.find(SPACE)?;
             (Space::from_color_ident(&body[..end])?, &body[end..])
         }
         _ => return None,
@@ -1057,15 +1070,15 @@ pub const PROFILES: [(&str, &str, usize); 12] = [
 /// in CSS: an app's `--Brand` keeps its case. A standard space (`PROFILES`)
 /// is matched in any case and named in lowercase.
 pub fn parse_profiled(input: &str) -> Option<(String, Vec<f64>, f64)> {
-    let s = input.trim();
+    let s = trim(input);
     if !s.get(..6)?.eq_ignore_ascii_case("color(") {
         return None;
     }
-    let body = s[6..].strip_suffix(')')?.trim_start();
+    let body = s[6..].strip_suffix(')')?.trim_start_matches(SPACE);
     if !body.starts_with("--") || body.contains(',') {
         return None;
     }
-    let end = body.find(char::is_whitespace)?;
+    let end = body.find(SPACE)?;
     let (name, rest) = (&body[..end], body[end..].to_ascii_lowercase());
     let lower = name.to_ascii_lowercase();
     let name = if PROFILES.iter().any(|p| p.0 == lower) {
@@ -1074,11 +1087,10 @@ pub fn parse_profiled(input: &str) -> Option<(String, Vec<f64>, f64)> {
         name.to_string()
     };
     let (main, alpha) = match rest.split_once('/') {
-        Some((m, a)) => (m, Some(a.trim())),
+        Some((m, a)) => (m, Some(trim(a))),
         None => (rest.as_str(), None),
     };
-    let c: Vec<f64> = main
-        .split_whitespace()
+    let c: Vec<f64> = words(main)
         .map(|t| match component(t)? {
             Arg::Num(n) => Some(n),
             Arg::Pct(p) => Some(p / 100.0),

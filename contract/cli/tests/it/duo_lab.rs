@@ -202,8 +202,8 @@ fn a_box_pads_by_its_margins_as_uikit_gives_them() {
     let reported = exact_kernel::OwnerMargins {
         root: [BAND[0], 16.0, BAND[2], 16.0],
         plain: [8.0; 4],
-        minimum: [0.0, 16.0, 0.0, 16.0],
-        readable_width: 672.0,
+        minimum: Some([0.0, 16.0, 0.0, 16.0]),
+        readable_width: Some(672.0),
     };
     k.set_owner_margins(route, Some(reported)).unwrap();
     k.compute_layout(root, Offer::definite(SIZE.0, SIZE.1))

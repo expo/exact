@@ -1,7 +1,7 @@
 // SDK additions for the Apple targets Exact builds beyond xtool's default iOS and macOS SDKs.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
-import { crossSdk } from './toolchain.mjs';
+import { appleLLVMTool, crossSdk } from './toolchain.mjs';
 import { plistCommand } from './plist.mjs';
 import { spawnSync } from 'node:child_process';
 
@@ -27,7 +27,7 @@ export function appleCrossReport(env = process.env, execute = spawnSync, sdks = 
       [sdk.runtime, resolve(sdk.tools, 'ld64.lld'), resolve(sdk.tools, 'llvm-lib')].every(existsSync));
   } catch (error) { sdk = error.message; }
   const swift = /Swift version ([\d.]+)/.exec(output('swift', ['--version']))?.[1];
-  const llvm = env.EXACT_APPLE_LLVM_BIN ? name => resolve(env.EXACT_APPLE_LLVM_BIN, name) : name => name;
+  const llvm = name => appleLLVMTool(name, env);
   const version = /LLVM version (\d+)/i.exec(output(llvm('llvm-lipo'), ['--version']))?.[1];
   const missing = ['dsymutil', 'llvm-ar', 'llvm-otool', 'llvm-nm', 'llvm-size', 'llvm-strip', 'llvm-install-name-tool']
     .filter(tool => !output(llvm(tool), ['--version']));

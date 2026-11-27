@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { factoryTags } from '../../scripts/launch-modules.mjs';
 import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from './crawl.mjs';
 import { warmGameInputs, warmGameEnvironment, publishWarmGame } from '../web-js/module.mjs';
 import { generatedInputFiles } from '../../game/inputs.mjs';
@@ -572,7 +573,8 @@ copyShaders(app, resolve(stage, 'shaders'));
 // The neutral sheet follows the browser resets (LLP 1115.000 D4 part B; look.mjs).
 writeFileSync(resolve(stage, 'index.html'), withInterfaceStyle(withLook(readFileSync(resolve(root, 'host/web/index.html'), 'utf8')), interfaceStyle(app.manifest)));
 const production = buildEnv.EXACT_UPDATE_TRUST === 'production';
-const provided = app.modules.web ? Object.keys((await import(app.modules.web)).roster ?? {}) : [];
+const webModules = app.modulesFor('web');
+const provided = webModules.web ? factoryTags(await import(webModules.web)) : [];
 const hostDir = resolve(stage, '.host');
 function copyHostFiles(group, only) {
   for (const [name, source] of Object.entries(webHostFiles(group))) {
@@ -604,7 +606,7 @@ else {
 wasm = readFileSync(out);
 const unbooted = () => { throw new Error('app logic ran while extracting baked bytes'); };
 const compiled = new WebAssembly.Module(wasm);
-const instance = await WebAssembly.instantiate(compiled, { ...placeholderImports(compiled, unbooted), exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { scroll_metrics: unbooted, range: unbooted, read: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
+const instance = await WebAssembly.instantiate(compiled, { ...placeholderImports(compiled, unbooted), exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { scroll_metrics: unbooted, range: unbooted, read: unbooted, fact: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
 exports = instance.exports;
 if (typeof exports.exact_plan !== 'function' || typeof exports.exact_out !== 'function' || !(exports.memory instanceof WebAssembly.Memory)) {
   throw new Error('the web wasm does not export exact_plan, exact_out, and memory');
@@ -731,7 +733,7 @@ function minifyCss(css) {
 }
 // The app's module artifact answers `native.later` on the page too (LLP
 // 1067 D5): the glue finds it by the meta tag below.
-const pageNative = app.modules.web;
+const pageNative = webModules.web;
 writeFileSync(resolve(stage, 'index.html'), readFileSync(resolve(stage, 'index.html'), 'utf8')
   .replace(/<style>([\s\S]*?)<\/style>/, (_, css) => `<style>${minifyCss(css)}${launchBackground(app.manifest)}</style>`)
   .replace('<html lang="en">', `<html lang="${escapeHtml(webManifest.lang)}">`)
@@ -856,15 +858,15 @@ if (gpu.built) {
 // app has modules (the GPU gate): its web executor under `modules/`, fetched
 // after first paint by the host's adapter.
 let moduleNote = 'no native modules';
-if (app.modules.tags.length || app.modules.web || packageViews) {
+if (webModules.tags.length || webModules.web || packageViews) {
   const release = buildEnv.EXACT_UPDATE_TRUST === 'production';
-  if (app.modules.web) {
-    copyStaticTreeIfPresent(dirname(app.modules.web), resolve(stage, 'modules'));
+  if (webModules.web) {
+    copyStaticTreeIfPresent(dirname(webModules.web), resolve(stage, 'modules'));
   }
-  checkModuleRoster(app, provided, 'web', release);
+  checkModuleRoster(webModules.tags, provided, 'web', release);
   copyHostFiles('native');
   const rosters = [];
-  if (app.modules.tags.length || app.modules.web) rosters.push(`modules/ (${provided.join(', ') || 'none'})`);
+  if (webModules.tags.length || webModules.web) rosters.push(`modules/ (${provided.join(', ') || 'none'})`);
   if (packageViews) rosters.push(`package views (${Object.keys(packageViews.extensions).join(', ')})`);
   moduleNote = `${rosters.join(', ')}, on demand`;
 }

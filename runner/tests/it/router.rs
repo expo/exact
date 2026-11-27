@@ -710,9 +710,9 @@ fn several_commits_before_a_take_keep_the_latest_top_and_all_removals() {
     let mut r = boot(b.finish().unwrap(), "/t/1/details");
     let before = nav(&r);
     r.take_router_change();
-    // One seek makes two removals and then an unchanged commit before a drain.
+    // One seek makes two removals before a drain; its third firing changes nothing.
     let receipts: Vec<exact_kernel::CommitReceipt> = r.advance(3000.0).unwrap();
-    assert_eq!(receipts.len(), 3);
+    assert_eq!(receipts.len(), 2);
     let change = r.take_router_change().unwrap();
     assert_eq!(change.top, before.tabs[0].stack[0].id);
     assert_eq!(change.url, "/");

@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { storeKeys } from './plist.mjs';
 import { signRelease, signedEntitlements, PROFILE_KEYS } from './assets.mjs';
+import { appleExecutableName } from '../../scripts/app.mjs';
 
 export const APPLICATION_KINDS = ['Apple Distribution', '3rd Party Mac Developer Application'];
 export const INSTALLER_KINDS = ['Mac Installer Distribution', '3rd Party Mac Developer Installer'];
@@ -99,7 +100,7 @@ export function entitlementLines(entitlements, compat) {
 
 /** `exact appstore <app>` (D1), or with `adHoc` the store configuration signed ad hoc (D4). `build(app, options)` runs
  *  the store build and returns its bundle; `out` is the folder the artifacts go in. Returns the `.pkg` (none ad hoc). */
-export function appstore(app, { adHoc = false, build, out, env = process.env, log = console.log, list = listIdentities, sh = run } = {}) {
+export function appstore(app, { adHoc = false, build, out, env = process.env, log = console.log, list = listIdentities, sh = run, sign = signRelease, signed: readSigned = signedEntitlements } = {}) {
   const { identity, installer, asc } = preflight(app, { adHoc, env, list });
   if (app.manifest.deploy?.store?.macos !== '0') log(`deploy.store.macos is "${app.manifest.deploy?.store?.macos ?? 'A'}" for the Developer ID build; the store build bakes "0": it links no update store, and every change is a new store submission (LLP 1030.005 D3).`);
   log(`version ${env.EXACT_VERSION ?? '0.1.0'} (build ${env.EXACT_BUILD_NUMBER ?? '1'}), from EXACT_VERSION and EXACT_BUILD_NUMBER; each upload needs a higher build number.`);
@@ -111,10 +112,10 @@ export function appstore(app, { adHoc = false, build, out, env = process.env, lo
   sh('/usr/bin/ditto', [bundle, staged]);
   const compat = JSON.parse(readFileSync(resolve(staged, 'Contents/Resources/receipt.json'), 'utf8')).build?.compat;
   if (compat?.inputs?.store?.L !== '0') throw new Error('the store build baked an update store; rebuild with this checkout (LLP 1030.005 D3)');
-  const order = signRelease(staged, { compat, manifest: app.manifest, identity: sha1, id: app.id, scratch: out, store: true,
+  const order = sign(staged, { compat, manifest: app.manifest, identity: sha1, id: app.id, scratch: out, store: true,
     hardened: !adHoc, timestamp: adHoc ? ['--timestamp=none'] : ['--timestamp'] });
   sh('codesign', ['--verify', '--deep', '--strict', '--verbose=1', staged]);
-  const signed = signedEntitlements(order);
+  const signed = readSigned(order);
   const allowing = debuggable(signed);
   if (allowing.length) throw new Error(`get-task-allow is signed into ${allowing.join(', ')}; the store takes none (LLP 1030.005 D1)`);
   log(`signed entitlements of ${staged}:\n${entitlementLines(signed.at(-1).entitlements, compat).join('\n')}`);
@@ -122,7 +123,7 @@ export function appstore(app, { adHoc = false, build, out, env = process.env, lo
     log(`${staged}\n  The store configuration signed ad hoc, without the hardened runtime (an ad hoc signature has no Team ID, so library validation would refuse Exact's own libraries) and without a profile, so a grant that needs one is unavailable. It proves the sandbox, the entitlements and the missing update store, not the signature, which only TestFlight proves. A production build ignores the agent: open it by hand.`);
     return null;
   }
-  const pkg = resolve(out, `${app.displayName}.pkg`);
+  const pkg = resolve(out, `${appleExecutableName(app)}.pkg`);
   sh('productbuild', ['--component', staged, '/Applications', '--sign', installer.sha1, pkg]);
   sh('pkgutil', ['--check-signature', pkg]);
   if (asc.skip) log(asc.skip);

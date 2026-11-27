@@ -49,6 +49,9 @@ object Native {
      * horizontal 2) and its start and end on that axis in window pixels. Before [start], from any thread, so the host boots laid out in it, and on
      * the host's thread again whenever any of it changes. The reader pads nothing: [chrome] says where the page is. */
     @JvmStatic external fun window(width: Int, height: Int, scale: Float, insets: IntArray)
+    /** The software keyboard's bottom inset in pixels as its inset animation shows it, each frame while one runs, and
+     * -1 once it ends (LLP 1123 D7): what an owner's update reports of the keyboard as it moves. */
+    @JvmStatic external fun keyboardProgress(depth: Int)
     /** What the reader draws around the page, when that is not what this last returned (else null): where the page is
      * in the window (x, y, width, height, in pixels), the colour behind it and in the edges it keeps out of (ARGB),
      * and 1 when its scheme is dark (the bars' icons are then light). */
@@ -98,15 +101,17 @@ object Native {
     /** The picture [token] reached the screen at [at] (`System.nanoTime`): whether a turn is now wanted. */
     @JvmStatic external fun picturePresented(token: Long, at: Long): Boolean
     /** The wake descriptors, -1 where absent: executor replies, decoded images, the GPU module's acquired images
-     * ([Wakes.ACQUIRED]) and the update store's finished checks. */
+     * ([Wakes.ACQUIRED]), the update store's finished checks, and GPU surface redraw wakes. */
     @JvmStatic external fun fds(): IntArray
     /** A driver from outside scrolls the feed by [dy] px ([ExactActivity.drive]). A finger's scroll is the
      * calls below. */
     @JvmStatic external fun scroll(dy: Float)
     /** What is under a point of the view (pixels), for the reader to decide what a drag from there is (LLP 1115.001
      * D7.3) and whose a touch there is (D8): the axes exact2's own gestures there claim (bit 0 sideways, bit 1 up
-     * and down; bit 2: the latter is a sheet's drag alone, which a hosted view that disallows interception keeps,
-     * [Contacts]; bits 3 and 4: a nested sheet takes an upward or downward finger drag; bit 6: a long press lifted a reorder row), a count, the hosted text field the touch is for (0: none; [Fields]), and eleven numbers a scroller,
+     * and down; bit 2: the latter is a sheet's drag alone, which a hosted view that disallows interception or declares
+     * [NativeModule.DRAG_VERTICAL] keeps, [Contacts]; bits 3 and 4: a nested sheet takes an upward or downward finger
+     * drag; bit 5: five nested-sheet words follow the scrollers; bit 6: a long press lifted a reorder row; bits 7 and 8:
+     * sideways or non-sheet vertical claims yield to a hosted view's [NativeModule.dragAxes]), a count, the hosted text field the touch is for (0: none; [Fields]), and eleven numbers a scroller,
      * innermost first: its id, flags (bit 0 it takes a sideways drag from here, bit 1 one up or down, bit 2 its
      * rows are a node the reader can move, bit 3 no scrollbar, bit 4 it hears `refresh`, bit 5 its `refreshing`
      * is true, bits 6 and 7 its `keyboardDismissMode`), its revision, then as float bits its offset (x, y), its farthest offset
@@ -123,6 +128,8 @@ object Native {
      * these [snapsAround] tells. */
     @JvmStatic external fun readerSelection(action: Int, x: Float, y: Float): String?
     @JvmStatic external fun under(x: Float, y: Float): IntArray
+    /** Position selected by the reader's settle in the touch's layout, in pixels. */
+    @JvmStatic external fun snapTarget(id: Int, vertical: Boolean, target: Float, landing: Float)
     /** Virtualized list [id]'s snap areas up and down ([vertical]) or sideways, for a release at offset [release] whose
      * rest is projected near [projected] (pixels): a count, then per area its least and greatest offsets as float bits
      * and 1 for `scroll-snap-stop: always` (`host/painted/src/presenter/snap.rs`, `reader_snaps_around`). */
@@ -163,6 +170,10 @@ object Native {
     /** A module event, checked against the session and allocation carried by its painted view. */
     @JvmStatic external fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String)
     @JvmStatic external fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long)
+    /** An unpartitioned iframe's `window.postMessage` string; checked as [frameLoaded] is (LLP 1156.008.001 B1). */
+    @JvmStatic external fun frameMessage(id: Int, slot: Int, generation: Int, session: Long, text: String)
+    /** Immutable boot-time media grants: bit 0 `device.camera`, bit 1 `device.microphone` (LLP 1156.008.001 B1b). */
+    @JvmStatic external fun frameMediaGrants(): Int
     /** An iframe's view took the window's focus (a field in its page did) or lost it; checked as [frameLoaded] is. */
     @JvmStatic external fun frameFocused(id: Int, slot: Int, generation: Int, session: Long, focused: Boolean)
     /** An iframe's `FrameNavigation` record (LLP 1020.002 D2): [event] by its name, [record] its JSON; checked as

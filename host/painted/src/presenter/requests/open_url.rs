@@ -37,6 +37,15 @@ fn declares(compat: &str, scheme: &str) -> bool {
         })
 }
 
+/// RFC 3986's `scheme`, lowercased: a letter, then letters, digits, `+`, `-` or `.`.
+fn refused_scheme(url: &str) -> Option<String> {
+    let (scheme, _) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    (chars.next()?.is_ascii_alphabetic()
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+    .then(|| scheme.to_ascii_lowercase())
+}
+
 impl<D: DataSource> Presenter<D> {
     pub(in crate::presenter) fn open_url(&mut self, args: &[exact_plan::Value]) {
         let raw = args
@@ -75,7 +84,10 @@ impl<D: DataSource> Presenter<D> {
             }
             return;
         } else {
-            self.host.log(format!("openURL refused: {url:?} is not an absolute http, https, mailto or tel URL or a declared outgoing scheme"));
+            // The URL's path and query can carry a token, so the journal names only its scheme.
+            let named = refused_scheme(url)
+                .map_or_else(|| "a URL with no scheme".to_owned(), |s| format!("{s}:"));
+            self.host.log(format!("openURL refused: {named} is not an absolute http, https, mailto or tel URL or a declared outgoing scheme"));
         }
         self.answer_open(element, false);
     }

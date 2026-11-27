@@ -557,6 +557,7 @@ extension NodeView {
             // A range role is one element, its value between its bounds and
             // its `aria-valuetext` the description, as WebKit serves a drawn
             // one (LLP 1116 D8). Only a change is written: each posts.
+            // A meter names the authored view for VoiceOver. It has no native gauge to tint.
             let axRole: NSAccessibility.Role = ["slider": .slider, "meter": .levelIndicator, "scrollbar": .scrollBar, "spinbutton": .incrementor][range] ?? .progressIndicator
             setAccessibilityElement(true)
             if accessibilityRole() != axRole { setAccessibilityRole(axRole) }
@@ -1166,16 +1167,33 @@ extension Presenter {
             let order = a.superview?.subviews ?? []
             return (order.firstIndex(of: a) ?? 0) > (order.firstIndex(of: b) ?? 0)
         }
-        // A leaving view (hidden from accessibility as its exit starts) covers nothing.
-        func painted(_ view: UIView) -> Bool {
-            !view.isHidden && view.alpha > 0 && !view.accessibilityElementsHidden && (view as? NodeView)?.style["display"]?.string != "none"
-                && (view as? NodeView)?.drawnBySurface != true
+        // A cover is either a painted opaque node fully occluding the modal (matching macOS
+        // `macAccessibilityModal`), or a controller's view (a sheet's stack) over it.
+        func covers(_ sibling: UIView, inFrontOf at: UIView, covering modal: NodeView) -> Bool {
+            guard sibling !== at, !sibling.isHidden, !sibling.accessibilityElementsHidden,
+                  !sibling.bounds.isEmpty, inFront(sibling, of: at) else { return false }
+            if let cover = sibling as? NodeView {
+                let progressTrack = cover.kind == "control" && cover.props["type"] == "progress" && cover.props["value"] != nil
+                let fill = (segments.control(of: cover.id) == nil && !cover.groundIsSheets && !progressTrack ? cover.cgColor("background_color") : nil) ?? cover.fieldGround
+                // Read committed style rather than `layer.backgroundColor` / `layer.cornerRadius`:
+                // `syncModal()` runs at the end of `apply(_:)`, before `NodeLayer.display()` updates the layer.
+                guard !cover.cssVisibilityHidden, cover.style["display"]?.string != "none",
+                      !cover.drawnBySurface, !isLeaving(cover),
+                      cover.alpha == 1, cover.layer.shownOpacity == 1,
+                      cover.surface == nil, cover.vibrancyView == nil || cover.isParagraph,
+                      cover.backgroundClip == "border-box", fill?.alpha == 1,
+                      cover.cornerRadii(in: cover.bounds).allSatisfy({ $0 == 0 }),
+                      cover.clipPath == nil, cover.style["mask_image"] == nil, cover.layer.boxMask == nil,
+                      CATransform3DIsIdentity(cover.layer.transform)
+                else { return false }
+                // Only a painted opaque rectangle covering the entire dialog establishes occlusion.
+                return cover.convert(cover.bounds, to: modal).contains(modal.bounds)
+            }
+            guard sibling.next is UIViewController, sibling.alpha > 0 else { return false }
+            return sibling.convert(sibling.bounds, to: modal).contains(modal.bounds)
         }
-        // A cover is content: a node, or a controller's view (a sheet's
-        // stack), not the host's own helper layers.
-        func covered(_ view: UIView) -> Bool {
-            view.superview?.subviews.contains { $0 !== view && ($0 is NodeView || $0.next is UIViewController) && painted($0)
-                && inFront($0, of: view) && $0.frame.intersects(view.frame) } == true
+        func covered(_ at: UIView, covering modal: NodeView) -> Bool {
+            at.superview?.subviews.contains { covers($0, inFrontOf: at, covering: modal) } == true
         }
         func exposed(_ view: NodeView) -> Bool {
             guard view.props["accessibilityModal"] == "true", view.accessibilityVisible else { return false }
@@ -1183,7 +1201,7 @@ extension Presenter {
             var below = true // covers are judged inside the session's viewport
             for at in ancestors(view) {
                 if at === viewport || at === documentMount { below = false }
-                if at.accessibilityElementsHidden || (at as? NodeView)?.style["display"]?.string == "none" || (below && covered(at)) { return false }
+                if at.accessibilityElementsHidden || (at as? NodeView)?.style["display"]?.string == "none" || (below && covered(at, covering: view)) { return false }
             }
             return true
         }
@@ -1396,6 +1414,7 @@ extension Agent {
                 }
                 if node.props["popover"] != nil { row["open"] = presenter.menus.isOpen(node) }
                 #if os(iOS) || os(tvOS)
+                if node.video?.state()["pictureInPicture"] as? Bool == true { row["pictureInPicture"] = ["presentation": "system"] }
                 if let why = unshown[node.id] { row["unshown"] = why }
                 #endif
             }

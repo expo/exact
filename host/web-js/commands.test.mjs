@@ -6,13 +6,13 @@ import { hostFixtureFile, glueCase, glueNode, glueDeclarations } from '../web/te
 import { test, expect } from 'bun:test';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { builtFile } from './content-names.mjs';
-import { engagement } from '../web/engagement.js';
+import { engagement, whenRendered } from '../web/engagement.js';
 import { agentParameters } from '../web/navigation/agent-parameters.js';
 
 test('relaunch reloads the browser document and keeps committed storage', async () => {
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
     if (path === '/commands.js') return new Response(Bun.file(new URL('./commands.js', import.meta.url)));
     if (path === '/frame-messages.js') return new Response(Bun.file(new URL('../web/frame-messages.js', import.meta.url)));
     if (path === '/navigation.js') return new Response(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
@@ -55,7 +55,7 @@ test('relaunch reloads the browser document and keeps committed storage', async 
 test("a prompt's Return commits its field, then presses its action", async () => {
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
     if (path === '/commands.js') return new Response(Bun.file(new URL('./commands.js', import.meta.url)));
     if (path === '/frame-messages.js') return new Response(Bun.file(new URL('../web/frame-messages.js', import.meta.url)));
     if (path === '/navigation.js') return new Response(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
@@ -114,12 +114,12 @@ test("a prompt's Return commits its field, then presses its action", async () =>
 }, 30000);
 
 // `openURL` hands the browser a scheme app.json's `open_url` declares (`exact.openSchemes`), whatever the case it is
-// written in; an undeclared scheme, and one that runs or reads content even if declared, is refused; under the agent
+// written in; an undeclared scheme, and one that runs or reads content even if declared, is refused, its journal line naming only the scheme; under the agent
 // a declared one is journaled, not opened. `change` at a named element hears which.
 test('openURL opens a declared scheme, refuses the rest, and journals under the agent', async () => {
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
     for (const [name, file] of [['commands.js', './commands.js'], ['frame-messages.js', '../web/frame-messages.js'], ['navigation.js', '../web/navigation.js'], ['prompt-glue.js', '../web/prompt-glue.js'], ['alert-message.js', '../web/alert-message.js'], ['menu-rows.js', '../web/menu-rows.js']]) {
       if (path === `/${name}`) return new Response(hostFixtureFile(new URL(file, import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
     }
@@ -137,6 +137,7 @@ test('openURL opens a declared scheme, refuses the rest, and journals under the 
         page('https://example.com/', 'asked');
         page('zed://ssh/devbox/p', 'asked');
         page('https://example.com/', 'absent');
+        for (const url of ['unknown:/route?token=private', '/route?token=private']) page(url);
         await new Promise(r => setTimeout(r));
         globalThis.result = { opened, said, heard };
       </script>`, { headers: { 'content-type': 'text/html' } });
@@ -150,10 +151,14 @@ test('openURL opens a declared scheme, refuses the rest, and journals under the 
     const { opened, said, heard } = await page.evaluate(() => globalThis.result);
     expect(opened).toEqual(['vscode://vscode-remote/ssh-remote+devbox/p', 'vscode://file/a', 'https://example.com/', 'https://example.com/']);
     expect(heard).toEqual(['opened', 'failed']);
-    expect(said).toHaveLength(4);
-    expect(said[0]).toStartWith('openURL refused: "zed://ssh/devbox/p"');
-    expect(said[1]).toStartWith('openURL refused: "javascript:alert(1)"');
+    expect(said).toHaveLength(6);
+    expect(said[0]).toStartWith('openURL refused: zed: is not');
+    expect(said[1]).toStartWith('openURL refused: javascript: is not');
     expect(said[2]).toBe('openURL vscode: vscode://file/b (journaled, not opened under the agent)');
+    // A refusal names the scheme alone: a query can carry a token.
+    expect(said[4]).toStartWith('openURL refused: unknown: is not');
+    expect(said[5]).toStartWith('openURL refused: a URL with no scheme is not');
+    expect(said.filter(line => line.includes('private'))).toEqual([]);
   } finally {
     await browser?.close();
     server.stop(true);
@@ -164,7 +169,7 @@ test('openURL opens a declared scheme, refuses the rest, and journals under the 
 test('openDevTools is refused on the web', async () => {
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
     for (const [name, file] of [['commands.js', './commands.js'], ['frame-messages.js', '../web/frame-messages.js'], ['navigation.js', '../web/navigation.js'], ['prompt-glue.js', '../web/prompt-glue.js'], ['alert-message.js', '../web/alert-message.js'], ['menu-rows.js', '../web/menu-rows.js']]) {
       if (path === `/${name}`) return new Response(hostFixtureFile(new URL(file, import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
     }
@@ -192,7 +197,7 @@ test('openDevTools is refused on the web', async () => {
 test('the trace commands are refused in the journal', async () => {
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = globalThis.testDevelopment ? \"fixture\" : null; export const Kept = () => globalThis.testKey ?? \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
     for (const [name, file] of [['commands.js', './commands.js'], ['frame-messages.js', '../web/frame-messages.js'], ['navigation.js', '../web/navigation.js'], ['prompt-glue.js', '../web/prompt-glue.js'], ['alert-message.js', '../web/alert-message.js'], ['menu-rows.js', '../web/menu-rows.js']]) {
       if (path === `/${name}`) return new Response(hostFixtureFile(new URL(file, import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
     }
@@ -227,14 +232,14 @@ test.each([false, true])('a saved scheme waits beneath a grid copy pin (wasm: %s
   const command = glueCase(source('../web/wasm/commit.js'), 'command');
   const boot = glueDeclarations(source('../web/wasm/boot.js'), ['bootNow', 'reportColors']);
   const client = glueNode(source('./dev.mjs'), n => n.type === 'VariableDeclarator' && n.id.name === 'client' && n.init);
-  // The client writes its replacement boundary and the page's engagement tracker into the script (dev.mjs).
   const boundary = glueNode(source('./dev.mjs'), n => n.type === 'FunctionDeclaration' && n.id.name === 'replacementBoundary' && n);
-  const script = new Function('INSPECT_EVENTS', 'replacementBoundary', 'engagement', 'agentParameters', `return (${client})(0, null)`)([], boundary, engagement, agentParameters)
+  const script = new Function('INSPECT_EVENTS', 'replacementBoundary', 'engagement', 'agentParameters', 'whenRendered',
+    `return (${client})(0, null, {epoch: 'fixture'})`)([], boundary, engagement, agentParameters, whenRendered)
     .replace(/^<script>|<\/script>$/g, '');
   const pin = glueNode(wasm ? source('../web/dev.js') : script, n => n.type === 'VariableDeclarator' && n.id.name === 'pin' && n.init);
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = \"fixture\"; export const Kept = () => \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = \"fixture\"; export const Kept = () => \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
     if (path === '/') return new Response('<iframe name="exact-copy-1" src="/copy"></iframe>', { headers: { 'content-type': 'text/html' } });
     for (const [name, file] of [['commands.js', './commands.js'], ['frame-messages.js', '../web/frame-messages.js'], ['navigation.js', '../web/navigation.js'], ['prompt-glue.js', '../web/prompt-glue.js'], ['alert-message.js', '../web/alert-message.js'], ['menu-rows.js', '../web/menu-rows.js']]) {
       if (path === `/${name}`) return new Response(hostFixtureFile(new URL(file, import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
@@ -338,7 +343,7 @@ component App
     expect(built.status, built.stdout + built.stderr).toBe(0);
     server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
       const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = \"fixture\"; export const Kept = () => \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = \"fixture\"; export const Kept = () => \"exact.state.\";', { headers: { 'content-type': 'text/javascript' } });
       return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))), { headers: { 'cache-control': 'no-store' } });
     } });
     browser = await suiteBrowser();
@@ -419,7 +424,7 @@ test.each([false, true])('named windows restore normally outside a development g
   const scheme = readFileSync(new URL('../web/scheme.js', import.meta.url), 'utf8');
   const server = Bun.serve({ port: 0, fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null; export const DEVELOPMENT_STORE = null; export const Kept = () => "exact.state.";', { headers: { 'content-type': 'text/javascript' } });
+    if (url.pathname === '/rt.js') return new Response('export const Hosts = {}, KeyEvent = null, Propagating = null, clock = {}; export const DEVELOPMENT_STORE = null; export const Kept = () => "exact.state.";', { headers: { 'content-type': 'text/javascript' } });
     for (const [name, file] of [['commands.js', './commands.js'], ['frame-messages.js', '../web/frame-messages.js'], ['navigation.js', '../web/navigation.js'], ['prompt-glue.js', '../web/prompt-glue.js'], ['alert-message.js', '../web/alert-message.js'], ['menu-rows.js', '../web/menu-rows.js']]) {
       if (url.pathname === `/${name}`) return new Response(hostFixtureFile(new URL(file, import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
     }

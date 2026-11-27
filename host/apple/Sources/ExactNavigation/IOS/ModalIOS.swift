@@ -27,29 +27,36 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
     /// A full-screen route's own presentation and dismissal
     /// (RouteTransitionIOS), kept here: UIKit holds the delegate weakly.
     var routeTransitions: RoutePresenting? { didSet { transitioningDelegate = routeTransitions } }
-    init(host: ModalHost, route: NodeView, fullscreen: Bool, detent: String?, grabber: String?) {
+    init(host: ModalHost, route: NodeView, kind: String, detent: String?, grabber: String?) {
         self.host = host
         routeID = route.id
         self.route = route
         super.init(nibName: nil, bundle: nil)
         #if os(tvOS)
-        // tvOS has no sheets; every modal covers the screen.
+        // tvOS presents a modal route over the full screen (LLP 1123 §"Host matrix"): it has no page sheet, popover or sheet controller
         modalPresentationStyle = .overFullScreen
         #else
-        modalPresentationStyle = fullscreen ? .overFullScreen : ModalController.sheetStyle(route.props["navigationSizing"])
-        if !fullscreen { updateSheet(detent: detent, cornerRadius: ModalController.cornerRadius(of: route), grabber: grabber) }
+        switch kind {
+        case "fullscreen": modalPresentationStyle = .overFullScreen
+        // A popover adapts to a sheet in a compact-width window, as UIKit adapts it (`PopoverDelegate`)
+        case "popover": modalPresentationStyle = .popover
+        default:
+            modalPresentationStyle = ModalController.sheetStyle(route.props["navigationSizing"])
+            updateSheet(detent: detent, cornerRadius: ModalController.cornerRadius(of: route), grabber: grabber)
+        }
         #endif
     }
-    /// A sheet route's presentation, its `navigationSizing` as it is presented (LLP 1123 D7): a page sheet unsaid, as
-    /// the LLP keeps it; `form` UIKit's form sheet and `automatic` UIKit's choice.
+    /// A sheet route's presentation, its `navigationSizing` as it is presented (LLP 1123 D7): UIKit's own choice
+    /// unsaid or `automatic`, which resolves a form sheet on iOS 18 and later and a page sheet before, as UIKit
+    /// presents a controller that names no style; `page` its page sheet and `form` its form sheet. tvOS presents a route over the full screen (§"Host matrix").
     static func sheetStyle(_ sizing: String?) -> UIModalPresentationStyle {
         #if os(tvOS)
         .overFullScreen
         #else
         switch sizing {
+        case "page": .pageSheet
         case "form": .formSheet
-        case "automatic": .automatic
-        default: .pageSheet
+        default: .automatic
         }
         #endif
     }
@@ -77,14 +84,15 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
     }
     private var detentValue: String?, cornerRadius: CGFloat?, grabberValue: String?
     /// The route's other sheet choices as last applied (LLP 1123 D7): the detent it holds the sheet at, its edge
-    /// attachment in a compact height and its scroll expansion.
+    /// attachment in a compact height, whether it then takes its content's preferred width, and its scroll expansion.
     private var choices = SheetChoices()
     private struct SheetChoices: Equatable {
-        var selected: String?, undimmed: String?, edgeAttached: String?, scrollExpands: String?
+        var selected: String?, undimmed: String?, edgeAttached: String?, widthFollows: String?, scrollExpands: String?
         init(_ props: [String: String]? = nil) {
             selected = props?["navigationSelectedDetent"].flatMap { $0.isEmpty ? nil : $0 }
             undimmed = props?["navigationUndimmedDetent"].flatMap { $0.isEmpty ? nil : $0 }
             edgeAttached = props?["navigationEdgeAttachedInCompactHeight"]
+            widthFollows = props?["navigationWidthFollowsPreferredContentSize"]
             scrollExpands = props?["navigationScrollExpands"]
         }
     }
@@ -117,6 +125,7 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
             SheetDetents.updateGrabber(grabber, on: sheet)
             if let expands = next.scrollExpands { sheet.prefersScrollingExpandsWhenScrolledToEdge = expands == "true" }
             sheet.prefersEdgeAttachedInCompactHeight = next.edgeAttached == "true"
+            sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = next.widthFollows == "true"
             sheet.preferredCornerRadius = radius
             // In `animateChanges`, the surface moves with the sheet.
             self.paintSurface()
@@ -228,6 +237,13 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         if view.backgroundColor != surface { view.backgroundColor = surface }
     }
     private var glass: Bool {
+        // A popover shows UIKit's material, and adapted to a sheet, UIKit gives its arrow no direction and the
+        // sheet's own rule holds
+        if let popover = popoverPresentationController, modalPresentationStyle == .popover {
+            guard popover.arrowDirection == .unknown else { return true }
+            let sheet = popover.adaptiveSheetPresentationController
+            return (sheet.selectedDetentIdentifier ?? sheet.detents.first?.identifier) != .large
+        }
         // Unspecified until it is presented: an iPhone's, compact.
         guard isSheet, traitCollection.horizontalSizeClass != .regular,
               let sheet = sheetPresentationController else { return false }
@@ -296,12 +312,19 @@ private final class Presentation {
     var sampleLanding: (() -> Void)?
     var alreadyDismissed = false
     var presentationsDidDismiss: (() -> Void)?
+    #if os(iOS)
+    /// A popover route's anchor and choices, and its presentation's delegate (LLP 1123 D7).
+    var popover: PopoverRoute?
+    #endif
 
     init(host: ModalHost, route: NodeView, navigation: UIViewController,
          background: UIViewController) {
         self.route = route
         kind = route.props["navigationPresentation"] ?? "modal"
-        controller = ModalController(host: host, route: route, fullscreen: kind == "fullscreen", detent: route.props["navigationDetent"], grabber: route.props["navigationGrabber"])
+        controller = ModalController(host: host, route: route, kind: kind, detent: route.props["navigationDetent"], grabber: route.props["navigationGrabber"])
+        #if os(iOS)
+        popover = kind == "popover" ? PopoverRoute(host: host, route: route) : nil
+        #endif
         self.navigation = navigation
         self.background = background
         backgroundInteraction = background.view.isUserInteractionEnabled
@@ -511,6 +534,13 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         for layer in layers {
             layer.controller.isModalInPresentation = refusesDismissal(of: layer.route)
             layer.controller.updateSheet(detent: layer.route.props["navigationDetent"], cornerRadius: ModalController.cornerRadius(of: layer.route), grabber: layer.route.props["navigationGrabber"])
+            #if os(iOS)
+            if let popover = layer.popover, let source = layer.controller.popoverPresentationController {
+                popover.configure(source)
+                // Its anchor gone, the popover closes once, as the person's tap outside it closes it
+                if popover.anchorLost(in: presenter) { presenter.navigationHost.sheetBack(from: layer.route)?() }
+            }
+            #endif
             syncBackground(layer)
             #if os(iOS)
             layer.controller.paintSurface()
@@ -596,10 +626,24 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     }
 
     func canPresent(from parent: UIViewController, route: NodeView) -> Bool {
-        guard parent.presentedViewController == nil else {
+        #if os(iOS)
+        // A popover opens once its anchor is in a window: the batch that brings it syncs again (LLP 1123 D7)
+        if route.props["navigationPresentation"] == "popover", PopoverRoute.anchor(of: route, in: presenter) == nil {
             if refusedRoute != route.id {
                 refusedRoute = route.id
-                presenter.session?.log("modal route #\(route.id) refused: the owning controller already presents")
+                presenter.session?.log("popover route #\(route.id) waits: no element in a window has the id its navigationPopoverAnchor names, \"\(route.props["navigationPopoverAnchor"] ?? "")\"")
+            }
+            return false
+        }
+        #endif
+        guard parent.presentedViewController == nil, !parent.isBeingPresented, !parent.isBeingDismissed,
+              parent.viewIfLoaded?.window != nil else {
+            if refusedRoute != route.id {
+                refusedRoute = route.id
+                let reason = parent.presentedViewController != nil ? "the owning controller already presents"
+                    : parent.viewIfLoaded?.window == nil ? "the owning controller has no window"
+                    : "the owning controller is in a transition"
+                presenter.session?.log("modal route #\(route.id) refused: \(reason)")
             }
             return false
         }
@@ -607,8 +651,9 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         return true
     }
 
+    @discardableResult
     func present(_ route: NodeView, navigation: UIViewController, from background: UIViewController,
-                 preceding: NodeView?, owner: UIViewController) {
+                 preceding: NodeView?, owner: UIViewController) -> Bool {
         let layer = Presentation(host: self, route: route, navigation: navigation,
                                  background: background)
         // The press that opened the sheet may hand its control's focus to the
@@ -690,16 +735,25 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         navigation.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         navigation.didMove(toParent: controller)
         controller.presentationController?.delegate = self
+        #if os(iOS)
+        // A popover's delegate adapts it, and passes its dismissal here
+        if let popover = layer.popover, let source = controller.popoverPresentationController {
+            source.delegate = popover
+            popover.configure(source)
+        }
+        #endif
         let guarded = zoomGuard === controller
         zoomGuard = nil
-        defer { if owner.presentedViewController !== controller { endPress(layer) } } // UIKit refused it
         HostLog.note(presenter.session, "presentation: presenting the \(layer.kind) \(layer.route.props["navigationKey"] ?? "?")")
         owner.present(controller, animated: !ExactEnv.agentFreezes && !presenter.navigation.crossFading) { [weak self, weak layer, weak controller] in
             if guarded { UIView.performWithoutAnimation { controller?.view.alpha = 1 } }
-            guard let self, let layer else { return }
+            guard let self, let layer,
+                  layers.contains(where: { $0 === layer }) || retiring.contains(where: { $0 === layer }) else { return }
             HostLog.note(presenter.session, "presentation: presented the \(layer.kind) \(layer.route.props["navigationKey"] ?? "?")")
             layer.presenting = false
             #if os(iOS)
+            // Whether it is a popover or a sheet is known now (`glass`)
+            if layer.popover != nil { controller?.paintSurface() }
             // Up: what the bar sits over now (LLP 1105 D5).
             presenter.resolveStatusBar()
             #endif
@@ -718,6 +772,23 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
                 presenter.menus.resumeAfterRouteDismissal()
             }
         }
+        guard owner.presentedViewController === controller else {
+            // UIKit refused the presentation and will not invoke its completion block.
+            layer.presenting = false
+            layers.removeAll { $0 === layer }
+            endPress(layer)
+            releaseBackground(layer)
+            controller.presentationController?.delegate = nil
+            #if os(iOS)
+            controller.popoverPresentationController?.delegate = nil
+            #endif
+            navigation.willMove(toParent: nil)
+            navigation.view.removeFromSuperview()
+            navigation.removeFromParent()
+            if guarded { UIView.performWithoutAnimation { controller.view.alpha = 1 } }
+            presenter.session?.log("modal route #\(route.id) refused: UIKit declined presentation")
+            return false
+        }
         if guarded {
             // Shown as the transition starts, in the block UIKit runs with
             // its first frame; at once if there is no coordinator or it
@@ -727,6 +798,7 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
             if !taken { show() }
         }
         fit()
+        return true
     }
 
     func fit() {
@@ -852,6 +924,7 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         // Dismiss native owners from the top down, each keeping what it shows
         // for its dismissal. New projection waits until all retired owners finish.
         for layer in layers.reversed() {
+            if layer.controller.presentingViewController == nil { layer.presenting = false }
             layer.controller.freeze()
             layer.controller.retiringRoot = layer.route
             layer.controller.retiringNavigation = presenter.navigationHost.preserveModalContent(in: layer.controller)

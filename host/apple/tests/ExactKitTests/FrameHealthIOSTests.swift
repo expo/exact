@@ -14,6 +14,63 @@ private final class Ticker: NSObject {
 }
 
 final class FrameHealthIOSTests: XCTestCase {
+    func testClearDiscardsBothSourcesAndChartsWhileKeepingPauseAndTheRequestedRate() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "clearing frame health")
+        }
+        for measuresScreen in [false, true] {
+            let health = FrameHealth(policy: .onDemand)
+            defer { health.destroy() }
+            let overlay = FrameHealthOverlay(health: health, measuresScreen: measuresScreen)
+            _ = hosted(overlay, in: scene, size: CGSize(width: 393, height: 216))
+            overlay.setVisible(true)
+            defer { overlay.setVisible(false) }
+            overlay.layoutIfNeeded()
+            health.requestedRate(120)
+            let start = CACurrentMediaTime(), generation = health.snapshot().generation
+            for i in 0...60 {
+                let time = start + Double(i) / 120
+                health.record(arrival: time, target: time + 0.001, period: 1 / 120, finished: time + 0.002)
+                overlay.screen?.scheduled(presented: time, deadline: time + 0.001, now: time)
+                overlay.screen?.completed(presented: time, now: time + 0.002)
+            }
+            overlay.refresh(now: start + 0.501)
+            XCTAssertGreaterThan(health.historyStatus().retained, 0)
+            XCTAssertGreaterThan(overlay.card.chart.latest, 0)
+            overlay.card.activate?(.status)
+            XCTAssertNotEqual(overlay.card.state.rows[0].1, "—")
+            overlay.card.activate?(.details)
+            let elements = overlay.card.accessibilityElements?.compactMap { $0 as? UIAccessibilityElement } ?? []
+            let clear = try XCTUnwrap(elements.first { $0.isAccessibilityElement && $0.accessibilityLabel == "Clear frame health" })
+            XCTAssertTrue(overlay.card.compact)
+            XCTAssertTrue(overlay.card.bounds.contains(clear.accessibilityFrameInContainerSpace))
+            let layout = overlay.card.layout, rect = layout.clear
+            XCTAssertEqual(layout.control(at: CGPoint(x: rect.midX, y: rect.midY)), .clear)
+            // An update begun before Clear must not enter the new measurement.
+            overlay.screen?.scheduled(presented: start + 1, deadline: start + 1.001, now: start + 1)
+            XCTAssertTrue(clear.accessibilityActivate())
+            overlay.screen?.completed(presented: start + 1, now: start + 1.1)
+            XCTAssertGreaterThan(health.snapshot().generation, generation)
+            XCTAssertEqual(health.snapshot().callbacks, 0)
+            XCTAssertEqual(health.historyStatus().retained, 0)
+            XCTAssertEqual(health.requestedHertz, 120)
+            XCTAssertEqual(health.requestedPeriodNs, 8_333_333)
+            XCTAssertEqual(overlay.screenFrames, 0)
+            XCTAssertEqual(overlay.screen?.health.historyStatus().retained ?? 0, 0)
+            XCTAssertEqual(overlay.card.chart.latest, 0)
+            XCTAssertTrue(overlay.card.chart.held)
+            XCTAssertEqual(overlay.card.state.status, .paused)
+            XCTAssertEqual(overlay.card.state.rows[0].1, "—")
+            XCTAssertTrue(overlay.card.state.showsDetails)
+            overlay.card.activate?(.status)
+            XCTAssertNotEqual(overlay.card.state.status, .paused)
+            XCTAssertFalse(overlay.card.chart.held)
+            XCTAssertTrue(clear.accessibilityActivate())
+            XCTAssertNotEqual(overlay.card.state.status, .paused, "Clear also preserves a live card's state")
+            XCTAssertEqual(health.requestedHertz, 120)
+        }
+    }
+
     func testTheCardOffersAnAccessibleMinimizeAction() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the frame-health card's minimize control")
@@ -374,6 +431,7 @@ final class FrameHealthIOSTests: XCTestCase {
         menu.tableView.layoutIfNeeded()
         XCTAssertEqual(menu.groups[1].first?.title, "Frame Health")
         XCTAssertEqual(menu.groups[1].first?.checked, true, "the shown card's row is checked")
+        XCTAssertFalse(menu.groups[1].contains { $0.title.contains("Text Diagnostics") })
         XCTAssertEqual(menu.tableView.cellForRow(at: IndexPath(row: 0, section: 1))?.accessoryType, .checkmark)
         // The card stays above the menu, so it can close itself there: the row follows
         overlay.setVisible(false)
@@ -546,10 +604,10 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertNil(overlay.hitTest(outside, with: nil), "outside the card, touches reach the app")
         let layout = FrameHealthCardFace.Layout(width: overlay.card.bounds.width)
         for (control, rect) in [(FrameHealthCardFace.Control.close, layout.close), (.title, layout.title), (.status, layout.status),
-                                (.share, layout.share), (.details, layout.details)] {
+                                (.share, layout.share), (.details, layout.details), (.clear, layout.clear)] {
             // Each button's touch target is 44 points tall and at least as wide, out to the card's edge or
             // halfway to the next button
-            XCTAssertEqual(layout.control(at: CGPoint(x: rect.midX, y: rect.midY + (control == .details ? 21 : -21))), control)
+            XCTAssertEqual(layout.control(at: CGPoint(x: rect.midX, y: rect.midY + ([.details, .clear].contains(control) ? 21 : -21))), control)
             XCTAssertEqual(layout.control(at: CGPoint(x: rect.midX + (control == .share ? 18 : -18), y: rect.midY)), control)
         }
         // The card measures the screen while it shows, so it is live from the start
@@ -823,15 +881,14 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.shareText { shared = $0 }
         waitFor("the reports are encoded") { shared != nil }
         let text = try XCTUnwrap(shared)
-        XCTAssertTrue(text.hasPrefix("Frame health, live\nA summary, then the full data for an AI agent as 2 JSON reports.\n"
-            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\n"
-            + "What was measured\nEvery UI update of this app on its screen, each one a frame."), "what it holds, then the summary: \(text)")
+        XCTAssertTrue(text.hasPrefix("# Frame health, live\n\nA summary of how smoothly this app is drawing, followed by detailed data for an AI agent.\n\n"
+            + "## What was measured\n\n- Frames: every time the app updated the screen."), "the status, then the summary: \(text)")
         let lines = text.components(separatedBy: "\n")
-        XCTAssertEqual(lines.filter { $0.hasPrefix("Agent report") }, ["Agent report 1 of 2, the screen's frames (ui-update):",
-            "Agent report 2 of 2, Exact's frame clock (\(health.source)):"])
+        XCTAssertEqual(lines.filter { $0.hasPrefix("### ") }, ["### All screen updates (`ui-update`)", "### Exact's frames (`\(health.source)`)"])
         func report(_ source: String) throws -> [String: Any] {
-            let heading = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("Agent report") && $0.hasSuffix("(\(source)):") })
-            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[heading + 1].utf8)) as? [String: Any])
+            let heading = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("### ") && $0.hasSuffix("(`\(source)`)") })
+            let fence = try XCTUnwrap(lines[heading...].firstIndex(of: "```json"))
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[fence + 1].utf8)) as? [String: Any])
         }
         let clock = try report(health.source)
         XCTAssertEqual(clock["source"] as? String, health.source)

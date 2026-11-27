@@ -4,7 +4,8 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // answered: the walk is kept here as the reference, and both run over seeded random routes (lists sideways by class,
 // by inline style and by an estimated item width, nested lists under taken and under sideways lists, undisplayed
 // ancestors by class and inline, popovers, leaving elements, `navigationKey` sub-routes, rows whose press and href say
-// push or not, a retained list left with no rows), at a phone's width and a desktop's; over a live page changed in each
+// push or not, a retained list left with no rows, a root route that asks for the split in each of its three ways, says
+// nothing about one or says "none"), at a phone's width and a desktop's; over a live page changed in each
 // way the answer reads (a list added and removed, a class that lays a list sideways, an ancestor hidden, the colour
 // scheme, a sheet swapped, the route replaced, a push and a pop, the retained list emptied); and in the scope the walk
 // had (`children`: the light DOM, slotted elements included, not a shadow root's or a frame's).
@@ -30,8 +31,8 @@ const page = `<!doctype html><style>
   // The router's matcher, with a hook a test sets to change the page while the search runs (production's is pure: router.js routeMatches, glue.js's exact_route_match).
   const linkedPaths = href => { window.onLinked?.(href); return href.startsWith('/in/') && href !== '/in/hook'; };
   navigation.connect(document.getElementById('exact-root'), () => false, () => {}, null, null, linkedPaths);
-  // The walk navigation.js had before the search, verbatim but for its inputs (retained, linked) passed in.
-  const excluded = el => el.hasAttribute('popover') || el.hasAttribute('data-exiting') || getComputedStyle(el).display === 'none';
+  // The walk navigation.js had before the search, verbatim but for its inputs (retained, linked) passed in, and passing over the split's placeholder as the runner's does.
+  const excluded = el => el.hasAttribute('popover') || el.hasAttribute('data-exiting') || el.getAttribute('navigationSplit') === 'placeholder' || getComputedStyle(el).display === 'none';
   const linked = href => href?.startsWith('/') && !href.startsWith('//') && linkedPaths(href);
   function listRows(list) {
     const rows = [], walk = parent => { for (const el of parent.children) { if (excluded(el)) continue; const press = el.getAttribute('data-exact-router-press'), href = el.getAttribute('href') || null; if (press !== null || href) rows.push({ el, press, href }); else walk(el); } };
@@ -56,11 +57,13 @@ const page = `<!doctype html><style>
     return empty;
   }
   const refLists = new WeakMap(), wide = () => matchMedia('(min-width: 900px)').matches, sheet = r => ['modal', 'fullscreen'].includes(r?.getAttribute('navigationPresentation'));
+  // The split off a fold (LLP 1127 D1, D22): only a root route that asks, by "split", a width or a placeholder box of its own.
   function walkedSplit([route]) {
-    const said = route?.getAttribute('navigationSplit'), explicit = Number(said);
+    const said = route?.getAttribute('navigationSplit'), named = /^[1-9][0-9]{0,5}$/.test(said ?? '');
+    const asked = named || said === 'split' || [...(route?.children ?? [])].some(box => box.getAttribute('navigationSplit') === 'placeholder' && !box.hasAttribute('navigationKey'));
     const found = route && said !== 'none' && !sheet(route) ? walkedList(route, refLists.get(route)) : null;
-    const width = route && said !== 'none' && !sheet(route) && wide() && /^(absolute|fixed)$/.test(getComputedStyle(route).position)
-      ? Number.isFinite(explicit) && explicit > 0 ? explicit : found ? 320 : 0 : 0;
+    const width = route && asked && said !== 'none' && !sheet(route) && wide() && /^(absolute|fixed)$/.test(getComputedStyle(route).position)
+      ? named ? Number(said) : 320 : 0;
     if (route) { if (found && (width || refLists.has(route))) refLists.set(route, found.list); else refLists.delete(route); }
     return { width, list: found?.list, rows: found?.rows ?? [] };
   }
@@ -75,11 +78,13 @@ const page = `<!doctype html><style>
   // mulberry32, its full 32 bits.
   const rng = seed => () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   let tid = 0; // unique test ids across routes; each route has its own element budget
-  /** A random route of up to \`size\` elements: lists (some sideways three ways, some nested), rows, every way to be unreachable. */
-  window.grow = (seed, size) => {
+  /** A random route of up to \`size\` elements: lists (some sideways three ways, some nested), rows, every way to be unreachable.
+   * \`split\` is the route's \`navigationSplit\`, or "placeholder" for a placeholder box in it, or null for neither. */
+  window.grow = (seed, size, split = null) => {
     const r = rng(seed), pick = a => a[Math.floor(r() * a.length)], nav = document.getElementById('nav');
     nav.replaceChildren();
     const route = document.createElement('div'); route.setAttribute('navigationKey', '1'); route.dataset.t = 'route'; nav.append(route);
+    if (split && split !== 'placeholder') route.setAttribute('navigationSplit', split);
     const lists = [], opened = []; let made = 0;
     const add = (parent, depth) => {
       if (depth > 7 || made >= size) return;
@@ -97,6 +102,7 @@ const page = `<!doctype html><style>
       }
     };
     add(route, 0);
+    if (split === 'placeholder') route.insertAdjacentHTML('beforeend', '<div navigationSplit="placeholder" style="display:none"></div>');
     // Some popovers shown (a closed one is undisplayed by the UA sheet anyway): their attribute alone excludes them.
     for (const p of opened) try { p.showPopover(); } catch {}
     return { route, lists, made };
@@ -183,7 +189,7 @@ check('seeded random routes: the search answers what the walk answered, at a pho
     const tally = await evaluate(`(() => {
       const t = { trees: 0, found: 0, emptyRetained: 0, none: 0, wide: 0, empty: 0, branches: {}, mismatches: [] };
       for (let seed = 1; seed <= 400; seed++) {
-        const { route, lists, made } = grow(seed * 7919 + ${width}, 40 + (seed % 7) * 40);
+        const { route, lists, made } = grow(seed * 7919 + ${width}, 40 + (seed % 7) * 40, [null, 'split', '280', 'none', 'placeholder'][seed % 5]);
         if (!made) t.empty++;
         branches(route, t.branches, answeredBy(route));
         // The split twice (the second reads what the first retained), then the list with each list retained in turn.
@@ -222,7 +228,7 @@ check('seeded random routes: the search answers what the walk answered, at a pho
 check('a live page changed in each way the answer reads: the search answers what the walk answered after each', () => inChrome(async (evaluate, size, call) => {
   await evaluate(`(() => {
     const nav = document.getElementById('nav');
-    nav.innerHTML = '<div navigationKey="1" data-t="r1"><header data-t="h">x</header><div data-t="box"><div data-exact-list data-t="L"><a href="/in/a" data-t="a">a</a><button data-exact-router-press="true" data-t="b">b</button></div></div></div><div navigationKey="2" data-t="r2"><div data-t="d">d</div></div>';
+    nav.innerHTML = '<div navigationKey="1" navigationSplit="split" data-t="r1"><header data-t="h">x</header><div data-t="box"><div data-exact-list data-t="L"><a href="/in/a" data-t="a">a</a><button data-exact-router-press="true" data-t="b">b</button></div></div></div><div navigationKey="2" data-t="r2"><div data-t="d">d</div></div>';
     window.routes = () => [...nav.children];
     window.both = () => compare(routes());
   })()`);
@@ -243,7 +249,7 @@ check('a live page changed in each way the answer reads: the search answers what
   await evaluate(`document.getElementById('swap').remove()`); expect((await same('the sheet swapped back')).list).toBe('L2');
   await evaluate(`document.getElementById('nav').insertAdjacentHTML('beforeend', '<div navigationKey="3" data-t="r3"></div>')`); expect((await same('a later route pushed: the root\'s answer unaffected')).list).toBe('L2');
   await evaluate(`document.querySelector('[data-t="r3"]').remove()`); expect((await same('the later route popped: the root\'s answer unaffected')).list).toBe('L2');
-  await evaluate(`(() => { const old = document.querySelector('[data-t="r1"]'), next = document.createElement('div'); next.setAttribute('navigationKey', '1'); next.dataset.t = 'r1b'; next.innerHTML = '<div data-exact-list data-t="M"><a href="/in/m" data-t="m">m</a></div>'; old.replaceWith(next); })()`);
+  await evaluate(`(() => { const old = document.querySelector('[data-t="r1"]'), next = document.createElement('div'); next.setAttribute('navigationKey', '1'); next.setAttribute('navigationSplit', 'split'); next.dataset.t = 'r1b'; next.innerHTML = '<div data-exact-list data-t="M"><a href="/in/m" data-t="m">m</a></div>'; old.replaceWith(next); })()`);
   expect((await same('the route replaced')).list).toBe('M');
   // Retained on a wide window (a split showing), then its rows gone: the retained list with none, both ways.
   await size(1280); expect((await same('retained wide')).width).toBe(320);
@@ -255,7 +261,7 @@ check('a live page changed in each way the answer reads: the search answers what
 check('the scope the walk had: light DOM and slotted elements, never a shadow root or a frame', () => inChrome(async (evaluate) => {
   const answers = await evaluate(`(async () => {
     const nav = document.getElementById('nav');
-    const route = document.createElement('div'); route.setAttribute('navigationKey', '1'); route.dataset.t = 'route'; nav.replaceChildren(route);
+    const route = document.createElement('div'); route.setAttribute('navigationKey', '1'); route.setAttribute('navigationSplit', 'split'); route.dataset.t = 'route'; nav.replaceChildren(route);
     // A list in a shadow root: neither sees it.
     const host = document.createElement('div'); host.dataset.t = 'host'; route.append(host);
     host.attachShadow({ mode: 'open' }).innerHTML = '<div data-exact-list data-t="s-list"><a href="/in/s" data-exact-router-press="true" data-t="s-row">s</a></div><slot></slot>';
@@ -283,6 +289,7 @@ check('each branch decides the answer in a fixed case', () => inChrome(async (ev
     ['an ancestor data-exiting', `<div data-exiting>${list('A')}</div>${list('B')}`, 'B'],
     ['an ancestor hidden by class', `<div class="gone">${list('A')}</div>${list('B')}`, 'B'],
     ['an ancestor hidden inline', `<div style="display:none">${list('A')}</div>${list('B')}`, 'B'],
+    ['an ancestor placeholder, shown', `<div navigationSplit="placeholder">${list('A')}</div>${list('B')}`, 'B'],
     ['itself navigationKey', `${list('A', 'navigationKey="9"')}${list('B')}`, 'B'],
     ['itself a popover, shown', `${list('A', 'popover')}${list('B')}`, 'B'],
     ['itself data-exiting', `${list('A', 'data-exiting')}${list('B')}`, 'B'],

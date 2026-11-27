@@ -1,5 +1,6 @@
-//! One acknowledged interaction picture and one submitted picture. Headless
-//! and agent frames remain immediate; no glyph/command graph is copied.
+//! One acknowledged interaction picture. A direct Linux carrier may submit
+//! one picture ahead of its pending present; other carriers stay single-flight.
+//! Headless and agent frames remain immediate; no glyph/command graph is copied.
 use super::*;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 use crate::paint::Presentation;
@@ -7,7 +8,7 @@ use crate::paint::ScrollBounds;
 use exact_kernel::id::IdMap;
 use exact_kernel::{Kernel, NodeKey};
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 use std::sync::Arc;
@@ -19,6 +20,12 @@ struct Identity {
     succeeded: bool,
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     activatable: bool,
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
+    picture: RefCell<Option<Picture>>,
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
+    presentable: Cell<bool>,
+    #[cfg(target_os = "linux")]
+    allows_ahead: bool,
 }
 struct Witness {
     epoch: u64,
@@ -43,6 +50,8 @@ struct Seen {
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 struct Picture {
     paint: Presentation,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    committed: Option<f64>,
     boxes: Vec<PaintedBox>,
     page: (f32, f32),
     witness: Witness,
@@ -56,7 +65,6 @@ struct Picture {
 pub struct SubmittedFrame<P = Arc<Pixmap>> {
     pub(crate) pixels: P,
     identity: Rc<Identity>,
-    picture: RefCell<Option<Picture>>,
     /// What its present starts (LLP 1003.001 D9).
     carried: super::Carried,
 }
@@ -121,6 +129,8 @@ pub(crate) struct State {
     active: bool,
     rendering: bool,
     pending: Option<Rc<Identity>>,
+    #[cfg(target_os = "linux")]
+    ahead: Option<Rc<Identity>>,
     acknowledged: Option<Witness>,
     /// Menu geometry retained while the acknowledged boxes are out for painting.
     pub(crate) menu: Option<crate::paint::control::MenuPaint>,
@@ -196,6 +206,7 @@ impl State {
                 .and_then(|a| a.nodes.get(&id).and_then(|s| s.scroll))
                 .unwrap_or(ScrollBounds {
                     axes: (Overflow::Hidden, Overflow::Hidden),
+                    min: (0., 0.),
                     max: (0., 0.),
                 }),
         )
@@ -247,7 +258,7 @@ impl<D: DataSource> Presenter<D> {
     /// while an earlier one is still pending.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub fn display_frame(&mut self) -> Option<SubmittedFrame> {
-        self.submitted_picture(|p| {
+        self.submitted_picture(false, |p| {
             p.frame_with_canvas_tick(crate::paint::FrameTarget::Pixels, false)
                 .expect("a display frame requested CPU pixels")
         })
@@ -260,46 +271,129 @@ impl<D: DataSource> Presenter<D> {
         direct: bool,
         mirror: bool,
     ) -> Option<SubmittedFrame<PanelImage>> {
-        self.submitted_picture(|p| {
-            #[cfg(target_os = "linux")]
-            if direct && p.host.content_region().is_none() {
-                p.brush.take_scanout();
-                let pixels = p.frame_with_canvas_tick(
-                    crate::paint::FrameTarget::Scanout { readback: mirror },
-                    false,
-                );
-                if let Some((view, rotation)) =
-                    p.brush.take_scanout().filter(|_| p.last_frame_succeeded)
-                {
-                    return PanelImage::Ink {
-                        view,
-                        rotation,
-                        pixels,
-                    };
-                }
-                return PanelImage::Pixels(
-                    pixels.expect("a CPU display fallback returns its image"),
-                );
+        self.submitted_picture(false, |p| p.panel_picture(direct, mirror))
+    }
+
+    /// Whether the direct Linux carrier may prepare a picture now. The host
+    /// uses this same admission rule for rendering, frame ticks and its wake.
+    #[cfg(target_os = "linux")]
+    pub fn panel_can_prepare_ahead(&self) -> bool {
+        if self.display.rendering || self.display.ahead.is_some() {
+            return false;
+        }
+        let Some(pending) = self.display.pending.as_ref() else {
+            return true;
+        };
+        if !pending.allows_ahead
+            || !Rc::ptr_eq(&pending.origin, &self.display.origin)
+            || self.present_wanted()
+            || self.host.data_pending()
+            || self.host.content_region().is_some()
+            || self.reveal_waits_for_picture()
+            // The pending picture's ACK can still clamp to its older field width.
+            || self.field_reveal
+            // Sync can complete a capture or surface request and create a hold,
+            // revoking admission. Keep captures and surface requests on single-flight
+            // so no outcome is published for a refused ahead picture.
+            || self.host.canvas_wants_frame()
+            || self.surfaces.has_pending_requests()
+        {
+            return false;
+        }
+        let picture = pending.picture.borrow();
+        let (Some(picture), Some(shown)) = (picture.as_ref(), self.display.witness()) else {
+            return false;
+        };
+        let next = &picture.witness;
+        // An ACK that rebases or clamps input must precede the next paint.
+        // Only active scrollers matter; rows may enter or leave while scrolling.
+        next.document == shown.document
+            && next.viewport == shown.viewport
+            && next.scale == shown.scale
+            && next.model_scroll.is_empty()
+            && self
+                .scroll
+                .keys()
+                .all(|id| match (shown.nodes.get(id), next.nodes.get(id)) {
+                    // A covered route keeps its offset while neither picture paints it.
+                    (None, None) => true,
+                    (Some(a), Some(b)) => {
+                        a.key == b.key
+                            && a.parent == b.parent
+                            && a.scroll_parent == b.scroll_parent
+                            && match (a.scroll, b.scroll) {
+                                (Some(a), Some(b)) => a.axes == b.axes && a.max == b.max,
+                                (None, None) => true,
+                                _ => false,
+                            }
+                    }
+                    _ => false,
+                })
+    }
+
+    /// Prepare at most one picture ahead of the pending present. The carrier
+    /// must submit each GPU view before calling again and acknowledge in order.
+    /// Initial pixels and held motion wait for their own present first.
+    #[cfg(target_os = "linux")]
+    pub fn panel_frame_ahead(&mut self, mirror: bool) -> Option<SubmittedFrame<PanelImage>> {
+        self.submitted_picture(true, |p| p.panel_picture(true, mirror))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn panel_picture(&mut self, direct: bool, mirror: bool) -> PanelImage {
+        let p = self;
+        #[cfg(target_os = "linux")]
+        if direct && p.host.content_region().is_none() {
+            p.brush.take_scanout();
+            let pixels = p.frame_with_canvas_tick(
+                crate::paint::FrameTarget::Scanout { readback: mirror },
+                false,
+            );
+            if let Some((view, rotation)) =
+                p.brush.take_scanout().filter(|_| p.last_frame_succeeded)
+            {
+                return PanelImage::Ink {
+                    view,
+                    rotation,
+                    pixels,
+                };
             }
-            #[cfg(target_os = "macos")]
-            let _ = (direct, mirror);
-            PanelImage::Pixels(
-                p.frame_with_canvas_tick(crate::paint::FrameTarget::Pixels, false)
-                    .expect("a display frame requested CPU pixels"),
-            )
-        })
+            return PanelImage::Pixels(pixels.expect("a CPU display fallback returns its image"));
+        }
+        #[cfg(target_os = "macos")]
+        let _ = (direct, mirror);
+        PanelImage::Pixels(
+            p.frame_with_canvas_tick(crate::paint::FrameTarget::Pixels, false)
+                .expect("a display frame requested CPU pixels"),
+        )
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     fn submitted_picture<P>(
         &mut self,
+        ahead: bool,
         render: impl FnOnce(&mut Self) -> P,
     ) -> Option<SubmittedFrame<P>> {
-        if self.display.blocked() {
+        #[cfg(target_os = "linux")]
+        let blocked = if ahead {
+            !self.panel_can_prepare_ahead()
+        } else {
+            self.display.blocked()
+        };
+        #[cfg(not(target_os = "linux"))]
+        let blocked = {
+            let _ = ahead;
+            self.display.blocked()
+        };
+        if blocked {
             return None;
         }
         // Sample and replay this display tick before captures and the ownership snapshot.
         self.sync_surfaces_with_canvas_tick(true);
+        #[cfg(target_os = "linux")]
+        if ahead && !self.panel_can_prepare_ahead() {
+            return None;
+        }
         // Keep A's owners alive for replay/failure during B's paint; swapping
         // afterward moves B into its receipt, without deep-copying any payload.
         let old_paint = self.brush.presentation();
@@ -310,13 +404,16 @@ impl<D: DataSource> Presenter<D> {
         self.boxes_serial += 1;
         self.display.active = true;
         self.display.rendering = true;
+        #[cfg(target_os = "linux")]
+        if let Some(pending) = &self.display.pending {
+            if let Some(picture) = pending.picture.borrow().as_ref() {
+                // Numeric rolls and flow continue after B's text; A's text
+                // stays in old_paint for input until its real replacement.
+                self.brush.use_text_predecessor(&picture.paint);
+            }
+        }
         let pixels = render(self);
         self.display.rendering = false;
-        let identity = Rc::new(Identity {
-            origin: self.display.origin.clone(),
-            succeeded: self.last_frame_succeeded,
-            activatable: self.last_frame_succeeded && !self.dirty,
-        });
         let limits = self.collection_scroll_limits();
         let kernel = self.host.kernel();
         let mut witness = Witness {
@@ -373,6 +470,8 @@ impl<D: DataSource> Presenter<D> {
         }
         let picture = Picture {
             paint: self.brush.replace_presentation(old_paint),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            committed: self.brush.numerals.committed,
             boxes: std::mem::replace(&mut self.boxes, old_boxes),
             page: std::mem::replace(&mut self.boxes_page, old_page),
             witness,
@@ -381,12 +480,45 @@ impl<D: DataSource> Presenter<D> {
         self.boxes_serial += 1;
         self.ranges.shown.set(old_shown);
         self.publish_ranges();
-        self.display.pending = Some(identity.clone());
+        let preparing_ahead = ahead && self.display.pending.is_some();
+        #[cfg(target_os = "linux")]
+        let waits_for_present = ahead && self.present_wanted();
+        #[cfg(target_os = "linux")]
+        if preparing_ahead && waits_for_present {
+            // A list edge can start motion inside the paint. Its first
+            // submitted picture must also carry what the earlier ACK begins.
+            self.discard_picture(picture);
+            self.repaint();
+            return None;
+        }
+        let identity = Rc::new(Identity {
+            origin: self.display.origin.clone(),
+            succeeded: self.last_frame_succeeded,
+            activatable: self.last_frame_succeeded && !self.dirty,
+            picture: RefCell::new(Some(picture)),
+            presentable: Cell::new(false),
+            #[cfg(target_os = "linux")]
+            allows_ahead: ahead
+                && self.last_frame_succeeded
+                && self.painted
+                && !waits_for_present
+                && !self.host.data_pending(),
+        });
+        let carried = self.capture_picture(preparing_ahead);
+        #[cfg(target_os = "linux")]
+        if self.display.pending.is_some() {
+            self.display.ahead = Some(identity.clone());
+        } else {
+            self.display.pending = Some(identity.clone());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.display.pending = Some(identity.clone());
+        }
         Some(SubmittedFrame {
             pixels,
             identity,
-            picture: RefCell::new(Some(picture)),
-            carried: self.picture_carried(),
+            carried,
         })
     }
 
@@ -398,6 +530,11 @@ impl<D: DataSource> Presenter<D> {
         frame: &SubmittedFrame<P>,
         at_ms: f64,
     ) -> Option<String> {
+        if !Rc::ptr_eq(&self.display.origin, &frame.identity.origin)
+            || !frame.identity.presentable.replace(false)
+        {
+            return None;
+        }
         self.picture_presented(frame.carried, at_ms)
     }
 
@@ -423,8 +560,51 @@ impl<D: DataSource> Presenter<D> {
             .is_some_and(|id| Rc::ptr_eq(id, &frame.identity))
         {
             self.display.pending = None;
+            if let Some(picture) = frame.identity.picture.borrow_mut().take() {
+                self.discard_picture(picture);
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(ahead) = self.display.ahead.take() {
+                let picture = ahead.picture.borrow_mut().take();
+                if let Some(picture) = picture {
+                    self.discard_picture(picture);
+                }
+            }
+            self.repaint();
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if self
+            .display
+            .ahead
+            .as_ref()
+            .is_some_and(|id| Rc::ptr_eq(id, &frame.identity))
+        {
+            self.display.ahead = None;
+            if let Some(picture) = frame.identity.picture.borrow_mut().take() {
+                self.discard_picture(picture);
+            }
             self.repaint();
         }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn discard_picture(&mut self, picture: Picture) {
+        if !Rc::ptr_eq(&self.display.origin, &picture.witness.origin) {
+            return;
+        }
+        // This paint consumed the numeric change's clock. A retry retains it
+        // without replacing newer work or rolls in the surviving predecessor.
+        self.host.row_dirty.restore_commit(picture.committed);
+        if let Some(pending) = &self.display.pending {
+            let pending = pending.picture.borrow();
+            if let Some(pending) = pending.as_ref() {
+                self.brush
+                    .discard_text(&picture.paint, Some(&pending.paint));
+                return;
+            }
+        }
+        self.brush.discard_text(&picture.paint, None);
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
@@ -439,15 +619,21 @@ impl<D: DataSource> Presenter<D> {
         }
         // Something shows the session from here on.
         self.unshown = false;
+        // A lift cuts its picture from the pixels whose boxes it reads
+        self.shown = None;
         // Consume once, even after reload. A retained pixel handle never pins
         // an old native paragraph/picture after this acknowledgement.
-        let picture = frame.picture.borrow_mut().take();
-        if Rc::ptr_eq(&self.display.origin, &frame.identity.origin) && frame.identity.succeeded {
+        let picture = frame.identity.picture.borrow_mut().take();
+        let same_session = Rc::ptr_eq(&self.display.origin, &frame.identity.origin);
+        // A fallback can reach the display without publishing new app geometry.
+        frame.identity.presentable.set(same_session);
+        if same_session && frame.identity.succeeded {
             if let Some(mut picture) = picture {
                 let scale = picture.witness.scale;
                 let model_scroll = std::mem::take(&mut picture.witness.model_scroll);
                 self.brush.replace_presentation(picture.paint);
                 self.boxes = picture.boxes;
+                self.keep_shown(pixels, f32::from_bits(scale));
                 self.boxes_page = picture.page;
                 self.boxes_serial += 1;
                 self.ranges.shown.set(picture.session);
@@ -478,7 +664,14 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        self.display.pending = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.display.pending = self.display.ahead.take();
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.display.pending = None;
+        }
         if Rc::ptr_eq(&self.display.origin, &frame.identity.origin)
             && frame.identity.activatable
             && self.activation_failed.is_none()

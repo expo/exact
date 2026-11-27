@@ -1,4 +1,8 @@
 import { test, expect } from 'bun:test';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { chromium } from 'playwright-core';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
 // `requestPictureInPicture(id)` on the JS target (LLP 1042 §9): the image's
@@ -52,7 +56,7 @@ test("an image floats in picture in picture and hears it enter and leave", async
     await page.evaluate(() => window.exitPip());
     await page.waitForFunction(() => document.pictureInPictureElement === null);
     await page.evaluate(() => window.exitPip());
-    expect(await page.locator('#log').textContent()).toBe('enterpictureinpicture;leavepictureinpicture;enterpictureinpicture;leavepictureinpicture;exitPictureInPicture ignored: no image is in the picture-in-picture window;');
+    expect(await page.locator('#log').textContent()).toBe('enterpictureinpicture;leavepictureinpicture;enterpictureinpicture;leavepictureinpicture;exitPictureInPicture ignored: nothing is in the picture-in-picture window;');
     await page.evaluate(() => { document.querySelector('#log').textContent = ''; });
     // Floated again, then the image leaves the document: the window closes, and no one hears it.
     await page.locator('#float').click();
@@ -150,7 +154,7 @@ test("the window presentation floats the image in a document picture-in-picture 
     await page.evaluate(() => documentPictureInPicture.window.close());
     await page.waitForFunction(() => document.querySelector('#log').textContent.endsWith('leavepictureinpicture;'));
     await page.evaluate(() => window.exitPip());
-    expect(await page.locator('#log').textContent()).toBe('enterpictureinpicture;leavepictureinpicture;exitPictureInPicture ignored: no image is in the picture-in-picture window;');
+    expect(await page.locator('#log').textContent()).toBe('enterpictureinpicture;leavepictureinpicture;exitPictureInPicture ignored: nothing is in the picture-in-picture window;');
   } finally {
     await browser?.close();
     server.stop(true);
@@ -163,3 +167,91 @@ test("the window opens at the asked area in the picture's aspect", async () => {
   expect(windowSize({ width: 480, height: 320 }, [300, 400])).toEqual([339, 453]);
   expect(windowSize({ width: 400, height: 400 }, [1600, 900])).toEqual([533, 300]);
 });
+
+// Chromium exposes its own media menu through accessibility. Use real input so
+// the browser grants activation to the control that starts the presentation.
+async function pressMediaControl(page, cdp, name) {
+  const end = Date.now() + 5000;
+  do {
+    const { nodes } = await cdp.send('Accessibility.getFullAXTree');
+    for (const node of nodes.filter(n => n.name?.value?.toLowerCase() === name && n.backendDOMNodeId)) {
+      const box = await cdp.send('DOM.getContentQuads', { backendNodeId: node.backendDOMNodeId }).catch(() => null);
+      const q = box?.quads[0];
+      if (q && q[2] > q[0] && q[5] > q[1]) {
+        return page.mouse.click((q[0] + q[4]) / 2, (q[1] + q[5]) / 2);
+      }
+    }
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+  } while (Date.now() < end);
+  throw new Error(`Chromium did not expose ${name}`);
+}
+
+test("a URL video reports each presentation to its Contract handlers", async () => {
+  const root = resolve(import.meta.dir, '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const app = mkdtempSync(resolve(root, 'target/video-pip-'));
+  let browser, server;
+  try {
+    mkdirSync(resolve(app, 'assets'));
+    copyFileSync(resolve(root, 'apps/video-player/assets/motion.mp4'), resolve(app, 'assets/motion.mp4'));
+    copyFileSync(resolve(root, 'scripts/fixtures/video-picture-in-picture.contract'), resolve(app, 'app.contract'));
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'PiP', app: { id: 'test.exact.pip', name: 'PiP' }, host: { web: {} } }));
+    const dist = resolve(app, 'dist');
+    const build = spawnSync(process.execPath, ['host/web-js/build.mjs', 'pip', '--render', 'none', '--out', dist],
+      { cwd: root, env: { ...process.env, EXACT_APP_DIR: app }, encoding: 'utf8' });
+    expect(build.status, build.stdout + build.stderr).toBe(0);
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    browser = await suiteBrowser('chromium', { executablePath: process.env.CHROME || chromium.executablePath(), headless: process.platform !== 'darwin' && !process.env.DISPLAY });
+    const page = await browser.newPage();
+    await page.goto(new URL('?agent=1', server.url).href);
+    await page.waitForFunction(() => window.exact?.ready && document.querySelector('video')?.videoWidth > 0);
+    const press = id => page.locator(`[data-testid="${id}"]`).click();
+    const counts = (ins, outs) => page.waitForFunction(([i, o]) => document.querySelector('[data-testid=events]').textContent === `Entries ${i}, exits ${o}`, [ins, outs]);
+    expect(await page.locator('[data-testid=available]').textContent()).toBe('Available true');
+    await press('stop');
+    // Without metadata the browser rejects the request, even from a real press.
+    const src = await page.locator('video').evaluate(e => { const src = e.src; e.removeAttribute('src'); e.load(); return src; });
+    await press('start');
+    await page.waitForFunction(() => document.querySelector('[data-testid=status]').textContent === 'InvalidStateError');
+    await counts(0, 0);
+    await page.locator('video').evaluate((e, src) => { e.src = src; }, src);
+    await page.waitForFunction(() => document.querySelector('video').videoWidth > 0);
+    await press('start');
+    await counts(1, 0);
+    expect(await page.evaluate(() => document.pictureInPictureElement?.id)).toBe('clip');
+    expect(await page.locator('[data-testid=status]').textContent()).toBe('Started');
+    const tree = await page.evaluate(() => window.exact.agentSettled({ op: 'tree', target: 'clip' }));
+    expect(tree.nodes[0].pictureInPicture.presentation).toBe("system");
+    await press('start');
+    await press('stop');
+    await counts(1, 1);
+    const cdp = await page.context().newCDPSession(page);
+    await page.locator('video').hover();
+    await pressMediaControl(page, cdp, 'show more media controls');
+    await pressMediaControl(page, cdp, 'enter picture-in-picture');
+    await counts(2, 1);
+    await page.evaluate(() => document.exitPictureInPicture());
+    await counts(2, 2);
+    await press('start');
+    await counts(3, 2);
+    await press('remove');
+    await counts(3, 3);
+    expect(await page.evaluate(() => document.pictureInPictureElement)).toBeNull();
+    expect(await page.locator('[data-testid=status]').textContent()).toBe('Stopped');
+
+    await page.addInitScript(() => Object.defineProperty(document, 'pictureInPictureEnabled', { value: false }));
+    await page.reload();
+    await page.waitForFunction(() => window.exact?.ready);
+    expect(await page.locator('[data-testid=available]').textContent()).toBe('Available false');
+    await press('start');
+    expect(await page.locator('[data-testid=status]').textContent()).toContain('unavailable');
+    await counts(0, 0);
+  } finally {
+    await browser?.close();
+    server?.stop(true);
+    rmSync(app, { recursive: true, force: true });
+  }
+}, 90000);

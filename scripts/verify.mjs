@@ -41,16 +41,17 @@
 // the console session's desktop and its window captured (`desktopShot`), since that, not the headless picture, is what a
 // person sees there.
 //
-//   bun scripts/verify.mjs [web|ios|windows|android] --app <name> [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]
+//   bun scripts/verify.mjs [web|ios|windows|android] --app <name> [--sim <udid|name>] [--duo <udid|name>|none] [--shots <dir>] [--rescroll] [--strict] [--json]
 import { LAUNCH_MEDIA } from './agent-prefer.mjs';
 import { toolEnv } from './tools.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
-import { availableParallelism, loadavg } from 'node:os';
+import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { findings as feelFindings, summary as feelSummary } from '../host/apple/feel/analyze.mjs';
+import { authoredTests } from './app.mjs';
 import { compilerWarnings, information, oneScheme, shippedHost, windowsWindow } from './app-cli.mjs';
 import { guardFlags } from './help.mjs';
 import { holderOf } from './port-lock.mjs';
@@ -58,6 +59,7 @@ import { selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
 import { axGroup, byRule, FIRST, firstGrounds, groups, launchNotes, placesOf, RELAUNCH, ruleOf, largeRemedy, iosNavigationContent, iosTabBar } from './verify-findings.mjs';
 import { cargoDiagnosticFilter } from './cargo-check.mjs';
+import { duoLeg, resolveDuoChoice, startParallelDuo } from './verify-duo.mjs';
 export { byRule, groups, ruleOf, largeRemedy };
 
 import { serverModules } from './app-imports.mjs';
@@ -105,11 +107,22 @@ export function buildWarnings(output) {
  * comes after them), and `logged`'s ticker while it runs. */
 export const buildProgress = line => /^(?:(?:building|waiting) for|\s*still building)/.test(line);
 
-/** The iOS build a drive needs, or its plan alone (agent-build.mjs): null when fresh, else what it said. */
+/** The iOS build a drive needs, or its plan alone (agent-build.mjs): null when fresh, else what it said.
+ *  Also populates `EXACT_BUILD_CHECKED` so subsequent launches in this run skip repeating `receiptChanges()`. */
 async function iosBuild(app) {
   const { buildFirst } = await import('./agent-build.mjs');
   const said = [], started = Date.now();
-  const code = await buildFirst('ios', app, { say: (line) => { said.push(line); if (buildProgress(line)) console.error(line); } });
+  const checkOut = resolve(tmpdir(), `exact-verify-build-checked-${process.pid}-${Date.now()}.json`);
+  const prevOut = process.env.EXACT_BUILD_CHECK_OUT;
+  process.env.EXACT_BUILD_CHECK_OUT = checkOut;
+  let code;
+  try {
+    code = await buildFirst('ios', app, { say: (line) => { said.push(line); if (buildProgress(line)) console.error(line); } });
+    if (!code && existsSync(checkOut)) process.env.EXACT_BUILD_CHECKED = readFileSync(checkOut, 'utf8');
+  } finally {
+    if (prevOut === undefined) delete process.env.EXACT_BUILD_CHECK_OUT; else process.env.EXACT_BUILD_CHECK_OUT = prevOut;
+    rmSync(checkOut, { force: true });
+  }
   return said.length || code ? { ms: Date.now() - started, code, said, warnings: [] } : null;
 }
 
@@ -306,17 +319,21 @@ const NOTE_ADVICE = '  a saved value must survive a reload; a game or a draft in
 export function refusalsOf({ lines = [], host = [] } = {}, expected = []) {
   const found = [], journal = new Map(), accepted = new Map();
   for (const line of expected) accepted.set(line,(accepted.get(line) ?? 0)+1);
+  // App-authored `console.<level>:` output without the `exact:` marker is not a host refusal (LLP 1156.008.000 D8.1).
+  const appConsole = raw => /^console\.\w+:\s/.test(String(raw)) && !/^console\.\w+:\s*exact:\s/i.test(String(raw));
   const normalized = raw => String(raw).replace(/^t=\d+(?:\.\d+)?\s+/, '').replace(/^(?:app|console\.\w+|chrome|warning|error): /, '').replace(/^exact: /, '').trim();
   const collect = line => {
     if (/\brefus(?:ed|es|al)\b/i.test(line) && !/\b(?:dismissal|back|back gesture|drag) refused\b|connection[ _]refused|fetch failed \(driver fault\)/i.test(line) && !found.includes(line)) found.push(line);
   };
   for (const raw of lines) {
+    if (appConsole(raw)) continue;
     const line=normalized(raw), count=accepted.get(String(raw)) ?? 0;
     journal.set(line,(journal.get(line) ?? 0)+1);
     if (count) accepted.set(String(raw),count-1); else collect(line);
   }
   // A native host can also print its journal; that mirror is one event.
   for (const raw of host) {
+    if (appConsole(raw)) continue;
     const line=normalized(raw), mirrors=journal.get(line) ?? 0;
     if (mirrors) journal.set(line,mirrors-1); else collect(line);
   }
@@ -424,6 +441,26 @@ export async function fixedType(dir, host, accept = ACCEPT) {
   return { lines, accepted, fonts };
 }
 const contentSize = (udid, size) => spawnSync('xcrun', ['simctl', 'ui', udid, 'content_size', ...(size ? [size] : [])], { encoding: 'utf8' });
+const contentSizeRecord = (udid) => resolve(tmpdir(), `exact-sim-content-size-${udid}.json`);
+
+/** Read the simulator's baseline `content_size` once for a whole leg, recovering from any prior killed run that
+ *  left the simulator stuck at `LARGEST`. Returns `{ baseline, restore(), finish() }`. */
+export function beginContentSizeLeg(udid, { io = contentSize, recordPath = contentSizeRecord(udid) } = {}) {
+  let saved = null;
+  try { saved = JSON.parse(readFileSync(recordPath, 'utf8')); } catch { /* none from a crashed run */ }
+  const current = io(udid).stdout?.trim() || null;
+  const baseline = saved?.baseline || current;
+  if (!baseline) return null;
+  // Heal a simulator left at LARGEST by a killed previous run before the first launch starts.
+  if (saved?.baseline && current === LARGEST && baseline !== LARGEST) io(udid, baseline);
+  const writeRecord = () => { if (baseline !== LARGEST) { mkdirSync(dirname(recordPath), { recursive: true }); writeFileSync(recordPath, JSON.stringify({ baseline })); } };
+  const restore = () => { if (baseline !== LARGEST) return io(udid, baseline); return { status: 0 }; };
+  const finish = () => {
+    const r = restore();
+    if (r?.status === 0 || baseline === LARGEST) rmSync(recordPath, { force: true });
+  };
+  return { baseline, recordPath, writeRecord, restore, finish };
+}
 
 /** The screen `s` shows, again at the largest text size: its findings of LARGE_KINDS as check words them with their remedy,
  * the app's `verify.accept` taken out, `{ screen, size, rootFontSize, lines, ms }`; or `{ screen, error }`. The simulator's
@@ -438,23 +475,41 @@ export function systemAlert(state) {
     || state?.dialog?.kind === 'alert' || state?.surface?.kind === 'alert';
 }
 
-export async function largestText(s, screen) {
+export async function largestText(s, screen, { baseline = null, recordPath = null, io = contentSize, pollMs = 3000 } = {}) {
   if (systemAlert(await s.state())) return null;
-  const web = s.host === 'web', udid = s.carrier?.udid, was = web ? null : udid && contentSize(udid).stdout?.trim();
+  const web = s.host === 'web', udid = s.carrier?.udid;
+  const rec = !web && udid ? (recordPath ?? contentSizeRecord(udid)) : null;
+  let was = web ? null : baseline;
+  if (!web && !was && udid) {
+    try { was = JSON.parse(readFileSync(rec, 'utf8')).baseline ?? null; } catch {}
+    was ??= io(udid).stdout?.trim() || null;
+  }
   if (!web && !was) return null;
   const started = Date.now(), body = async () => (await s.prefer({})).page?.['root-font-size'];
   const before = web ? null : await body();
-  const restore = () => { if (!web && was !== LARGEST) contentSize(udid, was); }, forget = web ? () => {} : whenEnded(restore);
+  const restore = () => {
+    if (!web && was !== LARGEST) {
+      const r = io(udid, was);
+      if (!baseline && rec && r?.status === 0) rmSync(rec, { force: true });
+    }
+  };
+  const forget = web ? () => {} : whenEnded(restore);
   try {
     if (web) {
       // Each session it reads closes after it, so the page's own size is not put back.
       await s.resize(...WEB_SIZES[0]);
       await s.prefer({ 'root-font-size': LARGEST_PX });
     } else if (was !== LARGEST) {
-      const set = contentSize(udid, LARGEST);
+      if (rec) { mkdirSync(dirname(rec), { recursive: true }); writeFileSync(rec, JSON.stringify({ baseline: was })); }
+      const set = io(udid, LARGEST);
       if (set.status !== 0) return { screen, error: `simctl ui content_size: ${firstLine(set.stderr)}` };
       // The app hears the change as a notification of its own: until then its body size is the one it had.
-      for (const end = Date.now() + 3000; (await body()) === before && Date.now() < end;) await new Promise((r) => setTimeout(r, 50));
+      let applied = false;
+      for (const end = Date.now() + pollMs; Date.now() < end;) {
+        if ((await body()) !== before) { applied = true; break; }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      if (!applied) return { screen, error: `app did not apply largest text size within ${(pollMs / 1000).toFixed(1)} s`, incomplete: true };
     }
     await s.clock('settle');
     const [{ judge, line, accepts }, tree] = await Promise.all([import('./agent-check.mjs'), s.op({ op: 'tree' })]);
@@ -511,13 +566,13 @@ export function scaledEnd(runs, size) {
 
 /** runTests' `atEnd`: a test's last screen once its transitions end, checked in both schemes (the web: at both widths,
  * one capture kept at the width nearer the test's own; iOS: the simulator's), and what the relaunch chooses by. */
-export const testEnd = (host, shots, persisted, capture = true) => async (s, t) => {
+export const testEnd = (host, shots, persisted, capture = true, { baseline = null } = {}) => async (s, t) => {
   await s.clock('settle');
   const state = await s.state().catch(() => ({}));
   const facts = await seen(s, state);
   // Each web test's store belongs to its own page origin; the relaunch must open that origin.
   const port = host === 'web' ? s.carrier?.port : undefined;
-  const kept = { keep: true, resources: facts.resources, ops: facts.ops, reload: t.reload, launch: t.launch, reached: t.reached, ...(port ? { port } : {}) };
+  const kept = { keep: true, resources: facts.resources, ops: facts.ops, reload: t.reload, seeded: !!t.seeded, launch: t.launch, reached: t.reached, ...(port ? { port } : {}) };
   if (!capture) return kept;
   const own = (t.size ?? [420, 900])[0], near = // the test's own width, else the driver's window (agent.mjs VIEWPORT)
     WEB_SIZES.reduce((a, b) => (Math.abs(b[0] - own) < Math.abs(a[0] - own) ? b : a));
@@ -534,7 +589,7 @@ export const testEnd = (host, shots, persisted, capture = true) => async (s, t) 
   if (host === 'ios') scaledEnd(runs, t.size);
   const refusals = await refusalsIn(s, t.expectedRefusals);
   const reloaded = await reloadEnd(s, t, persisted);
-  const large = await largestText(s, t.name);
+  const large = await largestText(s, t.name, { baseline });
   return { ...kept, runs, shot: path, refusals, reloaded, large };
 };
 
@@ -543,19 +598,59 @@ export const testEnd = (host, shots, persisted, capture = true) => async (s, t) 
  * as a compile error, or no simulator chosen); `{ none }` without a file. A test is numbered by its place in `results`,
  * so its captures' names are its own across the files, and each file after the first runs under a storage name of its
  * own, so a store one file's test left is not another's. */
-async function tests(host, app, shots, running) {
-  const [{ runTests }, { authoredTests }] = await Promise.all([import('./agent-test.mjs'), import('./app.mjs')]);
-  const persisted = persistedStates(app.dir), files = authoredTests(app.dir);
+/** Display and replay key for a test file: relative to `appDir` when inside it, else the full path. */
+const testLabel = (appDir, file) => {
+  const rel = relative(appDir, file);
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : file;
+};
+/** Resolve optional `.test.contract` file paths or globs for `verify [host] [file ...]`. */
+export function selectVerifyFiles(appDir, specs, all = null) {
+  const totalFiles = all ?? authoredTests(appDir);
+  if (!specs?.length) return { files: totalFiles, partial: null };
+  const selected = [];
+  for (const spec of specs) {
+    let found;
+    if (spec.includes('*')) {
+      found = [...new Bun.Glob(spec).scanSync({ absolute: true })].sort();
+      if (!found.length && resolve(process.cwd()) !== resolve(appDir)) found = [...new Bun.Glob(spec).scanSync({ cwd: appDir, absolute: true })].sort();
+    } else {
+      const direct = resolve(spec), inApp = resolve(appDir, spec);
+      found = existsSync(direct) ? [direct] : existsSync(inApp) ? [inApp] : [];
+    }
+    if (!found.length) throw new Error(`no test file matches ${spec}`);
+    for (const file of found) if (!selected.includes(file)) selected.push(file);
+  }
+  return { files: selected, partial: { selected: selected.length, total: new Set([...totalFiles, ...selected]).size } };
+}
+
+async function tests(host, app, shots, running, selectedFiles = null, { baseline = null } = {}) {
+  const { runTests } = await import('./agent-test.mjs');
+  const persisted = persistedStates(app.dir), files = selectedFiles ?? authoredTests(app.dir);
   if (!files.length) return { none: true };
-  const atEnd = testEnd(host, shots, persisted), out = { passed: 0, failed: 0, results: [] }, errors = [];
+  const atEnd = testEnd(host, shots, persisted, true, { baseline }), out = { passed: 0, failed: 0, results: [] }, errors = [];
   for (const [i, file] of files.entries()) {
-    const first = out.results.length;
+    const first = out.results.length, label = testLabel(app.dir, file);
+    const started = new Map();
+    let fileStart = Date.now();
     try {
-      const r = await runTests({ host, file, app: app.selector, running, ax: readsAx(host), atEnd: (s, t) => atEnd(s, { ...t, index: first + t.index }), ...(i ? { storage: `test${i}` } : {}), ...hostOpen(host, app) });
+      const r = await runTests({
+        host, file, app: app.selector, running, ax: readsAx(host),
+        atLine: ({ index }) => { if (!started.has(index)) started.set(index, Date.now()); },
+        atResult: (res) => {
+          const ms = Date.now() - (started.get(res.index) ?? fileStart);
+          fileStart = Date.now();
+          const status = res.skipped ? 'skip' : res.failures.length ? 'FAIL' : 'pass';
+          const count = (res.end?.runs ?? []).reduce((n, run) => n + (run.findings?.length ?? 0), 0)
+            + (res.end?.refusals?.length ?? 0) + (res.end?.large?.lines?.length ?? 0);
+          process.stderr.write(`verify ${host}: ${status} ${quoted(res.name, 40)} (${secs(ms)}${count ? `, ${plural(count, 'finding')}` : ''})\n`);
+        },
+        atEnd: (s, t) => atEnd(s, { ...t, index: first + t.index }),
+        ...(i ? { storage: `test${i}` } : {}), ...hostOpen(host, app),
+      });
       out.passed += r.passed; out.failed += r.failed;
       // A failure the test did not arrange is a finding (LLP 1146 D4): `runTests` says it in a note.
-      out.results.push(...r.results.map(({ name, index, failures, notes = [], end, store, shots }) => ({ name, index, file: basename(file), failures, unarranged: notes.filter((n) => n.startsWith('unarranged: ')).map((n) => n.slice(12)), ...(shots ? { shots } : {}), ...(end ? { end } : {}), ...(store ? { store } : {}) })));
-    } catch (e) { errors.push(files.length > 1 ? `${basename(file)}: ${e.message}` : e.message); }
+      out.results.push(...r.results.map(({ name, index, failures, notes = [], end, store, shots }) => ({ name, index, file: label, failures, unarranged: notes.filter((n) => n.startsWith('unarranged: ')).map((n) => n.slice(12)), ...(shots ? { shots } : {}), ...(end ? { end } : {}), ...(store ? { store } : {}) })));
+    } catch (e) { errors.push(files.length > 1 ? `${label}: ${e.message}` : e.message); }
   }
   return errors.length ? { ...out, error: errors.join('\n') } : out;
 }
@@ -570,7 +665,7 @@ async function tests(host, app, shots, running) {
  * 6 on average; most on an app with its own server, whose tour runs after the rest. */
 const LARGE_TOUR_SCREENS = 12, LARGE_TOUR_MS = 40_000;
 const kindOf = (id) => String(id).replace(/\d+/g, '#');
-async function largeTour(app, running) {
+async function largeTour(app, running, selectedFiles = null) {
   const [{ runTests }, { authoredTests }] = await Promise.all([import('./agent-test.mjs'), import('./app.mjs')]);
   const shown = new Set(), read = [], started = Date.now();
   const spent = () => read.length >= LARGE_TOUR_SCREENS || Date.now() - started > LARGE_TOUR_MS;
@@ -583,7 +678,7 @@ async function largeTour(app, running) {
     const r = await largestText(s, `line ${line} of ${quoted(name, 24)}`);
     if (r && !r.error) read.push(r);
   };
-  for (const file of authoredTests(app.dir)) {
+  for (const file of selectedFiles ?? authoredTests(app.dir)) {
     if (spent()) break;
     try { await runTests({ host: 'web', file, app: app.selector, running, size: WEB_SIZES[0], storage: 'verify-tour', atStep }); }
     catch { /* the tests' own run says what does not compile */ }
@@ -599,13 +694,40 @@ export function tourNews(visited, toured) {
   return toured.map((l) => ({ ...l, lines: l.lines.filter((line) => !said.has(key(line))) }));
 }
 
+/** `verify ios` on an iPhone Duo (verify-duo.mjs): the first screen and the tests' ends, in each pose. `passed` names the
+ * tests that passed on the other simulator, by file and place; one that fails here is the leg's `failed`. */
+async function onDuo(app, { pick, remember = false, chosen = null, phoneUdid = null, shots, running, freshServer, passed, selectedFiles = null }) {
+  const [{ open }, { runTests }, { checkOp }, { authoredTests }] = await Promise.all([import('./agent.mjs'), import('./agent-test.mjs'), import('./agent-check.mjs'), import('./app.mjs')]);
+  const check = async (s, screen, pose) => {
+    if (systemAlert(await s.state())) throw new Error('a system alert is up');
+    const shot = screen === FIRST ? resolve(shots, `ios-duo-${pose.replace(/\W+/g, '-')}.png`) : null;
+    const [run] = (await checkOp(s, ['light'], { ...(shot ? { shots: () => shot } : {}), accept: ACCEPT })).check;
+    if (run.incomplete) throw new Error(run.incomplete);
+    return { screen, pose, size: [run.viewport.w, run.viewport.h], scheme: run.scheme, ...(shot ? { shot } : {}), findings: run.findings, accepted: run.accepted, lines: run.findings.map((f) => f.line), hidden: 0, advice: [] };
+  };
+  const files = selectedFiles ?? authoredTests(app.dir);
+  const drive = async ({ atScreen, atResult }) => {
+    if (running) await freshServer();
+    const s = await open({ host: 'ios', app: app.selector, storage: 'verify-duo', env: { EXACT_AGENT_STORAGE_FRESH: '1' }, ...hostOpen('ios', app) });
+    try { await s.clock('data'); await s.clock('settle'); await atScreen(s, FIRST); } finally { await s.close(); }
+    if (running) await freshServer();
+    for (const [i, file] of files.entries()) {
+      const label = testLabel(app.dir, file);
+      await runTests({ host: 'ios', file, app: app.selector, running, storage: `verify-duo${i}`, replayShots: resolve(shots, 'duo', String(i)), ...hostOpen('ios', app),
+        atEnd: (t, { name, failures }) => atScreen(t, name, failures.length ? null : undefined),
+        atResult: (t) => atResult(t.failures.length && passed.has(`${label} ${t.index}`) ? { name: t.name, file: label, failures: t.failures } : null) });
+    }
+  };
+  return duoLeg({ pick, app: app.id, dir: app.dir, phoneUdid, remember, chosen, check, drive });
+}
+
 /** One launch at `size` (null: the device's own) on a fresh scratch store: the app's data landed and its
  * transitions ended, then `check both`, its captures kept in `shots`. A run per scheme, `{ screen, size, scheme,
  * asked, shot, findings, lines, hidden }` (`lines`: check's own text for it, with a line for a resource that
  * failed), and at the phone's width what it shows (`seen`), for the relaunch, and its accessibility tree (`ax`). */
-async function checkAt(host, app, size, store, shots) {
+async function checkAt(host, app, size, store, shots, { baseline = null } = {}) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
-  const fresh = { EXACT_AGENT_STORAGE_FRESH: '1' };
+  const fresh = { EXACT_AGENT_STORAGE_FRESH: '1', EXACT_AGENT_EPHEMERAL_PORT: '1' };
   const s = await open({ host, app: app.selector, storage: store, env: fresh, ax: readsAx(host), ...(size ? { size } : hostOpen(host, app)) });
   try {
     await s.clock('data');
@@ -615,8 +737,10 @@ async function checkAt(host, app, size, store, shots) {
     const runs = await checkHere(s, { screen: FIRST, shot: (vp, scheme) => resolve(shots, `${host}-${vp.w}x${vp.h}-${scheme}.png`), state, ax: !size || size === WEB_SIZES[0] });
     if (facts) Object.defineProperty(runs, 'seen', { value: facts });
     Object.defineProperty(runs, 'refusals', { value: await refusalsIn(s) });
-    if (host === 'ios' || size === WEB_SIZES[0]) Object.defineProperty(runs, 'large', { value: await largestText(s, FIRST) });
-    if (host === 'ios') Object.defineProperties(runs, { tall: { value: await tallContent(s) }, udid: { value: s.carrier?.udid ?? null } });
+    // Read tallContent before largestText so the height check sees normal text size, not LARGEST.
+    const tall = host === 'ios' ? await tallContent(s) : undefined;
+    if (host === 'ios' || size === WEB_SIZES[0]) Object.defineProperty(runs, 'large', { value: await largestText(s, FIRST, { baseline }) });
+    if (host === 'ios') Object.defineProperties(runs, { tall: { value: tall }, udid: { value: s.carrier?.udid ?? null } });
     return runs;
   } finally {
     await s.close();
@@ -713,7 +837,7 @@ async function scrolling(app, shots, { key = null, force = false } = {}) {
     rmSync(out, { recursive: true, force: true });
     mkdirSync(out, { recursive: true });
     writeFileSync(tracePath, '');
-    const s = await open({ host: 'ios', app: app.selector, storage: 'verify', env: { EXACT_AGENT_STORAGE_FRESH: '1', ...feel.recorderEnv(tracePath) }, chrome: 'platform', timing: 'platform', touch: 'drag' });
+    const s = await open({ host: 'ios', app: app.selector, storage: 'verify', env: { EXACT_AGENT_STORAGE_FRESH: '1', EXACT_STORE: 'memory', ...feel.recorderEnv(tracePath) }, chrome: 'platform', timing: 'platform', touch: 'drag' });
     let played;
     try {
       await Bun.sleep(2500); // its first loads, on real time; the accessibility runtime the touch runner turns on
@@ -733,7 +857,7 @@ const same = (a, b) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
  * `reload` step), and of those the one whose resources held the most at its end; null when no test passed. */
 export function relaunchStore(results, fresh) {
   const passed = (results ?? []).filter((r) => !r.failures.length && r.store && r.end && !r.end.error);
-  const wrote = (r) => r.end.reload || r.end.ops > (fresh?.ops ?? 0);
+  const wrote = (r) => r.end.seeded || r.end.reload || r.end.ops > (fresh?.ops ?? 0);
   const score = (r) => [wrote(r) ? 1 : 0, JSON.stringify(r.end.resources ?? {}).length, results.indexOf(r)];
   const above = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
   return passed.reduce((best, r) => (!best || above(score(r), score(best)) ? r : best), null);
@@ -750,7 +874,7 @@ export function judgeRelaunch(test, fresh, after, { busy = [], failed = {}, held
   if (busy.length) problems.push(`  loading  still in flight after ${secs(REAL_MS)} of real time: ${busy.join(', ')}; a store or the network that slow leaves the first screen empty`);
   for (const [name, why] of Object.entries(failed ?? {})) problems.push(`  failed   resource ${name}: ${why}; the screen shows its placeholder or last value`);
   if (!fresh) return { shows: [], problems, ...notes, said: 'it relaunched' };
-  const shows = [...after.texts].filter((t) => !fresh.texts.has(t)), wrote = test.end.reload || test.end.ops > fresh.ops;
+  const shows = [...after.texts].filter((t) => !fresh.texts.has(t)), wrote = test.end.seeded || test.end.reload || test.end.ops > fresh.ops;
   const held = !same(after.resources, fresh.resources), kept = held || !same(after.slots, fresh.slots);
   if (!shows.length && !busy.length && wrote && !same(test.end.resources, fresh.resources) && !held)
     problems.push('  lost     its first screen and resources are a fresh launch\'s, though the test wrote storage and ended holding data: what it stored did not come back');
@@ -786,7 +910,7 @@ export function pinnedLaunch(test, defaults) {
 /** What a fresh launch shows under `launch`'s facts on an empty scratch store, for `seen`'s comparison. */
 async function freshUnder(host, app, launch, store) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
-  const s = await open({ host, app: app.selector, storage: store, env: { EXACT_AGENT_STORAGE_FRESH: '1' }, ax: readsAx(host), ...launchOf(launch), substitutes: launch?.substitutes, restoreSubstitutes: true, ...(host === 'web' ? { size: WEB_SIZES[0] } : hostOpen(host, app)) });
+  const s = await open({ host, app: app.selector, storage: store, env: { EXACT_AGENT_STORAGE_FRESH: '1', EXACT_AGENT_EPHEMERAL_PORT: '1', EXACT_STORE: 'memory' }, ax: readsAx(host), ...launchOf(launch), substitutes: launch?.substitutes, restoreSubstitutes: true, ...(host === 'web' ? { size: WEB_SIZES[0] } : hostOpen(host, app)) });
   try {
     for (const [name, value] of Object.entries(preferencesOf(launch))) await s.prefer({ [name]: value });
     await s.clock('data');
@@ -802,9 +926,9 @@ async function freshUnder(host, app, launch, store) {
  * reached, as a `reload` relaunches), at the phone's width (iOS: the simulator's, with UIKit's bars), not emptied:
  * its first loads on real time, in REAL_STEP steps until nothing is in flight or REAL_MS pass, then its transitions
  * end; then `check both` (the web: at both widths, one capture kept). */
-async function relaunch(host, app, test, fresh, shots) {
+async function relaunch(host, app, test, fresh, shots, { baseline = null } = {}) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
-  const s = await open({ host, app: app.selector, storage: test.store, ax: readsAx(host), ...launchOf(relaunchFacts(test)), substitutes: test.end.launch?.substitutes, restoreSubstitutes: true, ...(host === 'web' ? { size: WEB_SIZES[0], ...(test.end.port ? { port: test.end.port } : {}) } : hostOpen(host, app)) });
+  const s = await open({ host, app: app.selector, storage: test.store, env: { EXACT_STORE: 'memory' }, ax: readsAx(host), ...launchOf(relaunchFacts(test)), substitutes: test.end.launch?.substitutes, restoreSubstitutes: true, ...(host === 'web' ? { size: WEB_SIZES[0], ...(test.end.port ? { port: test.end.port } : {}) } : hostOpen(host, app)) });
   try {
     for (const [name, value] of Object.entries(preferencesOf(test.end?.launch))) await s.prefer({ [name]: value });
     const started = performance.now(), b = (st) => (st.background?.queued ?? 0) + (st.background?.inFlight ?? 0);
@@ -816,16 +940,18 @@ async function relaunch(host, app, test, fresh, shots) {
     const after = await seen(s, state);
     const path = resolve(shots, `${host}-relaunch.png`);
     const runs = await checkHere(s, { screen: RELAUNCH, sizes: host === 'web' ? [null, WEB_SIZES[1]] : [null], shot: (vp, scheme) => (scheme === 'light' && (host !== 'web' || vp.w === WEB_SIZES[0][0]) ? path : undefined) });
-    const refusals = await refusalsIn(s), large = await largestText(s, RELAUNCH);
+    const refusals = await refusalsIn(s), large = await largestText(s, RELAUNCH, { baseline });
     return { test: test.name, ms, shot: path, runs, refusals, large, ...judgeRelaunch(test, fresh, after, { busy, failed: state.failed, heldBy: (state.pending ?? []).filter((p) => p.held).map((p) => p.name) }) };
   } finally {
+    if (host === 'android' && s.carrier?.apk) await s.op({ op: 'clean_store', appId: app.id, store: test.store }).catch(() => {});
     await s.close();
     if (host === 'web') await removeBrowserProfile(driveStore(app, test.store).profile).catch(() => {});
+    else (await import('./agent-secrets.mjs')).cleanRemoteStore({ host, appId: app.id, store: test.store, udid: s.carrier?.udid, serial: s.carrier?.serial, apk: !!s.carrier?.apk });
   }
 }
 
 const BOX = /\s*\[-?\d+,-?\d+ \d+×\d+\]/g;
-const sizeOf = (r) => r.size.join('x'), schemeOf = (r) => r.asked ?? r.scheme, screenOf = (r) => r.screen ?? FIRST;
+const sizeOf = (r) => r.pose ?? r.size.join('x'), schemeOf = (r) => r.asked ?? r.scheme, screenOf = (r) => r.screen ?? FIRST;
 const screenName = (screen) => (screen === FIRST || screen === RELAUNCH || screen.startsWith('line ') ? screen : quoted(screen, 28));
 /** The findings of every screen, launch and scheme, each once: a line found at several (its box aside, which a width
  * moves) is shown once, tagged with the screens it was on unless it was on all, and with the widths and schemes of
@@ -851,7 +977,7 @@ const KINDS_FROM = 10; // findings from which the closing line says their kinds
 
 /** The report's lines and its problem count, from what each stage gave; `full`, every finding of each group, one a line,
  *  which verify writes to `listed` (a path the report names when the groups leave any line out). */
-export function report({ host, built, compiler = [], server, tested, checks, ax = [], relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, launch = [], shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false }) {
+export function report({ host, built, compiler = [], server, tested, checks, ax = [], axError = null, relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, duo = null, launch = [], shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false, partial = null, scopedDuo = false }) {
   const out = [], full = [];
   const all = listed ? `${listed} lists them all` : 'verify --json lists them all';
   let failedTests = 0, findings = 0, broken = 0;
@@ -937,9 +1063,10 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
     findings += fixed.lines.length; for (const l of fixed.lines) { counted(ruleOf(l)); acceptable.add(ruleOf(l)); }
   }
   // What app.json's `verify.accept` names as the app's design: said once each, not counted; an entry that took nothing is named.
-  const accepted = [...distinctFindings(runs.map((r) => ({ ...r, lines: (r.accepted ?? []).map((f) => f.line) }))), ...fixed.accepted.map((f) => f.line), ...axSaid.accepted];
+  const judged = [...runs, ...(duo?.runs ?? [])];
+  const accepted = [...distinctFindings(judged.map((r) => ({ ...r, lines: (r.accepted ?? []).map((f) => f.line) }))), ...fixed.accepted.map((f) => f.line), ...axSaid.accepted];
   const took = (e, f) => f.accept?.finding === e.finding && f.accept?.node === e.node;
-  const idle = accept.filter((e) => ![...runs, ...ax].some((r) => (r.accepted ?? []).some((f) => took(e, f))) && !fixed.accepted.some((f) => took(e, f)));
+  const idle = accept.filter((e) => ![...judged, ...ax].some((r) => (r.accepted ?? []).some((f) => took(e, f))) && !fixed.accepted.some((f) => took(e, f)));
   if (accepted.length || idle.length) {
     out.push(`accepted (app.json verify.accept, not counted): ${plural(accepted.length, 'finding')}`, ...accepted.slice(0, SHOWN));
     if (accepted.length > SHOWN) out.push(`  … and ${accepted.length - SHOWN} more (${all})`);
@@ -973,20 +1100,22 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
   // apart from check's, so the last line says where they came from (LLP 1116.020 D4).
   let largeCount = 0;
   if (large.length) {
-    const read = large.filter((l) => !l.error), shown = distinctFindings(read.map((l) => ({ ...l, scheme: 'light' })));
+    const read = large.filter((l) => !l.error), failedLarge = large.filter((l) => l.error), shown = distinctFindings(read.map((l) => ({ ...l, scheme: 'light' })));
     const root = [...new Set(read.map((l) => l.rootFontSize).filter(Boolean))].join(', ');
     const size = host === 'ios' ? `${LARGEST}${root ? `, body ${root} pt` : ''}` : `root font size ${root || LARGEST_PX} px at ${WEB_SIZES[0].join('x')}, iOS's body at its largest`;
-    out.push(`largest text size (${size}), ${plural(read.length, 'screen')}: ${shown.length ? `${plural(shown.length, 'finding')} (the app's own layout: give the text room; a smaller or fixed font is the tell)` : 'nothing spills'}`, ...byRule(shown));
+    const largeStatus = shown.length ? `${plural(shown.length, 'finding')} (the app's own layout: give the text room; a smaller or fixed font is the tell)` : read.length ? 'nothing spills' : 'not read';
+    out.push(`largest text size (${size}), ${plural(read.length, 'screen')}: ${largeStatus}`, ...byRule(shown));
     largeCount = shown.length; for (const l of shown) counted(`${ruleOf(l)} at the largest text size`);
     const pictures = read.filter((l) => l.shots && l.lines?.length).map((l) => `${screenName(l.screen)}: ${l.shots.map((p) => relative(cwd, p).startsWith('..') ? p : relative(cwd, p)).join(' ')}`);
     if (pictures.length) out.push(`  pictures at that size: ${pictures.join('; ')}`);
     if (shown.length) full.push(`largest text size (${size}): ${plural(shown.length, 'finding')}`, ...shown);
-    for (const l of large.filter((l) => l.error)) out.push(`  could not read ${screenName(l.screen)}: ${firstLine(l.error)}`);
+    for (const l of failedLarge) { out.push(`  could not read ${screenName(l.screen)}: ${firstLine(l.error)}`); if (l.incomplete || !read.length) broken++; }
   }
   // How the first screen's list scrolls against UIKit's (host/apple/feel): each metric a tell or a bad the app can
   // fix (owner `app` or `either`) is a finding, with UIKit's value and what causes it; those only Exact can fix are
   // one line, not counted; on a busy machine the timing metrics are left out. A list like UIKit's is one line; no
   // long list, nothing; a probe that could not run is said, not counted, since it is the tool's.
+  if (axError) { out.push(`accessibility: could not restore: ${firstLine(axError)}`); broken++; }
   if (scrolled?.error) out.push(`scrolling: could not measure: ${firstLine(scrolled.error)}`);
   else if (scrolled?.result?.verdict === 'probed') {
     const r = scrolled.result, place = relative(cwd, scrolled.out), timing = timingJudged(scrolled.load);
@@ -1005,6 +1134,26 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
       findings += found.length; counted('scrolling', found.length);
     }
   }
+  // The app on an iPhone Duo (LLP 1188 D4): what its poses and the keyboard show that the phone did not.
+  if (duo?.why) out.push(`iPhone Duo: not read (${duo.why})`);
+  else if (duo) {
+    // The other simulator's node has another id; on the Duo a pose that moves a node says the same of it as the first did
+    const key = (r, f, ...rest) => [screenOf(r), f.kind, ...rest].join('\n'), elsewhere = (r, f) => key(r, f, f.node?.replace(`#${f.id}`, ''));
+    const already = new Set(runs.flatMap((r) => (r.findings ?? []).map((f) => elsewhere(r, f)))), each = new Map();
+    for (const r of duo.runs) for (const f of r.findings.filter((f) => !already.has(elsewhere(r, f)))) {
+      const at = key(r, f, f.node ?? f.line, f.detail?.with);
+      each.set(at, { screen: screenOf(r), line: each.get(at)?.line ?? f.line, poses: [...(each.get(at)?.poses ?? []), r.pose] });
+    }
+    const lines = [...each.values()].map(({ screen, line, poses }) => line.replace(/^(\s*)/, `$1(${screenName(screen)}, ${poses.join(', ')}) `));
+    if (duo.error) lines.push(`  unread   the drive of ${duo.device} ended: ${duo.error}`);
+    else if (!duo.runs.length) lines.push(`  unread   no screen was read on ${duo.device}`);
+    const head = `iPhone Duo (${duo.device}), ${[...new Set(duo.runs.map((r) => r.pose))].join(', ') || 'no pose'}, ${plural(new Set(duo.runs.map(screenOf)).size, 'screen')}: ${lines.length ? plural(lines.length, 'more finding') : 'nothing more'}`;
+    out.push(head, ...byRule(lines), ...duo.notes.map((n) => `  note     ${n}`));
+    if (lines.length) full.push(head, ...lines);
+    findings += lines.length; for (const l of lines) { counted(ruleOf(l)); acceptable.add(ruleOf(l)); }
+  }
+  failedTests += duo?.failed?.length ?? 0;
+  for (const t of duo?.failed ?? []) for (const f of t.failures) out.push(`  FAIL on an iPhone Duo "${t.name}" (${t.file}): ${firstLine(f).replace(`${t.name}: `, '')}`);
   // The relaunch on a test's store (LLP 1116.005 D7): what came back, or each problem, counted as findings.
   if (relaunched?.error) { broken++; out.push(`relaunch: could not drive: ${firstLine(relaunched.error)}`); }
   else if (relaunched) {
@@ -1040,7 +1189,9 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
   const [top, topCount] = byKind[0] ?? [];
   if (many && acceptable.has(top) && topCount * 2 > findings + largeCount) out.push(`most findings are ${top} (${topCount}): fix them, or, where the design means them, app.json's verify.accept takes each by its kind and testId (docs/recipes/tests.md)`);
   const caveats = [axSaid.tree, scrolled?.error && 'scrolling was not measured'].filter(Boolean).join('; ');
-  out.push(problems ? `verify: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'})${caveats ? `, and ${caveats}` : ''} in ${secs(ms)}` : `verify: clean${caveats ? `, but ${caveats}` : ''} in ${secs(ms)}`);
+  const scopeParts = [partial && `${partial.selected}/${partial.total} test files`, scopedDuo && 'no iPhone Duo'].filter(Boolean);
+  const prefix = partial ? `verify (partial: ${scopeParts.join(', ')})` : scopedDuo ? 'verify (scoped: no iPhone Duo)' : 'verify';
+  out.push(problems ? `${prefix}: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'})${caveats ? `, and ${caveats}` : ''} in ${secs(ms)}` : `${prefix}: clean${caveats ? `, but ${caveats}` : ''} in ${secs(ms)}`);
   // Counted problems never fail a run (LLP 1116.020 D4) unless the caller gates on them: `--strict` (LLP 1156.001 D1). A
   // finding verify.accept takes is not counted; a compiler warning is, and is fixed in the source, never accepted.
   return { lines: out, problems, exit: failedTests || broken || (strict && problems) ? 1 : 0, full: grouped ? full : [], axUnread: axSaid.unread };
@@ -1050,13 +1201,17 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
 async function deviceMain(argv, emitJSON, declined, ended) {
   const args = guardFlags('verify', argv);
   const value = (flag) => args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : undefined;
-  const json = args.includes('--json'), sim = value('--sim'), copyTo = value('--shots');
+  const json = args.includes('--json'), sim = value('--sim'), copyTo = value('--shots'), duoFlag = value('--duo'), duoPick = duoFlag ?? process.env.EXACT_DUO;
   // The app's variant (LLP 1030.008 D3), for every process verify starts; the app it resolves claims it.
   if (value('--variant')) { process.env.EXACT_VARIANT = value('--variant'); delete process.env.EXACT_VARIANT_APP; }
-  const flagged = new Set([args.indexOf('--app') + 1, args.indexOf('--sim') + 1, args.indexOf('--shots') + 1, args.indexOf('--variant') + 1].filter((i) => i > 0));
+  const flagged = new Set([args.indexOf('--app') + 1, args.indexOf('--sim') + 1, args.indexOf('--shots') + 1, args.indexOf('--duo') + 1, args.indexOf('--variant') + 1].filter((i) => i > 0));
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(value('--app'));
-  const named = args.find((a, i) => !a.startsWith('-') && !flagged.has(i)), chosen = named ? { host: named } : shippedHost('verify', app.manifest);
+  const positional = args.filter((a, i) => !a.startsWith('-') && !flagged.has(i));
+  const firstIsHost = positional.length > 0 && (['web', 'ios', 'windows', 'android'].includes(positional[0])
+    || (!/\.contract$|\*/.test(positional[0]) && !existsSync(resolve(positional[0])) && !existsSync(resolve(app.dir, positional[0]))));
+  const named = firstIsHost ? positional[0] : undefined, fileSpecs = firstIsHost ? positional.slice(1) : positional;
+  const chosen = named ? { host: named } : shippedHost('verify', app.manifest);
   // No platform the app ships has a leg here: the semantics check runs alone, and the run says so.
   if (!chosen.host) {
     if (json) emitJSON({ host: null, skipped: chosen.why, problems: 0, exit: 0 }); else ended(`verify: ${chosen.why}`);
@@ -1064,6 +1219,11 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   }
   const host = chosen.host;
   if (!['web', 'ios', 'windows', 'android'].includes(host)) { console.error(`verify: web, ios, windows or android, not ${host} (test ${host} runs the tests there)`); return declined(2); }
+  let selectedFiles = null, partial = null;
+  if (fileSpecs.length) {
+    try { ({ files: selectedFiles, partial } = selectVerifyFiles(app.dir, fileSpecs)); }
+    catch (e) { console.error(`verify: ${e.message}`); return declined(2); }
+  }
   if (host === 'windows' && process.platform !== 'win32') { console.error('verify windows runs on Windows (bun exact.mjs verify windows there)'); return declined(2); }
   if (['web', 'ios', 'windows'].includes(host)) {
     const { privateWebBuild, privateNativeBuild } = await import('./web-build.mjs');
@@ -1094,9 +1254,12 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   // A test run that holds the port's turn is waited for when the server starts.
   if (owned && await answering(server.url) && !(await holderOf(server.port))) return refuse(heldLine(server));
 
+  const scopedDuo = host === 'ios' && duoPick === 'none';
+  const scoped = Boolean(partial) || scopedDuo;
   const last = lastRuns(app)[host];
   console.error(`verify ${host}: about ${Math.round((last ?? ESTIMATE[host]) / 1000)} s${last ? ', as its last run took' : ''}; one report when it ends`);
-  const shots = resolve(app.dir, '.exact', 'verify');
+  const verifyRoot = resolve(app.dir, '.exact', 'verify');
+  const shots = scoped ? resolve(verifyRoot, 'scoped') : verifyRoot;
   mkdirSync(shots, { recursive: true }); largeShots = { dir: shots, host, n: 0 };
   for (const f of readdirSync(shots)) if (f.startsWith(`${host}-`) && f.endsWith('.png')) rmSync(resolve(shots, f), { force: true });
   // The web's scratch stores are this run's own, removed after it (and any a killed run left, as a test's are).
@@ -1105,9 +1268,8 @@ async function deviceMain(argv, emitJSON, declined, ended) {
     const [{ driveStore }, { sweepTestStores }] = await Promise.all([import('./agent-launch.mjs'), import('./agent-test.mjs')]);
     sweepTestStores(driveStore(app, 'verify').base, 'verify');
   }
-  const launch = (size, n) => checkAt(host, app, size, host === 'web' ? `verify.${tag}.t${n}` : 'verify', shots)
-    .catch((e) => [{ size: null, label: size ? size.join('x') : host, error: e.message }]);
-  let tested, firsts, relaunched = null, scrolled = null, desktop = null, results = [], replayStore = null, running = null, toured = [], serverSaid = server?.why ? { said: `${server.why}; the tests use whatever answers there` } : null;
+  let heldAx = null, forgetAx = null, heldSize = null, forgetSize = null, phoneKeyboard = null, parallelDuo = null, axRestoreError = null;
+  let tested, firsts, relaunched = null, scrolled = null, desktop = null, duo = null, results = [], replayStore = null, running = null, toured = [], serverSaid = server?.why ? { said: `${server.why}; the tests use whatever answers there` } : null;
   const compiling = compilerWarningsOf(app);
   if (owned) {
     try { running = await startServer(app.dir, server, 'verify'); }
@@ -1119,7 +1281,56 @@ async function deviceMain(argv, emitJSON, declined, ended) {
     if (deaths.length) serverSaid = { died: deaths.join('\n') };
   };
   const freshServer = async () => { serverHealth(); await running.fresh(); serverHealth(); };
+  const releasePhoneLeg = async () => {
+    if (heldAx) {
+      const h = heldAx; heldAx = null;
+      try { await h.release(); } catch (e) { axRestoreError ??= e.message; }
+      finally { if (forgetAx) { forgetAx(); forgetAx = null; } }
+    } else if (forgetAx) { forgetAx(); forgetAx = null; }
+    if (heldSize) {
+      const s = heldSize; heldSize = null;
+      try { s.finish(); } finally { if (forgetSize) { forgetSize(); forgetSize = null; } }
+    } else if (forgetSize) { forgetSize(); forgetSize = null; }
+    if (phoneKeyboard) { const kb = phoneKeyboard; phoneKeyboard = null; await kb.close().catch(() => {}); }
+  };
   try {
+    const wantsDuo = host === 'ios' && !scopedDuo && (app.manifest.host?.ios?.deviceFamily ?? ['iphone']).includes('iphone');
+    let phoneUdid = null, resolvedDuo = null;
+    if (host === 'ios') {
+      const [{ chooseSimulator, simulator, withSoftwareKeyboard }, { holdAccessibilityRuntime }] = await Promise.all([import('../host/apple/devices.mjs'), import('../host/apple/touches.mjs')]);
+      let phoneDev = null;
+      try { phoneDev = chooseSimulator(sim, { app: app.id, dir: app.dir, rememberChoice: false }); } catch {}
+      phoneUdid = phoneDev?.udid ?? null;
+      if (phoneDev?.udid) {
+        // Pin Phone's UDID before spawning parallel Duo so later lookups never drift onto the Duo.
+        process.env.EXACT_SIM = phoneDev.udid;
+        if (wantsDuo) {
+          resolvedDuo = resolveDuoChoice({ pick: duoPick, app: app.id, dir: app.dir, phoneUdid, remember: Boolean(duoFlag) });
+          if (!running) {
+            parallelDuo = startParallelDuo({ app, chosen: resolvedDuo, shots, selectedFiles, accept: ACCEPT, phoneUdid });
+          }
+        }
+        let booted = phoneDev.state === 'Booted';
+        if (!booted) {
+          try {
+            const bootedDev = simulator(phoneDev.udid, { rememberChoice: false, exactUdid: true });
+            booted = true;
+            if (bootedDev.bootedHere) phoneKeyboard = await withSoftwareKeyboard(bootedDev, async () => ({ close() {} }));
+          } catch {}
+        }
+        if (booted) {
+          try {
+            heldAx = await holdAccessibilityRuntime(phoneDev.udid, { enabled: 'try' });
+            if (heldAx.active) forgetAx = whenEnded(heldAx.restoreSync);
+          } catch (e) { axRestoreError ??= e.message; }
+          heldSize = beginContentSizeLeg(phoneDev.udid);
+          if (heldSize) forgetSize = whenEnded(heldSize.restore);
+        }
+      }
+    }
+    const baseline = heldSize?.baseline ?? null;
+    const launch = (size, n) => checkAt(host, app, size, host === 'web' ? `verify.${tag}.t${n}` : 'verify', shots, { baseline })
+      .catch((e) => [{ size: null, label: size ? size.join('x') : host, error: e.message }]);
     // An app with a server opens its first screen before the tests write to it: an empty database's.
     if (running) {
       firsts = [];
@@ -1129,10 +1340,10 @@ async function deviceMain(argv, emitJSON, declined, ended) {
         serverHealth();
       }
       await freshServer();
-      tested = await tests(host, app, shots, running);
+      tested = await tests(host, app, shots, running, selectedFiles, { baseline });
     }
-    else if (host === 'web') [tested, toured, ...firsts] = await Promise.all([tests(host, app, shots), largeTour(app), ...WEB_SIZES.map(launch)]);
-    else { tested = await tests(host, app, shots); firsts = [await launch(null, 0)]; }
+    else if (host === 'web') [tested, toured, ...firsts] = await Promise.all([tests(host, app, shots, null, selectedFiles), largeTour(app, null, selectedFiles), ...WEB_SIZES.map(launch)]);
+    else { tested = await tests(host, app, shots, null, selectedFiles, { baseline }); firsts = [await launch(null, 0)]; }
     serverHealth();
     results = tested?.results ?? [];
     const fresh = firsts.find((runs) => runs.seen)?.seen ?? null;
@@ -1164,17 +1375,31 @@ async function deviceMain(argv, emitJSON, declined, ended) {
             throw new Error(again.failures.join('\n') || again.end?.error || 'the chosen test did not leave a store');
           chosen = { ...chosen, ...again };
         }
-        const result = await relaunch(host, app, chosen, against, shots);
+        const result = await relaunch(host, app, chosen, against, shots, { baseline });
         serverHealth();
         return result;
       })().catch((e) => ({ test: chosen.name, error: e.message }));
     }
+    // Restore Phone-leg AX and content_size and wait for any parallel Duo leg to shut down before measuring scroll feel.
+    await releasePhoneLeg();
+    const passed = new Set(results.filter((t) => !t.failures.length).map((t) => `${t.file} ${t.index}`));
+    if (parallelDuo) {
+      duo = await parallelDuo.promise;
+      if (duo?.failed) duo.failed = duo.failed.filter((t) => passed.has(`${t.file} ${t.index}`));
+    }
     // The tour uses the same per-test server restarts as the main test pass.
-    if (running && host === 'web') { serverHealth(); toured = await largeTour(app, running); serverHealth(); }
+    if (running && host === 'web') { serverHealth(); toured = await largeTour(app, running, selectedFiles); serverHealth(); }
     if (host === 'ios' && firsts.some((runs) => runs.tall)) {
-      if (running) await freshServer();
-      const key = await scrollKey(app, { udid: firsts.find((runs) => runs.udid)?.udid, server: owned ? server : null }).catch(() => null);
-      scrolled = await scrolling(app, shots, { key, force: args.includes('--rescroll') });
+      if (axRestoreError) scrolled = { error: axRestoreError };
+      else {
+        if (running) await freshServer();
+        const key = await scrollKey(app, { udid: firsts.find((runs) => runs.udid)?.udid, server: owned ? server : null }).catch(() => null);
+        scrolled = await scrolling(app, shots, { key, force: args.includes('--rescroll') });
+        serverHealth();
+      }
+    }
+    if (wantsDuo && !parallelDuo) {
+      duo = await onDuo(app, { pick: duoPick, remember: Boolean(duoFlag), chosen: resolvedDuo, phoneUdid: phoneUdid ?? firsts.find((runs) => runs.udid)?.udid ?? null, shots, running, freshServer, passed, selectedFiles });
       serverHealth();
     }
     if (host === 'windows') {
@@ -1183,6 +1408,8 @@ async function deviceMain(argv, emitJSON, declined, ended) {
       serverHealth();
     }
   } finally {
+    parallelDuo?.stop();
+    await releasePhoneLeg();
     if (host === 'web') {
       const { driveStore, removeBrowserProfile } = await import('./agent-launch.mjs');
       for (const store of [...results.map(r => r.store), replayStore].filter(Boolean)) await removeBrowserProfile(driveStore(app, store).profile).catch(() => {});
@@ -1198,7 +1425,7 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   const checks = [...firsts.flat(), ...ends, ...(relaunched?.runs ?? [])];
   const axReads = [...firsts.map((runs) => runs.ax), ...results.map((t) => t.end?.runs?.ax), relaunched?.runs?.ax].filter(Boolean);
   const compiler = await compiling;
-  const kept = [...new Set([...checks.map((c) => c.shot), relaunched?.shot, desktop?.shot])].filter((p) => p && existsSync(p));
+  const kept = [...new Set([...checks.map((c) => c.shot), ...(duo?.runs ?? []).map((r) => r.shot), relaunched?.shot, desktop?.shot])].filter((p) => p && existsSync(p));
   // `--shots <dir>`: every capture of this run copied out, under its own name (LLP 1116.008 D2).
   // The screenshots a test took itself (its `screenshot` steps) come too, named by the test as the ends are.
   const own = [];
@@ -1222,16 +1449,16 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   // LLP 1163 D2: where the launch colour is not the first screen's, on the hosts that show one before the first frame
   const launchNote = ['ios', 'android', 'web'].includes(host) ? launchNotes(app.manifest, firstGrounds(firsts.flat()), host, host === 'ios' ? await builtGround(app) : null) : [];
   const findingsFile = resolve(shots, `${host}-findings.txt`), listed = relative(process.cwd(), findingsFile);
-  const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, launch: launchNote, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict') });
+  const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, axError: axRestoreError, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, duo, launch: launchNote, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict'), partial, scopedDuo });
   if (r.full.length) writeFileSync(findingsFile, r.full.join('\n') + '\n'); else rmSync(findingsFile, { force: true });
-  writeFileSync(resolve(shots, 'last.json'), JSON.stringify({ ...lastRuns(app), [host]: Date.now() - started }) + '\n');
+  if (!scoped) writeFileSync(resolve(verifyRoot, 'last.json'), JSON.stringify({ ...lastRuns(app), [host]: Date.now() - started }) + '\n');
   if (json) {
     const testsOut = tested?.results ? { ...tested, results: results.map(({ name, file, failures, end }) => ({ name, file, failures, ...(end?.shot && existsSync(end.shot) ? { shot: end.shot } : {}), ...(end?.error ? { endError: end.error } : {}) })) } : tested;
     const relaunchOut = relaunched && (({ runs, large, ...rest }) => rest)(relaunched);
-    emitJSON({ host, built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, ax: axReads, reloads, large, fixed, launch: launchNote, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), screenshots: kept, problems: r.problems, axUnread: r.axUnread, exit: r.exit, ms: Date.now() - started });
+    emitJSON({ host, ...(partial ? { partial: true, files: partial } : {}), ...(scoped ? { scoped: { ...(partial ? { files: partial } : {}), ...(scopedDuo ? { duo: 'none' } : {}) } } : {}), built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, ax: axReads, ...(axRestoreError ? { axError: axRestoreError } : {}), reloads, large, fixed, launch: launchNote, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), ...(duo ? { duo } : {}), screenshots: kept, problems: r.problems, axUnread: r.axUnread, exit: r.exit, ms: Date.now() - started });
   } else { say(r.lines.slice(0, -1)); ended(r.lines.at(-1)); }
-  // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
-  (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: `${r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean'}${r.axUnread ? `${r.problems ? ', and' : ', but'} the accessibility tree was not read whole` : ''}`, timing: 'agent', sim });
+  // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`). Scoped runs stay unrecorded (LLP 1156.008.000 D8.2).
+  if (!scoped) (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: `${r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean'}${r.axUnread ? `${r.problems ? ', and' : ', but'} the accessibility tree was not read whole` : ''}`, timing: 'agent', sim });
   return r.exit;
 }
 

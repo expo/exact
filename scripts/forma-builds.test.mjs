@@ -9,9 +9,9 @@
 import { expect, test } from 'bun:test';
 import { buildChannel, relayChannel, serveCommands, serveReport, streamFrame, BEHIND } from './forma-builds.mjs';
 
-const stream = channel => {
+const stream = (channel, sources) => {
   const frames = [];
-  const opened = channel.open(f => frames.push(f));
+  const opened = channel.open(f => frames.push(f), sources);
   return { frames, ...opened };
 };
 const report = (channel, body) => channel.report(JSON.stringify(body));
@@ -22,7 +22,8 @@ const poller = (channel, nonce) => { let ack = 0; return () => { const a = chann
 test('builds register by nonce, report up, and take pins one build at a time', () => {
   const events = [];
   const channel = buildChannel({ send: e => events.push(e) });
-  const a = stream(channel), b = stream(channel);
+  let latest = 2;
+  const a = stream(channel, { sequence: () => latest }), b = stream(channel);
   // An unguessable nonce.
   expect(a.nonce).toMatch(/^[0-9a-f]{32}$/);
   // No nonce, another's, or a stream gone: refused.
@@ -45,6 +46,17 @@ test('builds register by nonce, report up, and take pins one build at a time', (
   // Its effective facts come back as its status.
   expect(report(channel, { nonce: b.nonce, kind: 'status', scheme: 'dark', contrast: 'no-preference', mode: { 'dark-style': 'dim' }, rootFontSize: 16, revision: done.revision }).status).toBe(204);
   expect(events.at(-1)).toMatchObject({ event: 'build-status', build: { id: 'ios-1', status: { scheme: 'dark', revision: done.revision }, pin: { scheme: 'dark' } } });
+  expect(channel.list()[1].status).not.toHaveProperty('rendered');
+  for (const rendered of [-1, 1.5, '2', null]) expect(report(channel, { nonce: a.nonce, kind: 'status', rendered }).status).toBe(400);
+  expect(report(channel, { nonce: a.nonce, kind: 'status', rendered: 2 }).status).toBe(204);
+  expect(events.at(-1)).toMatchObject({ event: 'build-status', build: { id: 'web-1', status: { rendered: 2 } } });
+  latest++;
+  expect(report(channel, { nonce: a.nonce, kind: 'status', rendered: 2, scheme: 'light' }).status).toBe(204);
+  expect(events.at(-1).build.status.scheme).toBe('light');
+  expect(events.at(-1).build.status).not.toHaveProperty('rendered');
+  expect(report(channel, { nonce: a.nonce, kind: 'status', rendered: latest }).status).toBe(204);
+  expect(report(channel, { nonce: a.nonce, kind: 'status', rendered: latest - 1 }).status).toBe(204);
+  expect(channel.list().find(row => row.id === 'web-1').status.rendered).toBe(latest);
   // A command it cannot do comes back by name.
   expect(report(channel, { nonce: a.nonce, kind: 'unsupported', what: 'pin.contrast' }).status).toBe(204);
   expect(events.at(-1)).toMatchObject({ event: 'unsupported', build: 'web-1', what: 'pin.contrast' });
@@ -68,6 +80,10 @@ test('builds register by nonce, report up, and take pins one build at a time', (
   const back = stream(channel);
   register(channel, back.nonce, 'ios-1', 'ios');
   expect(back.frames).toEqual([expect.objectContaining({ kind: 'pin', pin: null })]);
+  const replacement = stream(channel);
+  register(channel, replacement.nonce, 'web-1', 'web-js');
+  expect(channel.list().find(x => x.id === 'web-1').status).toBeNull();
+  expect(report(channel, { nonce: a.nonce, kind: 'status', rendered: 2 }).status).toBe(409);
 });
 
 test('each listed build names the revision of the last pin frame it was sent, whoever sent it, so a client sees when its status catches up', () => {
@@ -526,6 +542,29 @@ test('a stream behind takes no frames until it drains, then the latest design\'s
   expect(written).toEqual(['data: {"n":1}\n\n', 'data: {"n":"latest"}\n\n']);
   streamFrame(res, '{"n":4}', () => null);
   expect(written.at(-1)).toBe('data: {"n":4}\n\n');
+});
+
+test('a frame keeps its held map through idle cleanup and receives only its own design stream', () => {
+  const first = '1'.repeat(64), second = '2'.repeat(64);
+  const channel = buildChannel({
+    holdMap: (plan, id) => channel.sources(id)?.map(plan),
+    correspond: (_from, to, site, id, heldMap) => heldMap[site] === channel.sources(id)?.map(to)?.[4] ? 4 : null,
+  });
+  const frames = [], before = channel.open(f => frames.push(f), { map: plan => plan === first ? ['Button'] : null });
+  const registerFrame = (stream, planDigest) => report(channel, { nonce: stream.nonce, kind: 'register', id: 'frame', host: 'web', capabilities: ['hold'], planDigest });
+  registerFrame(before, first);
+  channel.hold('tool', 'frame', { site: 0, instance: [], state: 'hover' });
+  before.close();
+  const after = channel.open(f => frames.push(f), { map: plan => plan === second ? [null, null, null, null, 'Button'] : null });
+  registerFrame(after, second);
+  expect(frames.at(-1)).toMatchObject({ kind: 'hold', plan: second, hold: { site: 4 } });
+  const polled = channel.openPolled(), batch = { kind: 'forma-batch', tokens: [] };
+  channel.broadcast(batch);
+  expect(frames.some(f => f.kind === 'forma-batch')).toBe(false);
+  expect(channel.poll(polled.nonce).frames).toContainEqual(batch);
+  channel.clear('tool');
+  expect(frames.at(-1)).toMatchObject({ kind: 'hold', hold: null });
+  after.close(); polled.close();
 });
 
 // LLP 1122 D8, LLP 1121 stage 8 E (*1.11*): a hold, one a build and its

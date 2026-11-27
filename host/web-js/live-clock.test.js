@@ -229,3 +229,71 @@ test('answer timers follow authored tasks at a tie and do not count as task firi
     }
   });
 });
+
+test('drive schedules past-due waited timers after reschedule races and hidden wake completion', async () => {
+  const { rt } = await import('./rt-link.js');
+  const { drive } = await import('./rt.js');
+  const { timerWaits } = await import('./timer-waits.js');
+  const names = ['document', 'window', 'requestAnimationFrame', 'cancelAnimationFrame', 'requestIdleCallback', 'setTimeout', 'clearTimeout'];
+  const originals = names.map(name => Object.getOwnPropertyDescriptor(globalThis, name));
+  let serial = 0;
+  const timeouts = new Map(), frames = new Map();
+  Object.assign(globalThis, {
+    document: { hidden: false, timeline: {}, documentElement: { append() {} },
+      createElement() { return { style: {}, setAttribute() {} }; },
+      addEventListener() {}, getAnimations() { return []; } },
+    window: { onscrollend: null },
+    requestAnimationFrame(fn) { frames.set(++serial, fn); return serial; }, cancelAnimationFrame(id) { frames.delete(id); },
+    requestIdleCallback() { return ++serial; },
+    setTimeout(fn, ms) { timeouts.set(++serial, { fn, ms }); return serial; }, clearTimeout(id) { timeouts.delete(id); },
+  });
+  const drainTimeout = () => {
+    const [id, task] = [...timeouts.entries()][0];
+    timeouts.delete(id);
+    task.fn();
+  };
+  try {
+    delete rt.timerWait; timerWaits();
+    // Path 1: reschedule race when clock.now >= t.due before driving's timeout fires.
+    const fired = [];
+    every(100, () => { fired.push('scrollend'); return true; }, true, 'scrollend', 3);
+    every(100, () => { fired.push('frame'); return true; }, true, 'frame', 1);
+    expect(timeouts.size).toBe(1);
+    wall = 120; clock.now = 120;
+    drive();
+    expect(timeouts.size).toBe(1);
+    expect([...timeouts.values()][0].ms).toBe(0);
+    drainTimeout();
+    expect(fired).toEqual(['scrollend']);
+    expect(frames.size).toBe(1);
+    // Once frame is held, drive schedules its starvation cap (200 - 120 = 80ms), not a 0ms loop.
+    expect([...timeouts.values()][0].ms).toBe(80);
+    [...frames.values()][0]();
+    frames.clear();
+    expect(fired).toEqual(['scrollend', 'frame']);
+
+    // Path 2: hidden wake stops timers past t.due, then resumes with drive().
+    clock.now = 0; clock.timers.length = 0; wall = 0; timeouts.clear(); frames.clear();
+    const afterWake = [];
+    every(100, () => { afterWake.push('scrollend'); return true; }, true, 'scrollend', 3);
+    clock.stopped = true;
+    wall = 100;
+    drainTimeout();
+    expect(afterWake).toEqual([]);
+    expect(timeouts.size).toBe(0);
+    wall = 200;
+    clock.stopped = false;
+    drive();
+    expect(timeouts.size).toBe(1);
+    expect([...timeouts.values()][0].ms).toBe(0);
+    drainTimeout();
+    expect(afterWake).toEqual(['scrollend']);
+  } finally {
+    clock.stopped = false;
+    clock.timers.length = 0;
+    for (let i = 0; i < names.length; i++) {
+      if (originals[i]) { Object.defineProperty(globalThis, names[i], originals[i]); }
+      else { delete globalThis[names[i]]; }
+    }
+  }
+});

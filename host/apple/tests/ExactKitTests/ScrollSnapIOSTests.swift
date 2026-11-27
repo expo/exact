@@ -390,6 +390,11 @@ final class ScrollSnapIOSTests: XCTestCase {
         XCTAssertFalse(margined.pagesByViewport(marginedScroll), "UIKit would rest at 300, where no snap position is")
         let (centred, centredScroll) = try strip(pages.map { ("center", $0.1, $0.2) }, stop: "always")
         XCTAssertTrue(centred.pagesByViewport(centredScroll), "centred pages snap at the multiples UIKit pages to")
+        let (down, downScroll) = try strip(pages, vertical: true, stop: "always")
+        down.setSideReach(UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 20))
+        XCTAssertTrue(down.pagesByViewport(downScroll), "a vertical pager reaches past its sides")
+        downScroll.contentInset.top = 20
+        XCTAssertFalse(down.pagesByViewport(downScroll), "an inset along its axis moves its pages")
     }
 
     /// A pager's rest is recorded for a re-snap after layout (CSS Scroll Snap 1

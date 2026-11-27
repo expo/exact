@@ -482,6 +482,87 @@ pub(crate) struct IdlePicture {
     resources: [Option<(u64, u64)>; 5],
 }
 
+impl IdlePicture {
+    pub(crate) fn changed_storages(&self, next: &Self, record: &mut dyn FnMut(&str)) {
+        let mut changed = |name: &str| record(&format!("world:{name}"));
+        match (self.mesh, next.mesh) {
+            (Some(a), Some(b)) => {
+                macro_rules! columns {
+                    ($($field:ident => $name:literal),+) => {
+                        $(if a.$field != b.$field { changed($name); })+
+                    }
+                }
+                columns!(assets => "assets", transform => "Transform", parent => "Parent",
+                    material => "Material", glow => "Glow", mesh => "Mesh", visible => "Visible",
+                    viewmodel => "ViewModel", opacity => "Opacity", node_materials => "NodeMaterials",
+                    material_overrides => "MaterialOverrides", lod => "ModelLod", pose => "Pose",
+                    offset => "Offset", node_offsets => "NodeOffsets", tint => "Tint",
+                    live => "entities", membership => "Transform-membership");
+            }
+            _ if self.mesh != next.mesh => changed("mesh-feed"),
+            _ => {}
+        }
+        if let (Some(a), Some(b)) = (self.lights, next.lights) {
+            columns_changed(
+                a,
+                b,
+                [
+                    "Camera",
+                    "DirectionalLight",
+                    "PointLight",
+                    "Lit",
+                    "SpotLight",
+                    "LightShadows",
+                    "Visible",
+                ],
+                &mut changed,
+            );
+        } else if self.lights != next.lights {
+            changed("light-feed");
+        }
+        columns_changed(
+            self.components,
+            next.components,
+            [
+                "Emitter",
+                "LightShadows",
+                "MouseLook",
+                "ParticleLook",
+                "Placed",
+                "PointerPan",
+                "SocketFollow",
+                "Sprite",
+            ],
+            &mut changed,
+        );
+        columns_changed(
+            self.resources,
+            next.resources,
+            [
+                "AmbientOcclusion",
+                "Environment",
+                "EnvironmentMap",
+                "Shadows",
+                "Water",
+            ],
+            &mut changed,
+        );
+    }
+}
+
+fn columns_changed<T: PartialEq, const N: usize>(
+    a: [T; N],
+    b: [T; N],
+    names: [&str; N],
+    record: &mut dyn FnMut(&str),
+) {
+    for ((a, b), name) in a.into_iter().zip(b).zip(names) {
+        if a != b {
+            record(name);
+        }
+    }
+}
+
 /// Persistent bridge from one world to one renderer. World loads invalidate it
 /// automatically; reset it when replacing a World with an unrelated instance.
 /// Replacement invalidates world-derived records, never renderer asset residency.

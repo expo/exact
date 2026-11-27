@@ -159,6 +159,69 @@ fn a_chord_windows_never_delivers_warns_in_an_app_with_a_windows_host() {
 }
 
 #[test]
+fn windows_shortcut_warnings_compare_modifier_sets() {
+    let dir = app(
+        "modifier-sets",
+        Some(r#"{"app":{"id":"com.exact.sets","name":"Sets"},"host":{"windows":{}}}"#),
+    );
+    let path = dir.join("app.contract");
+    let mut source = "component App\n  view\n    column\n".to_owned();
+    let mut expected = Vec::new();
+    for (chord, kept) in [
+        ("Control+Control+Escape", "opening Start"),
+        ("Shift+Control+Control+Escape", "opening Task Manager"),
+        ("Control+Alt+Control+Delete", "its security screen"),
+        ("Alt+Alt+F4", "closing the window"),
+        ("Alt+Alt+Space", "the window's system menu"),
+        ("Mod+Mod+Escape", "opening Start"),
+    ] {
+        for multiline in [false, true] {
+            let prefix = if multiline {
+                "      button \"Command\"\n        "
+            } else {
+                "      button \"Command\" "
+            };
+            source.push_str(prefix);
+            let line = source.lines().count() as u32;
+            source.push_str(&format!("aria-keyshortcuts=\"{chord} {chord}\"\n"));
+            expected.push((line, chord, kept));
+        }
+    }
+    for chords in [
+        "Meta+N Control+Control+n",
+        "Meta+Meta+S Control+s",
+        "Control+Control+Alt+Shift+Escape Hyper+Control+Escape",
+    ] {
+        source.push_str(&format!(
+            "      button \"Other\" aria-keyshortcuts=\"{chords}\"\n"
+        ));
+    }
+    std::fs::write(&path, source).unwrap();
+    let found = contract::shortcut_findings(&path).unwrap();
+    assert_eq!(found.len(), expected.len(), "{found:#?}");
+    for (finding, (line, chord, kept)) in found.iter().zip(expected) {
+        assert_eq!(finding.id, "analyze-shortcut-windows-reserved");
+        assert!(finding.is_warning());
+        assert_eq!(finding.span.line, line);
+        assert!(
+            finding.message.starts_with(&format!(
+                "`aria-keyshortcuts` \"{chord}\" is a chord Windows keeps for {kept}"
+            )),
+            "{finding:?}"
+        );
+    }
+    let (compiled, warnings) = contract::compile_path_all_with_warnings(&path, false);
+    assert!(compiled.is_ok(), "{:?}", compiled.err());
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|e| e.id.starts_with("analyze-shortcut-"))
+            .count(),
+        found.len(),
+    );
+}
+
+#[test]
 fn hosts_check_chords_in_literals_list_items_conditional_arms_concatenations_and_state_initializers(
 ) {
     for chord in ["Hyper+O", "Alt+Alt+O", "Mod+Meta+O", "Mod+Control+O"] {

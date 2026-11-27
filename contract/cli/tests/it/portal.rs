@@ -559,3 +559,37 @@ fn a_mover_shown_in_its_own_declaration_parent_names_no_declaration() {
     assert_eq!(r.declared_parent(m), None, "it bubbles as any node does");
     assert!(r.declared_parents().is_empty());
 }
+
+#[test]
+fn a_mover_whose_parent_loses_holds_while_its_destination_unmounts_survives_and_reattaches() {
+    let mut r = boot(
+        r#"component App
+  state as_tabs = false
+  state show_dest = true
+  action flip
+    as_tabs = true
+    show_dest = false
+  action unflip
+    as_tabs = false
+    show_dest = true
+  view
+    column
+      if show_dest
+        box id="dest" testId="dest"
+      column role=(as_tabs ? "tablist" : "") testId="p"
+        box portal="dest" testId="e"
+"#,
+    );
+    let dest = view(&r, "dest").unwrap();
+    let p = view(&r, "p").unwrap();
+    let e = view(&r, "e").unwrap();
+    assert_eq!(parent(&r, e), Some(dest));
+    r.act("flip", vec![]).unwrap();
+    assert!(view(&r, "dest").is_none());
+    assert!(r.kernel().node(e).is_some());
+    assert_eq!(parent(&r, e), Some(p));
+    assert_eq!(r.kernel().node(p).unwrap().children(), [e]);
+    // Runner is healthy and moves `e` back once `p` holds again and `dest` returns.
+    r.act("unflip", vec![]).unwrap();
+    assert_eq!(parent(&r, e), view(&r, "dest"));
+}

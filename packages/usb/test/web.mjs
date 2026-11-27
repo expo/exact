@@ -2,7 +2,7 @@
 // (`packages/serial/test/chromium.mjs`): the chooser asked with the app's filters, the record's configurations, a
 // lease per open on one shared open, a claim held by another connection refused `NetworkError`, control and bulk
 // transfers in both directions with their status, another connection's transfers to a claimed interface refused, the
-// device closing with its last lease, and `forget`.
+// device closing with its last lease, an open during that close, and `forget`.
 //
 // usage: bun packages/usb/test/web.mjs
 import { checker, open } from '../../serial/test/chromium.mjs';
@@ -29,7 +29,7 @@ const fake = () => {
     async controlTransferOut(setup, data) { this.log.push(['out', setup.request, [...data]]); return { status: 'ok', bytesWritten: data.length }; },
     async transferIn(endpoint, length) { this.log.push(['bulk in', endpoint, length]); return { status: 'ok', data: new DataView(Uint8Array.of(7, 8).buffer) }; },
     async transferOut(endpoint, data) { this.log.push(['bulk out', endpoint, [...data]]); return { status: 'ok', bytesWritten: data.length }; },
-    async reset() { this.log.push(['reset']); },
+    async reset() { if (!this.opened) throw new DOMException('The device must be opened first.', 'InvalidStateError'); this.log.push(['reset']); },
     async clearHalt(direction, endpoint) { this.log.push(['halt', direction, endpoint]); },
   };
   const usb = new EventTarget();
@@ -85,6 +85,24 @@ await u.call('close', { connection: a.connection });
 check('closing releases its claims; the device stays open for the other lease', (await u.eval(() => __device.log.some((l) => l[0] === 'release'))) && (await u.eval(() => __device.closes)) === 0);
 await u.call('close', { connection: b.connection });
 check('the device closes with its last lease', (await u.eval(() => __device.closes)) === 1);
+// An open while the last lease's close is pending waits for it and opens the device again, and two first opens at
+// once open it once.
+await u.eval(() => {
+  const later = () => new Promise((r) => setTimeout(r, 20));
+  __device.open = async function () { await later(); this.opened = true; this.opens++; };
+  __device.close = async function () { await later(); this.opened = false; this.closes++; };
+});
+const reopened = await u.eval((device) => Promise.all([
+  __impl.open({ device }).then((c) => __impl.close({ connection: c.connection })),
+  new Promise((r) => setTimeout(r, 5)).then(() => __impl.open({ device })),
+]).then(([, c]) => c), board.id);
+const reset = await u.call('reset', { connection: reopened.connection });
+check('an open during the last close answers an open device', reset === null && (await u.eval(() => __device.opened)) === true, JSON.stringify(reset));
+await u.call('close', { connection: reopened.connection });
+const opens = await u.eval(() => __device.opens);
+const pair = await u.eval((device) => Promise.all([__impl.open({ device }), __impl.open({ device })]), board.id);
+check('two first opens at once open the device once', (await u.eval(() => __device.opens)) === opens + 1 && pair.every((c) => c.connection), JSON.stringify(pair.map((c) => c.connection ?? c)));
+for (const c of pair) await u.call('close', { connection: c.connection });
 await u.call('forget', { device: board.id });
 check('forget forgets the device', (await u.eval(() => __device.forgotten)) === true && (await u.call('getDevices')).length === 0);
 

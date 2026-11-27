@@ -82,6 +82,8 @@ internal object Setup {
         meta?.getString("dev.exact.protocol_handlers")?.let { android.system.Os.setenv("EXACT_PROTOCOL_HANDLERS", it, true) }
         // GPU modules (LLP 1009) come from this APK. Exported intents never select executable content.
         android.system.Os.setenv("EXACT_NATIVE_LIBS", app.applicationInfo.nativeLibraryDir, true)
+        val videoPiP = meta?.getBoolean("dev.exact.video_pip") == true && app.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+        android.system.Os.setenv("EXACT_ANDROID_VIDEO_PIP", if (videoPiP) "1" else "0", true)
         android.system.Os.setenv("EXACT_ANDROID_APK", app.applicationInfo.sourceDir, true)
         android.system.Os.setenv("EXACT_MOVE_TRACKS", "1", true)
         // The logcat tag of the app's `console` lines, in every build (`host/painted/src/android.rs`, `console`): the

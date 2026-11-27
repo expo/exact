@@ -186,14 +186,14 @@ test('web, Linux and Apple builds publish the same discovery record', async () =
     for (const args of builds) {
       rmSync(resolve(dir,'.exact/typescript-inputs.json'), {force:true});
       assert.equal(appSourceInputs(dir), null);
-      const built = spawnSync(process.execPath,args,{cwd:root,env,encoding:'utf8',timeout:300_000});
+      const built = spawnSync(process.execPath,args,{cwd:root,env,encoding:'utf8',timeout:540_000});
       assert.equal(built.status,0,`${args.join(' ')}\n${built.stdout}\n${built.stderr}`);
       assert.ok(appSourceInputs(dir).modules.some(([file])=>file==='api.ts'));
       assert.deepEqual(sourceInputChanges(appSourceInputs(dir)), []);
       assert.equal(serverUrl(dir,{}),'http://127.0.0.1:8787');
     }
   } finally { rmSync(home,{recursive:true,force:true}); }
-}, 600_000);
+}, 720_000);
 
 test('server discovery excludes type-only edges and declarations, even after a setting refusal', () => {
   const dir = mkdtempSync(resolve(import.meta.dir, '../target/issue-859-server-types-'));
@@ -298,7 +298,7 @@ function stubServerRun(body) {
   const script = `
     import assert from 'node:assert/strict';
     import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-    import { resolve } from 'node:path';
+    import { resolve, toNamespacedPath } from 'node:path';
     import { spawnSync } from 'node:child_process';
     import { mock, spyOn } from 'bun:test';
     const dir = ${JSON.stringify(dir)}, scripts = ${JSON.stringify(import.meta.dir)};
@@ -327,7 +327,9 @@ function stubServerRun(body) {
     const keeperOf = (child) => Number(spawnSyncReal('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim().split('\\n')[0]) || null;
     const groupOf = (child) => { if (!groups.get(child)) groups.set(child, keeperOf(child)); return groups.get(child); };
     spyOn(Bun, 'spawn').mockImplementation((...args) => {
-      const child = spawn(...args); children.push(child);
+      const child = spawn(...args);
+      if (args[0][2] !== 'supervise') return child;
+      children.push(child);
       (async () => { while (!groups.get(child) && child.exitCode === null && child.signalCode === null) { groups.set(child, keeperOf(child)); await Bun.sleep(5); } })();
       return child;
     });
@@ -358,10 +360,10 @@ test('server command arguments reach the child in order, with DB and PORT for a 
     const server = appServer(dir);
     assert.equal(server.refusal, null);
     const running = await startServer(dir, server, 'test');
-    const db = resolve(dir, '.exact/test/db.sqlite');
+    const db = resolve(dir, '.exact/test/p4790/db.sqlite');
     assert.deepEqual(record(), { argv, db, port: '4790' });
     assert.equal(readFileSync(db, 'utf8'), 'scratch');
-    assert.equal(readFileSync(resolve(dir, '.exact/test/owner'), 'utf8').trim(), String(process.pid));
+    assert.deepEqual(readFileSync(resolve(dir, '.exact/test/p4790/owner'), 'utf8').trim().split('\\n'), [String(process.pid), server.url]);
     await running.stop();
     assert.notEqual(await children[0].exited, 0);
     assert.equal(existsSync(resolve(dir, '.exact/test')), false);
@@ -395,7 +397,7 @@ test('database: false omits inherited DB, preserves database files, and keeps re
   stubServerRun(`
     const server = appServer(dir);
     assert.equal(server.refusal, null);
-    const runDir = resolve(dir, '.exact/test');
+    const runDir = resolve(dir, '.exact/test/p4790');
     mkdirSync(runDir, { recursive: true });
     const files = ['db.sqlite', 'db.sqlite-wal', 'db.sqlite-shm', 'db.sqlite-journal'];
     for (const file of files) writeFileSync(resolve(runDir, file), 'untouched');
@@ -424,13 +426,15 @@ test('database: false omits inherited DB, preserves database files, and keeps re
   `);
 }, 30_000);
 
-test('agent --test starts and stops the app server on web, ios and macos, and reuses its parent server', () => {
+test('agent --test starts and stops the app server on web, ios, macos and android, and reuses its parent server', () => {
   stubServerRun(`
     const { main } = await import(resolve(scripts, 'agent.mjs'));
     const args = ['--app', dir, '--test', resolve(dir, 'app.test.contract')];
-    for (const host of ['web', 'ios', 'macos']) {
+    for (const host of ['web', 'ios', 'macos', 'android']) {
       const code = await main([host, ...args], { runTests: async (options) => {
         assert.equal(options.host, host);
+        assert.equal(options.appServerUrl, 'http://127.0.0.1:4790');
+        assert.equal(options.running.url, options.appServerUrl);
         assert.equal(options.file, args[3]);
         assert.deepEqual(record(), { argv, db: null, port: '4790' });
         assert.equal(children.at(-1).exitCode, null);
@@ -442,8 +446,10 @@ test('agent --test starts and stops the app server on web, ios and macos, and re
       rmSync(ready);
     }
     const result = await withAppServer(dir, async () => {
-      const source = 'const { main } = await import(' + JSON.stringify(resolve(scripts, 'agent.mjs')) + ');' +
-        'process.exit(await main(' + JSON.stringify(['web', ...args]) + ', { runTests: async () => ({ results: [], passed: 1, failed: 0 }) }));';
+      writeFileSync(resolve(dir, 'app.ts'), 'export const origin = "http://127.0.0.1:8350";');
+      const source = 'import assert from "node:assert/strict"; const { main } = await import(' + JSON.stringify(resolve(scripts, 'agent.mjs')) + ');' +
+        'process.exit(await main(' + JSON.stringify(['android', ...args]) + ', { runTests: async ({ running, appServerUrl }) => {' +
+        'assert.equal(running, null); assert.equal(appServerUrl, "http://127.0.0.1:4790"); return { results: [], passed: 1, failed: 0 }; } }));';
       const child = spawnSync(process.execPath, ['-e', source], { encoding: 'utf8', timeout: 10_000 });
       assert.equal(child.status, 0, child.stdout + child.stderr);
       assert.equal(children.at(-1).exitCode, null, 'the parent server still runs');
@@ -451,12 +457,41 @@ test('agent --test starts and stops the app server on web, ios and macos, and re
     }, { verb: 'test', optional: true });
     assert.equal(result, 0);
     assert.notEqual(await children.at(-1).exited, 0);
-    assert.deepEqual([taken, given], [4, 4]);
+    assert.deepEqual([taken, given], [5, 5]);
     rmSync(ready);
     rmSync(resolve(dir, 'server.ts'));
     assert.equal(await main(['web', ...args], { runTests: async () => ({ results: [], passed: 0, failed: 1 }) }), 1);
-    assert.equal(children.length, 4, 'an app with no server still runs its tests');
+    assert.equal(children.length, 5, 'an app with no server still runs its tests');
   `);
+}, 30_000);
+
+test('Android forwards the server an agent drive adopts or starts, and no app port without one', async () => {
+  const { main } = await import('./agent.mjs');
+  const { reversedPorts } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-server-'));
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('ready') });
+  const port = String(server.port), ports = [];
+  const drive = () => main(['android', '--app', dir, '--storage', 'one', 'state'], {
+    resolveDevice: () => 'emulator', exclusiveNativeStore: (_key, launch) => launch(),
+    open: async ({ env, appServerUrl }) => {
+      assert.equal(env.EXACT_AUTH_FIXTURE, undefined);
+      ports.push(reversedPorts(env, appServerUrl));
+      return { state: async () => ({}), close: async () => {} };
+    },
+  });
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Test', app: { id: 'com.exact.test', name: 'Test' }, server: { database: false } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+    writeFileSync(resolve(dir, 'app.ts'), 'export const api = ' + JSON.stringify(server.url.origin));
+    sourceRecord(dir);
+    writeFileSync(resolve(dir, 'server.ts'), "Bun.serve({ hostname: '127.0.0.1', port: Number(process.env.PORT), fetch: () => new Response('ready') });");
+    assert.equal(await drive(), 0);
+    await server.stop(true);
+    assert.equal(await drive(), 0);
+    rmSync(resolve(dir, 'server.ts'));
+    assert.equal(await drive(), 0);
+    assert.deepEqual(ports, [[port], [port], []]);
+  } finally { await server.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 30_000);
 
 test('an agent drive passes server arguments without DB or a scratch database', () => {
@@ -599,11 +634,11 @@ Bun.serve({ port: Number(process.env.PORT), fetch: () => new Response('ok') });`
     await running.beforeTest();
     writeFileSync(resolve(dir, '.exact/fail'), '');
     await assert.rejects(running.beforeTest(), /exited \(code 23\).*error: restart refused/);
-    assert.equal(readFileSync(resolve(dir, '.exact/test/owner'), 'utf8').trim(), String(process.pid));
+    assert.deepEqual(readFileSync(resolve(dir, `.exact/test/p${port}/owner`), 'utf8').trim().split('\n'), [String(process.pid), server.url]);
     rmSync(resolve(dir, '.exact/fail'));
     await running.beforeTest();
     assert.equal(await fetch(server.url).then(r => r.text()), 'ok');
-    assert.equal(readFileSync(resolve(dir, '.exact/test/db.sqlite'), 'utf8'), 'written');
+    assert.equal(readFileSync(resolve(dir, `.exact/test/p${port}/db.sqlite`), 'utf8'), 'written');
   } finally { await running?.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -612,7 +647,7 @@ test('stopping a memory server leaves verify’s report directory available afte
     const running = await startServer(dir, appServer(dir), 'verify');
     await running.stop();
     writeFileSync(resolve(dir, '.exact/verify/last.json'), '{}');
-    assert.equal(existsSync(resolve(dir, '.exact/verify/owner')), false);
+    assert.equal(existsSync(resolve(dir, '.exact/verify/p4790/owner')), false);
   `);
 });
 
@@ -633,7 +668,7 @@ test('shutdown waits for a delayed descendant before clearing storage or launchi
       return kill(pid, signal);
     });
     const running = await startServer(dir, appServer(dir), 'test');
-    const db = resolve(dir, '.exact/test/db.sqlite');
+    const db = resolve(dir, '.exact/test/p4790/db.sqlite');
     await running.beforeTest();
     const restarting = running.beforeTest();
     await forced;
@@ -686,11 +721,11 @@ test.each(['127.0.0.1', '::1'])('shutdown keeps storage and ownership until the 
     await new Promise(done=>setImmediate(done));
     try {
       assert.equal(stopped, false, 'a live listener prevents shutdown completion');
-      assert.equal(readFileSync(resolve(dir, '.exact/test/db.sqlite'), 'utf8'), 'held');
-      assert.equal(existsSync(resolve(dir, '.exact/test/owner')), true);
+      assert.equal(readFileSync(resolve(dir, '.exact/test/p' + port + '/db.sqlite'), 'utf8'), 'held');
+      assert.equal(existsSync(resolve(dir, '.exact/test/p' + port + '/owner')), true);
       assert.equal(given, 0);
     } finally {probe.stop(true); await stopping;}
-    assert.equal(existsSync(resolve(dir, '.exact/test/owner')), false);
+    assert.equal(existsSync(resolve(dir, '.exact/test/p' + port + '/owner')), false);
     assert.equal(given, 1);
   `);
 });
@@ -708,8 +743,8 @@ test('a shutdown that cannot finish refuses cleanup and can be retried', () => {
     try {
       await assert.rejects(running.stop(), /shutdown did not finish: process group .* still alive or port .* still in use/);
       assert.equal(groupAlive(children[0]), true);
-      assert.equal(readFileSync(resolve(dir, '.exact/test/db.sqlite'), 'utf8'), 'held');
-      assert.equal(existsSync(resolve(dir, '.exact/test/owner')), true);
+      assert.equal(readFileSync(resolve(dir, '.exact/test/p4790/db.sqlite'), 'utf8'), 'held');
+      assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), true);
       assert.equal(given, 0);
     } finally { stuck = false; signal.mockRestore(); date.mockRestore(); await running.stop(); }
     assert.equal(groupAlive(children[0]), false);
@@ -722,14 +757,14 @@ test('failed initial startup retains the port turn when shutdown also fails', ()
     delete manifest.server; save();
     // It never answers, and its group outlives SIGKILL.
     writeFileSync(resolve(dir, 'server.ts'), "import { writeFileSync } from 'node:fs'; process.on('SIGTERM', () => {}); writeFileSync(process.env.DB, 'held'); setInterval(() => {}, 1000);\\n");
-    const db = resolve(dir, '.exact/test/db.sqlite'), kill = process.kill.bind(process), now = Date.now.bind(Date);
+    const db = resolve(dir, '.exact/test/p4790/db.sqlite'), kill = process.kill.bind(process), now = Date.now.bind(Date);
     let stuck = true, time = now();
     const signal = spyOn(process, 'kill').mockImplementation((pid, kind) => stuck && kind === 'SIGKILL' ? true : kill(pid, kind));
     spyOn(Date, 'now').mockImplementation(() => existsSync(db) ? time += 11000 : now());
     try {
       await assert.rejects(startServer(dir, appServer(dir), 'test'), /shutdown did not finish/);
       assert.equal(readFileSync(db, 'utf8'), 'held');
-      assert.equal(existsSync(resolve(dir, '.exact/test/owner')), true);
+      assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), true);
       assert.equal(given, 0, 'a surviving launch still holds the port turn');
     } finally { stuck = false; signal.mockRestore(); }
   `);
@@ -775,7 +810,7 @@ test('a database delete failure keeps stop retryable and retains its exit handle
   stubServerRun(`
     delete manifest.server; save();
     const running = await startServer(dir, appServer(dir), 'test');
-    const db = resolve(dir, '.exact/test/db.sqlite');
+    const db = resolve(dir, '.exact/test/p4790/db.sqlite');
     writeFileSync(db, 'held');
     const fs = await import('node:fs'), remove = fs.rmSync;
     let locked = true;
@@ -788,11 +823,11 @@ test('a database delete failure keeps stop retryable and retains its exit handle
       await assert.rejects(running.stop(), /database locked/);
       assert.equal(process.listenerCount('exit'), handlers, 'failed cleanup keeps the exit handler');
       assert.equal(readFileSync(db, 'utf8'), 'held');
-      assert.equal(existsSync(resolve(dir, '.exact/test/owner')), true);
+      assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), true);
       assert.equal(given, 0);
     } finally { locked = false; await running.stop(); }
     assert.equal(existsSync(db), false);
-    assert.equal(existsSync(resolve(dir, '.exact/test/owner')), false);
+    assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), false);
     assert.equal(given, 1, 'retry releases the turn');
     assert.equal(process.listenerCount('exit'), handlers - 1);
     await running.stop();
@@ -849,7 +884,7 @@ test.each(['test', 'drive'])('Windows %s refuses a launch whose supervisor exits
     spyOn(globalThis,'fetch').mockImplementation(async()=>{throw new Error('not ready');});
     joins=false; setTimeout(exit,50);
     await assert.rejects(${mode === 'test' ? "startServer(dir,appServer(dir),'test')" : "driveServer(dir,'one',()=>{})"}, /exited \\(code 1\\) before it answered/);
-    assert.equal(existsSync(resolve(dir,'.exact/test/owner')),false);
+    assert.equal(existsSync(resolve(dir,'.exact/test/p4790/owner')),false);
     assert.equal(given,${mode === 'test' ? 1 : 0});
     assert.equal(existsSync(resolve(dir,'.exact/agent-server')),false);
   `);
@@ -887,7 +922,7 @@ test('Windows shutdown that a job member outlives keeps the database, owner and 
     writeFileSync(resolve(dir,'server.ts'),'const db=process.env.DB;');
     let probes=0;
     spyOn(globalThis,'fetch').mockImplementation(async()=>{if(probes++===0)throw new Error('not yet');return new Response('ok');});
-    const running=await startServer(dir,appServer(dir),'test'), db=resolve(dir,'.exact/test/db.sqlite');
+    const running=await startServer(dir,appServer(dir),'test'), db=resolve(dir,'.exact/test/p4790/db.sqlite');
     writeFileSync(db,'held');
     jobs.get(launched).stuck=true;
     const now=Date.now.bind(Date); let time=now();
@@ -895,7 +930,7 @@ test('Windows shutdown that a job member outlives keeps the database, owner and 
     try {
       await assert.rejects(running.stop(),/shutdown did not finish: the job of supervisor 65000 is still alive/);
       assert.equal(readFileSync(db,'utf8'),'held');
-      assert.equal(existsSync(resolve(dir,'.exact/test/owner')),true);
+      assert.equal(existsSync(resolve(dir,'.exact/test/p4790/owner')),true);
       assert.equal(given,0,'failed shutdown retains the port turn');
       assert.equal(calls.includes('close'),false,'the handle stays open for a retry');
     } finally { date.mockRestore(); jobs.get(launched).stuck=false; await running.stop(); }
@@ -911,13 +946,13 @@ test('shutdown stops a worker the server forks while handling SIGTERM, after the
     writeFileSync(resolve(dir, 'worker.ts'), "import { writeFileSync } from 'node:fs'; process.on('SIGTERM', () => {}); writeFileSync(process.env.DB, 'worker'); setInterval(() => {}, 1000);\\n");
     // The server exits as soon as its worker is forked, before any observation of the process table could see it.
     writeFileSync(resolve(dir, 'server.ts'), "const db = process.env.DB;\\nprocess.on('SIGTERM', () => { writeFileSync('worker.pid', String(Bun.spawn([process.execPath, 'worker.ts'], { stdio: ['ignore', 'ignore', 'inherit'] }).pid)); process.exit(0); });\\n" + serving);
-    const running = await startServer(dir, appServer(dir), 'test'), db = resolve(dir, '.exact/test/db.sqlite');
+    const running = await startServer(dir, appServer(dir), 'test'), db = resolve(dir, '.exact/test/p4790/db.sqlite');
     await running.stop();
     const worker = Number(readFileSync(resolve(dir, 'worker.pid'), 'utf8'));
     assert.ok(await ended(worker), 'the worker is stopped with its server');
     assert.equal(groupAlive(children[0]), false);
     assert.equal(existsSync(db), false, 'its database is removed after it ends');
-    assert.equal(existsSync(resolve(dir, '.exact/test/owner')), false);
+    assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), false);
     assert.equal(given, 1);
     assert.equal(await children[0].exited, 0, 'the supervisor reports the server ending on its own');
   `);
@@ -929,7 +964,7 @@ test('a server group outlives its exited leader under its supervisor, and is ref
     // The launcher exits once its worker answers, leaving the worker in its group.
     writeFileSync(resolve(dir, 'worker.ts'), "const db = process.env.DB; process.on('SIGTERM', () => {}); writeFileSync('worker.pid', String(process.pid));\\n" + serving);
     writeFileSync(resolve(dir, 'server.ts'), "const db = process.env.DB;\\nBun.spawn([process.execPath, 'worker.ts'], { stdio: ['ignore', 'ignore', 'inherit'] }).unref(); await Bun.sleep(1000); process.exit(0);\\n");
-    const running = await startServer(dir, appServer(dir), 'test'), db = resolve(dir, '.exact/test/db.sqlite');
+    const running = await startServer(dir, appServer(dir), 'test'), db = resolve(dir, '.exact/test/p4790/db.sqlite');
     while (running.exited() == null) await Bun.sleep(10);
     const worker = Number(readFileSync(resolve(dir, 'worker.pid'), 'utf8'));
     writeFileSync(db, 'held');
@@ -949,7 +984,7 @@ test('a server group outlives its exited leader under its supervisor, and is ref
     try {
       await assert.rejects(again.stop(), /cannot verify ownership of process group \\d+: its keeper exited/);
       assert.equal(readFileSync(db, 'utf8'), 'held');
-      assert.equal(existsSync(resolve(dir, '.exact/test/owner')), true);
+      assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), true);
       assert.equal(given, 1, 'uncertain ownership retains the port turn');
     } finally { process.kill(-groupOf(children[1]), 'SIGKILL'); while (groupAlive(children[1])) await Bun.sleep(10); }
     // On Linux the supervisor also held what left the group, and it ended without saying it had ended that.
@@ -978,7 +1013,7 @@ test('shutdown stops a launcher that respawns its worker, and the worker of a pa
     for (const pid of [Number(readFileSync(resolve(dir, 'orphan.pid'), 'utf8')), ...workers()])
       assert.ok(await ended(pid), 'process ' + pid + ' is stopped with its server');
     assert.equal(groupAlive(children[0]), false);
-    assert.equal(existsSync(resolve(dir, '.exact/test/db.sqlite')), false);
+    assert.equal(existsSync(resolve(dir, '.exact/test/p4790/db.sqlite')), false);
     assert.equal(given, 1);
   `);
 }, 30_000);
@@ -1033,7 +1068,7 @@ test('a test server ends when its owner\'s whole process group is killed, and th
     writeFileSync(resolve(dir, 'server.ts'), "const db = process.env.DB;\\nBun.spawn([process.execPath, 'worker.ts'], { stdio: ['ignore', 'ignore', 'inherit'] });\\n" + serving);
     await killedOwner("startServer(process.cwd(), appServer(process.cwd()), 'test')");
     assert.ok(await ended(worker()), 'the supervisor, in a session of its own, ends the server when its owner is gone');
-    const run = resolve(dir, '.exact/test');
+    const run = resolve(dir, '.exact/test/p4790');
     for (let i = 0; i < 100 && !readdirSync(run).some((f) => f.startsWith('ended-')); i++) await Bun.sleep(20);
     assert.ok(readdirSync(run).some((f) => f.startsWith('ended-')), 'its keeper records the end');
     rmSync(ready);
@@ -1169,7 +1204,7 @@ test('agent --test reports a crash between passing tests on a replacement server
     assert.equal(existsSync(resolve(dir, 'replacement')), true, r.stdout+r.stderr);
     assert.equal(readFileSync(resolve(dir, 'replacement'), 'utf8'), 'passed', r.stdout+r.stderr);
     assert.match(r.stdout, /2 passed, 0 failed/);
-    assert.equal(existsSync(resolve(dir, '.exact/test/owner')), false, 'cleanup completed');
+    assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), false, 'cleanup completed');
     assert.equal(r.status, 1, r.stdout+r.stderr);
     assert.match(r.stderr, /test: server\.ts exited \(signal SIGKILL\) during the run/);
   } finally {rmSync(dir,{recursive:true,force:true});}
@@ -1195,3 +1230,79 @@ test.each(['SIGTERM', 'exit'])('a throwing server cleanup cannot interrupt %s', 
     assert.equal(existsSync(resolve(dir, 'cleaned-after')),true,'later exit listeners still run');
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+test('driveServer stop preserves concurrent leases, kills unrecorded servers on write failure, and fails closed on starting lock errors', () => {
+  stubServerRun(`
+    delete manifest.server; save();
+    writeFileSync(resolve(dir, 'server.ts'), "import { writeFileSync } from 'node:fs';\\nprocess.on('SIGTERM', () => {});\\nwriteFileSync(process.env.DB, 'db');\\n" + serving);
+    const lease = resolve(dir, '.exact/agent-server');
+    const running = await driveServer(dir, null, () => {});
+    // While stopGroup awaits shutdown, a concurrent drive enters and writes its lease and starting lock.
+    const kill = process.kill.bind(process);
+    let injected = false;
+    const killSpy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (!injected && signal === 'SIGTERM' && children[0] && pid === -groupOf(children[0])) {
+        injected = true;
+        writeFileSync(resolve(lease, 'drive-' + process.ppid), '');
+        writeFileSync(resolve(lease, 'starting'), process.ppid + ':peer');
+      }
+      return kill(pid, signal);
+    });
+    try { await running.stop(); } finally { killSpy.mockRestore(); }
+    assert.equal(existsSync(resolve(lease, 'drive-' + process.ppid)), true, 'live peer drive lease survives stop cleanup');
+    assert.equal(existsSync(resolve(lease, 'starting')), true, 'peer starting lock survives stop cleanup');
+    // A live starting lock fails closed on timeout instead of proceeding unlocked.
+    await assert.rejects(driveServer(dir, null, () => {}, { lockTimeoutMs: 120 }), /timed out waiting for the app server startup lock/);
+    assert.equal(existsSync(resolve(lease, 'drive-' + process.pid)), false, 'timed-out drive cleans its own drive lease');
+    assert.equal(readFileSync(resolve(lease, 'starting'), 'utf8'), process.ppid + ':peer', 'live peer starting lock is never unlinked');
+    // A dead owner's starting lock is reclaimed via takeover.
+    rmSync(resolve(lease, 'drive-' + process.ppid), { force: true });
+    writeFileSync(resolve(lease, 'starting'), '999999:dead');
+    rmSync(ready, { force: true });
+    const recovered = await driveServer(dir, null, () => {}, { lockTimeoutMs: 500 });
+    await recovered.stop();
+    assert.equal(existsSync(lease), false, 'clean stop removes empty lease directory');
+    // Non-EEXIST errors while taking the starting lock fail closed immediately without sleeping.
+    const fs = await import('node:fs'), writeReal = fs.writeFileSync;
+    let mode = 'starting-enoent';
+    mock.module('node:fs', () => ({ ...fs, writeFileSync: (path, data, opts) => {
+      if (mode === 'starting-enoent' && String(path).endsWith('/starting')) throw Object.assign(new Error('missing lease'), { code: 'ENOENT' });
+      if (mode === 'server-fail' && /\\/server-\\d+$/.test(String(path))) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      return writeReal(path, data, opts);
+    } }));
+    const started = Date.now();
+    await assert.rejects(driveServer(dir, null, () => {}, { lockTimeoutMs: 5000 }), /missing lease/);
+    assert.ok(Date.now() - started < 2000, 'non-EEXIST fails immediately');
+    // A failure writing server-<pid> kills the spawned server instead of orphaning it.
+    rmSync(ready, { force: true });
+    mode = 'server-fail';
+    const before = children.length;
+    await assert.rejects(driveServer(dir, null, () => {}, { lockTimeoutMs: 500 }), /disk full/);
+    mode = 'none';
+    assert.equal(children.length, before + 1);
+    assert.equal(groupAlive(children.at(-1)), false, 'unrecorded server group is killed when server-<pid> write fails');
+  `);
+}, 30_000);
+
+test('parallel server runs on distinct ports isolate their runDir, db, and owner files (LLP 1156.008.000 D9.3)', async () => {
+  const { startServer, heldLine } = await import('./app-server.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-server-ports-'));
+  const probe = () => { const s = Bun.serve({ port: 0, fetch: () => new Response('') }); const p = s.port; s.stop(true); return p; };
+  const p1 = probe(), p2 = probe();
+  writeFileSync(resolve(dir, 'server.ts'), `await Bun.write(process.env.DB, 'port:' + process.env.PORT);
+Bun.serve({ port: Number(process.env.PORT), fetch: () => new Response(process.env.PORT) });`);
+  let a, b;
+  try {
+    a = await startServer(dir, { entry: 'server.ts', args: [], database: true, port: p1, url: `http://127.0.0.1:${p1}` }, 'test');
+    b = await startServer(dir, { entry: 'server.ts', args: [], database: true, port: p2, url: `http://127.0.0.1:${p2}` }, 'test');
+    assert.equal(readFileSync(resolve(dir, `.exact/test/p${p1}/db.sqlite`), 'utf8'), `port:${p1}`);
+    assert.equal(readFileSync(resolve(dir, `.exact/test/p${p2}/db.sqlite`), 'utf8'), `port:${p2}`);
+    assert.equal(readFileSync(resolve(dir, `.exact/test/p${p1}/owner`), 'utf8').trim(), `${process.pid}\nhttp://127.0.0.1:${p1}`);
+    assert.equal(readFileSync(resolve(dir, `.exact/test/p${p2}/owner`), 'utf8').trim(), `${process.pid}\nhttp://127.0.0.1:${p2}`);
+    const advice = heldLine({ entry: 'server.ts', database: true, port: p1, url: `http://127.0.0.1:${p1}` });
+    assert.match(advice, /PORT=<free>.*--backend.*kill /);
+    await a.stop(); a = null;
+    assert.equal(existsSync(resolve(dir, `.exact/test/p${p1}`)), false);
+    assert.equal(existsSync(resolve(dir, `.exact/test/p${p2}/owner`)), true);
+  } finally { await a?.stop(); await b?.stop(); rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);

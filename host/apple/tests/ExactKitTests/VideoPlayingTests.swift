@@ -40,6 +40,39 @@ final class VideoPlayingTests: XCTestCase {
     private var placedFrames: [CGRect] = []
     private var offsetPicture = false
 
+    #if os(iOS)
+    func testVideoReportsTheInlineControllersPictureInPictureCallbacks() throws {
+        let library = try XCTUnwrap(VideoArmLibrary.handle)
+        let create = unsafeBitCast(try XCTUnwrap(dlsym(library, "exact_video_create")), to: Create.self)
+        let view = unsafeBitCast(try XCTUnwrap(dlsym(library, "exact_video_view")), to: View.self)
+        let update = unsafeBitCast(try XCTUnwrap(dlsym(library, "exact_video_update")), to: Update.self)
+        let destroy = unsafeBitCast(try XCTUnwrap(dlsym(library, "exact_video_destroy")), to: Destroy.self)
+        let handle = try XCTUnwrap(create(Unmanaged.passUnretained(self).toOpaque(), { context, bytes, count in
+            let test = Unmanaged<VideoPlayingTests>.fromOpaque(context!).takeUnretainedValue()
+            test.messages.append(try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any])
+        }, nil, nil, nil))
+        let source = try XCTUnwrap(Bundle.module.url(forResource: "ColorFixtures", withExtension: nil)).appendingPathComponent("sdr.mp4")
+        let events = ["enterpictureinpicture", "leavepictureinpicture", "pictureinpictureerror"]
+        let data = try JSONSerialization.data(withJSONObject: ["src": source.absoluteString, "controls": "true", "paused": "true", "exactListeners": events.joined(separator: " ")])
+        data.withUnsafeBytes { update(handle, $0.bindMemory(to: UInt8.self).baseAddress, data.count) }
+        let container = Unmanaged<UIView>.fromOpaque(try XCTUnwrap(view(handle))).takeUnretainedValue()
+        let controller = try XCTUnwrap(container.subviews.compactMap { $0.next as? AVPlayerViewController }.first)
+        let delegate = try XCTUnwrap(controller.delegate)
+        let failure = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot present"])
+        delegate.playerViewController?(controller, failedToStartPictureInPictureWithError: failure)
+        delegate.playerViewControllerDidStartPictureInPicture?(controller)
+        delegate.playerViewControllerDidStartPictureInPicture?(controller)
+        delegate.playerViewControllerDidStopPictureInPicture?(controller)
+        delegate.playerViewControllerDidStopPictureInPicture?(controller)
+        delegate.playerViewControllerDidStartPictureInPicture?(controller)
+        destroy(handle)
+        let heard = messages.filter { events.contains($0["event"] as? String ?? "") }
+        XCTAssertEqual(heard.compactMap { $0["event"] as? String }, [events[2], events[0], events[1], events[0], events[1]])
+        XCTAssertEqual(heard.first?["payload"] as? String, "Cannot present")
+        XCTAssertEqual(heard.compactMap { ($0["state"] as? [String: Any])?["pictureInPicture"] as? Bool }, [false, true, false, true, false])
+    }
+    #endif
+
     func testInlineVideoUsesTheHostsObjectPlacement() throws {
         #if os(macOS)
         _ = NSApplication.shared

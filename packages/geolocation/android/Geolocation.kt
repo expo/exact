@@ -84,7 +84,8 @@ class GeolocationModule(context: ExtensionContext) : ExactExtension(context) {
         val before = said ?: return
         if (status().toString() != before) {
             context.changed("geolocation.geolocationStatus")
-            if (watch != null) {
+            // A held error too: the grant may now allow its provider (passive once precise).
+            if (watch != null || last != null) {
                 last = null
                 context.changed("geolocation.watchPosition")
             }
@@ -216,7 +217,8 @@ class GeolocationModule(context: ExtensionContext) : ExactExtension(context) {
         last?.let { return reply(it) }
         watchers += reply
         if (watch != null) return
-        val provider = provider(args) ?: return deliver(error("POSITION_UNAVAILABLE"))
+        // Held like a disabled provider's error: announced, the watch is read again, and would ask for none again.
+        val provider = provider(args) ?: return error("POSITION_UNAVAILABLE").let { last = it; deliver(it) }
         val listener = object : Listener() {
             override fun onLocationChanged(fix: Location) = deliver(position(fix))
             // Held as the answer until the next fix: after the first, no reader waits, and a re-read gets `last`. The

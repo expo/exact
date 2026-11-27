@@ -23,6 +23,9 @@ const UTF8: u32 = 0x0800_0100;
 extern "C" {
     static kCFPreferencesCurrentUser: CFTypeRef;
     static kCFPreferencesAnyHost: CFTypeRef;
+    static kCFBooleanTrue: CFTypeRef;
+    static kCFTypeDictionaryKeyCallBacks: u8;
+    static kCFTypeDictionaryValueCallBacks: u8;
     fn CFRelease(value: CFTypeRef);
     fn CFGetTypeID(value: CFTypeRef) -> usize;
     fn CFStringGetTypeID() -> usize;
@@ -46,6 +49,14 @@ extern "C" {
     ) -> CFIndex;
     fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
     fn CFArrayGetValueAtIndex(array: CFTypeRef, index: CFIndex) -> CFTypeRef;
+    fn CFDictionaryCreate(
+        allocator: CFTypeRef,
+        keys: *const CFTypeRef,
+        values: *const CFTypeRef,
+        num_values: CFIndex,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> CFTypeRef;
     fn CFPreferencesCopyAppValue(key: CFTypeRef, app: CFTypeRef) -> CFTypeRef;
     fn CFPreferencesSetAppValue(key: CFTypeRef, value: CFTypeRef, app: CFTypeRef);
     fn CFPreferencesCopyKeyList(app: CFTypeRef, user: CFTypeRef, host: CFTypeRef) -> CFTypeRef;
@@ -66,6 +77,16 @@ extern "C" {
     fn CFBooleanGetTypeID() -> usize;
     #[cfg(any(target_os = "watchos", test))]
     fn CFBooleanGetValue(value: CFTypeRef) -> u8;
+}
+
+#[link(name = "Security", kind = "framework")]
+extern "C" {
+    static kSecClass: CFTypeRef;
+    static kSecClassGenericPassword: CFTypeRef;
+    static kSecAttrService: CFTypeRef;
+    static kSecAttrAccount: CFTypeRef;
+    static kSecUseDataProtectionKeychain: CFTypeRef;
+    fn SecItemDelete(query: CFTypeRef) -> i32;
 }
 
 /// Read the signed main bundle's property, including in a widget process.
@@ -242,4 +263,46 @@ pub fn write(app: &str, key: &str, value: Option<&str>) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Delete one generic-password item from the data-protection Keychain unread.
+/// Returns `true` when deleted or already absent (`errSecSuccess` / `errSecItemNotFound`).
+pub(crate) fn delete_data_protection_item(service: &str, account: &str) -> bool {
+    const ERR_SEC_SUCCESS: i32 = 0;
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    let (Some(service), Some(account)) = (cf_string(service), cf_string(account)) else {
+        return false;
+    };
+    // SAFETY: keys and values are valid CFTypeRefs for the call; `CFDictionaryCreate`
+    // retains them and returns an owned CFDictionaryRef released on drop.
+    unsafe {
+        let keys = [
+            kSecClass,
+            kSecAttrService,
+            kSecAttrAccount,
+            kSecUseDataProtectionKeychain,
+        ];
+        let values = [
+            kSecClassGenericPassword,
+            service.0,
+            account.0,
+            kCFBooleanTrue,
+        ];
+        let query = CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            keys.len() as CFIndex,
+            (&raw const kCFTypeDictionaryKeyCallBacks).cast(),
+            (&raw const kCFTypeDictionaryValueCallBacks).cast(),
+        );
+        if query.is_null() {
+            return false;
+        }
+        let query = Owned(query);
+        matches!(
+            SecItemDelete(query.0),
+            ERR_SEC_SUCCESS | ERR_SEC_ITEM_NOT_FOUND
+        )
+    }
 }

@@ -3,7 +3,7 @@
 use super::*;
 use crate::kernel::{
     BarRegion, Contribution, Keyboard, KeyboardReport, Operation, OwnerChrome, OwnerMargins,
-    OwnerUpdate, VerticalBarEdge, WindowMap,
+    OwnerUpdate, RegionKind, ReservedRegion, VerticalBarEdge, WindowMap,
 };
 use crate::style::env::{Rect, SegmentGrid};
 
@@ -39,8 +39,8 @@ fn full() -> OwnerUpdate {
         margins: Some(OwnerMargins {
             root: [47.0, 16.0, 34.0, 16.0],
             plain: [8.0; 4],
-            minimum: [0.0, 16.0, 0.0, 16.0],
-            readable_width: 672.0,
+            minimum: Some([0.0, 16.0, 0.0, 16.0]),
+            readable_width: Some(672.0),
         }),
         keyboard: KeyboardReport::Shown(Keyboard {
             frame: [0.0, 500.0, 390.0, 344.0],
@@ -63,8 +63,18 @@ fn full() -> OwnerUpdate {
         chrome: Some(OwnerChrome {
             vertical_bar_edge: Some(VerticalBarEdge::Trailing),
             sidebar_available: Some(false),
+            auxiliary_top_left: Some([0.0, 0.0, 120.0, 32.0]),
+            auxiliary_top_right: None,
         }),
         window_map: Some(WindowMap([0.9, 0.1, 0.2, 0.8, 5.0, 62.0])),
+        configuration: Some(7),
+        regions: Some(vec![ReservedRegion {
+            id: 11,
+            kind: RegionKind::Division,
+            frame: [175.0, 0.0, 40.0, 844.0],
+            margins: [0.0, 10.0, 0.0, 10.0],
+            active: true,
+        }]),
     }
 }
 
@@ -89,10 +99,16 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
     let mut presence = bytes.clone();
     presence[0] = 2;
     assert!(OwnerUpdate::decode(&presence).is_err());
-    // An operation past the five, at the contribution's byte 25, a relation past the seven, at the
-    // first relation's byte 120, and a vertical bar edge past the three, before the window map's
-    // 25 bytes and the sidebar's two
-    for (at, unknown) in [(25, 5), (120, 7), (bytes.len() - 28, 3)] {
+    // An operation past the six, at the contribution's byte 25, a relation past the seven, at the
+    // first relation's byte 120, a vertical bar edge past the three, before the sidebar's two
+    // bytes, the auxiliary areas' 18, the window map's 25, the configuration's 9 and the regions'
+    // 47, and a region's kind past the two, 34 bytes from the end
+    for (at, unknown) in [
+        (25, 6),
+        (120, 7),
+        (bytes.len() - 102, 3),
+        (bytes.len() - 34, 2),
+    ] {
         let mut bad = bytes.clone();
         bad[at] = unknown;
         assert!(OwnerUpdate::decode(&bad).is_err(), "byte {at}");
@@ -119,8 +135,9 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
         BarReservation,
         KeyboardInsets,
         ContainerClearance,
+        NativeViewInsets,
     ];
-    assert_eq!(operations.map(|o| o as u8), [0, 1, 2, 3, 4]);
+    assert_eq!(operations.map(|o| o as u8), [0, 1, 2, 3, 4, 5]);
     assert_eq!(Operation::ALL, operations);
     use Relation::*;
     let relations = [
@@ -165,13 +182,14 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.extend(1u32.to_le_bytes());
     w.push(3);
     target(&mut w, 3, 44.0, Some([0.0, 0.0, 390.0, 844.0]));
+    // The margins: the root's and a plain view's, then the minimum and the readable width, each
+    // after a presence byte
     w.push(1);
-    f(
-        &mut w,
-        &[
-            47.0, 16.0, 34.0, 16.0, 8.0, 8.0, 8.0, 8.0, 0.0, 16.0, 0.0, 16.0, 672.0,
-        ],
-    );
+    f(&mut w, &[47.0, 16.0, 34.0, 16.0, 8.0, 8.0, 8.0, 8.0]);
+    w.push(1);
+    f(&mut w, &[0.0, 16.0, 0.0, 16.0]);
+    w.push(1);
+    f(&mut w, &[672.0]);
     w.push(2);
     f(&mut w, &[0.0, 500.0, 390.0, 344.0]);
     w.push(1);
@@ -181,11 +199,22 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.extend([0, 0, 1]);
     f(&mut w, &[24.0, 16.0, 8.67]);
     w.push(0);
-    // The chrome: a trailing vertical bar, its raw value 2, and a sidebar that is not available;
-    // then the window map
-    w.extend([1, 1, 2, 1, 0]);
+    // The chrome: a trailing vertical bar, its raw value 2, a sidebar that is not available, an
+    // auxiliary area at the top left and none reported at the top right; then the window map
+    w.extend([1, 1, 2, 1, 0, 1]);
+    f(&mut w, &[0.0, 0.0, 120.0, 32.0]);
+    w.push(0);
     w.push(1);
     f(&mut w, &[0.9, 0.1, 0.2, 0.8, 5.0, 62.0]);
+    // and the configuration's identity, then the one region
+    w.push(1);
+    w.extend(7u64.to_le_bytes());
+    w.push(1);
+    w.extend(1u32.to_le_bytes());
+    w.extend(11u64.to_le_bytes());
+    w.push(0);
+    f(&mut w, &[175.0, 0.0, 40.0, 844.0, 0.0, 10.0, 0.0, 10.0]);
+    w.push(1);
     assert_eq!(full().encode(), w);
 }
 
@@ -216,6 +245,8 @@ fn an_owner_update_applies_every_field() {
         (k.window_map(3), k.window_map(1)),
         (full().window_map, None)
     );
+    let regions = k.reserved_regions(3).map(|r| r.to_vec());
+    assert_eq!((regions, k.reserved_regions(1)), (full().regions, None));
     assert_eq!(
         (k.owner_chrome(3), k.owner_chrome(1)),
         (full().chrome, None)
@@ -241,7 +272,7 @@ fn an_owner_update_with_one_bad_field_changes_nothing() {
             u.targets.chain[1].kinds = 1 << Kind::ALL.len()
         }),
         ("margins", |u| {
-            u.margins.as_mut().unwrap().readable_width = -1.0
+            u.margins.as_mut().unwrap().readable_width = Some(-1.0)
         }),
         ("keyboard", |u| {
             if let KeyboardReport::Shown(k) = &mut u.keyboard {
@@ -381,6 +412,8 @@ fn session() -> crate::kernel::SessionUpdate {
         }),
         keyboard_policy: Some(crate::kernel::KeyboardPolicy::ResizesVisual),
         window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+        configuration: Some(3),
+        regions: Some(Vec::new()),
     }
 }
 
@@ -398,8 +431,9 @@ fn a_session_update_round_trips_and_a_malformed_one_is_refused() {
         assert!(SessionUpdate::decode(&bytes[..n]).is_err(), "{n} bytes");
     }
     assert!(SessionUpdate::decode(&[bytes.clone(), vec![0]].concat()).is_err());
-    // The policy, before the window map's 25 bytes: 2 is `resizes-visual`, and none past the three
-    let policy = bytes.len() - 26;
+    // The policy, before the window map's 25 bytes, the configuration's 9 and the regions' 5: 2 is
+    // `resizes-visual`, and none past the three
+    let policy = bytes.len() - 40;
     assert_eq!(bytes[policy], 2);
     let mut bad = bytes.clone();
     bad[policy] = 4;
@@ -454,4 +488,61 @@ fn a_window_map_places_a_rectangle_and_one_that_folds_the_plane_is_refused() {
     };
     assert!(k.update_owner(2, folded).is_err());
     assert_eq!(k.window_map(2), None);
+}
+
+#[test]
+fn an_observed_max_reader_keeps_the_largest_band_of_its_configuration() {
+    // 3 pads by its top observation under `observed-max`: after a 100-point band and then a
+    // 50-point one in configuration 1 it keeps 100 while its readout follows to 50;
+    // configuration 2 starts again from 50, and a host that reports no configuration leaves it
+    // reading the band live
+    let mut ops = create(3..=3);
+    let track = [
+        (StyleId::Height, "10"),
+        (StyleId::SafeAreaTrack, "observed-max"),
+    ];
+    ops.push(style(
+        3,
+        vec![(StyleId::PaddingTop, observed(Edge::Top, None))],
+        &track,
+    ));
+    ops.extend([children(1, &[2]), children(2, &[3])]);
+    let mut k = owner(390.0, 844.0, ops);
+    let band = |top: f32, configuration: Option<u64>| OwnerUpdate {
+        band: Some([top, 0.0, 0.0, 0.0]),
+        configuration,
+        ..OwnerUpdate::default()
+    };
+    k.update_owner(2, band(100.0, Some(1))).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 100.0);
+    k.update_owner(2, band(50.0, Some(1))).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 100.0, "the largest band of its configuration");
+    assert_eq!(
+        k.observation(3).map(|o| o[0]),
+        Some(Some(50.0)),
+        "its readout is live"
+    );
+    k.update_owner(2, band(50.0, Some(2))).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 50.0);
+    k.update_owner(2, band(100.0, Some(2))).unwrap();
+    k.update_owner(2, band(50.0, None)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(
+        top(&k, 3),
+        50.0,
+        "with no configuration it reads the band live"
+    );
+}
+
+#[test]
+fn a_reserved_region_of_negative_size_refuses_the_update() {
+    let mut k = owner(390.0, 844.0, create(3..=3));
+    lay_out(&mut k);
+    let mut bad = full();
+    bad.regions.as_mut().unwrap()[0].frame[2] = -1.0;
+    assert!(k.update_owner(2, bad).is_err());
+    assert_eq!(k.reserved_regions(3), None);
 }

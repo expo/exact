@@ -702,11 +702,11 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             // the web's space, all of it above the later section; a footer's
             // bottom inset is its own gap under the rows, and stays.
             var insets = section.contentInsets
-            // A fold's half band, as a hand-built split view's card stands
-            // clear of it, and the list's padding. The section's leading
-            // inset is on the left in either direction, as UIKit lays it.
-            insets.leading += self.foldReach.left + self.horizontalPadding.left
-            insets.trailing += self.foldReach.right + self.horizontalPadding.right
+            // The side safe area UIKit does not give the collection, a fold's half band, as a hand-built split view's
+            // card stands clear of it, and the list's padding. The leading inset is on the left in either direction.
+            let band = self.collection.sideBand
+            insets.leading += band.left + self.foldReach.left + self.horizontalPadding.left
+            insets.trailing += band.right + self.foldReach.right + self.horizontalPadding.right
             if let space, s?.hasHeader != true { insets.top = space }
             if s?.footer == nil {
                 if index + 1 < model.sections.count { if self.section(at: index + 1)?.spaceAbove != nil { insets.bottom = 0 } }
@@ -1106,18 +1106,18 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // The row's `-exact-tint-adjustment` is its cell's, as a hand-built app sets the cell's
         cell.tintAdjustmentMode = .init(host.presenter.views[id]?.style["tint_adjustment"])
         guard let row = rows[id] else { return }
-        cell.forcedPressed = !row.custom && host.presenter.views[id]?.pressIsDown == true
+        cell.forcedPressed = Self.pressIsCells(row, host.presenter.views[id]) && host.presenter.views[id]?.pressIsDown == true
         interact(cell, id)
         // A card-less section's rows sit on the list's background; a
-        // pressable standard row still shows UIKit's highlight while pressed.
+        // pressable row whose press is its cell's still shows UIKit's highlight while pressed.
         if card(of: id) {
             cell.configurationUpdateHandler = nil
             var card = cell.defaultBackgroundConfiguration()
             if let fill = ThemeRoles.color("secondary-grouped-background", in: host.presenter.root) { card.backgroundColor = fill }
             cell.backgroundConfiguration = card
         } else {
-            let highlights = row.pressable && !row.custom && !row.disabled
-            cell.configurationUpdateHandler = { cell, state in
+            cell.configurationUpdateHandler = { [weak self] cell, state in
+                let highlights = row.pressable && !row.disabled && Self.pressIsCells(row, self?.host.presenter.views[id])
                 cell.backgroundConfiguration = highlights && (state.isHighlighted || state.isSelected)
                     ? cell.defaultBackgroundConfiguration().updated(for: state) : .clear()
             }

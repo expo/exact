@@ -527,27 +527,21 @@ impl<D: DataSource> Bridge<D> {
 
     /// Whether the stack whose root route is `view` splits (`exact_stack_split`;
     /// `Runner::stack_split`, LLP 1115.002 D4), as JSON in the output buffer:
-    /// `{"list":view|null,"width":number|null,"rows":[[route,row]...],
-    /// "locations":[[route,url]...],"current":view|null,"pressWrites":bool|null}`, the list whose
+    /// `{"asked":bool,"placeholder":view|null,"list":view|null,"width":number|null,"rows":[[route,row]...],
+    /// "locations":[[route,url]...],"current":view|null}`, the root route's
+    /// own placeholder box (`StackSplit::placeholder`), the list whose
     /// row pushes, the list column's width where `navigationSplit` names one,
     /// each route above the root that is a row's detail with that row, each
-    /// route above the root with its location, the current row, and whether the press of
-    /// `pressed` (a view being pressed, or 0) writes the router; `null` for a
-    /// stack that pushes. Not a batch: nothing changes.
-    pub fn stack_split(&mut self, view: u32, retained: u32, pressed: u32) -> u32 {
+    /// route above the root with its location, and the current row, after whether
+    /// the root route asks for the split (LLP 1127 D1). `null` where
+    /// `Runner::stack_split` answers `None`; each host admits a split from the
+    /// answer by its own rule (LLP 1127 D22). Not a batch: nothing changes.
+    pub fn stack_split(&mut self, view: u32, retained: u32) -> u32 {
         let json = self
             .host
             .as_ref()
-            .and_then(|h| {
-                let runner = h.runner();
-                let writes = (pressed != 0)
-                    .then(|| runner.press_writes_router(pressed))
-                    .flatten();
-                runner
-                    .stack_split(view, (retained != 0).then_some(retained))
-                    .map(|split| (split, writes))
-            })
-            .map(|(split, writes)| {
+            .and_then(|h| h.runner().stack_split(view, (retained != 0).then_some(retained)))
+            .map(|split| {
                 let rows: Vec<String> = split
                     .rows
                     .iter()
@@ -561,17 +555,35 @@ impl<D: DataSource> Bridge<D> {
                     })
                     .collect();
                 format!(
-                    "{{\"list\":{},\"width\":{},\"rows\":[{}],\"locations\":[{}],\"current\":{},\"pressWrites\":{}}}",
+                    "{{\"asked\":{},\"placeholder\":{},\"list\":{},\"width\":{},\"rows\":[{}],\"locations\":[{}],\"current\":{}}}",
+                    split.asked,
+                    split.placeholder.map_or("null".into(), |v| v.to_string()),
                     split.list.map_or("null".into(), |v| v.to_string()),
                     split.width.map_or("null".into(), |w| w.to_string()),
                     rows.join(","),
                     locations.join(","),
-                    split.current.map_or("null".into(), |v| v.to_string()),
-                    writes.map_or("null".into(), |w| w.to_string())
+                    split.current.map_or("null".into(), |v| v.to_string())
                 )
             });
         self.output = json.unwrap_or_else(|| "null".into()).into_bytes();
         self.output.len() as u32
+    }
+
+    /// Whether the press of `view` writes the router (`exact_press_writes_router`;
+    /// `Runner::press_writes_router`, LLP 1127 D16): 1 where it does, 0 where it
+    /// does not, 2 for a view that hears no press or no runner. A fact of the
+    /// plan at the view's site, read before its press is dispatched, so a press
+    /// that removes or recycles the view still answers for it. Not a batch.
+    pub fn press_writes_router(&self, view: u32) -> u32 {
+        match self
+            .host
+            .as_ref()
+            .and_then(|h| h.runner().press_writes_router(view))
+        {
+            Some(true) => 1,
+            Some(false) => 0,
+            None => 2,
+        }
     }
 
     /// A grouped list's sections and rows (`exact_grouped_list`, LLP 1084

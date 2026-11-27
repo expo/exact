@@ -81,6 +81,9 @@ macro_rules! configured {
             fn preload(&self) -> Result<bool, $crate::exact_runner::DataError> {
                 $crate::exact_runner::DataSource::preload(&self.0)
             }
+            fn ambient_taint(&self, source: &str) -> (bool, bool) {
+                $crate::exact_runner::DataSource::ambient_taint(&self.0, source)
+            }
             fn when_preloaded(&self, wake: Box<dyn FnOnce() + Send>) {
                 $crate::exact_runner::DataSource::when_preloaded(&self.0, wake)
             }

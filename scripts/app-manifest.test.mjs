@@ -3,7 +3,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 test('launch modules must provide a part for every declared host', async () => {
   const { buildBake, readManifest } = await import('./app.mjs');
@@ -1058,6 +1058,19 @@ test('host.android.launchImage takes a PNG in the app up to the starting window\
     // A native input: the Android binary's record names it, so an update cannot change it.
     assert.deepEqual(nativeManifestMetadata(manifest, 'android').host.launchImage, { src: 'logo.png', width: 192 });
     for (const host of ['ios', 'android']) {
+      // The base picture is held to the dark one's rule: an existing file outside the app, or reached through a link
+      // out of it, is refused (#1595).
+      const outside = resolve(dir, '..', `${basename(dir)}-outside.png`);
+      writeFileSync(outside, 'png');
+      symlinkSync(outside, resolve(dir, 'linked.png'));
+      try {
+        assert.throws(() => read({ src: `../${basename(outside)}`, width: 128 }, host), new RegExp(`host\\.${host}\\.launchImage: \\.\\./.*-outside\\.png must name a PNG inside the app directory`));
+        assert.throws(() => read({ src: outside, width: 128 }, host), /launchImage: .* must name a PNG inside the app directory/);
+        assert.throws(() => read({ src: 'linked.png', width: 128 }, host), /launchImage: linked\.png must name a PNG inside the app directory/);
+      } finally { rmSync(outside); rmSync(resolve(dir, 'linked.png')); }
+      mkdirSync(resolve(dir, 'folder.png'));
+      assert.throws(() => read({ src: 'folder.png', width: 128 }, host), /launchImage\.src: folder\.png must be a PNG file/);
+      rmSync(resolve(dir, 'folder.png'), { recursive: true });
       const launch = { src: 'logo.png', width: 128, color_scheme_dark: { src: 'night.png' } };
       assert.throws(() => read(launch, host), /launchImage.color_scheme_dark: night.png.*does not exist/);
       assert.throws(() => read({ ...launch, color_scheme_dark: { src: '../outside.png' } }, host), /inside the app directory/);
@@ -1432,4 +1445,52 @@ test('the web manifest keeps a file handler’s file types and drops only its fo
   ];
   assert.deepEqual(webAppManifest({ file_handlers }, 'Docs').file_handlers,
     [{ action: '/', name: 'Documents', accept: { 'application/pdf': ['.pdf'] } }]);
+});
+
+test('the module roster validates each tag once and checks factories on their host', async () => {
+  const { checkModuleRoster, readManifest, resolveApp, validate } = await import('./app.mjs');
+  const { moduleRoster } = await import('./launch-modules.mjs');
+  const schema = JSON.parse(readFileSync(new URL('./app.schema.json', import.meta.url)));
+  const dir = mkdtempSync(resolve(tmpdir(), 'module-roster-'));
+  const read = modules => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'R', app: { id: 'dev.test.roster', name: 'R' }, modules }));
+    return readManifest(dir, 'roster');
+  };
+  try {
+    for (const items of [
+      ['phone-view', { tag: 'phone-view' }], [{ tag: 'phone-view' }, { tag: 'phone-view', hosts: ['ios'] }],
+      [{ tag: 'phone-view', hosts: [] }], [{ tag: 'phone-view', hosts: ['phone'] }], [{ tag: 'phone-view', slots: [] }],
+    ]) {
+      assert.match(validate(items, schema.properties.modules, 'modules', schema).join('\n'), /modules\[\d\].*phone-view/);
+      assert.throws(() => read(items), /modules\[\d\].*phone-view/);
+    }
+    assert.throws(() => read([{ tag: 'font-face' }]), /font-face/);
+    assert.throws(() => read([{ tag: 'phone-view', constructor: 0 }]), /constructor/);
+    const roster = moduleRoster(read(['shared-view', { tag: 'other-view' }, { tag: 'phone-view', hosts: ['android'] }]).modules);
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    shared-view\n');
+    mkdirSync(resolve(dir, 'ios/modules'), { recursive: true });
+    writeFileSync(resolve(dir, 'ios/modules/Input.swift'), '');
+    const app = resolveApp(dir, { useOutput: false });
+    assert.deepEqual(app.modules.tags, ['shared-view', 'other-view', 'phone-view']);
+    const tv = app.modulesFor('tvos', 'ios');
+    assert.deepEqual(tv.tags, ['shared-view', 'other-view']);
+    assert.deepEqual(tv.apple.map(file => basename(file)), ['Input.swift']);
+    assert.deepEqual(roster.tagsFor('ios'), ['shared-view', 'other-view']);
+    checkModuleRoster(roster.tagsFor('ios'), ['shared-view', 'other-view', 'phone-view'], 'ios', true);
+    assert.throws(() => checkModuleRoster(roster.tagsFor('android'), ['shared-view', 'other-view'], 'android', true), /phone-view/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('manifest app and variant display names reject control characters and blank strings', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-display-name-'));
+  const read = value => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify(value)); return readManifest(dir, 'name-check'); };
+  try {
+    assert.equal(read({ name: 'A/B Tester', app: { id: 'dev.exact.ab', name: 'A/B Tester' }, variants: { dev: { idSuffix: '.dev', name: 'A/B Dev' } } }).app.name, 'A/B Tester');
+    for (const bad of ['Foo\necho pwned', 'Foo\rBar', 'Foo\x00Bar', 'Foo\u2028Bar', '   ']) {
+      assert.throws(() => read({ name: bad, app: { id: 'dev.exact.ab', name: 'Safe' } }), /name/);
+      assert.throws(() => read({ name: 'Safe', app: { id: 'dev.exact.ab', name: bad } }), /app\.name/);
+      assert.throws(() => read({ name: 'Safe', app: { id: 'dev.exact.ab', name: 'Safe' }, variants: { dev: { idSuffix: '.dev', name: bad } } }), /variants\.dev\.name/);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

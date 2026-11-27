@@ -163,13 +163,17 @@ const emptyFeed: Feed = { ready: false, message: '', articles: [], pages: [] };
 const emptyArticle: Article = { found: false, slug: '', title: '', description: '', body: '', tags: [], date: '', favorited: false, favoritesCount: 0, author: author(undefined) };
 const emptyProfile: Profile = { found: false, username: '', bio: '', image: AVATAR, following: false };
 
+let authEpoch = 0;
+
 async function currentUser(store: Store): Promise<User> {
   const token = store.get('realworld.jwt');
   if (!token) return anonymous;
+  const epoch = authEpoch;
   try { return user((await api(store, '/user')).user); } catch (e) {
     // A 401 refuses only the token it was sent with: a sign-in may have
     // replaced it while the request was out.
     if (e instanceof Failure && e.status === 401 && store.get('realworld.jwt') === token) {
+      if (epoch === authEpoch) authEpoch++;
       store.forget('realworld.jwt');
       forget();
     }
@@ -217,8 +221,10 @@ function profile(store: Store, name: string): Profile | Promise<Profile> {
 
 type Auth = Result<'login'>;
 async function signIn(store: Store, path: string, body: Json, method = 'POST'): Promise<Auth> {
+  const epoch = ++authEpoch;
   try {
     const u = (await api(store, path, method, { user: body })).user;
+    if (epoch !== authEpoch) return { ok: false, errors: [] };
     if (u?.token) store.set('realworld.jwt', String(u.token));
     forget();
     return { ok: true, errors: [] };
@@ -246,7 +252,7 @@ const sources: Sources = {
   register: ([username, email, password], store) => signIn(store, '/users', { username, email, password }),
   saveSettings: ([image, username, bio, email, password], store) =>
     signIn(store, '/user', { image, username, bio, email, ...(password ? { password } : {}) }, 'PUT'),
-  logout: (_, store) => { store.forget('realworld.jwt'); forget(); return { ok: true, errors: [] }; },
+  logout: (_, store) => { authEpoch++; store.forget('realworld.jwt'); forget(); return { ok: true, errors: [] }; },
   followings: () => [...follows.values()],
   favorite: ([slug, on], store) => flip(favs, slug, async () => {
     const a = (await api(store, `${slugPath(slug)}/favorite`, on ? 'POST' : 'DELETE', undefined, true)).article;

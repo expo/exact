@@ -18,9 +18,28 @@ function keptMember(name, source, args, type, path) {
   if (kept?.source !== source) {
     return null;
   }
-  const at = args();
+  const candidates = kept.byPath?.get(path);
+  if (path !== undefined && !candidates) return null;
+  let at;
+  try {
+    at = args();
+  } catch (error) {
+    // A sleeping instance reads arguments only to match the page's answer.
+    if (!args.gate || args.gate()) throw error;
+    return null;
+  }
+  const fits = i => equal(kept.answers[i][0], at) && (!type || conforms(kept.answers[i][1], type));
+  if (candidates) {
+    const next = kept.next;
+    const i = kept.answers[next]?.[4] === path && fits(next)
+      ? next
+      : candidates.find(i => i >= next && fits(i)) ?? candidates.find(fits);
+    if (i === undefined) return null;
+    kept.next = i + 1;
+    return kept.answers[i];
+  }
   for (let k = 0, n = kept.answers.length, i = kept.next % n; k < n; k++, i = (i + 1) % n) {
-    if (kept.answers[i][4] === path && equal(kept.answers[i][0], at) && (!type || conforms(kept.answers[i][1], type))) {
+    if (kept.answers[i][4] === path && fits(i)) {
       kept.next = i + 1;
       return kept.answers[i];
     }

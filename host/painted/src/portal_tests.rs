@@ -229,6 +229,7 @@ fn a_message_reads_back_as_it_was_written() {
         "org.freedesktop.portal.FileChooser",
         "OpenFile",
         &body,
+        0,
     );
     let head: [u8; 16] = m[..16].try_into().unwrap();
     assert_eq!(wire::message_len(&head), Some(m.len()));
@@ -440,7 +441,7 @@ fn line(s: &mut UnixStream) -> Vec<u8> {
 
 /// An error reply to `serial`: the writer names no error, so the header
 /// is written here.
-fn error(serial: u32, name: &str, text: &str) -> Vec<u8> {
+pub(super) fn error(serial: u32, name: &str, text: &str) -> Vec<u8> {
     let field =
         |code: u8, v: Value| Value::Struct(vec![Value::Byte(code), Value::Variant(Box::new(v))]);
     let fields = vec![
@@ -493,7 +494,7 @@ fn bus(name: &str, portal: Portal) -> (String, std::thread::JoinHandle<Vec<Messa
                         body: &[Value]| {
             serial += 1;
             let _ = s.write_all(&wire::message(
-                kind, serial, reply, "", path, iface, member, body,
+                kind, serial, reply, "", path, iface, member, body, 0,
             ));
         };
         while let Some(m) = read_message(&mut s) {

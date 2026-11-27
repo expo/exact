@@ -10,10 +10,14 @@
 // same from their rows and the offsets their presenters note). `measure`
 // changes nothing the next rendering step sees: it takes motion off and
 // lays the node out at `height: auto` within the call, then puts both back.
+// `fact` is a geometry fact's box (LLP 1123 D6), as the JS target answers it.
 import { size } from './presence-glue.js';
+import { drawnBox } from './navigation.js';
 
-// Reply bits: answered, provisional.
-const ANSWERED = 1, PROVISIONAL = 2;
+// Reply bits: answered, provisional, and for `fact` placed in its space.
+const ANSWERED = 1, PROVISIONAL = 2, FRAMED = 4;
+// `fact`'s spaces by the runner's numbers (web-geometry's `OWNER`, `WINDOW`, `NODE`).
+const SPACES = ['owner', 'window', 'node'];
 // Animated properties that leave layout alone (keyframe keys, kebab-cased):
 // among them the paint that Contract's `keyframes` admit, the custom
 // properties Exact's own paint and press feedback animate (`css.rs`,
@@ -279,6 +283,16 @@ function createGeometry(root) {
       if (!box) return 0;
       out.set([box.x, box.y, box.width, box.height]);
       return ANSWERED | (provisional(el) ? PROVISIONAL : 0);
+    },
+    // `exactGeometry`'s box: its drawn size, and in `out` its frame where it
+    // is placed in the space asked (`node`'s border box for `"node"`), else
+    // its size alone.
+    fact(el, space, node, out) {
+      if (!el?.isConnected || !root.contains(el)) return 0;
+      const box = drawnBox(el, SPACES[space], node?.isConnected ? node : null);
+      if (!box) return 0;
+      out.set(box.frame ?? [0, 0, ...box.size]);
+      return ANSWERED | (box.frame ? FRAMED : 0);
     },
     read(op, el, out) {
       if (!el?.isConnected || !root.contains(el)) return 0;

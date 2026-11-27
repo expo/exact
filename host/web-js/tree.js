@@ -1,7 +1,7 @@
 // The element tree: elements built or adopted from a rendered page, their props and styles, and view ids.
 import { markdownText } from './markdown.js';
 import { oneActivation, suppressedInvocation, releaseAsset as rel } from './elements.js';
-import { listRow, listOwner, renderMarkup } from './navigation.js';
+import { listRow, listOwner, fieldText, renderMarkup } from './navigation.js';
 import { Docs } from './document.js';
 import { Refusal } from './shape.js';
 import { regions } from './regions.js';
@@ -153,7 +153,7 @@ if (typeof addEventListener === 'function')
 const Composing = new WeakSet(),
   Held = new WeakMap(),
   HeldTask = new WeakMap();
-function writeValue(e, v) {
+function writeValue(e, v, replace) {
   // An option's getter may equal its label without carrying an explicit value.
   if (e.localName === 'option') {
     if (e.getAttribute('value') !== v) e.value = v;
@@ -173,15 +173,40 @@ function writeValue(e, v) {
         e,
         setTimeout(() => {
           Composing.delete(e);
-          if (Held.has(e)) writeValue(e, Held.get(e));
+          if (Held.has(e)) writeValue(e, ...Held.get(e));
           e.exactDecorations?.sync();
         }, 0),
       );
     });
   }
-  if (e.value !== v && Composing.has(e)) return Held.set(e, v);
-  Held.delete(e);
-  if (e.value !== v) e.value = v;
+  if (e.value !== v && Composing.has(e)) {
+    Held.set(e, [v, replace]);
+    e.$echo?.(() => {
+      if (Held.get(e)?.[0] === e.value) { Held.delete(e); e.$echo(); }
+    });
+    return;
+  }
+  if (Held.delete(e)) e.$echo?.();
+  if (e.value !== v) {
+    if (replace) replace(e, v);
+    else e.value = v;
+    return true;
+  }
+}
+// A field can share a record with another editor. A change to another member
+// only reaches the widget when its own bound text changes.
+export function fieldValue(e, f) {
+  let accepted;
+  const show = () => {
+    if (writeValue(e, accepted, e.$field?.replace)) e.exactDecorations?.sync();
+  };
+  const binding = effect(() => {
+    const value = fieldText(e, String(f() ?? ''));
+    if (accepted === value) return;
+    accepted = value;
+    show();
+  });
+  return { binding, show };
 }
 // a URL that navigates (navigation.js `navigableURL`); an iframe's is iframes.js's
 const navigable = v => {
@@ -287,15 +312,191 @@ function watchViews() {
 }
 export const mapped = (v, map, clear) =>
   typeof v === 'string' && !v.trim() ? (clear === undefined ? map(null) : clear) : map(v);
+function splitCssValues(text) {
+  const parts = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i <= text.length; i++) {
+    const c = text[i];
+    if (c === '(') { if (start < 0) start = i; depth++; }
+    else if (c === ')') {
+      if (--depth < 0) return null;
+      if (depth === 0 && start >= 0) { parts.push(text.slice(start, i + 1)); start = -1; }
+    } else if ((c === undefined || /\s/.test(c)) && depth === 0) {
+      if (start >= 0) { parts.push(text.slice(start, i)); start = -1; }
+    } else if (start < 0) start = i;
+  }
+  return depth === 0 ? parts : null;
+}
+function cssSupports(prop, text) {
+  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' ? CSS.supports(prop, text) : false;
+}
+export function translateParts(v) {
+  const text = String(v ?? '').trim();
+  if (!text || /^(?:none|unset|initial|revert|revert-layer)$/i.test(text) || !cssSupports('translate', text)) return null;
+  const parts = splitCssValues(text.replace(/\/\*[\s\S]*?\*\//g, ' ').trim());
+  return parts && parts.length >= 1 && parts.length <= 3 ? parts : null;
+}
+export function scaleAxis(v, axis) {
+  const text = String(v ?? '').trim();
+  if (!text || /^(?:none|unset|initial|revert|revert-layer)$/i.test(text) || !cssSupports('scale', text)) return '1';
+  const parts = splitCssValues(text.replace(/\/\*[\s\S]*?\*\//g, ' ').trim());
+  if (!parts || parts.length < 1 || parts.length > 3) return '1';
+  const n = parts[axis] ?? parts[0];
+  return n.endsWith('%') ? parseFloat(n) / 100 : n;
+}
+const LH_UNIT = /^(?:px|in|cm|mm|q|pt|pc|ch|lh|rem|[sld]?v[wh]|vmin|vmax|cq[whib]|cqmin|cqmax)$/i;
+const LH_CONST = /^(?:e|pi|-?infinity|nan)$/i;
+const LH_FN = /^(?:calc|min|max|clamp)$/i;
+function lhTokens(raw) {
+  const out = [];
+  let i = 0, ws = false, n = raw.length;
+  const esc = () => {
+    if (i + 1 >= n || /[\n\f\r]/.test(raw[i + 1])) return null;
+    i++;
+    const hex = /^[0-9a-f]{1,6}/i.exec(raw.slice(i));
+    if (hex) {
+      i += hex[0].length;
+      if (i < n && /[\t\n\f\r ]/.test(raw[i])) { if (raw[i] === '\r' && raw[i + 1] === '\n') i++; i++; }
+      const cp = parseInt(hex[0], 16);
+      return cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? '\uFFFD' : String.fromCodePoint(cp);
+    }
+    return raw[i++];
+  };
+  const ident = () => {
+    let s = '';
+    while (i < n) {
+      if (raw[i] === '\\') { const c = esc(); if (c === null) return null; s += c; }
+      else if (/[\w\u0080-\uffff-]/.test(raw[i])) s += raw[i++];
+      else break;
+    }
+    return s;
+  };
+  while (i < n) {
+    const c = raw[i];
+    if (/[\t\n\f\r ]/.test(c)) { ws = true; i++; continue; }
+    if (c === '/' && raw[i + 1] === '*') { const end = raw.indexOf('*/', i + 2); i = end < 0 ? n : end + 2; continue; }
+    if ('(),*/'.includes(c)) { out.push({ k: c, ws }); ws = false; i++; continue; }
+    if ((c === '+' || c === '-') && (i + 1 >= n || (!/[\d.]/.test(raw[i + 1]) && !(c === '-' && (raw[i + 1] === '\\' || /[a-z_\u0080-\uffff-]/i.test(raw[i + 1])))))) {
+      out.push({ k: c, ws }); ws = false; i++; continue;
+    }
+    const num = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?/i.exec(raw.slice(i));
+    if (num) {
+      i += num[0].length;
+      if (raw[i] === '%') return null;
+      const unit = raw[i] === '\\' || /[a-z_\u0080-\uffff-]/i.test(raw[i] ?? '') ? ident() : '';
+      if (unit === null) return null;
+      out.push({ k: unit ? 'd' : 'n', v: num[0], u: unit.toLowerCase(), ws });
+      ws = false;
+      continue;
+    }
+    if (c === '\\' || /[a-z_\u0080-\uffff-]/i.test(c)) {
+      const id = ident();
+      if (!id) return null;
+      if (raw[i] === '(') { i++; out.push({ k: 'f', v: id.toLowerCase(), ws }); }
+      else out.push({ k: 'i', v: id.toLowerCase(), ws });
+      ws = false;
+      continue;
+    }
+    return null;
+  }
+  return out;
+}
+function parseLineHeightMath(raw) {
+  const toks = lhTokens(raw);
+  if (!toks || !toks.length || toks[0].k !== 'f' || !LH_FN.test(toks[0].v)) return null;
+  let i = 0, values = 0;
+  const sum = d => {
+    let left = prod(d);
+    if (!left) return null;
+    while (i < toks.length && (toks[i].k === '+' || toks[i].k === '-')) {
+      const op = toks[i];
+      if (!op.ws || i + 1 >= toks.length || !toks[i + 1].ws) return null;
+      i++;
+      const right = prod(d);
+      if (!right || right.t !== left.t) return null;
+      left = { t: left.t, s: `${left.s} ${op.k} ${right.s}` };
+    }
+    return left;
+  };
+  const prod = d => {
+    let left = atom(d);
+    if (!left) return null;
+    while (i < toks.length && (toks[i].k === '*' || toks[i].k === '/')) {
+      const op = toks[i++].k;
+      const right = atom(d);
+      if (!right || (op === '/' ? right.t !== 'n' : left.t === 'l' && right.t === 'l')) return null;
+      left = { t: left.t === 'l' || right.t === 'l' ? 'l' : 'n', s: `${left.s} ${op} ${right.s}` };
+    }
+    return left;
+  };
+  const atom = d => {
+    const t = toks[i++];
+    if (!t) return null;
+    if (t.k === 'n') return ++values <= 32 ? { t: 'n', s: t.v } : null;
+    if (t.k === 'i') return LH_CONST.test(t.v) && ++values <= 32 ? { t: 'n', s: t.v } : null;
+    if (t.k === 'd') {
+      if (!LH_UNIT.test(t.u) || ++values > 32) return null;
+      if (t.u === 'ch' || t.u === 'lh') {
+        const px = Number(t.v) * (t.u === 'ch' ? 8 : 16);
+        return { t: 'l', s: Number.isFinite(px) ? `${px}px` : `(${px < 0 ? '-infinity' : 'infinity'} * 1px)` };
+      }
+      return { t: 'l', s: `${t.v}${t.u}` };
+    }
+    if (t.k === '(') {
+      if (d >= 32) return null;
+      const v = sum(d + 1);
+      const close = toks[i++];
+      if (!v || (close && close.k !== ')')) return null;
+      return { t: v.t, s: `(${v.s})` };
+    }
+    if (t.k === 'f' && LH_FN.test(t.v)) {
+      if (d >= 32) return null;
+      if (t.v === 'calc') {
+        const v = sum(d + 1);
+        const close = toks[i++];
+        if (!v || (close && close.k !== ')')) return null;
+        return { t: v.t, s: `calc(${v.s})` };
+      }
+      const args = [];
+      let ty = null;
+      for (;;) {
+        const none = t.v === 'clamp' && args.length !== 1 && toks[i]?.k === 'i' && toks[i].v === 'none'
+          && (!toks[i + 1] || toks[i + 1].k === ',' || toks[i + 1].k === ')');
+        if (none) { i++; args.push('none'); }
+        else {
+          const a = sum(d + 1);
+          if (!a || (ty && ty !== a.t)) return null;
+          ty = a.t;
+          args.push(a.s);
+        }
+        const sep = toks[i++];
+        if (sep?.k === ',') continue;
+        if (!sep || sep.k === ')') break;
+        return null;
+      }
+      if (!ty || (t.v === 'clamp' && args.length !== 3)) return null;
+      return { t: ty, s: `${t.v}(${args.join(', ')})` };
+    }
+    return null;
+  };
+  const res = atom(0);
+  return res && res.t === 'l' && i >= toks.length ? res.s : null;
+}
 // Both line-height and its inheritance marker read this binding. Journal a refused value once per change.
 export function lineHeight(e, value) {
   const t = typeof value === 'string' && value.trim();
   // Theme and metric names are resolved by the next projection. A CSS value
   // the browser accepts still has to fit the kernel's line-height grammar.
-  const length = t && /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(px|rem|em|ch|lh|[sld]?v[wh]|vmin|vmax)$/i.exec(t);
-  const accepted = length && Number(length[1]) >= 0 && Number.isFinite(Math.fround(Number(length[1]))) &&
-    (length[2].toLowerCase() !== 'px' || length[2] === 'px');
-  if (t && (!Number.isNaN(Number(t)) || (CSS.supports('line-height', t) && !accepted && !/^(?:normal|unset|inherit)$/i.test(t) && !t.startsWith('var(')))) {
+  const length = t && /^([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?)(px|rem|em|ch|lh|[sld]?v[wh]|vmin|vmax|cq[whib]|cqmin|cqmax)$/i.exec(t);
+  if (length && Number(length[1]) >= 0 && Number.isFinite(Math.fround(Number(length[1]))) &&
+    (length[2].toLowerCase() !== 'px' || length[2] === 'px')) {
+    delete e.$badLeading;
+    return value;
+  }
+  const math = typeof value === 'string' ? parseLineHeightMath(value) : null;
+  if (math) { delete e.$badLeading; return math; }
+  if (t && ((t.includes('(') && !t.startsWith('var(')) || !Number.isNaN(Number(t)) ||
+    (cssSupports('line-height', t) && !/^(?:normal|unset|inherit)$/i.test(t) && !t.startsWith('var(')))) {
     if (value !== e.$badLeading) invalidStyle(e, 'line-height', value);
     e.$badLeading = value;
     return 'unset';
@@ -427,8 +628,15 @@ export function Sr(e, prop, unit, f) {
           v == null
             ? v
             : String(v).replace(/url\(\s*["']?#([^"')\s]+)["']?\s*\)/g, (m, name) => {
+                const findId = (root, target) => {
+                  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+                    return root.querySelector(`[data-exact-id="${CSS.escape(target)}"]`);
+                  for (const el of root.getElementsByTagName('*'))
+                    if (el.getAttribute('data-exact-id') === target) return el;
+                  return null;
+                };
                 for (let a = e.parentElement; a; a = a.parentElement) {
-                  const c = a.querySelector(`[data-exact-id="${CSS.escape(name)}"]`);
+                  const c = findId(a, name);
                   if (c) return `url(#${c.id})`;
                 }
                 missing = true;

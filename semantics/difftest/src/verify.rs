@@ -496,7 +496,7 @@ fn verify_js(
             .collect();
         let cases: Vec<_> = selected.iter().map(|l| l.scripted.case.clone()).collect();
         let verdicts = js::check(&compiler, &cases, 16, "verify")?;
-        let mut passed = js::report(&compiler, &cases, &verdicts, None, false, true)?;
+        let mut passed = js::report(&compiler, &cases, &verdicts, None, false, true, true)?;
         let always: Vec<_> = properties
             .iter()
             .filter(|p| p.kind == PropertyKind::Always)

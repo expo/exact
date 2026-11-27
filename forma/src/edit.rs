@@ -125,9 +125,12 @@ pub enum Op {
         /// The value.
         value: String,
     },
-    /// `add-axis name = a | b`: a new app axis, its first value the default,
-    /// after the axes there are (an `axes` block made after the header when
-    /// there is none). An importer proposes one for a theme class.
+    /// Remove an axis declaration.
+    RemoveAxis {
+        /// The axis.
+        name: String,
+    },
+    /// A new app axis. Its first value is the default.
     AddAxis {
         /// The axis.
         name: String,
@@ -135,6 +138,10 @@ pub enum Op {
         values: Vec<String>,
         /// `under scheme=dark`.
         under_dark: bool,
+        /// Insert before this axis, or append when absent.
+        before: Option<String>,
+        /// The declaration's trailing comment.
+        comment: Option<String>,
     },
     /// An inverse: lines `line` (1-based) to `line + remove - 1` replaced by
     /// `lines`, as they were, and whether the text ends with a newline. Only
@@ -176,7 +183,7 @@ pub fn undo(src: &str, inverse: &[Op], vocab: &Vocab) -> Result<Edited, Vec<Diag
     let mut text = src.to_string();
     let mut undone = Vec::new();
     for op in inverse {
-        let (next, back) = step(&text, op, vocab, &crate::params::NONE)?;
+        let (next, back) = step(&text, op, vocab, &crate::params::NONE, &mut Vec::new())?;
         text = next;
         undone.insert(0, back);
     }
@@ -194,6 +201,7 @@ fn step(
     op: &Op,
     vocab: &Vocab,
     params: &crate::params::Params,
+    removed_axes: &mut Vec<crate::Axis>,
 ) -> Result<(String, Op), Vec<Diagnostic>> {
     valid(op)?;
     let design = crate::parse(src)?;
@@ -233,9 +241,13 @@ fn step(
     // A rename names, and folds nothing else differently: a word it changed
     // that was no use (a channel, a colour space, a platform selector) would.
     if let Op::RenameToken { .. } = op {
-        let folded = |text: &str| {
-            let design = crate::parse(text)?;
-            let design = crate::params::defaults(crate::params::laid(&design, params));
+        let after = crate::parse(&doc.text())?;
+        let modes = axes::rename_modes(&design, &after, params, removed_axes);
+        let folded = |design: &Design| {
+            let mut design = crate::params::defaults(crate::params::laid(design, params));
+            if let Some(axes) = &modes {
+                design.axes.clone_from(axes);
+            }
             crate::check_design(design, vocab).map(|f| {
                 let values = f.tokens.into_iter().map(|t| t.values).collect::<Vec<_>>();
                 let icons = f
@@ -247,13 +259,38 @@ fn step(
             })
         };
         // Proved only where both sides check and fold the same.
-        match (folded(src), folded(&doc.text())) {
+        match (folded(&design), folded(&after)) {
             (Ok(was), Ok(now)) if was == now => {}
             (Ok(_), Ok(_)) => {
                 return Err(refuse("the rename would change what a value folds to (a word it reads that is no token): rename it by hand"))
             }
-            (Err(errors), _) | (_, Err(errors)) => return Err(errors),
+            (Err(mut errors), _) | (_, Err(mut errors)) => {
+                if modes.is_some() {
+                    for error in &mut errors {
+                        if matches!(error.id, "forma-tuples" | "forma-when-ambiguous") {
+                            error.message = crate::bounded_words(format!(
+                                "Unset the removed axis's conditions before the rename. In the rename check, {}",
+                                error.message
+                            ));
+                        }
+                    }
+                }
+                return Err(errors);
+            }
         }
+    }
+    let removed = match op {
+        Op::RemoveAxis { name } => Some(name),
+        Op::RemoveAxisValue { axis, .. } => Some(axis),
+        _ => None,
+    };
+    if let Some(mut axis) =
+        removed.and_then(|n| design.axes.into_iter().find(|a| a.name.value == *n))
+    {
+        if let Op::RemoveAxisValue { value, .. } = op {
+            axis.values = vec![value.clone()];
+        }
+        removed_axes.push(axis);
     }
     let undo = restore(&before, &doc.lines);
     Ok((doc.text(), undo))
@@ -445,11 +482,18 @@ pub(crate) fn valid(op: &Op) -> Result<(), Vec<Diagnostic>> {
             ident(value)?;
             before.as_deref().map_or(Ok(()), ident)
         }
+        Op::RemoveAxis { name } => ident(name),
         Op::RemoveAxisValue { axis, value } => ident(axis).and_then(|_| ident(value)),
         Op::AddAxis {
-            name: n, values, ..
+            name: n,
+            values,
+            before,
+            comment: c,
+            ..
         } => {
             ident(n)?;
+            before.as_deref().map_or(Ok(()), ident)?;
+            comment(c)?;
             let mut seen = std::collections::HashSet::new();
             if values.is_empty() || !values.iter().all(|v| seen.insert(v)) {
                 return Err(refuse(format!("`{n}`: an axis has values, each once")));
@@ -504,6 +548,7 @@ fn run(
         None => {
             let mut text = src.to_string();
             let mut inverse = Vec::new();
+            let mut removed_axes = Vec::new();
             let mut k = 0;
             while k < ops.len() {
                 // A run of new tokens (an import's) with one parse, and one
@@ -553,7 +598,7 @@ fn run(
                         }
                     }
                 }
-                let (next, undo) = step(&text, &ops[k], vocab, params)?;
+                let (next, undo) = step(&text, &ops[k], vocab, params, &mut removed_axes)?;
                 text = next;
                 inverse.push(undo);
                 k += 1;
@@ -562,30 +607,33 @@ fn run(
             (text, inverse)
         }
     };
-    match params.is_empty() {
-        true => drop(crate::check(&text, vocab)?),
-        false => drop(crate::check_design(
-            crate::params::laid(&crate::parse(&text)?, params),
-            vocab,
-        )?),
+    let mut design = crate::parse(&text)?;
+    if ops
+        .iter()
+        .any(|op| matches!(op, Op::RemoveAxis { .. } | Op::RemoveAxisValue { .. }))
+    {
+        axes::check_removals(src, &design, ops, vocab, params)?;
     }
+    if !params.is_empty() {
+        design = crate::params::laid(&design, params);
+    }
+    crate::check_design(design, vocab)?;
     Ok(Edited { text, inverse })
 }
 
 /// [`apply_all`] in two halves, for a caller that tries operations one group
 /// at a time on what it has accepted (re-import's transaction): `ops` applied
 /// to `src` with no check (a refused operation is `Err`, as [`apply_all`]
-/// says it), then the check. With no `Restore` among them (which
-/// `apply_all` refuses before any step), `stepped(stepped(src, a), b)` then
-/// the check is `apply_all(src, a ++ b)`: each operation reads only the text
-/// before it.
+/// says it), then the check. A rename that still reads modes removed by
+/// its transaction must be tried in the same group as those removals.
 pub(crate) fn stepped(src: &str, ops: &[Op], vocab: &Vocab) -> Result<String, Vec<Diagnostic>> {
     if ops.iter().any(|op| matches!(op, Op::Restore { .. })) {
         return Err(refuse("a restore is an inverse: undo applies it"));
     }
     let mut text = src.to_string();
+    let mut removed_axes = Vec::new();
     for op in ops {
-        text = step(&text, op, vocab, &crate::params::NONE)?.0;
+        text = step(&text, op, vocab, &crate::params::NONE, &mut removed_axes)?.0;
     }
     Ok(text)
 }
@@ -651,6 +699,7 @@ const KEYWORDS: &[&str] = &[
     "currentcolor",
 ];
 
+mod axes;
 mod batch;
 mod params;
 
@@ -762,6 +811,7 @@ impl Doc {
                     .ok_or_else(|| refuse(format!("no dial `{name}`")))?;
                 let (indent, code, comment) = self.parts(d.name.line);
                 let line = Line {
+                    comment: None,
                     indent,
                     text: code.clone(),
                     line: d.name.line,
@@ -790,6 +840,7 @@ impl Doc {
                 if when.is_empty() {
                     let (indent, code, trailing) = self.parts(t.name.line);
                     let line = Line {
+                        comment: None,
                         indent,
                         text: code,
                         line: t.name.line,
@@ -1034,7 +1085,32 @@ impl Doc {
                 name,
                 values,
                 under_dark,
-            } => self.add_axis(design, name, values, *under_dark),
+                before,
+                comment,
+            } => self.add_axis(
+                design,
+                name,
+                values,
+                *under_dark,
+                before.as_deref(),
+                comment.as_deref(),
+            ),
+            Op::RemoveAxis { name } => {
+                let i = design
+                    .axes
+                    .iter()
+                    .position(|a| a.name.value == *name)
+                    .ok_or_else(|| refuse(format!("no axis `{name}`")))?;
+                let axis = &design.axes[i];
+                self.lines.remove(axis.name.line as usize - 1);
+                Ok(vec![Op::AddAxis {
+                    name: name.clone(),
+                    values: axis.values.clone(),
+                    under_dark: axis.under_dark,
+                    before: design.axes.get(i + 1).map(|a| a.name.value.clone()),
+                    comment: axis.comment.clone(),
+                }])
+            }
             Op::SetParam {
                 name,
                 when,
@@ -1055,6 +1131,12 @@ impl Doc {
                 let at = a.values.iter().position(|v| v == value).ok_or_else(|| {
                     refuse_at(a.name.line, format!("`{axis}` has no value `{value}`"))
                 })?;
+                if a.values.len() == 1 {
+                    return Err(refuse_at(
+                        a.name.line,
+                        format!("`{value}` is the last value of `{axis}`: use `remove-axis`"),
+                    ));
+                }
                 let mut values = a.values.clone();
                 values.remove(at);
                 self.set_axis(a, &values);
@@ -1067,14 +1149,15 @@ impl Doc {
         }
     }
 
-    /// A new axis: after the last axis, or in a new `axes` block after the
-    /// header.
+    /// Insert into the axes, making the block after the header if needed.
     fn add_axis(
         &mut self,
         design: &Design,
         name: &str,
         values: &[String],
         under_dark: bool,
+        before: Option<&str>,
+        comment: Option<&str>,
     ) -> Result<Vec<Op>, Vec<Diagnostic>> {
         if let Some(a) = design.axes.iter().find(|a| a.name.value == name) {
             return Err(refuse_at(
@@ -1086,17 +1169,29 @@ impl Doc {
         if under_dark {
             code.push_str("  under scheme=dark");
         }
-        match (design.axes.last(), self.block_end("axes")) {
-            (Some(last), Some(end)) => {
-                let indent = self.parts(last.name.line).0;
-                let l = self.ended(line(indent, &code, None));
-                self.lines.insert(end, l);
-            }
-            (None, Some(end)) => {
-                let l = self.ended(line(2, &code, None));
-                self.lines.insert(end, l);
-            }
-            (_, None) => {
+        let sibling = match before {
+            Some(name) => Some(
+                design
+                    .axes
+                    .iter()
+                    .find(|a| a.name.value == name)
+                    .ok_or_else(|| refuse(format!("no axis `{name}` to insert before")))?,
+            ),
+            None => None,
+        };
+        let entry = line(
+            sibling
+                .or(design.axes.last())
+                .map_or(2, |a| self.parts(a.name.line).0),
+            &code,
+            comment,
+        );
+        match sibling
+            .map(|a| a.name.line as usize - 1)
+            .or_else(|| self.block_end("axes"))
+        {
+            Some(at) => self.lines.insert(at, self.ended(entry)),
+            None => {
                 let head = self
                     .lines
                     .iter()
@@ -1111,14 +1206,14 @@ impl Doc {
                 }) {
                     at += 1;
                 }
-                let new = [String::new(), "axes".into(), line(2, &code, None)];
+                let new = [String::new(), "axes".into(), entry];
                 for (k, l) in new.into_iter().enumerate() {
                     let l = self.ended(l);
                     self.lines.insert(at + k, l);
                 }
             }
         }
-        Ok(Vec::new())
+        Ok(vec![Op::RemoveAxis { name: name.into() }])
     }
 
     /// The index after block `name`'s last line that is not blank (its

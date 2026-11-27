@@ -76,17 +76,12 @@ final class ExactWebView: WKWebView {
         super.layout()
         pinInsets()
     }
-    func pinInsets() {
-        func walk(_ v: NSView) {
-            if let s = v as? NSScrollView {
-                if s.automaticallyAdjustsContentInsets { s.automaticallyAdjustsContentInsets = false }
-                if s.contentInsets.top != 0 || s.contentInsets.left != 0 || s.contentInsets.bottom != 0 || s.contentInsets.right != 0 {
-                    s.contentInsets = NSEdgeInsetsZero
-                }
-            }
-            v.subviews.forEach(walk)
-        }
-        walk(self)
+    var magnificationWord: String?
+    var authoredMagnification: CGFloat?
+    override func setFrameSize(_ newSize: NSSize) {
+        let previous = frame.size
+        super.setFrameSize(newSize)
+        if frame.size != previous { restoreMagnification() }
     }
 }
 #else
@@ -340,6 +335,8 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var suppressLoad = false
     var recovering = false
     var invalidated = false
+    /// Whether the current web view draws a transparent background (`buildFrame`, not partitioned).
+    var transparent = false
     /// The guest is the web view's own document, not a frame in a wrapper
     /// (see `serve`).
     var direct = false
@@ -486,6 +483,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         webView.scrollView.backgroundColor = .clear
         if #available(iOS 15.0, *) { webView.underPageBackgroundColor = .clear }
         #endif
+        transparent = true
         return webView
     }
 
@@ -523,6 +521,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         #endif
         driver.seedInitialDocument(webView)
         browser.attach(webView)
+        transparent = false
         return webView
     }
 
@@ -544,17 +543,9 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         // displayed frame after a zoom unobservable (LLP 1020.002 D6).
         if said("zoom") { web.pageZoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1) }
         if said("allowsBackForwardNavigationGestures") { web.allowsBackForwardNavigationGestures = options["allowsBackForwardNavigationGestures"] as? Bool ?? false }
-        #if os(iOS)
-        // How much of the guest lies under its owner's bars and band, top left bottom right (LLP 1123
-        // D15): WebKit lays the page's fixed and sticky content and its visible rect out clear of it, as
-        // in a web view pinned under a navigation bar
-        if #available(iOS 26.0, *), said("obscured") {
-            let o = (options["obscured"] as? [NSNumber])?.map(\.doubleValue) ?? [0, 0, 0, 0]
-            let insets = o.count == 4 ? UIEdgeInsets(top: o[0], left: o[1], bottom: o[2], right: o[3]) : .zero
-            if web.obscuredContentInsets != insets { web.obscuredContentInsets = insets }
-        }
-        #endif
+        applyInsets(to: web, said: said)
         #if os(macOS)
+        (web as? ExactWebView)?.configureMagnification(options["magnification"] as? String, id: id)
         if said("allowsMagnification") { web.allowsMagnification = options["allowsMagnification"] as? Bool ?? false }
         #endif
         // Never on the template's shared preferences: a policy said after the
@@ -1243,6 +1234,9 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         serving = false
         recovering = false
+        #if os(macOS)
+        (webView as? ExactWebView)?.restoreMagnification()
+        #endif
         guard direct, !invalidated else { return }
         if isBlank(navigation) { blank = nil; return }
         // A direct guest's document loaded: the iframe's `load`.
@@ -1275,13 +1269,10 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             sendReply(token: token, kind: 2, text: "iframe has no snapshot box")
             return
         }
-        let configuration = WKSnapshotConfiguration()
-        configuration.rect = webView.bounds
-        configuration.afterScreenUpdates = true
-        webView.takeSnapshot(with: configuration) { [weak self] image, error in
+        snapshotForHost(webView) { [weak self] image, error in
             guard let self else { return }
-            guard let image, let data = self.png(image) else {
-                self.sendReply(token: token, kind: 2, text: error?.localizedDescription ?? "WebKit returned no snapshot")
+            guard let image, let data = FrameCaptures.png(image) else {
+                self.sendReply(token: token, kind: 2, text: error ?? "WebKit returned no snapshot")
                 return
             }
             self.sendReply(token: token, kind: 0, data: data)
@@ -1297,15 +1288,6 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case .failure(let error):
             sendReply(token: token, kind: 2, text: error.localizedDescription)
         }
-    }
-
-    func png(_ image: PlatformImage) -> Data? {
-        #if os(macOS)
-        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        return NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])
-        #else
-        return image.pngData()
-        #endif
     }
 
     func emit(kind: UInt32, text: String = "") {
@@ -1418,7 +1400,7 @@ private func json(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32) -> [String: 
 }
 
 /// `{partition, agent, zoom, allowsBackForwardNavigationGestures,
-/// allowsMagnification, inactiveSchedulingPolicy}`: before the first
+/// allowsMagnification, magnification, inactiveSchedulingPolicy}`: before the first
 /// `exact_web_platform_view`, and again when any changes (a new partition
 /// makes a new web view, which that call then returns).
 @_cdecl("exact_web_configure")

@@ -2,7 +2,7 @@
 pub use crate::colours::{ColorProfileDecl, DesignSource, ThemeDecl};
 pub use crate::tap::TapForm;
 pub use crate::test_steps::{
-    DragLeg, LayoutOperand, StateComparison, StateOperand, Step, TestDecl,
+    DragLeg, LayoutOperand, StateComparison, StateOperand, Step, TestDecl, TicketAnswer,
 };
 use crate::Span;
 use std::collections::BTreeMap;

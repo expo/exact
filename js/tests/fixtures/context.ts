@@ -64,7 +64,9 @@ function answer(source: string, args: unknown[], store: any): unknown {
     throw new Error("body failed");
   }).catch((e: Error) => ({ text: `caught:${e.message}` }));
   if (source === "secret") return auth.fetch(store, `${API}/data`).then(r => r.text()).then(text => ({ text }), e => ({ text: `failed:${e.message}` }));
-  if (source === "work" && typeof args[0] === "string") return work(args[0]);
+  if (source === "work" && typeof args[0] === "string") {
+    return args[0].startsWith("then:") ? thenChain(args[0].slice(5)) : work(args[0]);
+  }
   throw { kind: "UnknownSource", message: source };
 }
 
@@ -144,4 +146,31 @@ function protectedPosts(store: any): Promise<{ text: string }> {
     }));
     return { text: values.join("/") };
   });
+}
+
+// Plain `.then` / `.catch` / `.finally` chain (no `async`/`await`) awaiting
+// another answer's promise: every follow-up fetch stays under its own answer.
+function thenChain(name: string): Promise<{ text: string }> {
+  let finalTag = "";
+  return load()
+    .then(loaded =>
+      fetch(`${API}/${name}/then`)
+        .then(r => r.text())
+        .then(t => {
+          throw new Error(`${loaded} ${t}`);
+        })
+    )
+    .catch((err: Error) =>
+      fetch(`${API}/${name}/catch`)
+        .then(r => r.text())
+        .then(c => `${err.message} ${c}`)
+    )
+    .finally(() =>
+      fetch(`${API}/${name}/finally`)
+        .then(r => r.text())
+        .then(f => {
+          finalTag = f;
+        })
+    )
+    .then(prefix => ({ text: `${prefix} ${finalTag}` }));
 }

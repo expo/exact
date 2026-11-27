@@ -20,6 +20,13 @@ impl ValueWatch {
     }
 
     pub(crate) fn fields_committed(&mut self, kernel: &Kernel, receipt: &CommitReceipt) {
+        if let Some(field) = receipt
+            .reconcile_field
+            .and_then(|key| kernel.node_by_key(key))
+        {
+            self.fields.insert(field.key);
+            self.committed(field.id, None);
+        }
         for key in &receipt.destroyed {
             self.fields.remove(key);
         }

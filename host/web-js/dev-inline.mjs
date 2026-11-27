@@ -22,3 +22,7 @@ export async function inlineWhy({ texts, file, ready, read, pages, same }) {
   const inline = next.tokens.find((t, i) => t.inline && t.name === from.tokens[i].name && !same(t, from.tokens[i]));
   return inline ? `\`${inline.name}\` is written inline on this page (${inline.writer ?? 'a font weight, an SVG attribute'})` : null;
 }
+
+export const same = (a, b) => a.value === b.value && a.slices.length === b.slices.length && a.slices.every((s, i) => s === b.slices[i]);
+export const sameShape = (from, next) => from && next && from.shape === next.shape && from.structure === next.structure && from.tokens.length === next.tokens.length
+    && next.tokens.every((t, i) => t.name === from.tokens[i].name && String(t.accent) === String(from.tokens[i].accent) && (!t.inline || same(t, from.tokens[i])));

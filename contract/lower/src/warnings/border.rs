@@ -171,16 +171,12 @@ fn inspect(attrs: &[Attr], styles: &[StyleDecl], mut cases: Vec<Case>) -> Option
         }
         return Some(repairs);
     }
-    let class = crate::class::rows(
-        attrs,
-        &|name| {
-            styles
-                .iter()
-                .find(|s| s.name == name)
-                .map(|s| s.attrs.as_slice())
-        },
-        &[],
-    )
+    let class = crate::class::rows(attrs, &|name| {
+        styles
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.attrs.as_slice())
+    })
     .ok()?;
     let mut layers: BTreeMap<&str, Vec<(&Attr, Option<&str>)>> = BTreeMap::new();
     let class_rows = class

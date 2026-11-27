@@ -1,10 +1,12 @@
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 // Built sources carry display pieces. New text and inline atoms load the
 // parser; an unseen source reserves space until formatted content can be painted.
-let Markdown = null, Ready = null, Atoms = null, Built = null;
+let Ready = null, Built = null;
 const Pending = new Set();
 function prepareMarkdown() {
-  if (!Markdown) { Markdown = markdown().then(pieces => Ready = pieces, e => { Markdown = null; throw e; }); }
-  return Markdown;
+  return loadOnce(loads, 'Markdown', () => markdown().then(pieces => Ready = pieces));
 }
 const key = (source, atoms, faces) => JSON.stringify([source, atoms, faces]);
 function built() {
@@ -47,7 +49,7 @@ export function markdownText(e, f, prepared, { effect, inflight, adopting, rende
       e.textContent = v;
     }
     inflight.n++;
-    const job = Promise.all([prepareMarkdown(), (dynamic || atoms) && (Atoms ??= import('./atoms.js'))])
+    const job = Promise.all([prepareMarkdown(), (dynamic || atoms) && (loadOnce(loads, "Atoms", () => import('./atoms.js')))])
       .then(([parse]) => {
         if (current !== generation || e.$source !== v) { return; }
         const atoms = e.getAttribute('data-atoms') ?? '', faces = e.getAttribute('data-atom-faces') ?? '';

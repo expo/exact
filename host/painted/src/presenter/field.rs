@@ -272,6 +272,21 @@ impl<D: DataSource> Presenter<D> {
         self.field_text(id)
     }
 
+    fn after_field_input(&mut self, id: ViewId) -> Option<String> {
+        let outer = self.filtering_field;
+        if self.host.kernel().node(id).is_some_and(|n| {
+            matches!(
+                n.props.str(PropId::Type).unwrap_or("text"),
+                "text" | "search" | "url" | "tel" | "email" | "password"
+            )
+        }) {
+            self.filtering_field = Some(id);
+        }
+        let error = self.after_commit();
+        self.filtering_field = outer;
+        error
+    }
+
     /// Compare runtime writes against the selection before the commit. Only
     /// plain fields start at 0-0: Markdown owns its selection on the web.
     pub(super) fn sync_field_values(&mut self) {
@@ -286,13 +301,17 @@ impl<D: DataSource> Presenter<D> {
             let id = node.id;
             let markdown = node.props.str(PropId::Markup) == Some("markdown");
             let value = self.field_value(id);
-            let after = FieldSelection::at_end(&value);
-            let before = match self.fields.get(&id) {
+            let end = FieldSelection::at_end(&value);
+            let (before, after) = match self.fields.get(&id) {
                 Some(mark) if mark.value == value => continue,
-                Some(mark) => mark.selection,
+                Some(mark) if self.filtering_field == Some(id) => (
+                    mark.selection,
+                    mark.selection.through_rewrite(&mark.value, &value),
+                ),
+                Some(mark) => (mark.selection, end),
                 None if value.is_empty() => continue,
-                None if markdown => after,
-                None => FieldSelection::caret(0),
+                None if markdown => (end, end),
+                None => (FieldSelection::caret(0), end),
             };
             self.field_history.invalidate(id);
             self.field_reveal |= self.focus == Some(id);
@@ -808,11 +827,11 @@ impl<D: DataSource> Presenter<D> {
             ) {
                 self.host.log(format!("setRangeText: {error}"));
             }
-            if let Some(error) = self.after_commit() {
+            if let Some(error) = self.after_field_input(id) {
                 self.host.log(format!("setRangeText: {error}"));
             }
         }
-        self.keep_typed(id, next.clone(), bound);
+        self.finish_field_edit(id);
         if moved {
             self.field_select_tasks.push(id);
         }
@@ -977,8 +996,8 @@ impl<D: DataSource> Presenter<D> {
         } else {
             None
         };
-        let error = error.or(self.after_commit());
-        self.keep_typed(id, next, bound);
+        let error = error.or(self.after_field_input(id));
+        self.finish_field_edit(id);
         if matches!(selection, EditSelection::Presenter(_)) {
             // An input handler can replace the binding. The offsets index the value we send.
             self.hosted_commanded(id, self.field_selection(id));

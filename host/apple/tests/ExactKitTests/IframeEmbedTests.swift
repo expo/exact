@@ -188,6 +188,77 @@ final class IframeEmbedTests: XCTestCase {
     }
     #endif
 
+    #if os(macOS)
+    /// A page in a frame mounted 180 points down a session whose view, its owner's, has a 40-point bottom band, the
+    /// frame reaching 10 above its box and 20 below, so its web view fills 130 points and its last 40 lie in the band.
+    private func reachedFrame(_ label: String, page: String) throws -> (NSView, NodeView, WKWebView) {
+        let session = try session(label)
+        let owner = try XCTUnwrap(window?.contentView)
+        owner.additionalSafeAreaInsets = NSEdgeInsets(top: 0, left: 0, bottom: 40, right: 0)
+        owner.layoutSubtreeIfNeeded()
+        let name = "app:/tmp/\(label)-\(UUID().uuidString).html"
+        let file = try XCTUnwrap(AppFiles.url(name))
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: file) }
+        try Data(page.utf8).write(to: file)
+        let loaded = expectation(description: "guest loaded")
+        session.presenter.onLoad = { if $0 == 7001 { loaded.fulfill() } }
+        mount(session, ["src": name], y: 180)
+        let node = try XCTUnwrap(session.presenter.views[7001])
+        node.handlers.insert("load")
+        wait(for: [loaded], timeout: 30)
+        session.presenter.setReach(7001, NSEdgeInsets(top: 10, left: 0, bottom: 20, right: 0))
+        let web = try XCTUnwrap(node.web as? WKWebView)
+        XCTAssertEqual(web.frame, node.bounds, "the web view fills the reached frame")
+        XCTAssertEqual(node.bounds.size, CGSize(width: 200, height: 130))
+        return (owner, node, web)
+    }
+
+    /// LLP 1123 D15 on AppKit: a frame that reach draws into its owner's band tells WebKit what the band covers, and
+    /// the page's fixed footer keeps clear of it.
+    func testAFrameReachingIntoItsOwnersBandKeepsThePagesFixedFooterClearOfItOnTheMac() throws {
+        guard #available(macOS 26.0, *) else { throw XCTSkip("WebKit's obscured insets are macOS 26's") }
+        let (owner, node, web) = try reachedFrame("obscured", page: """
+        <!doctype html><div id="footer" style="position:fixed;left:0;right:0;bottom:0;height:10px"></div>
+        """)
+        node.writeObscured(in: owner, configuration: nil)
+        XCTAssertEqual(web.obscuredContentInsets.bottom, 40, accuracy: 0.01)
+        XCTAssertEqual(web.obscuredContentInsets.top, 0, accuracy: 0.01)
+        var footer: Double?
+        until(5) {
+            web.evaluateJavaScript("document.getElementById('footer').getBoundingClientRect().bottom") { value, _ in footer = value as? Double }
+            return footer == 90
+        }
+        XCTAssertEqual(footer, 90, "the fixed footer ends above the band")
+    }
+
+    /// LLP 1123 D15 on AppKit: the range a reached frame's obscured insets move through in its owner's configuration
+    /// is WebKit's viewport range; another configuration starts the range again.
+    func testAFramesViewportRangeIsItsBandsRangeInItsOwnersConfigurationOnTheMac() throws {
+        let (owner, node, web) = try reachedFrame("viewport-range", page: """
+        <!doctype html><div id="large" style="height:100lvh"></div><div id="small" style="height:100svh"></div>
+        """)
+        func band(_ bottom: CGFloat, _ configuration: UInt64) {
+            owner.additionalSafeAreaInsets = NSEdgeInsets(top: 0, left: 0, bottom: bottom, right: 0)
+            owner.layoutSubtreeIfNeeded()
+            node.writeObscured(in: owner, configuration: configuration)
+        }
+        band(40, 1)
+        band(20, 1)
+        XCTAssertEqual(web.minimumViewportInset.bottom, 20, "the least of the band")
+        XCTAssertEqual(web.maximumViewportInset.bottom, 40, "the most of it")
+        var heights: [Double] = []
+        until(5) {
+            web.evaluateJavaScript("[large.offsetHeight, small.offsetHeight]") { value, _ in heights = (value as? [Double]) ?? [] }
+            return heights.count == 2 && heights[0] - heights[1] == 20
+        }
+        XCTAssertEqual(heights.count == 2 ? heights[0] - heights[1] : nil, 20, "lvh less svh, \(heights)")
+        band(20, 2)
+        XCTAssertEqual(web.minimumViewportInset.bottom, 20)
+        XCTAssertEqual(web.maximumViewportInset.bottom, 20)
+    }
+    #endif
+
     #if os(iOS)
     /// LLP 1123 D15: a frame that reach draws into its owner's band tells WebKit what the band covers.
     func testAFrameReachingIntoItsOwnersBandKeepsThePagesFixedFooterClearOfIt() throws {
@@ -215,7 +286,7 @@ final class IframeEmbedTests: XCTestCase {
         let web = try XCTUnwrap(node.web as? WKWebView)
         XCTAssertEqual(web.frame, node.bounds, "the web view fills the reached frame")
         XCTAssertEqual(node.bounds.size, CGSize(width: 200, height: 130))
-        node.writeObscured(in: owner.view)
+        node.writeObscured(in: owner.view, configuration: nil)
         guard #available(iOS 26.0, *) else { return }
         XCTAssertEqual(web.obscuredContentInsets, UIEdgeInsets(top: 0, left: 0, bottom: 40, right: 0))
         // The page's fixed footer ends where the band begins, 40 points above the web view's bottom
@@ -225,6 +296,50 @@ final class IframeEmbedTests: XCTestCase {
             return footer == 90
         }
         XCTAssertEqual(footer, 90, "the fixed footer ends above the band")
+    }
+
+    /// LLP 1123 D15: the range a reached frame's obscured insets move through in its owner's
+    /// configuration is WebKit's viewport range, so the page's large viewport clears the least of
+    /// the band and its small one the most; another configuration starts the range again.
+    func testAFramesViewportRangeIsItsBandsRangeInItsOwnersConfiguration() throws {
+        let session = try session("viewport-range")
+        let owner = try XCTUnwrap(window?.rootViewController)
+        let name = "app:/tmp/range-\(UUID().uuidString).html"
+        let file = try XCTUnwrap(AppFiles.url(name))
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("""
+        <!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
+        <div id="large" style="height:100lvh"></div><div id="small" style="height:100svh"></div>
+        """.utf8).write(to: file)
+        let loaded = expectation(description: "guest loaded")
+        session.presenter.onLoad = { if $0 == 7001 { loaded.fulfill() } }
+        mount(session, ["src": name], y: 180)
+        let node = try XCTUnwrap(session.presenter.views[7001])
+        node.handlers.insert("load")
+        wait(for: [loaded], timeout: 30)
+        session.presenter.setReach(7001, UIEdgeInsets(top: 10, left: 0, bottom: 20, right: 0))
+        let web = try XCTUnwrap(node.web as? WKWebView)
+        func band(_ bottom: CGFloat, _ configuration: UInt64) {
+            owner.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: bottom, right: 0)
+            owner.view.layoutIfNeeded()
+            node.writeObscured(in: owner.view, configuration: configuration)
+        }
+        band(40, 1)
+        band(20, 1)
+        XCTAssertEqual(web.minimumViewportInset.bottom, 20, "the least of the band")
+        XCTAssertEqual(web.maximumViewportInset.bottom, 40, "the most of it")
+        // The page's large viewport is taller than its small one by the range
+        var heights: [Double] = []
+        until(5) {
+            web.evaluateJavaScript("[large.offsetHeight, small.offsetHeight]") { value, _ in heights = (value as? [Double]) ?? [] }
+            return heights.count == 2 && heights[0] - heights[1] == 20
+        }
+        XCTAssertEqual(heights.count == 2 ? heights[0] - heights[1] : nil, 20, "lvh less svh, \(heights)")
+        // Another configuration starts again from the band as it is
+        band(20, 2)
+        XCTAssertEqual(web.minimumViewportInset.bottom, 20)
+        XCTAssertEqual(web.maximumViewportInset.bottom, 20)
     }
     #endif
 }

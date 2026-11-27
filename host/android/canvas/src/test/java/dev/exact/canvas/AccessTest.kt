@@ -264,6 +264,15 @@ class AccessTest {
         assertTrue(cancel !in actions(1) && start in actions(1))
     }
 
+    @Test fun focusableFlagMapsToAccessibilityNodeFocusable() {
+        val access = told(listOf(
+            Said(1, 0, Access.GROUP, "Focusable panel", flags = Access.FOCUSABLE),
+            Said(2, 0, Access.GROUP, "Plain panel", flags = 0),
+        ))
+        assertTrue(access.provider.createAccessibilityNodeInfo(1)!!.isFocusable)
+        assertFalse(access.provider.createAccessibilityNodeInfo(2)!!.isFocusable)
+    }
+
     /** exact2's side of an act: each node and act asked, all taken. */
     @Implements(Native::class, isInAndroidSdk = false)
     class Acts {

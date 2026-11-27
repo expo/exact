@@ -437,6 +437,7 @@ impl Module {
             ..*frame
         };
         // Keep menus on the same swapchain: GDI can leave its last GPU image up.
+        let took_wake = draw && inst.as_mut().is_some_and(|i| i.wake.take());
         let wants = draw
             && crate::frame::render_scene(
                 inst.as_mut().map(|i| &mut *i.surface),
@@ -451,6 +452,11 @@ impl Module {
         let commands = match recording.finish() {
             Ok(commands) => commands,
             Err(e) => {
+                if took_wake {
+                    if let Some(i) = inst.as_mut() {
+                        i.wake.rearm();
+                    }
+                }
                 let own = inst.as_mut().and_then(|inst| {
                     inst.drain();
                     inst.surface.take_error()
@@ -469,28 +475,44 @@ impl Module {
             // available. Consume them before any acquisition early return.
             inst.drain();
             if let Some(SurfaceError(e)) = inst.surface.take_error() {
+                if took_wake {
+                    inst.wake.rearm();
+                }
                 return Err(e);
             }
-        }
-        window.rested = (!wants
-            && inst
-                .as_ref()
-                .is_none_or(|i| i.surface.frame_ready() || i.surface.is_empty()))
-        .then_some(extent);
-        if let Some(i) = inst.as_mut().filter(|_| draw) {
-            i.input_dirty = i.surface.input_pending();
-            i.dirty = false;
         }
         use wgpu::CurrentSurfaceTexture as Current;
         let drawable = match window.target.get_current_texture() {
             Current::Success(t) | Current::Suboptimal(t) => t,
-            Current::Timeout | Current::Occluded => return Ok(()),
+            Current::Timeout | Current::Occluded => {
+                if took_wake {
+                    if let Some(i) = inst.as_mut() {
+                        i.wake.rearm();
+                    }
+                }
+                return Ok(());
+            }
             Current::Lost | Current::Outdated => {
+                if let Some(i) = inst.as_mut() {
+                    i.dirty = true;
+                }
                 self.window = None;
                 return Ok(());
             }
-            other => return Err(format!("window surface: {other:?}")),
+            other => {
+                if took_wake {
+                    if let Some(i) = inst.as_mut() {
+                        i.wake.rearm();
+                    }
+                }
+                return Err(format!("window surface: {other:?}"));
+            }
         };
+        window.rested = None;
+        if let Some(i) = inst.as_mut().filter(|_| draw) {
+            i.input_dirty = i.surface.input_pending();
+            i.dirty = false;
+        }
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let view = drawable.texture.create_view(&Default::default());
@@ -515,6 +537,11 @@ impl Module {
             pass.draw(0..3, 0..1);
         }
         gpu.queue.submit([encoder.finish()]);
+        window.rested = (!wants
+            && inst.as_ref().is_none_or(|i| {
+                (i.surface.frame_ready() || i.surface.is_empty()) && !i.wake.is_woken()
+            }))
+        .then_some(extent);
         if let Some(inst) = inst {
             inst.seen.store(true, Ordering::Release);
             if inst.surface.frame_ready() {

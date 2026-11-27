@@ -681,6 +681,16 @@ pub(crate) fn content_size_with(
     presented: &dyn Fn(ViewId) -> Presented,
     scaled_presented: &std::collections::BTreeSet<ViewId>,
 ) -> (f32, f32) {
+    let (_, w, h) = content_extent_with(node, kernel, presented, scaled_presented);
+    (w, h)
+}
+
+pub(crate) fn content_extent_with(
+    node: &NodeRef<'_>,
+    kernel: &Kernel,
+    presented: &dyn Fn(ViewId) -> Presented,
+    scaled_presented: &std::collections::BTreeSet<ViewId>,
+) -> (f32, f32, f32) {
     fn overflow(
         node: &NodeRef<'_>,
         kernel: &Kernel,
@@ -762,31 +772,54 @@ pub(crate) fn content_size_with(
             false
         });
     if !transformed {
-        let (_, _, pr, pb) = kernel.layout_padding(node.key).unwrap_or_default();
+        let (pl, _, pr, pb) = kernel.layout_padding(node.key).unwrap_or_default();
+        let rtl = node.style.direction == exact_kernel::Direction::Rtl;
+        let mut min_x = 0.0f32;
         let mut size = (
-            node.frame.width.max(node.content.0),
+            if rtl {
+                node.frame.width
+            } else {
+                node.frame.width.max(node.content.0)
+            },
             node.frame.height.max(node.content.1),
         );
         for id in node.children() {
             if let Some(c) = kernel.node_unblocked(id) {
-                size.0 = size.0.max(c.frame.x - node.frame.x + c.frame.width + pr);
+                let cx = c.frame.x - node.frame.x;
+                if rtl {
+                    min_x = min_x.min(cx - pl);
+                    if effective_overflow(&c).0 == Overflow::Visible && c.content.0 > c.frame.width
+                    {
+                        if c.style.direction == exact_kernel::Direction::Rtl {
+                            min_x = min_x.min(cx + c.frame.width - c.content.0 - pl);
+                        } else {
+                            size.0 = size.0.max(cx + c.content.0 + pr);
+                        }
+                    }
+                }
+                size.0 = size.0.max(cx + c.frame.width + pr);
                 size.1 = size.1.max(c.frame.y - node.frame.y + c.frame.height + pb);
             }
         }
-        return size;
+        return (min_x, size.0, size.1);
     }
-    let (_, _, pr, pb) = kernel.layout_padding(node.key).unwrap_or_default();
+    let (pl, _, pr, pb) = kernel.layout_padding(node.key).unwrap_or_default();
+    let rtl = node.style.direction == exact_kernel::Direction::Rtl;
+    let mut min_x = 0.0f32;
     let mut size = (node.frame.width, node.frame.height);
     for id in node.children() {
         if let Some(child) = kernel.node_unblocked(id) {
             let Some((r, _)) = overflow(&child, kernel, presented) else {
                 continue;
             };
+            if rtl {
+                min_x = min_x.min(r.0 - node.frame.x - pl);
+            }
             size.0 = size.0.max(r.0 + r.2 - node.frame.x + pr);
             size.1 = size.1.max(r.1 + r.3 - node.frame.y + pb);
         }
     }
-    size
+    (min_x, size.0, size.1)
 }
 
 #[cfg(test)]
@@ -809,7 +842,7 @@ mod tests {
             view width=100 height=20
       list testId="other" width=120 height=120
         for row in range(1000) key=row
-          view width=100 height=20 swiperight=noop
+          view width=100 height=20 swipe=noop swipe-follow="right"
             view swipeIndicator=true width=10 height=10 scale=0.5
 "#;
         let (mut p, error) = Presenter::boot_with(

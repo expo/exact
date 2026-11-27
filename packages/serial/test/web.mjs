@@ -1,7 +1,8 @@
 // @exact/serial's web conformance suite in Chromium (LLP 1133.037 §16 stage 1), over a fake `navigator.serial`
 // (`chromium.mjs`): the filters the chooser is asked with, `getPorts`, `open`'s options and a second open, one reader
 // that loses nothing with its backpressure (1 MB pushed while the reader is slow), a non-fatal error at its offset and
-// the next `readable` taken, writes in order, signals, an unplug ending the stream, and `forget`.
+// the next `readable` taken, writes in order, a write held by flow control aborted by close and `forget`, signals, an
+// unplug ending the stream, and `forget`.
 //
 // usage: bun packages/serial/test/web.mjs
 import { checker, open } from './chromium.mjs';
@@ -25,7 +26,14 @@ const fake = () => {
           c.enqueue(piece);
         },
       }, { highWaterMark: 0 });
-      p.writable = new WritableStream({ write(c) { p.written.push(...c); } });
+      // A stuck port holds each write, as hardware flow control with CTS low does, until the writable is aborted.
+      p.writable = new WritableStream({
+        write(c, controller) {
+          if (!p.stuck) { p.written.push(...c); return; }
+          p.holding?.();
+          return new Promise((_, fail) => controller.signal.addEventListener('abort', () => fail(controller.signal.reason)));
+        },
+      });
     }
     async open(options) {
       if (this.options) throw new DOMException('already open', 'InvalidStateError');
@@ -65,7 +73,8 @@ const fake = () => {
       navigator.serial.dispatchEvent(e);
     }
   }
-  const ports = [new Port({ usbVendorId: 0x303a, usbProductId: 0x1001 }), new Port({ usbVendorId: 0x0403, usbProductId: 0x6001 })];
+  const ports = [new Port({ usbVendorId: 0x303a, usbProductId: 0x1001 }), new Port({ usbVendorId: 0x0403, usbProductId: 0x6001 }), new Port({ usbVendorId: 0x2341, usbProductId: 0x0043 })];
+  ports[2].stuck = true;
   const granted = new Set();
   const serial = new EventTarget();
   serial.requestPort = async (options = {}) => {
@@ -185,6 +194,24 @@ const forgotten = await s.call('forget', { port: other.id });
 check('forget closes an open connection, then forgets the port', forgotten === null && (await s.eval(() => __ports[1].forgotten && __ports[1].options === null))
   && (await s.call('serialConnection', { connection: third.connection })).open === false && !(await s.call('getPorts')).some((p) => p.id === other.id),
   JSON.stringify(forgotten));
+// A write the device never takes, as one held by hardware flow control with CTS low, is aborted by close and by
+// forget, which then close the port: it can be opened again.
+const held = await s.call('requestPort', { filters: [{ usbVendorId: 0x2341 }] });
+const holding = (end) => s.eval(async ([port, end]) => {
+  const { connection } = await __impl.open({ port, baudRate: 9600, flowControl: 'hardware' });
+  const taken = new Promise((r) => { __ports[2].holding = r; });
+  const write = __impl.write({ connection, data: btoa('held') });
+  await Promise.race([taken, write]);
+  const ending = end === 'close' ? __impl.close({ connection }) : __impl.forget({ port });
+  const late = new Promise((r) => setTimeout(() => r('unanswered'), 1000));
+  return Promise.race([Promise.all([ending, write]), late]);
+}, [held.id, end]);
+const closed = await holding('close');
+const reopened = await s.call('open', { port: held.id, baudRate: 9600 });
+check('close aborts a write in flight, answers, and the port opens again', Array.isArray(closed) && closed[0] === null && closed[1]?.error === 'AbortError' && !!reopened.connection, JSON.stringify({ closed, reopened }));
+await s.call('close', { connection: reopened.connection });
+const forgot = await holding('forget');
+check('forget aborts a write in flight and forgets the port', Array.isArray(forgot) && forgot[0] === null && forgot[1]?.error === 'AbortError' && (await s.eval(() => __ports[2].forgotten)), JSON.stringify(forgot));
 check('the readers of the list were asked again', (await s.eval(() => __changed)).includes('serial.getPorts'));
 
 await s.close();

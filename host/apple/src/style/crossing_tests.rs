@@ -327,6 +327,64 @@ fn a_placed_popover_carries_its_margins() {
     assert_eq!(placed["margin_left"], "auto", "{placed}");
 }
 
+/// LLP 1123 D7: a popover route's authored size in points is its popover's preferred size, so it
+/// crosses though the route holds children, where a sheet route's stays the kernel's.
+#[test]
+fn a_popover_routes_size_crosses_and_a_sheets_does_not() {
+    use exact_kernel::{Kernel, MonospaceMeasurer, Op};
+    let mut kernel = Kernel::new(Box::new(MonospaceMeasurer::default()));
+    let mut style = StyleProps::default();
+    style
+        .set_dynamic(StyleId::Width, &StyleValue::Number(240.0))
+        .unwrap();
+    style
+        .set_dynamic(StyleId::Height, &StyleValue::Number(180.0))
+        .unwrap();
+    // Written by the author, as Contract marks an attribute
+    style.written = style.mask;
+    let create = [
+        Op::CreateView {
+            id: 1,
+            node_type: NodeType::View,
+        },
+        Op::CreateView {
+            id: 2,
+            node_type: NodeType::View,
+        },
+        Op::SetStyle {
+            id: 1,
+            patch: Box::new(style),
+        },
+        Op::SetChildren {
+            id: 1,
+            children: vec![2],
+        },
+        Op::SetProp {
+            id: 1,
+            prop: PropId::NavigationPresentation,
+            value: "modal".into(),
+        },
+    ];
+    kernel.apply(0, 1, &create).unwrap();
+    let json = |kernel: &Kernel| -> serde_json::Value {
+        serde_json::from_str(&style_json_for(&kernel.node(1).unwrap(), &Env::default()).0).unwrap()
+    };
+    let sheet = json(&kernel);
+    assert!(sheet.get("width").is_none(), "{sheet}");
+    let popover = [Op::SetProp {
+        id: 1,
+        prop: PropId::NavigationPresentation,
+        value: "popover".into(),
+    }];
+    kernel.apply(0, 2, &popover).unwrap();
+    let popover = json(&kernel);
+    assert_eq!(
+        (popover["width"].clone(), popover["height"].clone()),
+        (240.into(), 180.into()),
+        "{popover}"
+    );
+}
+
 struct NoData;
 impl DataSource for NoData {
     fn query(

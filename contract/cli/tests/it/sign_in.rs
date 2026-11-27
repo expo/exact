@@ -576,12 +576,11 @@ fn the_member_is_data_code_s_and_declared_once() {
 #[cfg(target_os = "macos")]
 #[test]
 fn a_bound_sign_in_goes_to_the_member_s_package() {
-    let (_app, mut host, _data) = boot("bound");
-    let heard: Arc<Mutex<Vec<Json>>> = Default::default();
-    let seen = heard.clone();
-    host.r
-        .native_slot()
-        .host(Some(Arc::new(move |body: Vec<u8>, reply: Reply| {
+    for (app_module, packages) in [(true, false), (false, true), (true, true)] {
+        let (_app, mut host, _data) = boot("bound");
+        let heard: Arc<Mutex<Vec<Json>>> = Default::default();
+        let seen = heard.clone();
+        let handler: exact_runner::NativeHandler = Arc::new(move |body: Vec<u8>, reply: Reply| {
             seen.lock()
                 .unwrap()
                 .push(serde_json::from_slice(&body).unwrap());
@@ -590,17 +589,29 @@ fn a_bound_sign_in_goes_to_the_member_s_package() {
                 headers: Vec::new(),
                 body: b"{}".to_vec(),
             }));
-        })));
-    host.bind(&["passkeys", "sign-in"]);
-    host.r.act("google", vec![]).unwrap();
-    host.pump();
-    let calls: Vec<Json> = (heard.lock().unwrap().iter())
-        .filter(|b| b["args"]["identity"].is_object())
-        .cloned()
-        .collect();
-    assert_eq!(calls.len(), 1, "{}", host.logs());
-    assert_eq!(calls[0]["extension"], "sign-in");
-    assert_eq!(calls[0]["send"], "identity");
+        });
+        let slot = host.r.native_slot();
+        if app_module {
+            slot.host(Some(if packages {
+                Arc::new(|_, _| panic!("a package call reached the app module"))
+            } else {
+                handler.clone()
+            }));
+        }
+        if packages {
+            slot.host_packages(Some(handler));
+        }
+        host.bind(&["passkeys", "sign-in"]);
+        host.r.act("google", vec![]).unwrap();
+        host.pump();
+        let calls: Vec<Json> = (heard.lock().unwrap().iter())
+            .filter(|b| b["args"]["identity"].is_object())
+            .cloned()
+            .collect();
+        assert_eq!(calls.len(), 1, "{}", host.logs());
+        assert_eq!(calls[0]["extension"], "sign-in");
+        assert_eq!(calls[0]["send"], "identity");
+    }
 }
 
 #[cfg(target_os = "macos")]

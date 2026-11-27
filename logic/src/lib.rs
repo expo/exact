@@ -349,6 +349,11 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             _ => Ok(true),
         }
     }
+    fn ambient_taint(&self, source: &str) -> (bool, bool) {
+        self.embedded
+            .as_ref()
+            .map_or((false, false), |embedded| embedded.ambient_taint(source))
+    }
     fn when_preloaded(&self, wake: Box<dyn FnOnce() + Send>) {
         if let Some(embedded) = &self.embedded {
             return embedded.when_preloaded(wake);

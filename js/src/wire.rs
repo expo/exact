@@ -33,6 +33,7 @@ pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Reque
             },
         },
         continuation: None,
+        local: false,
         storage: None,
         surface: None,
         grants: None,

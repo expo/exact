@@ -43,6 +43,34 @@ macro_rules! canvas_jni_frames {
             with(|h| h.frame_focused(id as u32, key, session as u64, focused));
         }
 
+        /// An unpartitioned iframe's `window.postMessage` string (LLP 1156.008.001 B1).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameMessage(
+            env: *mut JNIEnv,
+            _class: jclass,
+            id: jint,
+            slot: jint,
+            generation: jint,
+            session: jlong,
+            text: jstring,
+        ) {
+            let text = string(env, text);
+            let key = $crate::canvas::ModuleKey {
+                index: slot as u32,
+                generation: generation as u32,
+            };
+            with(|h| h.frame_message(id as u32, key, session as u64, &text));
+        }
+
+        /// Immutable boot-time `device.camera` (bit 0) and `device.microphone` (bit 1) grants.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameMediaGrants(
+            _env: *mut JNIEnv,
+            _class: jclass,
+        ) -> jint {
+            FRAME_MEDIA_GRANTS.load(std::sync::atomic::Ordering::Acquire)
+        }
+
         /// An iframe's `FrameNavigation` record (LLP 1020.002 D2).
         #[no_mangle]
         #[allow(clippy::too_many_arguments)]

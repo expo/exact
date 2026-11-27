@@ -85,7 +85,8 @@ export const openURL = (say, agentMode) => (u, id) => {
   else if (to) open(to, "_blank", "noopener,noreferrer");
   // The app's own settings page (LLP 1133.002 D11): a browser has none to open.
   else if (u === "app-settings:") say("openURL refused: app-settings: has no page on the web; a site's permissions are the browser's own (its address bar, its settings)");
-  else say(`openURL refused: ${JSON.stringify(String(u).slice(0, 80))} is not an absolute http, https, mailto or tel URL, nor of a scheme app.json's open_url.schemes declares`);
+  // The URL's path and query can carry a token, so the journal names only its scheme, as the painted host's does.
+  else say(`openURL refused: ${/^[a-z][a-z0-9+.-]*:/i.exec(String(u).trim())?.[0].toLowerCase() ?? "a URL with no scheme"} is not an absolute http, https, mailto or tel URL, nor of a scheme app.json's open_url.schemes declares`);
   if (id != null) queueMicrotask(() => liveById(String(id))?.dispatchEvent(new CustomEvent("change", { detail: to ? "opened" : "failed" })));
 };
 // The inverse of `message=`: text into the named surface, every post in
@@ -155,9 +156,58 @@ export const deliveryActivate = say => () => say("delivery: nothing is staged");
 // queues them for the web host's media glue (media-glue.js `run`).
 export const fastSeek = say => (id, seconds) => media(say, id, "fastSeek", seconds);
 export const load = say => id => media(say, id, "load");
-// An image's pictures in the browser's floating window (picture-in-picture.js, LLP 1042 §9).
-export const requestPictureInPicture = say => (id, presentation, title, width, height) => { const e = liveById(String(id ?? "")); import("./picture-in-picture.js").then(m => m.float(e, id, say, { presentation, title, width, height })); };
-export const exitPictureInPicture = say => () => import("./picture-in-picture.js").then(m => m.exit(say));
+// Call the video API while the browser still has the press's transient activation.
+// Only an image needs the canvas or Document Picture-in-Picture adapter.
+let images, requestedImage, videoTransition;
+
+// Start the first request during the press. Later commands observe the browser's
+// answer to the preceding command, including a rejection or a completed exit.
+function afterVideoTransition(command) {
+  const result = videoTransition ? videoTransition.then(command) : command();
+  if (!result?.then) return result;
+  const done = videoTransition = result.finally(() => {
+    if (videoTransition === done) videoTransition = null;
+  });
+  return done;
+}
+export const requestPictureInPicture = say => (id, presentation, title, width, height) => {
+  const e = liveById(String(id ?? ""));
+  const refuse = reason => {
+    say(`requestPictureInPicture "${id}" refused: ${reason}`);
+    e?.dispatchEvent(new CustomEvent("pictureinpictureerror", { detail: reason }));
+  };
+  const options = { presentation, title, width, height };
+  if (e?.localName === "img") {
+    const request = requestedImage = {};
+    return afterVideoTransition(() => import("./picture-in-picture.js").then(module => {
+      images = module;
+      if (!e.isConnected) return refuse("the image left the document");
+      if (requestedImage === request) images.float(e, id, say, options);
+    }));
+  }
+  if (e?.localName !== "video") return refuse(e ? "not an image or video" : "no live node with that id");
+  requestedImage = null;
+  return afterVideoTransition(() => {
+    const option = Object.keys(options).find(name => options[name] != null);
+    if (option) return refuse(`${option} is an image-only option`);
+    if (e.srcObject || e.hasAttribute("srcobject")) return refuse("picture in picture requires a URL-backed video");
+    if (!document.pictureInPictureEnabled || typeof e.requestPictureInPicture !== "function")
+      return refuse("video picture in picture is unavailable in this browser");
+    if (!e.isConnected || e.$media?.retired) return refuse("the video left the document");
+    images?.cancelOpening();
+    return e.requestPictureInPicture().catch(error => refuse(error.name));
+  });
+};
+export const exitPictureInPicture = say => () => {
+  requestedImage = null;
+  return afterVideoTransition(() => closePicture(say));
+};
+function closePicture(say) {
+  if (images) return images.exit(say);
+  if (document.pictureInPictureElement && !document.pictureInPictureElement.srcObject)
+    return document.exitPictureInPicture().catch(error => say(`exitPictureInPicture refused: ${error.name}`));
+  say("exitPictureInPicture ignored: nothing is in the picture-in-picture window");
+}
 
 function frame(say, name, args) {
   import("./frame-navigation.js").then(m => m.command(name, args, say));

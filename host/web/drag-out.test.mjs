@@ -9,7 +9,8 @@ import { deferred, source } from './glue-fixture.mjs';
 import { glueDeclarations } from './tests/glue-fixture.mjs';
 import { EXTENSION_TYPES } from '../../scripts/share-target.mjs';
 import { carried, listen, start, typeOf, writeDraggable } from './drag-out.js';
-import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
+import { downForDrag, dragPathFrom, elementOf, observeDragInput, pressedAt } from './drag-input.js';
+import { loadOnce } from './load-once.js';
 
 const BASE = 'https://example.com/app/';
 const node = (attrs) => ({
@@ -251,6 +252,34 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
+test('one window listener records an image drag’s path as its dispatch began, kept across the handoff', async () => {
+  const root = page(), wait = new AbortController(), loaded = new AbortController();
+  const recorders = () => root.defaultView.heard.filter(([type, , capture]) => type === 'dragstart' && capture);
+  const input = observeDragInput(root, wait.signal);
+  // The loaded listener's bundle has its own copy of the module
+  const bundled = await import('./drag-input.js?bundle');
+  expect(bundled.observeDragInput).not.toBe(observeDragInput);
+  bundled.observeDragInput(root, loaded.signal, input);
+  const [[, record]] = recorders();
+  expect(recorders()).toHaveLength(1);
+  wait.abort();
+  expect(recorders().map(([, fn]) => fn)).toEqual([record]);
+  const card = new El('div'), image = new El('img', {}, card);
+  const event = { type: 'dragstart', target: image, composedPath: () => [image, card, root] };
+  root.defaultView.fire('dragstart', event, true);
+  const recorded = bundled.dragPathFrom(input, event);
+  expect(recorded).toEqual([image, card]);
+  // A later listener's move changes what the path reads now, not what it read as the drag began
+  event.composedPath = () => [image, root];
+  expect(dragPathFrom(input, event)).toBe(recorded);
+  const unrecorded = { type: 'dragstart', target: card, composedPath: () => [card, root] };
+  root.defaultView.fire('dragstart', unrecorded, true);
+  unrecorded.composedPath = () => [card];
+  expect(dragPathFrom(input, unrecorded)).toEqual([card]);
+  loaded.abort();
+  expect(recorders()).toEqual([]);
+});
+
 function listenOn(root, input) {
   const controller = new AbortController();
   cleanups.push(() => {
@@ -273,7 +302,7 @@ test('a primary down in a field turns the drag of every node the app made dragga
       ['mouseup', true, true], ['pointermove', true, true], ['dragstart', true, true], ['dragend', true, true],
       ['dragstart', true, true], ['dragstart', false, true]]);
   expect(root.defaultView.heard.map(([type, , capture, signal]) => [type, capture, signal === controller.signal]))
-    .toEqual([['blur', false, true]]);
+    .toEqual([['dragstart', true, false], ['blur', false, true]]);
   const draggable = () => [outer, card, foreign, unowned].map((el) => el.getAttribute('draggable'));
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: field });
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: range });
@@ -1199,7 +1228,7 @@ function wasmGlue(loadAfterPaint) {
     constructor() { super(); cleanups.push(() => this.abort()); }
   }
   const context = vm.createContext({ host: {}, document, views, retiredViews, log: (line) => logs.push(line), loadAfterPaint, exact,
-    downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt, AbortController: Controller,
+    downForDrag, dragPathFrom, elementOf, loadOnce, observeDragInput, pressedAt, AbortController: Controller,
     setTimeout: (fn, ms) => timers.push([fn, ms]) });
   vm.runInContext(DECLARATIONS, context);
   const element = (id, view, parent = null, localName = 'div', attrs = {}) => {

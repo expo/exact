@@ -33,11 +33,18 @@ impl Kernel {
         let Some(slot) = self.arena.slot_of(view) else {
             return false;
         };
-        if measure && self.arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog") {
+        let changed = if measure
+            && self.arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
+        {
             self.arena.alert_state.measured_dialogs.insert(slot)
         } else {
             self.arena.alert_state.measured_dialogs.remove(slot)
+        };
+        // A root takes no implied block, so it is styled again here
+        if changed && self.arena.is_root(slot) {
+            self.restyle_block(slot);
         }
+        changed
     }
 
     /// Call as a popover opens, with whether its source has a layout box (the

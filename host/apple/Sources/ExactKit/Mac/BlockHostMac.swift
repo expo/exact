@@ -18,6 +18,12 @@ import CExact
 /// (a divider, a window) gave it another size.
 package final class BlockView: NSView {
     package var sizeChanged: ((CGSize) -> Void)?
+    /// A pass of its layout, in which AppKit also gives it a safe area changed at the same size (a toolbar shown).
+    package var laidOut: (() -> Void)?
+    package override func layout() {
+        super.layout()
+        laidOut?()
+    }
     package var positionChanged: (() -> Void)?
     /// The moves of a free pointer over a window of the session's own (a
     /// popover's, a sheet's), as the page's viewport reports its window's
@@ -86,6 +92,16 @@ package final class BlockHost {
     private(set) var rects: [UInt32: CGRect] = [:]
     /// A block's used size changed: a sheet sizes its window from it.
     var onUsed: ((UInt32, CGSize) -> Void)?
+    /// Each owner's update (LLP 1123 D2), sampled with its block and at each pass of its container's layout while
+    /// `samplesOwners`, which activation sends (stage 5) and tests turn on: the update last taken, and those taken since
+    /// `takeUpdates`. A released or destroyed owner's goes.
+    package var samplesOwners = false
+    package private(set) var toldUpdates: [UInt32: OwnerUpdateWire] = [:]
+    package private(set) var pending: [UInt32: OwnerUpdateWire] = [:]
+    package func takeUpdates() -> [UInt32: OwnerUpdateWire] {
+        defer { pending = [:] }
+        return pending
+    }
     package init(_ presenter: Presenter) { self.presenter = presenter }
 
     /// Whether `node`'s view lives in a container's view: a `children` op of
@@ -152,6 +168,11 @@ package final class BlockHost {
             presenter.topLayerChanged()
         }
         tellInsets(node, in: container)
+        // A container the node has since left samples it no more: a later layout of it is no update of this owner's
+        (container as? BlockView)?.laidOut = { [weak self, weak node, weak container] in
+            guard let self, let node, let container, self.entries[node.id]?.node === node, node.superview === container else { return }
+            self.sample(node, in: container)
+        }
         tell([(node.id, block)], placements: [(node.id, placement)], shows: placeholder ? [(node.id, true)] : [])
     }
 
@@ -162,6 +183,7 @@ package final class BlockHost {
     /// yet in its window has none, which a pane's first resize there corrects.
     private func tellInsets(_ node: NodeView, in container: NSView) {
         guard entries[node.id]?.owner == true else { return }
+        sample(node, in: container)
         let safe = container.safeAreaInsets
         let insets = [safe.top, safe.right, safe.bottom, safe.left]
         guard entries[node.id]?.insets != insets else { return }
@@ -169,6 +191,15 @@ package final class BlockHost {
         presenter?.session?.localInsets([(node.id, insets)])
         let edges = HostCover.Edges(top: safe.top, right: safe.right, bottom: safe.bottom, left: safe.left)
         presenter?.covers.report("owner \(node.id)", insets.allSatisfy { $0 == 0 } ? [:] : [node.id: .edges(edges)])
+    }
+
+    /// Take an owner's update from its container where it changed since the last (`samplesOwners`).
+    private func sample(_ node: NodeView, in container: NSView) {
+        guard samplesOwners, entries[node.id]?.owner == true else { return }
+        let update = OwnerUpdateMac.sample(container, session: presenter?.session?.view)
+        guard toldUpdates[node.id] != update else { return }
+        toldUpdates[node.id] = update
+        pending[node.id] = update
     }
 
     /// A split's placeholder this shows was restyled by a commit: its shown
@@ -196,6 +227,7 @@ package final class BlockHost {
         let following = siblings.drop { $0 !== node }.dropFirst().first { $0.superview === entry.home }
         entries[node.id] = nil
         used[node.id] = nil
+        (toldUpdates[node.id], pending[node.id]) = (nil, nil)
         if entry.insets != nil, presenter?.views[node.id] === node {
             presenter?.session?.localInsets([(node.id, nil)])
             presenter?.covers.report("owner \(node.id)", [:])
@@ -234,11 +266,17 @@ package final class BlockHost {
     /// The runtime is replaced: no rectangle it sent stands.
     func forgetRects() { rects = [:] }
 
+    /// Whether any block table currently tracks `id`.
+    func hasEntry(_ id: UInt32) -> Bool {
+        entries[id] != nil || used[id] != nil || rects[id] != nil || margined[id] != nil || toldUpdates[id] != nil || pending[id] != nil
+    }
+
     /// The node is gone, and its block with it.
     func destroyed(_ id: UInt32) {
         if let node = entries[id]?.node { onDestroyed?(node) }
         if entries[id]?.insets != nil { presenter?.covers.report("owner \(id)", [:]) }
         entries[id] = nil; used[id] = nil; rects[id] = nil; margined[id] = nil
+        (toldUpdates[id], pending[id]) = (nil, nil)
     }
 
     private func tell(_ blocks: [(UInt32, HostBlock?)], placements: [(UInt32, BlockPlacement?)] = [], shows: [(UInt32, Bool)] = []) {

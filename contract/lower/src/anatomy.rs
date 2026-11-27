@@ -533,9 +533,13 @@ impl Lowerer<'_> {
     /// `display: block`, a transition, the button's context), as it decides
     /// for that instance ([`Lowerer::bare_control`]).
     pub(crate) fn check_anatomy(&mut self, file: &File) {
+        // The written views' swipe rules, judged in every declaration as a part is (LLP 1057.001 §8)
+        self.errors
+            .extend(crate::handlers::swipe::judge_written(file));
         for e in platform(file) {
             self.push(e);
         }
+        let design_names = std::cell::LazyCell::new(|| library::design_names(file));
         for c in &file.components {
             // An exported library component's slot (LLP 1139 D0, D4).
             let library = c
@@ -555,7 +559,7 @@ impl Lowerer<'_> {
             // reads.
             if library {
                 let controls = library::control(c);
-                for e in library::literal(c, file)
+                for e in library::literal(c, file, |name| design_names.contains(name))
                     .into_iter()
                     .chain(controls.refused)
                 {

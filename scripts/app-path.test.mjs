@@ -245,16 +245,35 @@ test('the JS build given a path keeps its module crate private to that build', (
   }
 }, 600_000);
 
-test('an app\'s authored tests are app.test.contract, then each other *.test.contract beside it by name', () => {
+test('an app\'s authored tests are app.test.contract, other root *.test.contract, then tests/*.test.contract', () => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-authored-tests-'));
   try {
     expect(authoredTests(dir)).toEqual([]);
     mkdirSync(join(dir, 'nested'));
-    for (const f of ['b.test.contract', 'app.contract', 'nested/c.test.contract', 'a.test.contract']) writeFileSync(join(dir, f), '');
-    expect(authoredTests(dir)).toEqual([join(dir, 'a.test.contract'), join(dir, 'b.test.contract')]);
+    mkdirSync(join(dir, 'tests'));
+    for (const f of ['b.test.contract', 'app.contract', 'nested/c.test.contract', 'a.test.contract', 'tests/z.test.contract', 'tests/m.test.contract', 'tests/readme.md']) {
+      writeFileSync(join(dir, f), '');
+    }
+    expect(authoredTests(dir)).toEqual([
+      join(dir, 'a.test.contract'),
+      join(dir, 'b.test.contract'),
+      join(dir, 'tests/m.test.contract'),
+      join(dir, 'tests/z.test.contract'),
+    ]);
     writeFileSync(join(dir, 'app.test.contract'), '');
-    expect(authoredTests(dir)).toEqual(['app', 'a', 'b'].map((n) => join(dir, `${n}.test.contract`)));
+    expect(authoredTests(dir)).toEqual([
+      join(dir, 'app.test.contract'),
+      join(dir, 'a.test.contract'),
+      join(dir, 'b.test.contract'),
+      join(dir, 'tests/m.test.contract'),
+      join(dir, 'tests/z.test.contract'),
+    ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+  const fileTests = mkdtempSync(join(tmpdir(), 'exact-authored-tests-file-'));
+  try {
+    writeFileSync(join(fileTests, 'tests'), 'not a dir');
+    expect(authoredTests(fileTests)).toEqual([]);
+  } finally { rmSync(fileTests, { recursive: true, force: true }); }
 });
 
 test('pathFrom refuses a missing Windows drive or UNC share instead of walking forever', () => {

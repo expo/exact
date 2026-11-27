@@ -848,3 +848,96 @@ component App
     r.act("second", vec![]).unwrap();
     assert!(!r.wants_canvas_performance("world"));
 }
+
+#[test]
+fn colour_arguments_follow_the_canvas_place() {
+    let dir = Scratch::new(format!("contract-surface-colour-{}", std::process::id()));
+    std::fs::write(dir.join("app.forma"), "forma board\n\naxes\n  ink = plain | bright\n\ntheme\n  surface.board = light-dark(#ececef, #141416)\n    when ink=bright: #00ff00\n  board.dot = color(display-p3 1 0 0 / 50%)\n  gap: length = 4px\n").unwrap();
+    let source = r#"component App
+  state bright = false
+  action change
+    bright = not bright
+  view
+    column
+      column -exact-mode=(bright ? "ink=bright" : "ink=plain")
+        canvas surface=board(color("surface.board"), color("board.dot")) testId="first"
+      column color-scheme="light"
+        canvas surface=board(color("surface.board"), color("board.dot")) testId="second"
+      canvas surface=plain("surface.board")
+"#;
+    let path = dir.join("app.contract");
+    std::fs::write(&path, source).unwrap();
+    let plan = contract::compile_path(&path).unwrap();
+    let plan = exact_plan::Plan::decode(&plan.encode()).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let initial = r.take_surface_updates();
+    assert_eq!(initial.len(), 3);
+    let args = |u: &exact_runner::SurfaceUpdate| {
+        serde_json::from_str::<serde_json::Value>(&u.arguments_json()).unwrap()
+    };
+    let light = args(&initial[0]);
+    assert_eq!(light, args(&initial[1]));
+    assert_eq!(args(&initial[2]), serde_json::json!(["surface.board"]));
+    assert!((light[0]["color"][0].as_f64().unwrap() - 0.8388).abs() < 0.001);
+    let p3 = light[1]["color"].as_array().unwrap();
+    assert!(p3[0].as_f64().unwrap() > 1.2 && p3[1].as_f64().unwrap() < 0.);
+    assert_eq!(p3[3], 0.5);
+    let mut prefs = r.viewport().preferences;
+    prefs.dark = true;
+    r.set_preferences(prefs).unwrap();
+    let dark = r.take_surface_updates();
+    assert_eq!(dark.len(), 1);
+    assert_eq!(dark[0].view, initial[0].view);
+    assert!((args(&dark[0])[0]["color"][0].as_f64().unwrap() - 0.007).abs() < 0.0001);
+    assert_eq!(args(&dark[0])[1], light[1]);
+    r.act("change", vec![]).unwrap();
+    let pinned = r.take_surface_updates();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(
+        args(&pinned[0])[0]["color"],
+        serde_json::json!([0, 1, 0, 1])
+    );
+    r.set_token("board.dot", "#000", &[]).unwrap();
+    let live = r.take_surface_updates();
+    assert_eq!(live.len(), 2);
+    for u in &live {
+        assert_eq!(args(u)[1]["color"], serde_json::json!([0, 0, 0, 1]));
+    }
+    r.set_token("board.dot", "#000000", &[]).unwrap();
+    assert!(r.take_surface_updates().is_empty());
+    for (expr, expected) in [
+        ("color(\"absent\")", "absent"),
+        ("color(\"gap\")", "length"),
+        ("color(bright)", "literal"),
+        ("color(\"#f00\")", "token"),
+    ] {
+        std::fs::write(&path, source.replace("color(\"surface.board\")", expr)).unwrap();
+        let error = contract::compile_path(&path).unwrap_err().to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+    std::fs::write(
+        &path,
+        source.replace(
+            "  action change",
+            "  derive misplaced = color(\"surface.board\")\n  action change",
+        ),
+    )
+    .unwrap();
+    assert!(contract::compile_path(&path)
+        .unwrap_err()
+        .to_string()
+        .contains("surface argument"));
+    let collision = format!("fn color(name: string): string = name\n{source}");
+    std::fs::write(&path, collision).unwrap();
+    assert!(contract::compile_path(&path)
+        .unwrap_err()
+        .to_string()
+        .contains("rename the declared function"));
+}

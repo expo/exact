@@ -199,7 +199,7 @@ fn a_screens_then_runs_in_its_frame_and_hands_the_lines_to_the_root() {
 }
 
 #[test]
-fn leaving_the_screen_before_its_answer_forgets_the_send_and_runs_no_then() {
+fn leaving_the_screen_before_its_answer_or_its_then_runs_no_then() {
     let mut r = boot();
     open(&mut r, "1");
     press(&mut r, "detect-1");
@@ -218,6 +218,19 @@ fn leaving_the_screen_before_its_answer_forgets_the_send_and_runs_no_then() {
     assert_eq!(text(&r, "state-1").as_deref(), Some("idle"));
     assert_eq!(r.fulfill(sent[0].ticket, ok()).unwrap(), None);
     assert_eq!(text(&r, "state-1").as_deref(), Some("idle"));
+
+    // An answer that lands while the screen lives arms its `then`; leaving
+    // before the `then` runs drops it.
+    press(&mut r, "detect-1");
+    let sent = r.take_requests();
+    r.fulfill(sent[0].ticket, ok()).unwrap();
+    assert_eq!(text(&r, "state-1").as_deref(), Some("detect 1"));
+    assert_eq!(text(&r, "shown").as_deref(), Some(""));
+    r.act("back", vec![]).unwrap();
+    let landed = r.land_then();
+    assert!(landed.error.is_none(), "{:?}", landed.error);
+    assert!(landed.receipts.is_empty());
+    assert_eq!(text(&r, "shown").as_deref(), Some(""));
 }
 
 #[test]

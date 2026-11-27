@@ -922,34 +922,56 @@ impl Attachments {
         self.output.clear();
         self.output.reserve(self.items.len());
     }
-    fn matrix(&self, index: usize, alpha: f32, remaining: usize) -> Mat4 {
-        let item = &self.items[index];
-        if remaining == 0 {
-            return matrix(item.history.at(alpha));
+    fn matrix(&self, index: usize, alpha: f32, visited: &mut Vec<usize>) -> Option<Mat4> {
+        const MAX_ATTACHMENT_DEPTH: usize = 64;
+        if visited.len() >= MAX_ATTACHMENT_DEPTH || visited.contains(&index) {
+            return None;
         }
-        let owner = self.owner_matrix(&self.owners[&item.owner], alpha, remaining);
-        item.chain.iter().fold(owner, |m, pair| {
-            m * crate::skinning::interpolated_local(*pair, alpha)
-        }) * matrix(item.offset)
-            * matrix(item.drawn.at(alpha))
+        visited.push(index);
+        let item = &self.items[index];
+        let result = self
+            .owner_matrix(&self.owners[&item.owner], alpha, visited)
+            .map(|owner| {
+                item.chain.iter().fold(owner, |m, pair| {
+                    m * crate::skinning::interpolated_local(*pair, alpha)
+                }) * matrix(item.offset)
+                    * matrix(item.drawn.at(alpha))
+            });
+        visited.pop();
+        result
     }
-    fn owner_matrix(&self, owner: &Owner, alpha: f32, remaining: usize) -> Mat4 {
+    fn owner_matrix(&self, owner: &Owner, alpha: f32, visited: &mut Vec<usize>) -> Option<Mat4> {
         // A link that is itself a follower is already drawn, offset included.
         let links = owner.chain.iter().zip(&owner.offsets).rev();
-        links.fold(Mat4::IDENTITY, |m, (h, offset)| {
-            self.items
+        links.fold(Some(Mat4::IDENTITY), |m, (h, offset)| {
+            let m = m?;
+            match self
+                .items
                 .binary_search_by_key(&h.entity, |v| v.history.entity)
-                .ok()
-                .map_or_else(
-                    || m * matrix(h.at(alpha)) * matrix(offset.at(alpha)),
-                    |i| self.matrix(i, alpha, remaining - 1),
-                )
+            {
+                Ok(i) => self.matrix(i, alpha, visited),
+                Err(_) => Some(m * matrix(h.at(alpha)) * matrix(offset.at(alpha))),
+            }
         })
+    }
+    fn owner_fallback(owner: &Owner, alpha: f32) -> Mat4 {
+        owner
+            .chain
+            .iter()
+            .zip(&owner.offsets)
+            .rev()
+            .fold(Mat4::IDENTITY, |m, (h, offset)| {
+                m * matrix(h.at(alpha)) * matrix(offset.at(alpha))
+            })
     }
     pub fn frame(&mut self, alpha: f32) {
         self.output.clear();
+        let mut visited = Vec::new();
         for (i, item) in self.items.iter().enumerate() {
-            let matrix = self.matrix(i, alpha, self.items.len());
+            visited.clear();
+            let matrix = self
+                .matrix(i, alpha, &mut visited)
+                .unwrap_or_else(|| matrix(item.history.at(alpha)));
             let (scale, rotation, position) = matrix.to_scale_rotation_translation();
             self.output.push(DisplayedAttachment {
                 entity: item.history.entity,
@@ -974,7 +996,10 @@ impl Attachments {
             {
                 continue;
             }
-            let matrix = self.owner_matrix(owner, alpha, self.items.len());
+            visited.clear();
+            let matrix = self
+                .owner_matrix(owner, alpha, &mut visited)
+                .unwrap_or_else(|| Self::owner_fallback(owner, alpha));
             let (scale, rotation, position) = matrix.to_scale_rotation_translation();
             self.output.push(DisplayedAttachment {
                 entity: item.owner,
@@ -1244,8 +1269,8 @@ mod diagnostic_tests {
             14.
         );
         assert_eq!(
-            a.owner_matrix(&stale, 0.5, a.items.len()),
-            matrix(Transform::at(77., 0., 0.))
+            a.owner_matrix(&stale, 0.5, &mut Vec::new()),
+            Some(matrix(Transform::at(77., 0., 0.)))
         );
 
         w.get_mut::<SocketFollow>(middle).unwrap().joint = "joint".into();
@@ -1355,6 +1380,55 @@ mod diagnostic_tests {
         assert_eq!(registry.len(), 2);
         assert_eq!(registry[&(e, "socket")], "missing target");
         assert_eq!(registry[&(e, "stale")], "stale pose");
+    }
+
+    #[test]
+    fn attachment_cycles_fall_back_without_deep_recursion() {
+        use exact_game::{Mesh, SocketFollow};
+        let mut sim = exact_game::Sim::<Rig>::new(()).unwrap();
+        sim.deliver_asset(
+            "rig.model",
+            Ok(exact_game::asset::Content::Model(
+                crate::test_model::skinned_model(),
+            )),
+        )
+        .unwrap();
+        let w = sim.world_mut();
+        let root = w.spawn((Transform::at(5., 0., 0.), Mesh::asset("rig.model")));
+        let a = w.spawn((
+            Transform::at(11., 0., 0.),
+            Mesh::asset("rig.model"),
+            SocketFollow::new(root, "joint").offset(Transform::at(1., 0., 0.)),
+        ));
+        let b = w.spawn((
+            Transform::at(22., 0., 0.),
+            Mesh::asset("rig.model"),
+            SocketFollow::new(a, "joint").offset(Transform::at(1., 0., 0.)),
+        ));
+        for _ in 0..1024 {
+            w.spawn((Transform::default(), SocketFollow::new(a, "joint")));
+        }
+        w.propagate();
+        let mut attachments = Attachments::default();
+        attachments.feed(w, true, true, None, true);
+        // Introduce a direct cycle in Attachments::items/owners to exercise frame()'s cycle guard
+        // with 1,026 followers (would otherwise recurse 1,026 frames deep and multiply offsets).
+        attachments
+            .owners
+            .insert(b, Owner::new(w, &PoseRows::new(w), b));
+        attachments.items[0].history = History::new(a, Transform::at(11., 0., 0.));
+        attachments.items[0].owner = b;
+        attachments.items[1].history = History::new(b, Transform::at(22., 0., 0.));
+        attachments.items[1].owner = a;
+        attachments.frame(0.5);
+        assert_eq!(
+            displayed(&attachments.output, a, Transform::default()).position,
+            Vec3::new(11., 0., 0.)
+        );
+        assert_eq!(
+            displayed(&attachments.output, b, Transform::default()).position,
+            Vec3::new(22., 0., 0.)
+        );
     }
 }
 

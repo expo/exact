@@ -554,3 +554,149 @@ fn filter_functions_read_numbers_units_and_names_as_css_does() {
         assert!(FilterList::parse(css).is_none(), "{css}");
     }
 }
+
+#[test]
+fn repeated_url_paints_are_refused_without_recursing() {
+    let repeated = "url(#a)".repeat(50_000);
+    assert_eq!(Paint::parse(&repeated), None);
+    assert_eq!(Paint::parse("url(#a) url(#b)"), None);
+    assert_eq!(crate::clip::ClipPath::parse(&repeated), None);
+    assert!(Paint::parse("url(#a) #ff0000").is_some());
+}
+
+#[test]
+fn a_gradient_with_no_length_or_radius_paints_its_last_stop() {
+    use super::server::{resolve, Resolved};
+    use crate::{Kernel, NodeType, Op, StyleId, StyleValue};
+    crate::style::link_all();
+    let mut ops = vec![
+        Op::CreateView {
+            id: 1,
+            node_type: NodeType::Svg,
+        },
+        Op::CreateView {
+            id: 2,
+            node_type: NodeType::SvgRect,
+        },
+    ];
+    let mut next = 3;
+    let mut node =
+        |ops: &mut Vec<Op>, t, rows: &[(StyleId, StyleValue)], props: &[(PropId, &str)]| {
+            let id = next;
+            next += 1;
+            ops.push(Op::CreateView { id, node_type: t });
+            let mut patch = StyleProps::default();
+            for (row, v) in rows {
+                patch.set_dynamic(*row, v).unwrap();
+            }
+            ops.push(Op::SetStyle {
+                id,
+                patch: Box::new(patch),
+            });
+            for (p, v) in props {
+                ops.push(Op::SetProp {
+                    id,
+                    prop: *p,
+                    value: PropValue::Str((*v).into()),
+                });
+            }
+            id
+        };
+    use NodeType::{SvgLinearGradient as Linear, SvgRadialGradient as Radial};
+    let user = (PropId::GradientUnits, "userSpaceOnUse");
+    let zero = [(StyleId::R, StyleValue::Number(0.0))];
+    // Name, type, `r`, attributes; the last two take their stops from `href`.
+    let cases: [(&str, NodeType, &[_], &[_]); 9] = [
+        ("r-fr", Radial, &zero, &[(PropId::Fr, "0.2")]),
+        ("r-fx", Radial, &zero, &[(PropId::Fx, "0.2")]),
+        (
+            "l-box",
+            Linear,
+            &[],
+            &[(PropId::X1, "0.5"), (PropId::X2, "50%")],
+        ),
+        (
+            "l-user",
+            Linear,
+            &[],
+            &[user, (PropId::X1, "10"), (PropId::X2, "10")],
+        ),
+        ("r-box", Radial, &zero, &[]),
+        ("r-user", Radial, &zero, &[user]),
+        ("whole", Linear, &[], &[]),
+        (
+            "pad",
+            Radial,
+            &[],
+            &[(PropId::Href, "#r-user"), (PropId::SpreadMethod, "pad")],
+        ),
+        (
+            "reflect",
+            Radial,
+            &[],
+            &[(PropId::Href, "#r-box"), (PropId::SpreadMethod, "reflect")],
+        ),
+    ];
+    let mut children = vec![2];
+    for (i, (name, t, rows, props)) in cases.iter().enumerate() {
+        let g = node(
+            &mut ops,
+            *t,
+            rows,
+            &[*props, &[(PropId::Id, *name)]].concat(),
+        );
+        if i < 7 {
+            let first = node(
+                &mut ops,
+                NodeType::SvgStop,
+                &[(StyleId::StopColor, StyleValue::Text("#000000".into()))],
+                &[],
+            );
+            let last = node(
+                &mut ops,
+                NodeType::SvgStop,
+                &[
+                    (StyleId::StopColor, StyleValue::Text("#ff0000".into())),
+                    (StyleId::StopOpacity, StyleValue::Number(0.5)),
+                ],
+                &[(PropId::Offset, "1")],
+            );
+            ops.push(Op::SetChildren {
+                id: g,
+                children: vec![first, last],
+            });
+        }
+        children.push(g);
+    }
+    ops.push(Op::SetChildren { id: 1, children });
+    ops.push(Op::AttachRoot { id: 1 });
+    let mut k = Kernel::with_monospace();
+    k.apply(0, 1, &ops).unwrap();
+    let env = crate::Env::default();
+    let vp = Viewport {
+        env: &env,
+        width: 100.0,
+        height: 100.0,
+    };
+    let red = ColorValue::Fixed(Color::rgba(255, 0, 0, 255));
+    let bbox = Some((0.0, 0.0, 20.0, 10.0));
+    // Equal end points (SVG 2 §14.2.2.2), or a zero radius about the focus
+    // (SVG 1.1 §13.2.3), paint the last stop's colour and opacity. Chrome
+    // does so under `pad`.
+    for name in ["l-box", "l-user", "r-box", "r-user", "pad"] {
+        assert_eq!(
+            resolve(&k, 2, name, bbox, vp),
+            Resolved::Color(red, 0.5),
+            "{name}"
+        );
+    }
+    // Under `reflect` Chrome paints the stops' average instead, and a zero
+    // radius with a focal radius or an off-centre focus is still a two-circle
+    // gradient, so the server stays, as it does for a gradient with a length.
+    for name in ["reflect", "whole", "r-fr", "r-fx"] {
+        assert!(
+            matches!(resolve(&k, 2, name, bbox, vp), Resolved::Server(_)),
+            "{name}"
+        );
+    }
+}

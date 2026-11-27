@@ -5,10 +5,9 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { helpParity } from './help-parity.mjs';
+import { helpParity, SCRIPT_FILES as READ } from './help-parity.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
-const READ = ['scripts/exact.mjs', 'scripts/app-cli.mjs', 'scripts/forma-pairing.mjs', 'host/apple/build.mjs', 'host/apple/devices.mjs', 'host/apple/link.mjs', 'host/apple/bundle.mjs', 'host/web/dev.mjs', 'host/web/serve.mjs', 'scripts/install-page.mjs', 'scripts/forma-remote.mjs', 'scripts/forma-relay.mjs', 'host/web/build.mjs', 'scripts/agent-launch.mjs', 'scripts/agent-widget.mjs', 'scripts/verify.mjs', 'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'host/windows/build.mjs', 'scripts/feedback.mjs'];
 
 /** helpParity over a copy of the scripts it reads, `edit` applied to the copy first. */
 function over(edit) {

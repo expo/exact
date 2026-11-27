@@ -104,7 +104,7 @@ pub(in crate::runner) struct Invocations {
     running: BTreeMap<u64, Running>,
     /// Requests the host refused at admission, settled in their turn, and
     /// whether each was ordered.
-    refused: Vec<(u64, &'static str, bool)>,
+    refused: Vec<(u64, String, bool)>,
     anchors: Anchors,
     /// The sends whose final handler runs, with when its budget ends.
     finals: BTreeMap<u64, f64>,
@@ -348,7 +348,7 @@ impl<D: DataSource> Runner<D> {
             effects: false,
         };
         let answer = self.as_cause(cause, |r| {
-            r.store.set_clock_ms(r.now_ms);
+            r.sync_store_clock();
             (r.data).answer(&mut r.store, &run.source, std::slice::from_ref(&run.args))
         });
         self.tool_step(run, answer);
@@ -444,7 +444,7 @@ impl<D: DataSource> Runner<D> {
                 // D13): a handler's is refused before it reaches the host,
                 // so no ordered work waits on it.
                 match self.process_refusal(&request) {
-                    Some(why) => self.refuse_tool(ticket, why, false),
+                    Some(why) => self.refuse_tool(ticket, why.into(), false),
                     None => self.requests.push(RequestOut {
                         completion: None,
                         class: crate::RequestClass::Ordered,
@@ -568,7 +568,7 @@ impl<D: DataSource> Runner<D> {
         };
         let answer = self.as_cause(run.cause, |r| {
             let args = std::slice::from_ref(&run.args);
-            r.store.set_clock_ms(r.now_ms);
+            r.sync_store_clock();
             (r.data).parse_tool(
                 run.fetch,
                 run.continuation,
@@ -584,7 +584,7 @@ impl<D: DataSource> Runner<D> {
     /// The host refused a handler's request at admission: it settles in
     /// its turn, as a failure, an ordered one only once earlier ordered work
     /// has.
-    pub(super) fn refuse_tool_linked(&mut self, ticket: u64, reason: &'static str, ordered: bool) {
+    pub(super) fn refuse_tool_linked(&mut self, ticket: u64, reason: String, ordered: bool) {
         self.extensions
             .invocations
             .refused
@@ -603,10 +603,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A handler's refused request that may settle now.
-    pub(super) fn tool_refusal_linked(
-        &mut self,
-        allow_ordered: bool,
-    ) -> Option<(u64, &'static str)> {
+    pub(super) fn tool_refusal_linked(&mut self, allow_ordered: bool) -> Option<(u64, String)> {
         let refused = &mut self.extensions.invocations.refused;
         let at = refused
             .iter()

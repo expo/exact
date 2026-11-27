@@ -1122,7 +1122,7 @@ pub(super) fn serve_ready(state: &mut State) {
             outcome,
             bytes,
             message: false,
-            stream: false,
+            stream: None,
             light,
             again: false,
             reply: false,

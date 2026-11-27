@@ -216,6 +216,7 @@ mod tests {
             )),
             symbol: Some("settings".into()),
             checked: true,
+            checkable: true,
             enabled: true,
             destructive: false,
             cancel: false,
@@ -246,7 +247,7 @@ mod tests {
                 window: (260., 500.),
                 room: 500.,
             };
-            let layout = super::super::menu(&mut engine, &entries, &inputs, false);
+            let layout = super::super::menu(&mut engine, &entries, None, &inputs, false);
             let row = layout.targets[0].rect;
             let icons: Vec<_> = layout
                 .items

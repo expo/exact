@@ -436,25 +436,10 @@ fn refreshing_drops_the_preload_and_waiters_fetch_in_their_delivery_order() {
                 ReplyState::Gone
             ));
             second.send(()).unwrap();
-            {
-                let end = Instant::now() + HANG;
-                let mut state = core.shared.state.lock().unwrap();
-                // An out-of-order worker completion has no presenter wake (LLP 1162 D1).
-                while !state.completed[0].iter().any(|d| d.ticket == 10) {
-                    assert!(Instant::now() < end, "refresh did not complete");
-                    state = core
-                        .shared
-                        .ready
-                        .wait_timeout(state, Duration::from_millis(50))
-                        .unwrap()
-                        .0;
-                }
-            }
-            assert!(core.drain().is_empty());
+            expect(&core, &woke, 10, b"new", false);
             first.send(()).unwrap();
             old.send(()).unwrap();
             expect(&core, &woke, 20, b"new", false);
-            expect(&core, &woke, 10, b"new", false);
             gone(&core);
             assert_eq!(server.count(), 3);
         }
@@ -657,15 +642,21 @@ fn eight_prefetches_evict_the_oldest_complete_or_leave_the_ninth_a_plain_read() 
             core.run(job(9, server.request("/9").prefetch()), None)
                 .unwrap();
             server.seen(9);
+            expect(&core, &woke, 9, b"ninth", !pending);
             if pending {
                 for release in releases {
                     release.send(()).unwrap();
                 }
-                for ticket in 1..=8 {
-                    expect(&core, &woke, ticket, b"held", true);
+                let mut got = Vec::new();
+                for _ in 1..=8 {
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert!(timing.cached);
+                    assert!(matches!(outcome, Outcome::Response(r) if r.body == b"held"));
+                    got.push(ticket);
                 }
+                got.sort_unstable();
+                assert_eq!(got, (1..=8).collect::<Vec<_>>());
             }
-            expect(&core, &woke, 9, b"ninth", !pending);
             assert_eq!(
                 core.shared
                     .state
@@ -840,9 +831,15 @@ fn prefetches_have_eight_places_beside_eight_late_launch_preloads() {
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=8 {
-            expect(&core, &woke, ticket, b"held", true);
+        let mut got = Vec::new();
+        for _ in 1..=8 {
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert!(timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"held"));
+            got.push(ticket);
         }
+        got.sort_unstable();
+        assert_eq!(got, (1..=8).collect::<Vec<_>>());
         ready(&core, 16);
         assert!(read(&core, &woke, &server, 17, "/16").1);
         core.drop_preload_secret("session");
@@ -1070,8 +1067,20 @@ fn a_prefetch_behind_a_barrier_or_fence_never_starts_a_preload_on_readmission() 
         assert!(core.preloads.lock().unwrap().is_none());
         first.send(()).unwrap();
         second.send(()).unwrap();
-        expect(&core, &woke, 1, b"first", false);
-        expect(&core, &woke, 2, b"second", false);
+        let mut got = Vec::new();
+        for _ in 0..2 {
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert!(!timing.cached);
+            let body = if ticket == 1 {
+                b"first".as_slice()
+            } else {
+                b"second"
+            };
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
+            got.push(ticket);
+        }
+        got.sort_unstable();
+        assert_eq!(got, [1, 2]);
         gone(&core);
         server.plan("/first", Plan::new(200, &[], b"later"));
         assert!(!read(&core, &woke, &server, 3, "/first").1);
@@ -1196,13 +1205,19 @@ fn a_full_read_lane_still_starts_a_prefetch_on_its_own_workers() {
         }
         release.send(()).unwrap();
         ready(&core, 1);
+        expect(&core, &woke, 20, b"held", true);
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=INDEPENDENT as u64 {
-            expect(&core, &woke, ticket, b"read", false);
+        let mut got = Vec::new();
+        for _ in 1..=INDEPENDENT as u64 {
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert!(!timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"read"));
+            got.push(ticket);
         }
-        expect(&core, &woke, 20, b"held", true);
+        got.sort_unstable();
+        assert_eq!(got, (1..=INDEPENDENT as u64).collect::<Vec<_>>());
         assert!(read(&core, &woke, &server, 21, "/next").1);
         assert_eq!(server.count(), INDEPENDENT + 1);
     }

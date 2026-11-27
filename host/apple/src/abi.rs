@@ -772,6 +772,9 @@ impl<D: DataSource> Bridge<D> {
             Some(io) => (io.endow)(data.grants(), data.app_id(), carried.is_none()),
             None => crate::store::Endowed::none(),
         };
+        if let Some(why) = unbound.as_deref().filter(|w| w.starts_with("stored: ")) {
+            return self.prepare_error(&format!("boot: {why}"));
+        }
         let mut snapshot = snapshot;
         if carried.as_ref().is_none_or(|c| c.fresh_state) {
             self.seed_window_state(&mut snapshot);
@@ -826,14 +829,12 @@ impl<D: DataSource> Bridge<D> {
                     host.log(&format!("{why}; every request is refused"));
                 }
                 host.runner_mut().forget_unread_kept(&unread_kept);
-                if let Some((backend, keystore)) = presence {
-                    host.runner_mut().install_presence(backend, keystore);
-                }
                 self.output = batch.as_bytes().to_vec();
                 self.prepared = Some(PreparedHost {
                     host,
                     batch,
                     bindings,
+                    presence,
                     hooks,
                     module: false,
                     let_go: false,
@@ -875,6 +876,11 @@ impl<D: DataSource> Bridge<D> {
         let Some(mut candidate) = self.prepared.take() else {
             return self.prepare_error("no prepared plan");
         };
+        self.install_presence(
+            &mut candidate.host,
+            candidate.bindings.as_ref(),
+            candidate.presence,
+        );
         candidate.host.commit_boot();
         if let Some(live) = &self.host {
             candidate
@@ -994,8 +1000,9 @@ impl<D: DataSource> Bridge<D> {
             // toggle (50), focusin (46) and focusout (47) with their targets, scrollend (51),
             // a file drag's enter (55) and leave (56), a paste with files (57), an iframe's record (58), an atom's press (59),
             // the history swipe the Mac tracks (60), swipeleft (61), a scroll
-            // drag's start (62) and release (63), pointercancel (65) and swipe (66) (`Event::of_host_kind`).
-            6 | 10 | 13 | 19 | 20 | 21 | 28..=38 | 40..=44 | 46..=48 | 50..=63 | 65 | 66 => {
+            // drag's start (62) and release (63), pointercancel (65), swipe (66),
+            // pinch (67) and pinchrelease (68) (`Event::of_host_kind`).
+            6 | 10 | 13 | 19 | 20 | 21 | 28..=38 | 40..=44 | 46..=48 | 50..=63 | 65..=68 => {
                 match Event::of_host_kind(kind, &payload) {
                     Ok(event) => event,
                     Err(error) => return self.refuse(error),

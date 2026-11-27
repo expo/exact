@@ -178,7 +178,7 @@ impl<D: DataSource> Runner<D> {
             self.count_churn(i, args, &resource);
         }
         self.snapshot_sockets();
-        self.store.set_clock_ms(self.now_ms);
+        self.sync_store_clock();
         let answer =
             self.data
                 .answer_for(super::Target::Resource(i), &mut self.store, &source, args);

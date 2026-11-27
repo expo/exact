@@ -1406,6 +1406,31 @@ test('an install outside a drive waits for the drive of each app it installs, an
     expect(events).toEqual(['close app', 'install', 'close host']);
   } finally { console.error = error; await held?.close(); rmSync(directory, { recursive: true, force: true }); }
 }, 60000);
+test('default simulatorApps and exclusiveIOS share a lock across processes with different TMPDIR values', async () => {
+  const tmpA = mkdtempSync(join(tmpdir(), 'exact-sim-tmp-a-')), tmpB = mkdtempSync(join(tmpdir(), 'exact-sim-tmp-b-'));
+  const udid = `sim-tmpdir-${process.pid}-${Date.now()}`, bundle = 'com.example.tmpdir.probe';
+  const mod = JSON.stringify(new URL('../../scripts/agent-launch.mjs', import.meta.url).href);
+  const hold = join(tmpA, 'hold.mjs'), probe = join(tmpB, 'probe.mjs');
+  writeFileSync(hold, `import { exclusiveIOS } from ${mod};
+await exclusiveIOS(${JSON.stringify(udid)}, ${JSON.stringify(bundle)}, async () => ({ close: async () => {} }));
+console.log('held'); setInterval(() => {}, 1000);`);
+  writeFileSync(probe, `import { exclusiveIOS, simulatorApps } from ${mod};
+const err = async (fn) => { try { await fn(); return null; } catch (e) { return e.message; } };
+console.log(JSON.stringify({
+  apps: await err(() => simulatorApps(${JSON.stringify(udid)}, [${JSON.stringify(bundle)}], async () => {}, { timeout: 0 })),
+  excl: await err(() => exclusiveIOS(${JSON.stringify(udid)}, ${JSON.stringify(bundle)}, async () => ({ close: async () => {} }), { timeout: 0 })),
+}));`);
+  const holder = spawn(process.execPath, [hold], { env: { ...process.env, TMPDIR: tmpA }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exited = new Promise(resolve => holder.once('exit', resolve));
+  try {
+    await new Promise((resolve, reject) => { holder.stdout.once('data', resolve); holder.once('error', reject); holder.once('exit', () => reject(Error('holder exited early'))); });
+    const check = spawnSync(process.execPath, [probe], { env: { ...process.env, TMPDIR: tmpB }, encoding: 'utf8', timeout: 15000 });
+    expect(check.status, check.stderr).toBe(0);
+    const out = JSON.parse(check.stdout.trim());
+    expect(out.apps).toContain(`still runs a drive of ${bundle}`);
+    expect(out.excl).toContain(`iOS drive busy for ${bundle}`);
+  } finally { holder.kill('SIGKILL'); await exited; rmSync(tmpA, { recursive: true, force: true }); rmSync(tmpB, { recursive: true, force: true }); }
+}, 30000);
 test('tap parses every mouse form, refuses a word it does not use, and a carrier that cannot deliver one says unsupported (#107)', async () => {
   const { tapWords: t, pointerGap: gap } = await import('../../scripts/agent.mjs'); expect(t(['p', 'auxclick', 'at', '30', '40', 'modifiers', 'Meta'])).toEqual(['p', { auxclick: true, at: [30, 40], modifiers: 'Meta' }]); expect(t(['p', 'clicks', '3'])).toEqual(['p', { clicks: 3 }]); expect(t(['p', 'wheel', '0', '20', 'at', '10', '10'])).toEqual(['p', { wheel: [0, 20], at: [10, 10] }]); expect(t(['p', 'down', 'at', '10', '20', 'modifiers', 'Shift'])).toEqual(['p', { down: true, at: [10, 20], modifiers: 'Shift' }]); expect(t(['up', 'modifiers', 'Shift'], true)).toEqual([null, { phase: 'up', modifiers: 'Shift' }]); for (const words of [['p', 'mouse', 'foo'], ['p', 'auxclick', 'at', '1'], ['p', 'hover', 'x'], ['p', 'clicks'], ['p', 'frob']]) expect(() => t(words)).toThrow(/unknown word|takes a number/); expect(gap('macos', undefined, { auxclick: true })).toBeNull(); expect(gap('web', 'chrome', { clicks: 3, modifiers: 'Shift', down: true })).toBeNull(); for (const host of ['linux', 'windows', 'ios']) expect(gap(host, undefined, { wheel: [0, 1], at: [1, 1] })).toContain('a wheel at a point'); expect(gap('web', 'firefox', { drag: { modifiers: 'Shift' } })).toContain('modifiers'); });
 

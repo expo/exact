@@ -27,6 +27,7 @@ pub mod frame_interface {
 /// A hook's last idle frame records how to read each borrowed column's version.
 pub(crate) struct HookRead {
     key: HookKey,
+    pub(crate) name: &'static str,
     revision: fn(&World) -> Option<(u64, u64)>,
     drawn: Option<(u64, u64)>,
 }
@@ -51,12 +52,13 @@ pub struct RenderWorld<'a>(
     pub(crate) Option<&'a std::cell::RefCell<Vec<HookRead>>>,
 );
 impl<'a> RenderWorld<'a> {
-    fn reads(&self, key: HookKey, revision: fn(&World) -> Option<(u64, u64)>) {
+    fn reads(&self, key: HookKey, name: &'static str, revision: fn(&World) -> Option<(u64, u64)>) {
         if let Some(columns) = self.1 {
             let mut columns = columns.borrow_mut();
             if !columns.iter().any(|c| c.key == key) {
                 columns.push(HookRead {
                     key,
+                    name,
                     revision,
                     drawn: revision(self.0),
                 });
@@ -65,24 +67,29 @@ impl<'a> RenderWorld<'a> {
     }
     /// Read one component by entity or name.
     pub fn get<C: Component>(&self, target: impl Target) -> Option<Ref<'a, C>> {
-        self.reads(HookKey::Component(TypeId::of::<C>()), |w| {
-            Some((w.membership::<C>(), w.revision::<C>()))
-        });
+        self.reads(
+            HookKey::Component(TypeId::of::<C>()),
+            std::any::type_name::<C>(),
+            |w| Some((w.membership::<C>(), w.revision::<C>())),
+        );
         self.0.get(target)
     }
     /// Read an optional resource.
     pub fn resource<R: Resource>(&self) -> Option<Ref<'a, R>> {
         self.reads(
             HookKey::Resource(TypeId::of::<R>()),
+            std::any::type_name::<R>(),
             World::resource_revision::<R>,
         );
         self.0.try_resource::<R>()
     }
     /// Visit one component column in stable entity order, with immutable values.
     pub fn for_each<C: Component>(&self, mut visit: impl FnMut(Entity, &C)) {
-        self.reads(HookKey::Component(TypeId::of::<C>()), |w| {
-            Some((w.membership::<C>(), w.revision::<C>()))
-        });
+        self.reads(
+            HookKey::Component(TypeId::of::<C>()),
+            std::any::type_name::<C>(),
+            |w| Some((w.membership::<C>(), w.revision::<C>())),
+        );
         for (entity, value) in self.0.query::<&C>().iter() {
             visit(entity, value);
         }
@@ -99,7 +106,7 @@ impl<'a> RenderWorld<'a> {
     }
     /// Completed simulation tick.
     pub fn tick(&self) -> u64 {
-        self.reads(HookKey::Tick, |w| Some((0, w.tick())));
+        self.reads(HookKey::Tick, "tick", |w| Some((0, w.tick())));
         self.0.tick()
     }
     /// Simulation ticks per second.

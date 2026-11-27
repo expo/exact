@@ -82,7 +82,7 @@ component Home
         image "symbol:icon.exactmark" aria-hidden=true width="5.125rem" height="3rem" margin-bottom=24 color="var(--color-text-default)"
         h1 font-size="var(--text-4xl)" font-weight=600 letter-spacing="-2px" line-height=1.1 color="var(--color-text-default)"
           text page.title
-        text page.description margin-top=24 max-width=562 font-size="var(--text-base)" font-weight=500 line-height=1.4 color="var(--color-text-secondary)"
+        text page.description margin-top=24 max-width=562 text-wrap="balance" font-size="var(--text-base)" font-weight=500 line-height=1.4 color="var(--color-text-secondary)"
         row margin-top=24 flex-wrap="wrap" justify-content="center" align-items="center" column-gap=8 row-gap=2 min-height=48 box-sizing="border-box" padding="0 10px 0 16px" border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)" background-color="var(--color-background-subtle)" max-width="100%" testId="agent-pill"
           row flex-shrink=0 aria-hidden=true
             Avatar(icon="symbol:icon.claude", fill="light-dark(#D77655, #D77655)", ink="light-dark(#FFFFFF, #FFFFFF)", first=true)

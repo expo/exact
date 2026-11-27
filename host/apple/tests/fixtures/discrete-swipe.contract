@@ -7,10 +7,10 @@ component App
     way = (way == "down" ? "up" : "sideways")
   view
     column width="100%" height=600
-      column testId="bar" swipe=swiped swipe-direction=way height=120
+      column testId="bar" swipe=swiped swipe-flick=way height=120
         textarea testId="field" value="One line" field-sizing="content" font-size=17
       column inert=true height=40
-        box testId="inside-inert" swipe=swiped swipe-direction="up" height=40
+        box testId="inside-inert" swipe=swiped swipe-flick="up" height=40
       text `${swipes}` testId="swipes"
       button testId="turn" press=turn
         text "Turn"

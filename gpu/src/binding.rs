@@ -1,5 +1,25 @@
 use crate::{json, Module, Value};
 
+// Only complete arguments can be colour slots. A named rest argument is stored
+// in the last input as a list of [name, value] pairs.
+pub(crate) fn has_color(inputs: &[Value], rest: bool) -> bool {
+    if inputs
+        .iter()
+        .any(|value| json::color_components(value).is_some())
+    {
+        return true;
+    }
+    let Some(Value::List(pairs)) = inputs.last().filter(|_| rest) else {
+        return false;
+    };
+    pairs.iter().any(|pair| {
+        let Value::List(fields) = pair else {
+            return false;
+        };
+        fields.get(1).and_then(json::color_components).is_some()
+    })
+}
+
 impl Module {
     /// Bind a positional JSON array or named JSON object through the same typed
     /// bind operation. A named argument the object omits takes its default.
@@ -78,7 +98,7 @@ impl Module {
             Ok(inputs)
         })();
         match result {
-            Ok(values) => self.bind(id, &values, at_ms),
+            Ok(values) => self.bind_inputs(id, &values, at_ms, true),
             Err(error) => {
                 self.error = error;
                 false
@@ -100,7 +120,7 @@ impl Module {
             return false;
         };
         if inst.surface.size(width, height) {
-            inst.dirty = true;
+            inst.invalidate();
         }
         inst.drain();
         true

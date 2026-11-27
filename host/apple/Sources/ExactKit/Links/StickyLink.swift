@@ -10,6 +10,7 @@ package protocol StickyHosting: AnyObject {
     /// A box's constraint, from its `sticky` op.
     func apply(_ id: UInt32, _ payload: [String: Any])
     func forget(_ id: UInt32)
+    func reset()
     /// `scroller` scrolled; nil: the page, which moves the boxes stuck to
     /// the roots it scrolls.
     func scrolled(_ scroller: UInt32?)
@@ -22,6 +23,7 @@ package final class NoStickies: StickyHosting {
     package init() {}
     package func apply(_ id: UInt32, _ payload: [String: Any]) {}
     package func forget(_ id: UInt32) {}
+    package func reset() {}
     package func scrolled(_ scroller: UInt32?) {}
     package func regridded(_ id: UInt32) {}
 }

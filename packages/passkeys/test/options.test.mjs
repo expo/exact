@@ -32,3 +32,35 @@ test('fallback JSON conversion decodes every binary extension without changing t
     for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
   }
 });
+
+test('cancel(request) aborts matching in-flight create and get ceremonies via AbortSignal', async () => {
+  const previous = ['navigator', 'PublicKeyCredential'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
+  const pending = [];
+  const wait = options => new Promise((resolve, reject) => {
+    pending.push({ options, resolve, reject });
+    options.signal?.addEventListener('abort', () => reject(options.signal.reason));
+  });
+  try {
+    Object.defineProperty(globalThis, 'PublicKeyCredential', { configurable: true, value: class {} });
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { credentials: { create: wait, get: wait } } });
+    const publicKey = { challenge: 'AQI', rp: { id: 'example.test' }, user: { id: 'AwQ' } };
+    const api = implementation({ changed() {} });
+    expect(typeof api.cancel).toBe('function');
+
+    const creating = api.create({ publicKey }, { request: 7 });
+    expect(pending[0].options.signal?.aborted).toBe(false);
+    api.cancel(99);
+    expect(pending[0].options.signal?.aborted).toBe(false);
+    api.cancel(7);
+    expect(pending[0].options.signal?.aborted).toBe(true);
+    expect(await creating).toEqual({ error: 'AbortError', message: 'the call was let go' });
+
+    const getting = api.get({ publicKey, mediation: 'conditional' }, { request: 8 });
+    expect(pending[1].options.signal?.aborted).toBe(false);
+    api.cancel(8);
+    expect(pending[1].options.signal?.aborted).toBe(true);
+    expect(await getting).toEqual({ error: 'AbortError', message: 'the call was let go' });
+  } finally {
+    for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
+  }
+});

@@ -324,7 +324,7 @@ fn a_body_from_a_file_is_refused_unsent_past_its_grant_scope_or_with_another_bod
     both.body = b"x".to_vec();
     assert_eq!(
         core.run(job(4, both), None),
-        Err("fetch: a request has one body: body or exactBodyFrom")
+        Err("fetch: a request has one body: body or exactBodyFrom".into())
     );
     assert!(sent.lock().unwrap().is_empty(), "a refused body was sent");
 }
@@ -945,7 +945,10 @@ fn response_fixture_reads_keep_the_128_request_admission_limit() {
             })
         }))),
     );
-    assert_eq!(refusal, Err("native executor admission limit reached"));
+    assert_eq!(
+        refusal,
+        Err("129 ordered requests requested (128 in use, maximum 128)".into())
+    );
     let outcomes = collect(&core, &woke, 128);
     assert!(outcomes
         .iter()

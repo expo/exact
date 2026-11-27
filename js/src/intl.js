@@ -339,10 +339,15 @@
     n = Number(n);
     if (!this.cells || !isFinite(n)) return partsOf(this.native, n);
     var s = this.scale(Math.abs(n), n < 0), o = this.options, text = s.text;
-    // Trailing zeros go, down to the app's minimum.
-    var least = o.minimumFractionDigits !== undefined ? o.minimumFractionDigits : 0;
-    if (o.minimumSignificantDigits === undefined)
-      while (text.indexOf(".") >= 0 && text.split(".")[1].length > least && /0$/.test(text)) text = text.slice(0, -1);
+    // Trailing zeros go, down to the app's minimum: fraction digits, or the
+    // fraction digits that keep its significant digits, counted from the
+    // first nonzero digit (a zero's one integer digit).
+    var least = o.minimumFractionDigits !== undefined ? o.minimumFractionDigits : 0, sd = o.minimumSignificantDigits;
+    if (sd !== undefined) {
+      var int = text.split(".")[0];
+      least = Number(text) === 0 ? sd - 1 : int !== "0" ? Math.max(0, sd - int.length) : /^0\.(0*)/.exec(text)[1].length + sd;
+    }
+    while (text.indexOf(".") >= 0 && text.split(".")[1].length > least && /0$/.test(text)) text = text.slice(0, -1);
     text = text.replace(/\.$/, "");
     var fraction = (text.split(".")[1] || "").length, value = Number(text);
     var sign = signOf(o.signDisplay, n < 0 || (n === 0 && 1 / n < 0), value === 0);

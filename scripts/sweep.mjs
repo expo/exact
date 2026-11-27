@@ -36,11 +36,18 @@ export function startSweep(target, now = Date.now()) {
   // protocol nor reliable immediate access-time updates; keep its build units.
   if (process.platform === 'win32') return;
   if (!existsSync(target)) return;
-  const log = resolve(target, LOG);
+  const log = resolve(target, LOG), ledger = resolve(target, LEDGER);
+  const state = existsSync(ledger) ? JSON.parse(readFileSync(ledger, 'utf8')) : null;
+  if (state?.disabled) {
+    if (existsSync(log) && statSync(log).size) {
+      process.stderr.write(`target sweep disabled (${log}):\n${readFileSync(log, 'utf8')}`);
+      try { writeFileSync(log, ''); } catch {}
+    }
+    return;
+  }
   if (existsSync(log) && statSync(log).size) process.stderr.write(`target sweep failed (${log}):\n${readFileSync(log, 'utf8')}`);
-  const ledger = resolve(target, LEDGER);
-  if (existsSync(ledger) && now - JSON.parse(readFileSync(ledger, 'utf8')).at < EVERY) return;
-  const err = openSync(log, 'a');
+  if (state && now - state.at < EVERY) return;
+  const err = openSync(log, 'w');
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), resolve(target)], { cwd: import.meta.dirname, detached: true, stdio: ['ignore', 'ignore', err] });
   child.on('error', () => {});
   child.unref();
@@ -82,7 +89,7 @@ function assertAccessTimes(target, resetAccess) {
   readFileSync(probe);
   const seen = statSync(probe).atimeMs > RESET * 1000;
   rmSync(probe);
-  if (!seen) throw new Error(`${target}: this filesystem does not record reads (noatime), so the sweep cannot tell which units builds use`);
+  if (!seen) throw Object.assign(new Error(`${target}: this filesystem does not record reads (noatime), so the sweep cannot tell which units builds use`), { code: 'NOATIME' });
 }
 
 const profiles = target => [target, ...readdirSync(target, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => resolve(target, e.name))]
@@ -272,14 +279,21 @@ export async function sweep(target, now = Date.now()) {
   const { lock, resetAccess } = await libc(), own = lock(resolve(target, `${LEDGER}.lock`));
   if (own === null) return {};
   try {
-    assertAccessTimes(target, resetAccess);
-    const path = resolve(target, LEDGER), old = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-    const { units: oldUnits = {}, caches: oldCaches = {} } = old;
-    const units = {}, caches = {}, removed = {}, aside = resolve(target, ASIDE, String(now));
+    const path = resolve(target, LEDGER);
     const save = ledger => {
       writeFileSync(`${path}.tmp`, JSON.stringify(ledger));
       renameSync(`${path}.tmp`, path);
     };
+    try { assertAccessTimes(target, resetAccess); }
+    catch (error) {
+      if (error?.code !== 'NOATIME') throw error;
+      save({ at: now, disabled: 'noatime' });
+      writeFileSync(resolve(target, LOG), `${error.message}; sweeping disabled for this target\n`);
+      return {};
+    }
+    const old = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+    const { units: oldUnits = {}, caches: oldCaches = {} } = old;
+    const units = {}, caches = {}, removed = {}, aside = resolve(target, ASIDE, String(now));
     const remember = (key, activity) => {
       oldCaches[key] = activity;
       save({ ...old, caches: oldCaches });

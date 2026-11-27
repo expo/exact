@@ -9,9 +9,8 @@ import { clock, agentMode } from './clock.js';
 
 documents({ read, early });
 
-/** The page's checkpoint: the time the render stopped at, and by resource name the `source` and `answers` its document
- * used, each `[args, value, open, reads]`: one, or a list's elements', where a new element looks first at `next`; or
- * `elsewhere`, and nothing kept, for a page rendered at another location. */
+/** The checkpoint keeps the render time and each resource's source and answers. List elements look first at `next`.
+ * Owned answers are indexed by instance path. A page rendered at another location keeps nothing. */
 function read() {
   const el = typeof document !== 'undefined' && document.querySelector('script[type="application/vnd.exact.checkpoint"]');
   if (!el) return { kept: null };
@@ -37,7 +36,13 @@ function read() {
   if (driven) for (const k of checkpointFaults(cp)) open.add(k);
   cp.answers.forEach(([name, source, args, value], k) => {
     if (!kept.has(name)) kept.set(name, { source, answers: [], next: 0 });
-    kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k), paths.get(k)]);
+    const row = kept.get(name), path = paths.get(k);
+    if (path !== undefined) {
+      row.byPath ??= new Map();
+      if (!row.byPath.has(path)) row.byPath.set(path, []);
+      row.byPath.get(path).push(row.answers.length);
+    }
+    row.answers.push([value_(args), value_(value), open.has(k), readers.has(k), path]);
   });
   return { kept, alias, revalidate: !!cp.revalidate, time: (clock.now = driven ? 0 : cp.time || 0) };
 }

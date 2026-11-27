@@ -59,6 +59,14 @@ final class TableGrid {
         headers[id] = nil
         #endif
     }
+    func reset() {
+        sizes.removeAll()
+        places.removeAll()
+        #if os(macOS)
+        columns.removeAll()
+        headers.removeAll()
+        #endif
+    }
 }
 
 extension NodeView {

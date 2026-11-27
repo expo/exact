@@ -26,8 +26,10 @@ package protocol WebHosting: AnyObject {
     func update(_ owner: NodeView)
     /// Tell the guest how much of `owner`'s web view lies under its owner's bars and band, in the
     /// view's own coordinates (LLP 1123 D15): WebKit keeps the page's fixed and sticky content and
-    /// its visible rect clear of it. A host with no web views, and the Mac, do nothing.
-    func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat)
+    /// its visible rect clear of it, and sizes the page's small and large viewports from the range it
+    /// has moved through in the owner's `configuration`, kept for none where that is `nil`. A host
+    /// with no web views, and the Mac, do nothing.
+    func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat, configuration: UInt64?)
     func reloadDocument(_ owner: NodeView)
     func destroy(id: UInt32)
     func hatched(_ id: UInt32)
@@ -60,7 +62,7 @@ package final class NoWebViews: WebHosting {
     package var status: String { "none" }
     package func create(owner: NodeView) -> ExactWebPlatformView? { nil }
     package func update(_ owner: NodeView) {}
-    package func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {}
+    package func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat, configuration: UInt64?) {}
     package func reloadDocument(_ owner: NodeView) {}
     package func destroy(id: UInt32) {}
     package func hatched(_ id: UInt32) {}

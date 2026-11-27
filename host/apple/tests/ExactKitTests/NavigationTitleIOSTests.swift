@@ -186,5 +186,20 @@ extension NavigationBasicsIOSTests {
         cover.removeFromSuperview()
         XCTAssertFalse(p.menus.isOpen(popover))
     }
+
+    /// A pressable header title also runs its `press` handler without `ExactNativeViews` (#1951).
+    func testPressableHeaderTitlePressesWithoutNativeElementHatches() throws {
+        let session = try fixture("title-press-no-hatches")
+        let (_, _, chat) = try chat(session)
+        session.presenter.elements = NoElementHatches()
+        let view = try XCTUnwrap(chat.navigationItem.titleView as? HeaderTitleView)
+        XCTAssertEqual(text(session, "title-presses"), "title presses 0")
+        for target in view.allTargets {
+            for action in view.actions(forTarget: target, forControlEvent: .touchUpInside) ?? [] {
+                _ = (target as NSObject).perform(Selector(action))
+            }
+        }
+        until("the title pressed its group without ElementHatches") { self.text(session, "title-presses") == "title presses 1" }
+    }
 }
 #endif

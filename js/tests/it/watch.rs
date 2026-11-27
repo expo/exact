@@ -122,3 +122,30 @@ fn an_atomic_save_from_typescript_that_cannot_keep_the_document_fails() {
     kept::end(9133);
     exact_data::documents::forget(9133);
 }
+
+/// Forgetting a kept document when the kept set cannot be saved rejects with
+/// `EACCES` (not `ENOENT`) and leaves the document kept.
+#[cfg(unix)]
+#[test]
+fn forget_document_from_typescript_reports_save_error_instead_of_enoent() {
+    use exact_data::documents::kept;
+    use std::os::unix::fs::PermissionsExt;
+    let root = Root::new();
+    std::fs::create_dir_all(root.0.join("set")).unwrap();
+    let file = root.0.join("kept.md");
+    std::fs::write(&file, "kept").unwrap();
+    let set = root.0.join("set/kept.json");
+    kept::open(9134, "test.js.kept-forget-err", &set);
+    let doc = kept::keep(9134, &file, "", "readwrite").unwrap();
+    let mut module = root.module();
+    module.set_document_owner(9134);
+    module.activate().unwrap();
+    let mut store = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    let mode = std::fs::Permissions::from_mode;
+    std::fs::set_permissions(root.0.join("set"), mode(0o555)).unwrap();
+    let result = call(&mut module, &mut store, "kept-forget", &doc);
+    std::fs::set_permissions(root.0.join("set"), mode(0o755)).unwrap();
+    assert_eq!(result, format!("Unavailable EACCES | {doc}"));
+    kept::end(9134);
+    exact_data::documents::forget(9134);
+}

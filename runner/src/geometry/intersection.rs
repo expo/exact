@@ -60,11 +60,12 @@ pub(crate) fn intersection(
             // iOS, `closed.rs`) lays out nothing under it, as `display: none`
             // does; the box itself answers by its native frame below. A node a
             // bar shows in a view of its own is not placed in the page
-            // either (LLP 1141.004 D2).
-            let replaced = slot != key.index
-                && arena
-                    .cover(slot)
-                    .is_some_and(exact_kernel::HostCover::replaces);
+            // either (LLP 1141.004 D2). A box whose room a bar keeps shows
+            // the bar, so neither it nor what it holds is (LLP 1083.000 D4).
+            let replaced = arena.cover(slot).is_some_and(|cover| {
+                (slot != key.index && cover.hides_content())
+                    || matches!(cover, exact_kernel::HostCover::Room(_))
+            });
             if arena.style(slot).display == Display::None
                 || arena.flags(slot).has(NodeFlags::HIDDEN)
                 || replaced

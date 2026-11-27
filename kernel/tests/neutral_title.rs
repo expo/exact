@@ -280,6 +280,9 @@ fn a_route_title_keeps_the_large_title_line() {
                 change(&mut k, &[]);
                 near(frame(&mut k, 2).height, root * 2.0625 * 1.2 + 13.);
                 change(&mut k, &[prop(1, container, value)]);
+                if value == "dialog" {
+                    k.measure_dialog(1, true);
+                }
                 let bar = frame(&mut k, 2);
                 near(bar.height, root * 1.6875 * 1.2 + 13.);
                 near(frame(&mut k, 3).y - bar.y, 6.);
@@ -290,6 +293,9 @@ fn a_route_title_keeps_the_large_title_line() {
                         prop: container,
                     }],
                 );
+                if value == "dialog" {
+                    k.measure_dialog(1, false);
+                }
                 near(frame(&mut k, 2).height, root * 2.0625 * 1.2 + 13.);
             }
         }

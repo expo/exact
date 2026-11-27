@@ -7,7 +7,8 @@
 //   both at once is ignored from Android 11, where the second opens the app's location settings page). A denied first
 //   step fails `PERMISSION_DENIED` without the second.
 // - Twenty a fence app (D11), `android.limit` up to Play services' 100; a radius under 100 m is raised with a journal
-//   line. A fence added while inside raises `geofenceenter` (`INITIAL_TRIGGER_ENTER`); a re-arm adds none.
+//   line. A fence added while inside raises `geofenceenter` (`INITIAL_TRIGGER_ENTER`, or `INITIAL_TRIGGER_DWELL` for
+//   a dwell fence); a re-arm adds none.
 // - A crossing reaches `GeofenceReceiver` (Receivers.kt), which writes it to the store and asks for a region wake. A
 //   live session's module delivers it at once; with none (it boots no session yet, §9 item 6) the store keeps it,
 //   and the module delivers it when a later launch makes it (D14 step 3), with its original time.
@@ -60,11 +61,19 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
                 .build()
         }
 
+        /**
+         * Play services' request for [regions]: [initial] raises an entry for a fence the device is already inside. Each
+         * initial trigger applies only to fences listening for its transition, so a dwell fence needs `DWELL`.
+         */
+        internal fun request(regions: List<JSONObject>, initial: Boolean): GeofencingRequest {
+            val trigger = if (initial) GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_DWELL else 0
+            return GeofencingRequest.Builder().setInitialTrigger(trigger).addGeofences(regions.map(::fence)).build()
+        }
+
         /** Add [regions] to Play services: [initial] raises an entry for a fence the device is already inside. */
         internal fun arm(app: Context, regions: List<JSONObject>, initial: Boolean, done: (Exception?) -> Unit) {
             if (regions.isEmpty() || app.checkSelfPermission(FINE) != PackageManager.PERMISSION_GRANTED) return done(null)
-            val request = GeofencingRequest.Builder().setInitialTrigger(if (initial) GeofencingRequest.INITIAL_TRIGGER_ENTER else 0)
-                .addGeofences(regions.map(::fence)).build()
+            val request = request(regions, initial)
             try {
                 LocationServices.getGeofencingClient(app).addGeofences(request, pendingIntent(app))
                     .addOnSuccessListener { done(null) }.addOnFailureListener { done(it) }

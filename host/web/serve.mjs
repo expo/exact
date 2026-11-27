@@ -587,7 +587,7 @@ export const planRouteTable = bytes => planRows(bytes, 'routes', ['name', 'patte
 /** The package views placed by this plan, including tags in conditional branches. */
 export const planViewTable = bytes => planRows(bytes, 'views', ['tag', 'extension', 'package', 'displayed', 'binds']);
 
-function planRows(bytes, name, fields) {
+export function planRows(bytes, name, fields) {
   if (bytes.subarray(0, 4).toString() !== 'EXPL' || bytes.readUInt32LE(4) !== planFormat.formatVersion
     || !bytes.subarray(8, 16).equals(planFormatDigest)) throw new Error('unknown plan format');
   let at = 32;
@@ -609,6 +609,7 @@ function planRows(bytes, name, fields) {
       strings.push(`${members[member]}#${owners[owner]}`);
     }
   }
+  if (!name) return strings;
   take(u32()); // code pool
   take(u32()); // data pool
   const width = codec => {

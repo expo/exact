@@ -152,10 +152,17 @@ pub struct Analysis {}
 /// the app's root slot. @ref LLP 1038 D2/D3.
 pub fn check_routes_root(file: &File, root_file: bool) -> Result<(), AnalyzeError> {
     if let Some(routes) = &file.routes {
-        if !root_file || file.components.is_empty() {
+        if !root_file {
             return err(
                 "analyze-routes-not-root",
                 "`routes` belongs to the app's root file",
+                routes.span,
+            );
+        }
+        if file.components.is_empty() {
+            return err(
+                "analyze-routes-not-root",
+                "`routes` belongs in the app's root file beside a `component` declaration (importing a component with `use` alone does not define the root component)",
                 routes.span,
             );
         }
@@ -373,7 +380,7 @@ fn check_tasks(c: &Component) -> Vec<AnalyzeError> {
 
 /// The handler attributes (the web's events, LLP 1005 §3): `press`,
 /// `change`, `input`, `hover`, `focus`, `blur`, `key`, `submit`, `load`, `message`.
-pub const HANDLERS: [&str; 89] = [
+pub const HANDLERS: [&str; 91] = [
     "press",
     "change",
     "input",
@@ -439,7 +446,7 @@ pub const HANDLERS: [&str; 89] = [
     "swiperight",
     // Its mirror (Charlie, 2026-11-10).
     "swipeleft",
-    // The platform's discrete swipe in the node's `swipe-direction` (LLP
+    // The platform's discrete swipe in the node's `swipe-flick` direction (LLP
     // 1057.001 §8); no payload.
     "swipe",
     "refresh",
@@ -454,6 +461,8 @@ pub const HANDLERS: [&str; 89] = [
     "pan",
     // A pan that began ended (LLP 1057 §10.6 phase 2): release velocity.
     "panrelease",
+    "pinch",
+    "pinchrelease",
     "loadedmetadata",
     "durationchange",
     "fullscreenchange",
@@ -555,6 +564,7 @@ pub fn handler_arity(attr: &str, given: usize) -> Option<std::ops::RangeInclusiv
         return (given == 0).then_some(0..=1);
     }
     let payload = match attr {
+        "pinch" | "pinchrelease" => 3,
         "transformgeometry" => 4,
         "transformrelease" => 6,
         "scroll" | "pan" | "panrelease" | "heightrelease" | "reorderdrop" | "resize" => 2,
@@ -735,7 +745,13 @@ fn check_handler(
         }
         if matches!(
             attr,
-            "pan" | "panrelease" | "heightrelease" | "transformgeometry" | "transformrelease"
+            "pan"
+                | "panrelease"
+                | "pinch"
+                | "pinchrelease"
+                | "heightrelease"
+                | "transformgeometry"
+                | "transformrelease"
         ) && params[given..].iter().any(|ty| *ty != Ty::Number)
         {
             return err(
@@ -829,4 +845,23 @@ pub fn resource_clock_warnings(file: &File) -> Vec<AnalyzeError> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod routes_root_tests {
+    use super::*;
+
+    #[test]
+    fn root_routes_without_component_explains_use_import() {
+        let file = contract_syntax::parse("routes nav\n  home \"/\"\n").unwrap();
+        let err = check_routes_root(&file, true).unwrap_err();
+        assert_eq!(err.id, "analyze-routes-not-root", "{err:?}");
+        assert!(
+            err.message.contains("beside a `component` declaration"),
+            "{err:?}"
+        );
+        let imported = check_routes_root(&file, false).unwrap_err();
+        assert_eq!(imported.id, "analyze-routes-not-root");
+        assert_eq!(imported.message, "`routes` belongs to the app's root file");
+    }
 }

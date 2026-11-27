@@ -919,8 +919,11 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::BackgroundMaterial => "backgroundMaterial",
             // LLP 1053.000.000 D1: written, read by no rule, drawn nowhere.
             PropId::GlassGroup => "glassGroup",
-            // Interactive glass and a menu's order are UIKit's; a page has neither.
-            PropId::GlassInteractive | PropId::MenuOrder => continue,
+            // Interactive glass, a menu's order and a menu kept open at a pick are UIKit's; a page has none.
+            PropId::GlassInteractive
+            | PropId::MenuOrder
+            | PropId::KeepsMenuPresented
+            | PropId::Arrangement => continue,
             // A page has no tip system (LLP 1035.006.000 D4).
             PropId::Tip | PropId::TipMessage | PropId::TipImage | PropId::TipDone => continue,
             PropId::RetainFocus => "retainFocus",
@@ -1003,11 +1006,11 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::SeekforwardOffset => "seekforwardOffset",
 
             PropId::Sandbox => "sandbox",
-            // @ref LLP 1020.002 D1, §9 — not honoured on the web. The glue
-            // keeps `partition` on the element for the agent's tree, never as a
-            // DOM attribute; the Apple words do not reach the page.
+            // The agent reads the partition from the element. Apple words stay off the DOM
+            // (@ref LLP 1020.002 D1, §9).
             PropId::Partition => "partition",
             PropId::AppleAllowsBackForwardNavigationGestures
+            | PropId::AppleMagnification
             | PropId::AppleAllowsMagnification
             | PropId::AppleInactiveSchedulingPolicy => continue,
             PropId::SemanticTag => continue,

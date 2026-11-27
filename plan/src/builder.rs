@@ -1063,16 +1063,31 @@ impl PlanBuilder {
     /// module and its argument expressions (LLP 1009 D3), each with its
     /// declared type where it has one (LLP 1056 D1).
     pub fn surface(&mut self, name: &str, args: &[(&str, Code, Option<TypesId>)]) -> SurfacesId {
+        self.surface_with_colors(
+            name,
+            args.iter().map(|&(name, expr, ty)| (name, expr, ty, None)),
+        )
+    }
+
+    /// A surface whose colour operands name checked entries in the design.
+    pub fn surface_with_colors<'a>(
+        &mut self,
+        name: &str,
+        args: impl IntoIterator<Item = (&'a str, Code, Option<TypesId>, Option<ThemeId>)>,
+    ) -> SurfacesId {
         let start = self.plan.surface_args.len() as u32;
-        for &(name, expr, ty) in args {
+        for (name, expr, ty, color) in args {
             let name = self.str(name);
-            self.plan
-                .surface_args
-                .push(SurfaceArgsRow { name, expr, ty });
+            self.plan.surface_args.push(SurfaceArgsRow {
+                name,
+                expr,
+                ty,
+                color,
+            });
         }
         let args = SurfaceArgsRange {
             start,
-            len: args.len() as u32,
+            len: self.plan.surface_args.len() as u32 - start,
         };
         let name = self.str(name);
         let mode = if args.len != 0

@@ -20,6 +20,20 @@ pub(in crate::runner) struct LetGo {
     held: BTreeMap<u64, u64>,
 }
 
+impl LetGo {
+    /// Whether pending request `ticket` is waiting on a currently held data-code module call.
+    pub(super) fn holds_ticket(&self, ticket: u64, held: &[super::Held]) -> bool {
+        self.held
+            .iter()
+            .any(|(token, &t)| t == ticket && held.iter().any(|h| h.token == *token))
+    }
+
+    /// Forget a held data-code call once its token is released.
+    pub(super) fn release(&mut self, token: u64) {
+        self.held.remove(&token);
+    }
+}
+
 impl<D: DataSource> Runner<D> {
     /// `request`, about to be handed out, numbered when it is data code's
     /// call of one of this plan's module sends that has no number yet.
@@ -88,5 +102,71 @@ impl<D: DataSource> Runner<D> {
         let ext = &mut *self.extensions;
         let held = &ext.held;
         (ext.letgo.held).retain(|token, _| held.iter().any(|h| h.token == *token));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::request::{Dispatch, Request, Work};
+    use crate::{DataError, DataSource, HoldAnswer, Runner, Value};
+    use exact_kernel::{Kernel, NodeType};
+    use exact_plan::{builder::PlanBuilder, TypeKind};
+
+    struct HoldData;
+
+    impl DataSource for HoldData {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource("unused".into()))
+        }
+    }
+
+    #[test]
+    fn held_data_code_module_send_counts_as_held_for_agent_until_released() {
+        let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+        let string = b.primitive(TypeKind::String);
+        let source = b.source("openBrowser", &[], string);
+        b.module(
+            source,
+            ("in-app-browser", "@exact/in-app-browser"),
+            "openBrowser",
+            true,
+            false,
+            "never",
+            "",
+            r#"{"choose":{"ticket":"browser","choices":["dismissed","opened"],"typed":false}}"#,
+        );
+        b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+        let plan = b.finish().unwrap();
+        let mut r = Runner::boot_stored(
+            plan,
+            HoldData,
+            Kernel::with_monospace(),
+            vec![],
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+
+        let body = br#"{"extension":"in-app-browser","send":"openBrowser","args":{"url":"https://example.com"}}"#.to_vec();
+        let mut req = Request::native(body);
+        // Simulate append_request numbering and recording a data-code send on ticket 77.
+        r.number_data_call(&mut req);
+        r.note_send(77, &req.body);
+        assert!(!r.holds_data_request(77));
+
+        let Some(Dispatch::Run(Work::Later(_))) = r.module_call(&req) else {
+            panic!("expected agent hold on openBrowser choose ticket");
+        };
+        assert!(
+            r.holds_data_request(77),
+            "pending data-code request waiting on a held module call must count as held for agent"
+        );
+        let hold_ticket = r.device_holds[0].ticket;
+        r.answer_hold(hold_ticket, &HoldAnswer::Choice("dismissed".into()))
+            .unwrap();
+        assert!(
+            !r.holds_data_request(77),
+            "releasing the hold must clear holds_data_request so clock data waits for the data call to finish"
+        );
     }
 }

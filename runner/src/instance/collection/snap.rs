@@ -208,7 +208,7 @@ impl Tree {
             // Raw font-relative values still use the provisional font basis.
             // Only absolute lengths are known without laying out the row.
             let absolute = |id, value| {
-                if style.relative.get(id).is_some() {
+                if style.relative.get_spec(id).is_some() {
                     return None;
                 }
                 match value {

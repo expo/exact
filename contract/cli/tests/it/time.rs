@@ -1446,3 +1446,24 @@ fn resource_clock_advice_keeps_json_build_success_and_stdout_valid() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn child_task_when_and_key_read_derives_referenced_only_by_the_task() {
+    let src = "component App\n  view\n    Child(open=true)\ncomponent Child\n  props\n    open: bool\n  state ticks = 0\n  derive under = ticks < 3\n  derive armed = open and under\n  derive phase = `p${ticks}`\n  action tick\n    ticks = ticks + 1\n  task pulse when armed key=phase\n    after(10, tick)\n  view\n    text `${ticks}` testId=\"date\"\n";
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(text(&r), "0");
+    for (t, want) in [(10.0, "1"), (20.0, "2"), (30.0, "3")] {
+        assert_eq!(r.timer_due_ms(), Some(t));
+        r.advance(t).unwrap();
+        assert_eq!(text(&r), want);
+    }
+    assert_eq!(r.timer_due_ms(), None);
+}

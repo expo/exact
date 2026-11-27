@@ -133,6 +133,7 @@ pub fn row_json(row: StyleId, v: RowValue<'_>, out: &mut String) {
         }
         RowValue::ClipPath(p) => quote(&p.css(), out),
         RowValue::AspectRatio(r) => quote(&r.css(), out),
+        RowValue::AspectFit(r) => quote(&r.css(), out),
         RowValue::DragTimeline(d) => quote(&d.css(), out),
         RowValue::AnimationTimeline(t) => quote(&t.css(), out),
         RowValue::AnimationRange(r) => quote(&r.css(), out),
