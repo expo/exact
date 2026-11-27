@@ -217,10 +217,9 @@ package final class ScrollPump: NSObject, UIScrollViewDelegate {
         armRest(after: Self.restDelay)
         p.leaves?.scrolled()
         p.menus.rehostPopovers()
-        // What this frame shows has its text before it commits. A pass
-        // follows only for work owed: a paragraph still without all its
-        // pixels, or a list's rows. A screen painted up front scrolls with
-        // none, and asks for no frames.
+        // Give pixels to what this frame shows before it commits. Queue a
+        // slice only for text within reach or pending rows. Every UIKit
+        // offset callback during a fling can otherwise queue another pass.
         if p.paintVisibleText() { textPending = true }
         guard textPending || !p.collections.fillPending.isEmpty else { return }
         scheduleAfterScroll()
