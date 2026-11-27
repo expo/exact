@@ -62,7 +62,7 @@ final class DragOutMacTests: XCTestCase {
         let counted = NodeView.everyClickCounts
         NodeView.everyClickCounts = false
         defer { NodeView.everyClickCounts = counted }
-        let p = presenter(["draggable": "true", "dataTransferText": "Mount Fuji"], handlers: ["press", "pointerdown"])
+        let p = presenter(["draggable": "true", "dataTransferText": "Mount Fuji"], handlers: ["press", "pointerdown", "pointerup"])
         XCTAssertFalse(window.isKeyWindow, "a window that is not key")
         let card = try XCTUnwrap(p.views[10]), inner = try XCTUnwrap(p.views[12]), pin = try XCTUnwrap(p.views[14])
         let event = { (type: NSEvent.EventType, at: NSPoint, flags: NSEvent.ModifierFlags) in
@@ -87,7 +87,6 @@ final class DragOutMacTests: XCTestCase {
         XCTAssertEqual(presses, [], "no press")
         XCTAssertNil(p.mouseDragOut?.armed, "the up ends the contact")
         // A drag-only contact whose up never comes ends at the next down, which goes its way
-        NodeView.everyClickCounts = false
         XCTAssertTrue(card.acceptsFirstMouse(for: down))
         card.mouseDown(with: down)
         XCTAssertTrue(p.mouseDragOut?.armed === card)
@@ -95,10 +94,49 @@ final class DragOutMacTests: XCTestCase {
         let next = event(.leftMouseDown, onCard, [])
         card.mouseDown(with: next)
         card.mouseUp(with: event(.leftMouseUp, onCard, []))
-        XCTAssertEqual(pointers.first, .down, "the next click's pointerdown")
+        XCTAssertEqual(pointers, [.down, .up], "the next click's pointerdown and pointerup")
+        XCTAssertEqual(presses, [10], "and its press, once")
+        XCTAssertNil(p.pointerHeld, "and no pointer held after it")
+        pointers = []; presses = []
         NodeView.everyClickCounts = false
+        // Whether the drag keeps the window where it was follows the recorded first click, not the key state AppKit has changed by the down
+        let drag = try XCTUnwrap(p.mouseDragOut as? MouseDragOut)
+        drag.arm(card, event: down)
+        XCTAssertFalse(drag.fromBackground, "an ordinary down's drag orders the window as AppKit does")
+        drag.cancel()
+        var begun = 0
+        drag.begin = { _, _, _, _ in begun += 1 }
+        XCTAssertTrue(card.acceptsFirstMouse(for: down))
+        card.mouseDown(with: down)
+        card.mouseDragged(with: event(.leftMouseDragged, NSPoint(x: onCard.x + 40, y: onCard.y), []))
+        XCTAssertEqual(begun, 1, "past the slop the session begins")
+        XCTAssertTrue(drag.fromBackground, "as a first click's, which keeps the window where it was")
+        drag.cancel()
+        card.mouseUp(with: event(.leftMouseUp, onCard, []))
+        XCTAssertEqual(pointers, [], "the drag's contact reaches no pointer event")
+        // A recorded first click that no longer may drag arms nothing, and its contact reaches nothing
+        XCTAssertTrue(card.acceptsFirstMouse(for: down))
         p.apply(wireBatch([["op": "props", "id": 10, "set": ["draggable": "false"]]]))
+        card.mouseDown(with: down)
+        card.mouseUp(with: event(.leftMouseUp, onCard, []))
+        XCTAssertNil(p.mouseDragOut?.armed)
+        XCTAssertEqual(pointers, [], "no pointer event")
+        XCTAssertEqual(presses, [], "no press")
         XCTAssertFalse(card.acceptsFirstMouse(for: down), "a card that does not drag")
+        // A renewed row ends the drag but not the contact: its up, a second click, reaches no `dblclick` of the row's next item
+        let row = presenter(["draggable": "true", "dataTransferText": "Mount Fuji"], handlers: ["dblclick"])
+        var doubled: [UInt32] = []
+        row.onDblclick = { doubled.append($0) }
+        let rowCard = try XCTUnwrap(row.views[10])
+        let rowDown = event(.leftMouseDown, rowCard.convert(NSPoint(x: 150, y: 20), to: nil), [])
+        XCTAssertTrue(rowCard.acceptsFirstMouse(for: rowDown))
+        rowCard.mouseDown(with: rowDown)
+        row.renew(10)
+        XCTAssertNil(row.mouseDragOut?.armed, "the drag ends with the row's item")
+        rowCard.mouseUp(with: NSEvent.mouseEvent(with: .leftMouseUp, location: rowDown.locationInWindow, modifierFlags: [], timestamp: 0,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2, pressure: 0)!)
+        XCTAssertEqual(doubled, [], "no dblclick")
+        XCTAssertNil(row.mouseChain.dragOnly, "and the up ends the contact")
         // A swipe on the card arms too, which rule 4 ranks first: the click only activates the window
         let swiped = presenter(["draggable": "true", "dataTransferText": "Mount Fuji"], handlers: ["swipeleft", "pointerdown"])
         var swipedPointers: [PointerKind] = []

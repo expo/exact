@@ -304,10 +304,10 @@ final class MouseChain {
     /// (LLP 1094.000 D5, which `DragOutCapability.arms` decides with no other
     /// candidate on the way): the drag out of the app arms alone, and nothing
     /// else hears the contact, through its up.
-    func downDragOnly(_ node: NodeView, event: NSEvent) {
+    func downDragOnly(_ node: NodeView, event: NSEvent, arms: Bool = true) {
         downEvent = event
         dragOnly = event
-        guard let drag = presenter?.mouseDragOut else { order = []; return }
+        guard arms, let drag = presenter?.mouseDragOut else { order = []; return }
         drag.armFromBackground(node, event: event)
         order = drag.armed == nil ? [] : [drag]
     }

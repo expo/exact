@@ -214,9 +214,10 @@ extension NodeView {
         if let chain = holdPresenter?.mouseChain {
             // A drag-only contact whose up never came ends before a new down goes its way
             chain.endDragOnly()
-            // A first click AppKit gave this view for a drag reaches nothing else, through its up, while it still may (LLP 1094.000 D5)
-            if chain.takeFirstMouseDrag(event, at: self), firstMouseDragsHere(event) {
-                chain.downDragOnly(self, event: event)
+            // A first click AppKit gave this view for a drag reaches nothing else, through its up (LLP 1094.000 D5);
+            // one that no longer may drag arms nothing, unless the view now takes the click itself
+            if chain.takeFirstMouseDrag(event, at: self), !(Self.countsFirstMouse(event) || clicksThrough) {
+                chain.downDragOnly(self, event: event, arms: firstMouseDragsHere(event))
                 return
             }
         }
