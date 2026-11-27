@@ -5025,7 +5025,7 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   it as the subtitle (or the first text in a plain box after it, or a line of symbols and
   words); an avatar before the heading in its box; buttons, links and badges as above;
   readouts; one search field; and one tablist of titled tabs. Plain boxes around them,
-  or empty between them (a text with no words is one), lay them out. Anything else (a spinner or a picture beside the
+  or empty between them, lay them out. Anything else (a spinner or a picture beside the
   heading, a second text, a switch, a pressed row of more than words, a button with a
   dot beside its label or a coloured text, a button inside a readout) fails the build
   (`lower-header-item`), and the error names the repair: make it one of those, move it

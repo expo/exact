@@ -36,7 +36,7 @@ enum Part {
 }
 
 fn part(node: Visit<'_>) -> Part {
-    let Some((tag, positional, attrs)) = node.element() else {
+    let Some((tag, _, attrs)) = node.element() else {
         return Part::Doubt;
     };
     // A popover or dialog shows over the page when opened, not in the bar.
@@ -70,8 +70,6 @@ fn part(node: Visit<'_>) -> Part {
         return Part::Status;
     }
     match tag {
-        // A text with no words shows nothing: a spacer, as the kernel reads one.
-        "text" if matches!(positional, [Expr::Str(s, _)] if s.trim().is_empty()) => Part::Box,
         "text" => Part::Text,
         "input" if computed(attrs, "type") => Part::Doubt,
         "input" if literal(attrs, "type") == Some("search") => Part::Search,
@@ -311,6 +309,23 @@ struct Bar<'a> {
 
 /// A route's `header` that is not the bar, in `lower-header-no-bar`'s words (LLP 1115.000 D5.2).
 pub(super) const NOT_THE_BAR: &str = "the header is drawn in the page as written, and the bar has no title: a pushed route's holds the system Back button alone, above the header, and a stack's first route has no bar.";
+
+/// How `lower-header-no-bar` names a `text` of no words: a spacer to its
+/// author, content to the bar, which lays out a `view` between its items.
+const SPACER: &str = "this `text` with no words";
+
+/// Whether `node` is a `text` of no words written as a literal, or none.
+fn blank(node: Visit<'_>) -> bool {
+    let Some(("text", positional, _)) = node.element() else {
+        return false;
+    };
+    node.children().next().is_none()
+        && match positional {
+            [] => true,
+            [Expr::Str(s, _)] => s.trim().is_empty(),
+            _ => false,
+        }
+}
 
 /// The other repairs `lower-header-no-bar` names: a site's header, and the route's own chrome.
 pub(super) const OR_NO_BAR: &str = "; or, for a site's header, say `appearance=\"none\"` on it; or, if this screen draws its own chrome, say `navigationBar=\"none\"` on the route's element (the one with `navigationKey`, not its line under `routes`)";
@@ -700,7 +715,8 @@ fn check_header(header: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerErr
                     (bar.headings, bar.placed, bar.unplaced.first().or(bar.hosted.first()))
                 {
                     let what = what.trim_end_matches(',').trim_end_matches(", before the heading");
-                    format!("this route's `header` holds no heading, and {what} in it is not a bar item, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items; or, for a bar with no title, move what is not a button below the `header`: a header of buttons alone is the bar{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
+                    let spacer = if what == SPACER { " Write a spacer as `view flex=1`, which the bar lays out, not as a `text`." } else { "" };
+                    format!("this route's `header` holds no heading, and {what} in it is not a bar item, so on iOS it is not the navigation bar: {NOT_THE_BAR}{spacer} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items; or, for a bar with no title, move what is not a button below the `header`: a header of buttons alone is the bar{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
                 } else if bar.headings == (0, 0) {
                     format!("this route's `header` holds no heading, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
                 } else {
@@ -869,6 +885,7 @@ impl<'a> Bar<'a> {
             // place depends on how a choice goes is given the benefit.
             Part::Text => match (bar.passed, bar.subtitle) {
                 (Place::Taken, Place::Taken) => hide("this text, after the subtitle,".into()),
+                (Place::Free, _) if blank(node) => hide(SPACER.into()),
                 (Place::Free, _) => hide("this text, before the heading,".into()),
                 (Place::Taken, _) => bar.subtitle = Place::Taken,
                 (Place::Maybe, _) => bar.subtitle = Place::join([bar.subtitle, Place::Taken]),

@@ -96,7 +96,7 @@ struct WindowHeader {
         func refusal(in node: NodeView) -> String? {
             for child in children(node) where child.style["display"]?.string != "none" {
                 if child === rule.heading { passedHeading = true; continue }
-                if passedHeading, subtitle == nil, child.isParagraph, !child.isBlankText, !items.contains(ObjectIdentifier(child)),
+                if passedHeading, subtitle == nil, child.isParagraph, !items.contains(ObjectIdentifier(child)),
                    !rule.readouts.contains(where: { $0 === child }) { subtitle = child; continue }
                 if child === rule.tap { return "its heading is inside a pressable (#\(child.id)), and a window's title is not pressed" }
                 if rule.readouts.contains(where: { $0 === child }) {
@@ -129,7 +129,7 @@ struct WindowHeader {
                     continue
                 }
                 // A box that only groups is no part of the bar; what it holds decides.
-                guard child.kind == "view" || child.isBlankText, child.props["popover"] == nil, child.props["semanticTag"] != "dialog" else {
+                guard child.kind == "view", child.props["popover"] == nil, child.props["semanticTag"] != "dialog" else {
                     return "it holds #\(child.id) (\(child.isParagraph ? "text that is not its heading" : child.props["popover"] != nil ? "a popover" : child.kind)), which a toolbar has no place for"
                 }
                 if let inner = refusal(in: child) { return inner }

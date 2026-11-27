@@ -526,8 +526,8 @@ function barItems(route, header) {
   const holds = (el) => [...el.children].some((child) => !leaving(child) && !layer(child) && (child.matches(heading) || holds(child)));
   const disabled = (el) => el.matches("button[disabled]") && !el.hasAttribute("role") && root?.getAttribute("aria-busy") !== "true";
   // `fact::DISABLED`, dimmed whether or not it presses; a `button` element carries no `role` unless it has another one (element.rs); until input is ready, the glue disables every control itself (glue.js)
-  // `fact::BOX`: a plain box, a `div` that is no text or a text with no words and no inline picture, or a semantic box (element.rs `element`)
-  const box = (el) => el.localName === "div" ? !el.hasAttribute("data-exact-text") || !el.textContent.trim() && !el.querySelector("img, svg") : /^(main|header|nav|section|footer|article|aside)$/.test(el.localName);
+  // `fact::BOX`: a plain box, a `div` that is no text or a semantic box (element.rs `element`)
+  const box = (el) => el.localName === "div" ? !el.hasAttribute("data-exact-text") : /^(main|header|nav|section|footer|article|aside)$/.test(el.localName);
   let headings = 0, tap = null, placed = 0, unplaced = false, searches = 0, tablists = 0;
   const items = [], walk = (node) => {
     for (const child of node.children) {

@@ -53,7 +53,6 @@ const HEADING: &[(PropId, &str)] = &[(PropId::AccessibilityRole, "heading")];
 const BACK: &[(PropId, &str)] = &[(PropId::Id, "back")];
 const SEARCH: &[(PropId, &str)] = &[(PropId::Type, "search")];
 const TABLIST: &[(PropId, &str)] = &[(PropId::AccessibilityRole, "tablist")];
-const WORDS: &[(PropId, &str)] = &[(PropId::Text, "Draft")];
 
 fn view(id: u32, children: Vec<Node>) -> Node {
     Node(id, NodeType::View, &[], children)
@@ -151,36 +150,12 @@ fn the_back_control_is_the_platforms_own_back_on_a_pushed_route_and_an_item_else
     assert_eq!(unnamed.leading, vec![22]);
 }
 
-/// A text with no words between a header's items is a spacer, as an empty
-/// box is: the header is still the bar with no title.
-#[test]
-fn a_blank_text_is_a_spacer() {
-    let header = |words: &'static [(PropId, &'static str)]| {
-        kernel(view(
-            10,
-            vec![Node(
-                11,
-                NodeType::View,
-                HEADER,
-                vec![text(12, words), button(13, &[])],
-            )],
-        ))
-        .header_shape(10, None, true, &pressed)
-        .map(|shape| shape.trailing)
-    };
-    assert_eq!(header(&[(PropId::Text, " ")]), Some(vec![13]));
-    assert_eq!(header(WORDS), None);
-}
-
 #[test]
 fn what_is_not_header_shaped_is_no_bar() {
     // No header first; a header with no heading that holds a text; one with
     // two; a level with no heading role (LLP 1115.000 D12.5); a text in a
     // button is no title.
-    let level: &[(PropId, &str)] = &[
-        (PropId::AccessibilityHeadingLevel, "1"),
-        (PropId::Text, "Draft"),
-    ];
+    let level: &[(PropId, &str)] = &[(PropId::AccessibilityHeadingLevel, "1")];
     for (name, route) in [
         (
             "the header is not first",
@@ -200,7 +175,7 @@ fn what_is_not_header_shaped_is_no_bar() {
                     11,
                     NodeType::View,
                     HEADER,
-                    vec![button(13, &[]), view(17, vec![text(16, WORDS)])],
+                    vec![button(13, &[]), view(17, vec![text(16, &[])])],
                 )],
             ),
         ),
@@ -562,7 +537,7 @@ fn an_element_the_bar_has_no_object_for_is_no_item() {
             11,
             NodeType::View,
             HEADER,
-            vec![button(41, &[]), text(83, WORDS)],
+            vec![button(41, &[]), text(83, &[])],
         )],
     ));
     assert_eq!(untitled.header_shape(10, None, true, &pressed), None);

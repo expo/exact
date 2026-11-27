@@ -25,8 +25,7 @@
 //!
 //! **A header with no heading** is the bar too, with no title, when the bar
 //! places everything it shows: buttons, readouts, a search field, a
-//! tablist, and plain boxes around them or empty between them, a text with
-//! no words among those (issue #364).
+//! tablist, and plain boxes around them or empty between them (issue #364).
 //! Any other element keeps such a header in the page as written rather
 //! than give its place to a bar with no title. With no heading to
 //! stand between them, its items trail, as SwiftUI's
@@ -188,15 +187,7 @@ pub mod fact {
                 AUTHORED,
             ),
             (props.str(PropId::NavigationBar) == Some("none"), NO_BAR),
-            // A text with no words of its own shows nothing, as a box: a
-            // spacer. Its inline runs, if any, are its children.
-            (
-                node.node_type == NodeType::View
-                    || (node.node_type == NodeType::Text
-                        && !heading
-                        && props.str(PropId::Text).unwrap_or("").trim().is_empty()),
-                BOX,
-            ),
+            (node.node_type == NodeType::View, BOX),
             (
                 (node.node_type == NodeType::Pressable
                     || (node.node_type == NodeType::Control

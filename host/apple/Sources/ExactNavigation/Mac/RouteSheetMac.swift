@@ -112,7 +112,7 @@ struct SheetHeader: SheetHeading {
             children(node).contains { child in
                 if child.style["display"]?.string == "none" || child === rule.heading || child === cancel || child === confirm { return false }
                 // A box that only groups shows nothing itself; what it holds decides.
-                let groups = (child.kind == "view" || child.isBlankText) && !child.pressable && child.props["popover"] == nil && child.props["semanticTag"] != "dialog"
+                let groups = child.kind == "view" && !child.pressable && child.props["popover"] == nil && child.props["semanticTag"] != "dialog"
                 return !groups || others(in: child)
             }
         }

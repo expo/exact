@@ -160,8 +160,8 @@ fn a_symbol_beside_the_heading_in_its_row_is_the_titles() {
 }
 
 /// Issue #364: a route's first `header` that holds buttons and no heading is
-/// the bar with no title, so the compiler says nothing of it, a text with no
-/// words among them included; one that also holds a text is not, and `lower-header-no-bar` names the text and both
+/// the bar with no title, so the compiler says nothing of it; one that also
+/// holds a text is not, and `lower-header-no-bar` names the text and both
 /// repairs.
 #[test]
 fn a_header_of_buttons_alone_is_the_bar_and_one_with_a_text_is_named() {
@@ -172,8 +172,6 @@ fn a_header_of_buttons_alone_is_the_bar_and_one_with_a_text_is_named() {
     for header in [
         "  button press=go aria-label=\"Add\"\n    image \"symbol:add\"",
         "  row\n    button press=go aria-label=\"Add\"\n      image \"symbol:add\"\n  view flex=1\n  text \"Live\" role=\"status\"",
-        // A text with no words is a spacer, as an empty box is.
-        "  text \"\" flex=1\n  button press=go aria-label=\"Add\"\n    image \"symbol:add\"",
     ] {
         assert_eq!(crate::warnings::warned(&route(header)), [], "{header}");
     }
@@ -189,6 +187,16 @@ fn a_header_of_buttons_alone_is_the_bar_and_one_with_a_text_is_named() {
         m.contains("holds no heading, and this text in it is not a bar item")
             && m.contains("one `text role=\"heading\"`")
             && m.contains("a header of buttons alone is the bar"),
+        "{m}"
+    );
+    // A text with no words is no spacer to the bar: the warning names the one that is.
+    let (_, warnings) = contract::compile_warned(&route(
+        "  text \"\" flex=1\n  button press=go aria-label=\"Add\"\n    image \"symbol:add\"",
+    ));
+    let m = &warnings[0].message;
+    assert!(
+        m.contains("this `text` with no words in it is not a bar item")
+            && m.contains("Write a spacer as `view flex=1`"),
         "{m}"
     );
     // A heading that presses is still the heading, as the kernel's bar

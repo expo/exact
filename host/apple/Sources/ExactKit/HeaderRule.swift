@@ -71,7 +71,7 @@ package struct HeaderRule {
         if back != nil, node.props["id"] == back { facts |= 32 }
         if node.props["semanticTag"] == "header" { facts |= 64 }
         // A plain box, which shows nothing of its own (`fact::BOX`).
-        if node.kind == "view" || node.isBlankText { facts |= 32768 }
+        if node.kind == "view" { facts |= 32768 }
         if node.style["display"]?.string == "none" { facts |= 128 }
         // Written, never implied (LLP 1075.003 §9.10): a header that says it keeps its authored bar.
         if node.wrote("appearance"), node.style["appearance"]?.string == "none" { facts |= 512 }
@@ -122,12 +122,6 @@ package struct HeaderRule {
 }
 
 extension NodeView {
-    /// A text with no words and no inline run, which shows nothing of its
-    /// own, as a box: a spacer between a header's items (`fact::BOX`).
-    package var isBlankText: Bool {
-        kind == "text" && !isHeading && inlineText.isEmpty && (props["text"] ?? "").allSatisfy(\.isWhitespace)
-    }
-
     /// The children a reader of the header finds: `childNodes`, with a child
     /// the navigation lifted out of this node (a bar's hosted item, LLP
     /// 1141.004 D3) at its place among them.
