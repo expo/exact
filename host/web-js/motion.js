@@ -6,7 +6,7 @@
 // and this file is the runner's half between them: the kernel's motion seam
 // (each registered node's targets and `transition` at every commit, rt.js
 // `mo`), the holds `motion-glue.js` asks for, and the actions they end in.
-import { inertAncestor } from './navigation.js';
+import { carry, inertAncestor } from './navigation.js';
 import { motionController } from './motion-glue.js';
 import { transformDrags } from './transform.js';
 import { arrangeDrags } from './arrange.js';
@@ -207,7 +207,7 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
     if (px != null) w.m_height(id, px, now() / 1000);
     else if (w.m_unheight(id)) api.retire(id, 'height');
   }
-  const api = motionController({ views, now, generation: () => 0, request, applyBatch, inert: inertAncestor });
+  const api = motionController({ views, now, generation: () => 0, request, applyBatch, inert: inertAncestor, carry });
   const T = transformDrags({ w, views, viewId, api, lower, ops, now, authored, holds, held, eligible, inflight, say });
   const A = arrangeDrags({ w, views, viewId, api, lower, ops, now, applyBatch, authored, holds, held, hooks, After: globalThis.exact.After });
   // A list's wrappers during a preview are motion nodes too (list.js).

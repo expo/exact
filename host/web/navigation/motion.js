@@ -1,3 +1,4 @@
+import { carry } from "./inputs.js";
 import { queue, sheet, commit, root, log, settled } from "./routes.js";
 // LLP 1047 D5: calls to motion-glue.js and collection-glue.js queue in order until their after-paint piece loads. Before use, drop no-op reconciliations and write styles immediately.
 // `o.wasm(name, bytes)` returns a wasm reply, or null before boot; `o.replayed()` reconciles after replay.
@@ -46,7 +47,8 @@ export function afterPaintPieces(load, o) {
     const motion = m.motionController({
       ...common,
       releaseInteraction: (pointer) => collections.releaseInteraction(pointer),
-      request
+      request,
+      carry
     });
     const arrange = m.arrangeController({
       ...common,
@@ -102,7 +104,7 @@ export function afterPaintPieces(load, o) {
       }
       const el = o.views.get(id);
       if (el) {
-        el.style.cssText = text;
+        el.style.cssText = carry(el, text);
       }
     },
     keyframes

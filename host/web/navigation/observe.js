@@ -21,6 +21,7 @@
 // overlap from its bottom edge, not limited by its size, as the kernel derives them for the native hosts, and 0 while
 // no keyboard shows. `keyboardInset` gives only that depth, so the two families read alike, a floating keyboard taken
 // as docked. Activation (stage 5) runs it at each commit; until then only its tests do.
+import { drop, own } from "./inputs.js";
 import { keyboardInset } from "./environment.js";
 
 const EDGES = ["top", "right", "bottom", "left"];
@@ -84,7 +85,7 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
       return { rounds: result.rounds, unsettled: result.unsettled };
     }
     // The provisional values out, and each scroller where it was, then the settled ones in once the marks are gone
-    for (const [el, was] of before) reads.get(el).inputs.forEach((i, k) => was[k] ? el.style.setProperty(NAMES[i], was[k]) : el.style.removeProperty(NAMES[i]));
+    for (const [el, was] of before) reads.get(el).inputs.forEach((i, k) => was[k] ? own(el, NAMES[i], was[k]) : drop(el, NAMES[i]));
     sticky.forEach((a) => a.removeAttribute(REST));
     root.getBoundingClientRect();
     for (const [a, [x, y]] of scrollers) if (a.scrollLeft !== x || a.scrollTop !== y) a.scrollTo({ left: x, top: y, behavior: "instant" });
@@ -184,7 +185,7 @@ function ensureRoundsRule() {
 /** The inputs a reader reads, by their index in `NAMES`, from `inputs` (its safe area's, then its keyboard's twice), or
  * `initial` for a reader with no box. */
 function write(el, reads, inputs) {
-  for (const i of reads) el.style.setProperty(NAMES[i], inputs ? `${inputs[i]}px` : "initial");
+  for (const i of reads) own(el, NAMES[i], inputs ? `${inputs[i]}px` : "initial");
 }
 
 /** D9's rounds over `readers`, returning the inputs each settled on, how many rounds ran and the readers still moving.
