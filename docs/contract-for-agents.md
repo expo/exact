@@ -5437,8 +5437,8 @@ and `then`s (`TIMER_FIRE_LIMIT`), those that change nothing included; the rest i
 refused, what committed is kept, and the clock stays at the last one's time. A
 fast `every` under a long `clock +N` can reach it: tick slower or move the clock in steps.
 A firing whose action changes nothing commits nothing: it wrote no state a new value, and
-sent, refreshed and commanded nothing. Where a binding, derive or resource argument reads
-`performanceNow()`, every firing commits and shows the time.
+sent, refreshed and commanded nothing. Where a binding, derive, or a resource's argument,
+`when` or `for … in` list reads `performanceNow()`, every firing commits and shows the time.
 
 Use `change(action)` for work that must follow an input change, such as reading
 layout or issuing a host command:

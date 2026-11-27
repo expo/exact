@@ -152,6 +152,53 @@ fn a_view_that_reads_the_clock_still_commits_at_each_firing() {
     }
 }
 
+/// Every source answers `"ready"` at once.
+struct Ready;
+impl exact_runner::DataSource for Ready {
+    fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, exact_runner::DataError> {
+        Err(exact_runner::DataError::UnknownSource(name.into()))
+    }
+    fn answer(
+        &mut self,
+        _: &mut exact_runner::Store,
+        _: &str,
+        _: &[Value],
+    ) -> Result<exact_runner::Answer, exact_runner::DataError> {
+        Ok(exact_runner::Answer::Now(Value::str("ready")))
+    }
+}
+
+#[test]
+fn a_resource_whose_when_or_list_reads_the_clock_opens_at_an_idle_firing() {
+    for (resource, text) in [
+        (
+            "load() when performanceNow() >= 250 as shape string else empty()",
+            "message",
+        ),
+        (
+            "load(t) for t in (performanceNow() >= 250 ? [1] : []) as shape string",
+            "message.join(\",\")",
+        ),
+    ] {
+        let source = format!(
+            "component App\n  task beat mount\n    every(250, idle)\n  action idle\n    if false\n      shown = 0\n  state shown = 0\n  resource message = {resource}\n  view\n    text {text} testId=\"shown\"\n"
+        );
+        let plan = contract::compile(&source).unwrap_or_else(|e| panic!("{e}"));
+        let mut r = Runner::boot(
+            plan,
+            Ready,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        assert_eq!(r.advance(250.0).unwrap().len(), 1, "{resource}");
+        let key = r.kernel().find_first_by_test_id("shown").unwrap();
+        let node = r.kernel().node_by_key(key).unwrap();
+        assert_eq!(node.props.str(PropId::Text), Some("ready"), "{resource}");
+    }
+}
+
 #[test]
 fn idle_firings_count_toward_an_advances_fire_limit() {
     let mut r = boot(IDLE[0], 1, SHOWN);

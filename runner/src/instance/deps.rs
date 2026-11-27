@@ -285,7 +285,8 @@ pub struct Deps {
     pub(crate) derives: Vec<Reads>,
     /// Each resource's arguments together.
     pub(crate) resource_args: Vec<Reads>,
-    /// Whether any body above reads the clock.
+    /// Whether any body above, or a resource's `when`, list or key, reads the
+    /// clock.
     pub(crate) reads_clock: bool,
 }
 
@@ -415,7 +416,14 @@ impl Deps {
         .flat_map(|table| &table.reads)
         .chain(&deps.derives)
         .chain(&deps.resource_args)
-        .any(|reads| reads.bits.get(layout.clock()));
+        .any(|reads| reads.bits.get(layout.clock()))
+            // A resource's `when`, list and key settle at every commit too;
+            // the compiler refuses the clock only in a task's.
+            || plan
+                .resources
+                .iter()
+                .flat_map(|r| r.gate.iter().chain(r.each.iter()))
+                .any(|a| scan(plan.arg(a).expr, None).bits.get(layout.clock()));
         // Post-order over the site tree without recursing to the plan's depth;
         // the sites' reads are tabled once every one is known.
         let mut nodes = vec![Reads::default(); plan.nodes.len()];
