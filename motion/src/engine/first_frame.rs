@@ -100,36 +100,15 @@ impl Engine {
     /// together (`carried == at`), and a second call at the same instant
     /// starts only what began since.
     pub fn present_frame(&mut self, carried: f64, at: f64) -> Result<Vec<u64>, EngineError> {
-        if self.record_present(carried, at)? {
-            self.start_pending(carried, Some(at))
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    /// A picture prepared without holds has reached the display. Running
-    /// curves sample at its present; a hold born after its paint still waits.
-    pub fn present_frame_without_holds(
-        &mut self,
-        carried: f64,
-        at: f64,
-    ) -> Result<(), EngineError> {
-        if self.record_present(carried, at)? {
-            self.advance(self.now)?;
-        }
-        Ok(())
-    }
-
-    fn record_present(&mut self, carried: f64, at: f64) -> Result<bool, EngineError> {
         if !carried.is_finite() || !at.is_finite() {
             return Err(EngineError::NonFinite);
         }
         if carried < self.carried {
-            return Ok(false);
+            return Ok(Vec::new());
         }
         self.carried = carried;
         self.shown = self.shown.max(at);
-        Ok(true)
+        self.start_pending(carried, Some(at))
     }
 
     /// Release, at its own begin, every held curve and clock origin that

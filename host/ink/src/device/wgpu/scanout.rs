@@ -9,18 +9,15 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const PENDING_LIMIT: u32 = 2;
-
 /// A configured FIFO swapchain for one connector and mode.
 pub struct Scanout {
     output: Arc<Output>,
     blitter: Blit,
     next_id: u64,
-    pending_limit: usize,
-    uploads: Vec<::wgpu::Texture>,
-    upload_next: usize,
+    upload: Option<::wgpu::Texture>,
     size: [u32; 2],
     queue: ::wgpu::Queue,
+    errors: Arc<Mutex<Option<Error>>>,
 }
 
 struct Output {
@@ -30,7 +27,6 @@ struct Output {
     device: ::wgpu::Device,
     wait: khr::present_wait::Device,
     chain: vk::SwapchainKHR,
-    errors: Arc<Mutex<Option<Error>>>,
     _card: OwnedFd,
 }
 
@@ -44,17 +40,14 @@ impl QueuedFrame {
     /// Whether Vulkan has completed this presentation within the given time.
     pub fn wait(&self, timeout: Duration) -> Result<bool> {
         let ns = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
-        // SAFETY: the immutable output owns this FIFO swapchain and its device.
-        // presentWait allows another thread to queue the next ID during this wait.
+        // SAFETY: the immutable output owns the swapchain and its device.
+        // This ID was submitted to this FIFO swapchain with presentWait enabled.
         match unsafe {
             self.output
                 .wait
                 .wait_for_present(self.output.chain, self.id.get(), ns)
         } {
-            Ok(()) | Err(vk::Result::SUBOPTIMAL_KHR) => {
-                failure(&self.output.errors)?;
-                Ok(true)
-            }
+            Ok(()) => Ok(true),
             Err(vk::Result::TIMEOUT) => Ok(false),
             Err(e) => Err(vk_error(e)),
         }
@@ -162,7 +155,7 @@ impl Scanout {
             height: size[1],
             color_space: ::wgpu::SurfaceColorSpace::Srgb,
             present_mode: ::wgpu::PresentMode::Fifo,
-            desired_maximum_frame_latency: PENDING_LIMIT,
+            desired_maximum_frame_latency: 1,
             alpha_mode,
             view_formats: Vec::new(),
         };
@@ -174,17 +167,6 @@ impl Scanout {
         let chain = unsafe { surface.as_hal::<Vulkan>() }
             .and_then(|s| s.raw_native_swapchain())
             .ok_or(Error::Unsupported("a native Vulkan swapchain"))?;
-        // WSI can clamp the requested image count. Leave the scanning image
-        // with the panel and admit an ahead frame only if a third image exists.
-        // SAFETY: this device owns the newly configured, idle swapchain.
-        let images = unsafe {
-            let hal = device
-                .as_hal::<Vulkan>()
-                .ok_or(Error::Unsupported("a Vulkan device"))?;
-            khr::swapchain::Device::new(hal.shared_instance().raw_instance(), hal.raw_device())
-                .get_swapchain_images(chain)
-        }
-        .map_err(vk_error)?;
         let errors = ink.errors.clone();
         Ok((
             ink,
@@ -194,26 +176,16 @@ impl Scanout {
                     device,
                     wait,
                     chain,
-                    errors,
                     _card: card,
                 }),
                 blitter,
                 next_id: 1,
-                pending_limit: images
-                    .len()
-                    .saturating_sub(1)
-                    .clamp(1, PENDING_LIMIT as usize),
-                uploads: Vec::new(),
-                upload_next: 0,
+                upload: None,
                 size,
                 queue,
+                errors,
             },
         ))
-    }
-
-    /// How many presentations the carrier can own while the panel holds its image.
-    pub fn pending_limit(&self) -> usize {
-        self.pending_limit
     }
 
     /// A CPU-composited content region or fallback painter uses the same display.
@@ -228,9 +200,8 @@ impl Scanout {
             height: pixels.height(),
             depth_or_array_layers: 1,
         };
-        if self.uploads.len() < self.pending_limit {
-            let texture = self
-                .output
+        let texture = self.upload.get_or_insert_with(|| {
+            self.output
                 .device
                 .create_texture(&::wgpu::TextureDescriptor {
                     label: Some("Linux panel pixels"),
@@ -241,12 +212,8 @@ impl Scanout {
                     format: ::wgpu::TextureFormat::Rgba8Unorm,
                     usage: ::wgpu::TextureUsages::COPY_DST | ::wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
-                });
-            self.uploads.push(texture);
-        }
-        let slot = self.upload_next % self.uploads.len();
-        self.upload_next = self.upload_next.wrapping_add(1);
-        let texture = &self.uploads[slot];
+                })
+        });
         self.queue.write_texture(
             texture.as_image_copy(),
             pixels.data(),
@@ -272,7 +239,7 @@ impl Scanout {
         source: &::wgpu::TextureView,
         rotation: Rotation,
     ) -> Result<QueuedFrame> {
-        failure(&self.output.errors)?;
+        failure(&self.errors)?;
         let size = source.texture().size();
         if rotation.size([size.width, size.height]) != self.size {
             return Err(Error::Invalid(
@@ -305,14 +272,9 @@ impl Scanout {
         let mut encoder = output.device.create_command_encoder(&Default::default());
         self.blitter
             .copy(&output.device, &mut encoder, source, &view, rotation);
-        // The next paint can overwrite the source on this queue once the copy
-        // is submitted. WSI owns the acquired image through presentation.
         self.queue.submit([encoder.finish()]);
-        failure(&self.output.errors)?;
-        // Once `present` runs, return the `QueuedFrame` unconditionally so the
-        // waiter always runs `vkWaitForPresentKHR` before teardown; any device
-        // error recorded on `output.errors` surfaces in `QueuedFrame::wait`.
         self.queue.present(image);
+        failure(&self.errors)?;
         Ok(QueuedFrame {
             output: self.output.clone(),
             id,

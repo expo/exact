@@ -1,8 +1,7 @@
 //! The Linux display uses the connected panel at its preferred mode. Ink
 //! presents directly when Vulkan supports the connector and presentation
 //! feedback. Other painters and failed Vulkan surfaces use KMS dumb buffers.
-//! Direct Vulkan can submit one frame ahead of its pending presentation;
-//! KMS dumb buffers keep one pending flip while the host services other wakes.
+//! One frame can be outstanding while the host services input and worker wakes.
 //! @ref LLP 1015 §6; expo/exact#145.
 
 #![allow(unsafe_code)]
@@ -184,16 +183,10 @@ impl event_loop::Output for Display {
             .as_ref()
             .map_or_else(|| self.flips.pending(), |d| d.pending())
     }
-    fn can_submit(&self) -> bool {
-        self.direct
-            .as_ref()
-            .map_or_else(|| !self.flips.pending(), |d| d.can_submit())
-    }
-    /// When the Vulkan waiter observed the last completed presentation.
+    /// The vblank sequence of the last completed flip (LLP 1079 D3).
     fn observed(&self) -> Option<Instant> {
-        self.direct.as_ref().and_then(|d| d.observed())
+        self.direct.as_ref().and_then(|d| d.observed)
     }
-    /// The vblank sequence of the last completed KMS flip (LLP 1079 D3).
     fn sequence(&self) -> Option<u32> {
         self.flips.sequence
     }
@@ -207,11 +200,11 @@ impl event_loop::Output for Display {
             .map_or_else(|| self.card.0.as_raw_fd(), |d| d.fd())
     }
 
-    // The Vulkan swapchain owns its submitted images. KMS copies only into
-    // the back buffer unowned by scanout or a pending flip.
+    // Copy/submit only when neither scanout nor an outstanding flip owns back.
+    // The first set_crtc is synchronous; later calls never wait for a vblank.
     fn submit(&mut self, frame: PanelFrame) -> Result<Completion, String> {
         if let Some(direct) = &mut self.direct {
-            let result = direct.submit(frame)?;
+            let result = direct.submit(frame);
             return Ok(self.finish_direct(result));
         }
         self.open_dumb_buffers()?;
@@ -224,7 +217,6 @@ impl event_loop::Output for Display {
         flips
             .submit(frame, |back, first, frame| {
                 let pixels = frame
-                    .picture
                     .mirror()
                     .ok_or("KMS dumb buffer requires panel pixels")?;
                 let (db, fb) = &mut buffers[back];

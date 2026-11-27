@@ -39,11 +39,6 @@ pub struct Dirty {
 }
 
 impl Dirty {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn restore_commit(&mut self, at: Option<f64>) {
-        self.committed = self.committed.into_iter().chain(at).reduce(f64::max);
-    }
-
     #[cfg(test)]
     pub(crate) fn pending_nodes(&self) -> usize {
         self.hard.len() + self.moved.len() + self.renewed.len()

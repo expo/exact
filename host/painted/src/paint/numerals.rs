@@ -64,19 +64,6 @@ impl Roll {
 }
 
 impl Numerals {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) fn discard(
-        &mut self,
-        previous: &BTreeMap<NodeKey, Rc<Paragraph>>,
-        abandoned: &BTreeMap<NodeKey, Rc<Paragraph>>,
-    ) {
-        self.rolls
-            .retain(|key, _| match (previous.get(key), abandoned.get(key)) {
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b) || text(a) == text(b),
-                _ => false,
-            });
-    }
-
     /// Whether a roll owes a frame.
     pub(crate) fn rolling(&self) -> bool {
         !self.rolls.is_empty()

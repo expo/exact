@@ -66,7 +66,7 @@ mod transform_binding;
 #[path = "value_watch.rs"]
 mod value_watch;
 pub use error::{HostError, LET_GO_AFTER};
-pub(crate) use first_frame::PictureMotion;
+
 pub use store_writer::drain as drain_store_writes;
 pub use store_writer::take_warnings as take_store_warnings;
 use system::{physical_memory, store_read};
@@ -137,7 +137,7 @@ pub struct Host<D: DataSource> {
     /// Whether colour transitions are lowered too (`lower.rs`).
     lower_colors: bool,
     lowered_epoch: u64,
-    /// The engine time through which the latest picture carried holds.
+    /// The engine time the latest picture carried (`first_frame.rs`).
     carried: Option<f64>,
     /// The epoch each lowered node's plays last changed at.
     lowered_changed: std::collections::HashMap<u64, u64>,

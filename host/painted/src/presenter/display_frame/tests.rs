@@ -431,87 +431,6 @@ fn failed_paint_cannot_acknowledge_first_pixel_or_bind_stale_hit_boxes() {
 }
 
 #[test]
-fn failed_receipts_report_real_presents_without_activating_or_retrying_forever() {
-    let source = r##"component App
-  state faded = false
-  action fade
-    faded = true
-  view
-    box testId="fader" press=fade opacity=(faded ? 0 : 1) transition="opacity 200ms linear" width=100 height=100 background-color="#cc3300"
-"##;
-    let previous = exact_runner::page::set_awaits_present(true);
-    let (mut p, _, fail) = boot_app(source);
-    exact_runner::page::set_awaits_present(previous);
-    p.presents_pictures(true);
-    p.set_live_clock(Some(Rc::new(|| 0.)));
-    p.set_pointer(None);
-    let fader = id(&p, "fader");
-
-    fail.set(true);
-    let failed = submit(&mut p).unwrap();
-    assert!(!p.last_frame_succeeded);
-    assert!(failed.pixels.data().iter().all(|byte| *byte == 255));
-    assert!(!p.host.runner().presented().seen);
-    assert!(complete(&mut p, &failed));
-    assert!(p.display_presented(&failed, 16.).is_none());
-    assert!(
-        p.host.runner().presented().seen,
-        "the white fallback really showed"
-    );
-    assert!(
-        !p.painted,
-        "a fallback cannot activate the app's first pixel"
-    );
-    assert_eq!(p.hit(5., 5.), None, "failed geometry was not published");
-    assert!(
-        !p.dirty(),
-        "a permanent refusal does not request an idle retry"
-    );
-    assert!(!p.needs_animation_frame());
-    assert_eq!(p.wake_due_ms(), None);
-
-    fail.set(false);
-    p.repaint();
-    let first = submit(&mut p).unwrap();
-    assert!(complete(&mut p, &first));
-    assert!(p.display_presented(&first, 32.).is_none());
-    assert!(p.painted);
-    assert_eq!(p.hit(5., 5.), Some(fader));
-
-    assert!(p.host.dispatch_at(fader, Event::Press, 100.).is_none());
-    assert!(p.after_commit().is_none());
-    p.tick(150.);
-    fail.set(true);
-    let failed_motion = submit(&mut p).unwrap();
-    assert!(!p.last_frame_succeeded);
-    assert!(!p.host.holds_uncarried());
-    assert_eq!(p.host.presented(fader).opacity, 1.);
-    assert!(complete(&mut p, &failed_motion));
-    assert!(p.display_presented(&failed_motion, 166.).is_none());
-    p.tick(266.);
-    assert!(
-        (p.host.presented(fader).opacity - 0.5).abs() < 1e-3,
-        "a real fallback present keeps the existing carried-motion clock"
-    );
-    p.tick(400.);
-    let failed_final = submit(&mut p).unwrap();
-    assert!(complete(&mut p, &failed_final));
-    assert!(p.display_presented(&failed_final, 416.).is_none());
-    assert_eq!(p.host.presented(fader).opacity, 0.);
-    assert!(!p.dirty());
-    assert!(!p.needs_animation_frame());
-    assert_eq!(p.wake_due_ms(), None);
-
-    fail.set(false);
-    p.repaint();
-    let recovered = submit(&mut p).unwrap();
-    assert!(p.last_frame_succeeded);
-    assert!(complete(&mut p, &recovered));
-    assert!(p.display_presented(&recovered, 432.).is_none());
-    assert!(!p.dirty());
-}
-
-#[test]
 fn headless_geometry_is_current_before_the_first_picture() {
     let (mut p, paints, _) = boot();
     assert!(!p.boxes().is_empty());
@@ -1210,7 +1129,3 @@ fn a_press_on_an_svg_element_reaches_its_button_on_an_attached_display() {
 
 #[path = "inline_tests.rs"]
 mod inline;
-
-#[cfg(target_os = "linux")]
-#[path = "ahead_tests.rs"]
-mod ahead;

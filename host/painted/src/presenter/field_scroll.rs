@@ -223,54 +223,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn typing_while_an_unchanged_frame_is_pending_keeps_the_final_caret_visible() {
-        for ahead in [false, true] {
-            let (mut p, id) = fixture("input", &"wide text ".repeat(8));
-            p.field_key(id, "End", 0.);
-            let a = p.panel_frame_ahead(true).unwrap();
-            assert!(p.panel_complete(&a));
-            assert!(p.display_presented(&a, 0.).is_none());
-            assert!(p.caret_frame().is_some());
-            let old_scroll = p.scroll_of(id).0;
-            assert!(old_scroll > 0.);
-
-            // An unchanged redraw can await present while the person types.
-            p.repaint();
-            let b = p.panel_frame_ahead(true).unwrap();
-            for n in 0..6 {
-                p.field_key(id, "W", 1. + f64::from(n));
-            }
-            assert!(p.field_text(id).ends_with("WWWWWW"));
-            let prepared = ahead.then(|| p.panel_frame_ahead(true)).flatten();
-            assert!(p.panel_complete(&b));
-            assert!(p.display_presented(&b, 16.).is_none());
-            let c = prepared.unwrap_or_else(|| p.panel_frame_ahead(true).unwrap());
-            assert!(p.panel_complete(&c));
-            assert!(p.display_presented(&c, 32.).is_none());
-
-            let final_frame = p.panel_frame_ahead(true).unwrap();
-            assert!(p.panel_complete(&final_frame));
-            assert!(p.display_presented(&final_frame, 48.).is_none());
-            let caret = p.caret_frame().unwrap_or_else(|| {
-                panic!(
-                    "caret hidden after pending redraw and typing: ahead={ahead}, scroll={:?}",
-                    p.scroll_of(id)
-                )
-            });
-            let field = p.rect_of(id).unwrap();
-            assert!(caret.0 >= field.0 && caret.0 + caret.2 <= field.0 + field.2);
-            let pixels = final_frame.mirror().unwrap();
-            let coverage: u32 = pixels
-                .pixels()
-                .iter()
-                .map(|pixel| u32::from(pixel.red().saturating_sub(pixel.green())))
-                .sum();
-            assert!(coverage >= 16 * 255, "caret pixels missing: ahead={ahead}");
-        }
-    }
-
     #[test]
     fn scrolled_selection_keeps_the_visible_parts_of_the_full_range() {
         let value = "אב 😀 a line long enough to wrap in the field\n\n".repeat(16);

@@ -327,12 +327,6 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// A keyboard inset will move the field only after its new port is shown.
-    #[cfg(target_os = "linux")]
-    pub(super) fn reveal_waits_for_picture(&self) -> bool {
-        self.window.reveal.is_some()
-    }
-
     /// The Android reader's iframe `id` took the platform's focus (a field
     /// in its page did) or lost it, for this session and allocation.
     #[cfg(any(target_os = "android", test))]

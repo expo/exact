@@ -642,11 +642,6 @@ impl Surfaces {
         std::mem::take(&mut self.outcomes)
     }
 
-    #[cfg(target_os = "linux")]
-    pub(crate) fn has_pending_requests(&self) -> bool {
-        !self.captures.is_empty() || !self.work.is_empty() || !self.outcomes.is_empty()
-    }
-
     fn sync<D: DataSource>(
         &mut self,
         host: &mut Host<D>,

@@ -213,23 +213,50 @@ test "the web reads no text from a photo, so a book offers no Add Quote from Pho
   tap "book-seed-2"
   expect tree missing "add-quote"
 
-// The first read in a new build waits while the platform compiles its recognizer, a minute or more. Leaving the book
-// before the lines come is tested on Shelf's plan, where the test holds the read's answer
-// (contract/cli/tests/it/shelf_quote.rs).
-test "a photo's lines open the quote sheet, and the picker opens again on the same book" on macos, ios
+// The book screen owns the photo's read (LLP 1035.005.004 D6). The first read
+// in a new build waits while the platform compiles its recognizer.
+test "a photo's lines open the quote sheet, and leaving the book before they come opens none" on macos, ios
   tap "book-seed-2"
   clock settle
   tap "add-quote"
   pick "quote-photo" "../../packages/text-detection/fixture/quote.png"
-  clock until state current.name == "quote" within 120000
+  clock data
+  clock data
+  clock data
+  clock settle
+  expect state current.name == "quote"
   expect text "quote-line-0" == "It is a truth universally acknowledged,"
-  // A cancelled pick reads nothing
   back
   clock settle
   tap "add-quote"
-  pick "quote-photo" cancel
+  pick "quote-photo" "../../packages/text-detection/fixture/quote.png"
+  back
+  clock settle
+  clock data
+  clock +1000
+  clock data
+  clock settle
+  expect state current.name == "library"
+  expect tree missing "route-quote"
+
+// A book that takes another's place (a link to it while a book shows, as a row beside the list is) is a new visit,
+// so the other's read goes with the other's screen, even when the other is opened again
+test "a photo read for a book that another took the place of opens no sheet when that book comes back" on macos
+  tap "book-seed-2"
+  clock settle
+  tap "add-quote"
+  pick "quote-photo" "../../packages/text-detection/fixture/quote.png"
+  type "shelf" "/book/seed-1"
+  clock settle
+  expect state current.params.id == "seed-1"
+  type "shelf" "/book/seed-2"
+  clock settle
+  clock data
+  clock +1000
+  clock data
   clock settle
   expect state current.name == "book"
+  expect state current.params.id == "seed-2"
   expect tree missing "route-quote"
 
 after "askRemoveAimed" "askRemoveAimed writes only none"

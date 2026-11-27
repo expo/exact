@@ -126,7 +126,7 @@ export function translation(el,text,cs) {
     return terms?v:NaN;
   });
 }
-export function motionController({views,now,generation,request,applyBatch,inert,releaseInteraction=()=>{},ready=()=>true}) {
+export function motionController({views,now,generation,request,applyBatch,inert,releaseInteraction=()=>{},ready=()=>true,carry=(el,text)=>text}) {
   const properties=['translate','scale','rotate','opacity','height'];
   // What motion writes over the author's style, which `restore` puts back: the lift's `z-index` and `position`, the
   // `transition` that keeps a held property from animating, and each held property (`scale` as `--exact-scale` on a
@@ -763,7 +763,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     style(id,text) {
       const el=views.get(id); if(!el) return;
       if(authored.has(id)) authored.set(id,text);
-      el.style.cssText=text; overlay(id);
+      el.style.cssText=carry(el,text); overlay(id);
     },
     animate(op) {
       const {id,property}=op, k=key(id,property), prior=animations.get(k);
