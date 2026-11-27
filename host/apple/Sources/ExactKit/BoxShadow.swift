@@ -203,6 +203,22 @@ extension NodeView {
         }
     }
 
+    #if os(iOS) || os(tvOS)
+    /// Includes shadows a later hover, focus, or appearance change could bring.
+    package var mayCastGroupedCardShadow: Bool {
+        func hasLookShadow(_ style: NodeStyle) -> Bool {
+            Self.look("hover", in: style)?["box_shadow"]?.array?.isEmpty == false
+                || Self.look("focus_visible", in: style)?["box_shadow"]?.array?.isEmpty == false
+        }
+        let base = pressPaint.lookBase ?? style
+        if props["defaultSurfaceShadow"] != nil || base["box_shadow"]?.array?.isEmpty == false || hasLookShadow(base) {
+            return true
+        }
+        guard let section = nodeSuperview, section.groupedShadowCard === self else { return false }
+        return hasLookShadow(section.style)
+    }
+    #endif
+
     /// The `box-shadow` list resolved for the view's appearance; a popover's
     /// default surface's shadow where its author wrote none (`defaultSurface`).
     package var boxShadows: [BoxShadowSpec] {
