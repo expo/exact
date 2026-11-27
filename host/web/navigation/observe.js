@@ -30,6 +30,10 @@ const INHERITED = new Set(["font", "font-size", "line-height", "letter-spacing",
   "tab-size", "text-underline-offset", "-webkit-text-stroke-width"]);
 /** D9's bound on the rounds of one transaction. */
 export const ROUNDS = 24;
+/** The round from which a reader the secant has not settled takes half a step toward its measurement, as the kernel's
+ * `DAMPED_FROM`: a third of the bound. Half a step settles a reading whose slope against its input lies between -3 and
+ * 1, where coupled readers' secants can swing between a range's ends. */
+const DAMPED_FROM = ROUNDS / 3;
 
 /** How far the unsafe area `band` (top right bottom left, from the viewport's edges, `width` by `height`) reaches into
  * the border box `r` (viewport coordinates) from each of its edges, at most that area's depth there. */
@@ -298,7 +302,7 @@ function rounds(readers, reads, before, chains, held, band, keyboard, save) {
       // The first round takes the measurement exactly and keeps its residual, from which the next takes the secant
       const input = written.get(el), m = measured[i], only = reads.get(el).inputs, exact = round ? tolerance : 0;
       if (m == null || settled(input, m, exact, only)) return;
-      const next = input == null ? m : step(input, m, samples[i], caps[i], exact);
+      const next = input == null ? m : step(input, m, samples[i], caps[i], exact, round);
       written.set(el, next);
       save();
       write(el, only, next);
@@ -347,12 +351,14 @@ const settled = (input, measured, tolerance, only) =>
 /** D9's step on each input, as the kernel's solve takes it: where the residual `measured - input` is within `tolerance`
  * the input holds; with the last round's sample on that input, the secant through both, clamped to 0 and the input's
  * most `caps`, or that range's end where the line's root lies behind the input or the residual repeats while the input
- * moved; else the measurement. `last` keeps each input's sample for the next round. */
-function step(input, measured, last, caps, tolerance) {
+ * moved; else the measurement; and from `DAMPED_FROM` on, half a step toward the measurement within the same range.
+ * `last` keeps each input's sample for the next round. */
+function step(input, measured, last, caps, tolerance, round) {
   return input.map((x, e) => {
     const m = measured[e], r = m - x, prior = last[e];
     last[e] = [x, r];
     if (Math.abs(r) <= tolerance) return x;
+    if (round >= DAMPED_FROM) return Math.min(Math.max(x + 0.5 * r, 0), caps[e]);
     if (!prior || prior[0] === x) return m;
     const [x0, r0] = prior;
     if (r === r0) return r > 0 ? caps[e] : 0;

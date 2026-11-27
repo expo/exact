@@ -14,6 +14,8 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
   <div class="b" style="top:60px;left:100px;--exact-additional-safe-area-right:10px"><div class="r at" id="untouched" style="top:-40px"></div></div>
   <div id="coupled" style="position:absolute;left:150px;width:40px;bottom:690px;outline-offset:var(--exact-safe-area-inset-top, 0px);--exact-additional-safe-area-top:calc(10px + var(--exact-safe-area-inset-top, 0px))">
     <div id="coupledchild" style="height:calc(100px - 0.5 * var(--exact-safe-area-inset-top, 0px))"></div></div>
+  <div id="coupled2" style="position:absolute;left:340px;width:40px;bottom:700px;outline-offset:var(--exact-safe-area-inset-top, 0px);--exact-additional-safe-area-top:calc(10px + var(--exact-safe-area-inset-top, 0px))">
+    <div id="coupledchild2" style="height:calc(100px - 0.25 * var(--exact-safe-area-inset-top, 0px))"></div></div>
   <div data-navigationbar="transparent" style="left:200px"><div data-exact-list-item><header data-exact-clear></header></div><div class="r at" id="wrapped" style="top:47px"></div></div>
   <div class="b" id="zero" style="left:250px;height:20px;top:calc(50px - var(--exact-safe-area-inset-top, 50px))"></div>
   <div style="position:absolute;top:0;left:300px;width:40px;height:100px"><div id="port" style="height:100px;overflow:hidden"><div style="height:1000px"></div>
@@ -23,7 +25,7 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
   <script type="module">
     import { moving, observe } from '/observe.js';
     document.getElementById('port').scrollTop = 35;
-    const ids = ['bordered', 'joined', 'joinedtop', 'untouched', 'coupled', 'coupledchild', 'wrapped', 'zero', 'contents', 'hidden'];
+    const ids = ['bordered', 'joined', 'joinedtop', 'untouched', 'coupled', 'coupledchild', 'coupled2', 'coupledchild2', 'wrapped', 'zero', 'contents', 'hidden'];
     const els = ids.map((id) => document.getElementById(id)), { unsettled } = observe(els, [47, 0, 34, 0]);
     const read = () => Object.fromEntries(ids.map((id, i) => [id, parseFloat(els[i].style.getPropertyValue('--exact-safe-area-inset-top')) || 0]));
     const reported = read();
@@ -184,6 +186,10 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader's area fo
     expect(Math.abs(fresh.coupled - reported.coupled)).toBeLessThan(0.5);
     expect(Math.abs(fresh.coupledchild - reported.coupledchild)).toBeLessThan(0.5);
     expect(Math.abs(reported.coupledchild - 42)).toBeLessThan(1);
+    // The same at 700 with a quarter of the input: its secants swing between the range's ends, and from a third of the
+    // bound half steps settle it, the child near its fixed point of 69.33
+    expect(Math.abs(fresh.coupledchild2 - reported.coupledchild2)).toBeLessThan(0.5);
+    expect(Math.abs(reported.coupledchild2 - 69.33)).toBeLessThan(1);
     // A transparent bar to 91, its header in a list-item wrapper, over a reader at 47
     expect(reported.wrapped).toBeCloseTo(44, 1);
     // `top: calc(50px - input)`: from 0 it lies at 50, clear of the band, its fixed point there
