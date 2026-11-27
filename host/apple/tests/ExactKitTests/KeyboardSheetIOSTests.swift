@@ -167,10 +167,14 @@ final class KeyboardSheetIOSTests: XCTestCase {
         until("the presentation lands") { !owner.isBeingPresented }
         let list = try XCTUnwrap(p.views.values.first { $0.props["id"] == "form-list" })
         let collection = try XCTUnwrap(sequence(first: list.subviews, next: { $0.flatMap(\.subviews).nilIfEmpty }).joined().first { $0 is UICollectionView } as? UICollectionView)
-        let container = try XCTUnwrap(sequence(first: list as UIView, next: \.superview).first { $0.next is UIViewController })
+        // The presented route's own controller, from the modal stack, and the phone from the window, apart from the
+        // lookup `sideReach` makes
+        let route = try XCTUnwrap(p.modalHost.routes.last?.node)
+        let container = try XCTUnwrap(session.presenter.navigationHost.controllers[route.id]?.view)
+        XCTAssertTrue(list.isDescendant(of: container), "the list lies in the presented route's view")
         let side = container.safeAreaInsets.right, box = list.convert(list.bounds, to: container).maxX
         let reached = try XCTUnwrap(collection.superview).convert(collection.frame, to: container).maxX
-        if container.traitCollection.placesVerticalBar {
+        if try XCTUnwrap(window).traitCollection.placesVerticalBar {
             // On an iPhone Duo the case is the one this tests: the list's edge meets the sheet's clearance of the strip
             XCTAssertGreaterThan(side, 0, "an iPhone Duo's sheet clears the vertical bar's strip")
             XCTAssertEqual(box, container.bounds.maxX - side, accuracy: 0.5, "the list's box ends at the sheet's clearance")
