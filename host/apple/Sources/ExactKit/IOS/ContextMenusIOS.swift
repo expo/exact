@@ -591,9 +591,12 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             if owner.titleLift == nil { owner.titleLift = .some((shown as? TitleMenuSurface)?.avatarLift) }
             if case let avatar?? = owner.titleLift {
                 // One its `contextmenu` hid or removed has no place to return to
-                guard avatar.view.window != nil, !avatar.view.isHidden, let target = LiftTarget.target(avatar.view) else { return nil }
+                // Its outline now: the title may have resized it while its menu was up
+                let current = (shown as? TitleMenuSurface)?.avatarLift
+                let outline = current?.view === avatar.view ? current?.outline ?? avatar.outline : avatar.outline
+                guard avatar.view.window != nil, !avatar.view.isHidden, let target = LiftTarget.target(avatar.view, around: outline.bounds) else { return nil }
                 let parameters = UIPreviewParameters()
-                parameters.visiblePath = avatar.outline
+                parameters.visiblePath = outline
                 parameters.backgroundColor = .clear
                 return UITargetedPreview(view: avatar.view, parameters: parameters, target: target)
             }
@@ -628,7 +631,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
                 parameters.backgroundColor = UIColor(cgColor: fill)
             }
         }
-        guard let target = LiftTarget.target(shown) else { return nil }
+        guard let target = LiftTarget.target(shown, around: parameters.visiblePath?.bounds) else { return nil }
         return UITargetedPreview(view: shown, parameters: parameters, target: target)
     }
 

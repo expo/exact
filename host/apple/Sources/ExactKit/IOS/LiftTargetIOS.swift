@@ -72,8 +72,12 @@ package enum LiftTarget {
     /// `container(of:)`, centered on the view, with the view's transform, as
     /// UIKit's own target for a view carries it (`UITargetedPreview(view:parameters:)`),
     /// and each ancestor's scale and rotation; converting the center takes the
-    /// translations.
-    package static func target(_ view: UIView, pullDown: Bool = false) -> UIPreviewTarget? {
+    /// translations. UIKit sizes a preview to its visible path and puts the
+    /// path's middle at the target's center, so a preview drawn in part of its
+    /// view (a balloon's outline above the room its box keeps for a tail it
+    /// does not draw) aims at the middle of that part, `around`, in the view's
+    /// own space; else it would show offset by half what it leaves out.
+    package static func target(_ view: UIView, around region: CGRect? = nil, pullDown: Bool = false) -> UIPreviewTarget? {
         guard let container = pullDown ? pullDownContainer(of: view) : container(of: view), let parent = view.superview else { return nil }
         var transform = view.transform
         for ancestor in sequence(first: parent, next: { $0.superview }) {
@@ -83,7 +87,8 @@ package enum LiftTarget {
         }
         transform.tx = 0
         transform.ty = 0
-        return UIPreviewTarget(container: container, center: view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: container), transform: transform)
+        let middle = region.flatMap { $0.isEmpty ? nil : CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        return UIPreviewTarget(container: container, center: view.convert(middle, to: container), transform: transform)
     }
 
     /// `view` as its own preview, clipped to its corners, over nothing (a

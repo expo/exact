@@ -81,6 +81,22 @@ final class ContextLiftShapeIOSTests: XCTestCase {
         XCTAssertTrue(back.contains(CGPoint(x: 118, y: 44)) && !back.contains(CGPoint(x: 4, y: 44)), "it returns in the shape it lifted in")
     }
 
+    /// UIKit puts the middle of a preview's visible path at its target: a
+    /// balloon that draws no tail in the room its box keeps for one aims at
+    /// its body's middle as it lifts and as it returns, or it shows lower.
+    func testABalloonWithNoTailAimsAtItsBodysMiddle() throws {
+        if ExactEnv.agentMode { throw XCTSkip("under the agent the popover is painted (D4)") }
+        let body: [[Any]] = [["M", [0, 0]], ["L", [120, 0]], ["L", [120, 40]], ["L", [0, 40]], ["Z", []]]
+        let p = try balloon(clipped: true, clip: body)
+        defer { p.menus.reset() }
+        let node = try XCTUnwrap(p.views[2])
+        for preview in [try lifted(p), try dismissed(p)] {
+            let middle = node.convert(CGPoint(x: 60, y: 20), to: preview.target.container)
+            XCTAssertEqual(preview.target.center.x, middle.x, accuracy: 0.5)
+            XCTAssertEqual(preview.target.center.y, middle.y, accuracy: 0.5, "the body's middle, 4 points above the box's")
+        }
+    }
+
     func testAClipPathPastTheBoxIsCutToIt() throws {
         if ExactEnv.agentMode { throw XCTSkip("under the agent the popover is painted (D4)") }
         let p = try balloon(clipped: true, height: 40)

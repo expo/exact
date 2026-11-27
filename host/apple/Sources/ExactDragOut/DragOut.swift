@@ -222,7 +222,7 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     /// context menu's preview of a node, which a node with both lifts once
     /// (D4).
     static func preview(of view: NodeView) -> UITargetedDragPreview? {
-        guard !view.isHidden, let target = LiftTarget.target(view) else { return nil }
+        guard !view.isHidden else { return nil }
         let parameters = UIDragPreviewParameters()
         if let lift = LiftTarget.clipLift(view) {
             parameters.visiblePath = lift.outline
@@ -231,6 +231,7 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
             parameters.visiblePath = LiftTarget.rounded(view)
             parameters.backgroundColor = view.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear
         }
+        guard let target = LiftTarget.target(view, around: parameters.visiblePath?.bounds) else { return nil }
         return UITargetedDragPreview(view: view, parameters: parameters, target: target)
     }
 

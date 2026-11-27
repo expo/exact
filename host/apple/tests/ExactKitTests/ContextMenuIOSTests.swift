@@ -12,6 +12,24 @@ import XCTest
 /// stack's animation, `.dismiss` otherwise. The native fixture's `peek` row.
 /// UIKit, so a simulator runs it: bun host/apple/build.mjs --test --ios
 final class ContextMenuIOSTests: XCTestCase {
+    /// UIKit sizes a preview to its visible path and puts the path's middle
+    /// at its target's center: a preview drawn in the top part of its view
+    /// (a balloon above the room its box keeps for a tail it does not draw)
+    /// aims at the middle of that part, not of the view, or it shows lower.
+    func testALiftAimsAtTheMiddleOfWhatItDraws() throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let screen = UIViewController()
+        window.rootViewController = screen
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let view = UIView(frame: CGRect(x: 100, y: 100, width: 100, height: 100))
+        screen.view.addSubview(view)
+        XCTAssertEqual(try XCTUnwrap(LiftTarget.target(view)).center.y, 150, accuracy: 0.5)
+        let part = try XCTUnwrap(LiftTarget.target(view, around: CGRect(x: 0, y: 0, width: 100, height: 60)))
+        XCTAssertEqual(part.center.y, 130, accuracy: 0.5)
+        XCTAssertEqual(part.center.x, 150, accuracy: 0.5)
+    }
+
     private var window: UIWindow?
     private var session: ExactSession?
 
