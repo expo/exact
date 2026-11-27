@@ -21,21 +21,19 @@ use std::time::{Duration, Instant, SystemTime};
 #[path = "disk.rs"]
 mod disk;
 
-/// The app's own disk cache directory, beside its `app:/cache`, as each app
-/// keeps its own (XDG, `%LOCALAPPDATA%\\<app>`); none until [`keep_on_disk`].
-static KEPT: OnceLock<PathBuf> = OnceLock::new();
+/// The process's disk cache, the first app's to boot; none until
+/// [`keep_on_disk`].
+static KEPT: OnceLock<disk::Disk> = OnceLock::new();
 
-/// Keep this process's remote images on disk for `app_id`, the first app
-/// to ask; none for an app with no storage (an agent drive with no scratch
-/// tree keeps none of the developer's).
-pub(crate) fn keep_on_disk(app_id: &str) {
+/// Keep this process's remote images on disk beside the app's `app:/cache`
+/// (`app_cache`), as each app keeps its own (XDG, `%LOCALAPPDATA%\\<app>`).
+pub(crate) fn keep_on_disk(app_cache: &Path) {
     // A test's presenters are not to fill the developer's cache.
     if cfg!(test) {
         return;
     }
-    if let Ok(Some(([_, cache, _], _))) = crate::picker::app_dirs(app_id) {
-        let _ = KEPT.set(cache.with_file_name("image-cache"));
-    }
+    let dir = app_cache.with_file_name("image-cache");
+    let _ = KEPT.set(disk::Disk::new(dir, disk::DISK_BYTES));
 }
 
 /// `link` cut at its query or fragment, whatever its form.
@@ -294,7 +292,7 @@ pub(super) struct Downloads {
     streak: AtomicUsize,
     started: std::sync::Once,
     cache: Mutex<Cache>,
-    /// Responses kept across launches; none in tests that make their own.
+    /// A test's own disk cache; else the process's ([`Downloads::disk`]).
     disk: Option<disk::Disk>,
     /// Source URLs to refresh once no download waits, one entry each.
     refreshes: Mutex<Vec<String>>,
@@ -309,15 +307,8 @@ pub(super) struct Downloads {
 impl Downloads {
     pub fn process() -> &'static Arc<Downloads> {
         static DOWNLOADS: OnceLock<Arc<Downloads>> = OnceLock::new();
-        DOWNLOADS.get_or_init(|| {
-            let disk = KEPT
-                .get()
-                .map(|dir| disk::Disk::new(dir.clone(), disk::DISK_BYTES));
-            Downloads::with(Policy::default(), disk)
-        })
+        DOWNLOADS.get_or_init(|| Downloads::new(Policy::default()))
     }
-    /// Downloads with no disk cache, for a test's own.
-    #[cfg(test)]
     pub fn new(policy: Policy) -> Arc<Self> {
         Self::with(policy, None)
     }
@@ -462,9 +453,13 @@ impl Downloads {
     /// and whatever the disk holds for it.
     pub fn forget(&self, url: &str, body: &Arc<Body>) {
         self.cache.lock().unwrap().forget(url, body);
-        if let (Some(disk), Some(url)) = (&self.disk, clean(url)) {
+        if let (Some(disk), Some(url)) = (self.disk(), clean(url)) {
             disk.remove(url.as_str());
         }
+    }
+    /// A test's own disk cache, else the process's.
+    fn disk(&self) -> Option<&disk::Disk> {
+        self.disk.as_ref().or_else(|| KEPT.get())
     }
     fn start(self: &Arc<Self>) {
         self.started.call_once(|| {
@@ -582,7 +577,7 @@ impl Downloads {
     }
     /// After a load: its body to the disk, or `url` to refresh.
     fn then(&self, url: &str, body: Option<Arc<Body>>, then: Option<Then>) {
-        match (then, &self.disk) {
+        match (then, self.disk()) {
             (Some(Then::Store(key, head)), Some(disk)) => {
                 if let Some(body) = body {
                     disk.put(&key, &head, &body.path, body.len);
@@ -615,7 +610,7 @@ impl Downloads {
         };
         let mut url = clean(&job.url).ok_or_else(|| refused("not an http or https URL"))?;
         let key = url.to_string();
-        let mut stored = self.disk.as_ref().and_then(|disk| disk.get(&key));
+        let mut stored = self.disk().and_then(|disk| disk.get(&key));
         if let Some(entry) = &mut stored {
             let usable = entry.head.usable(SystemTime::now());
             let shown = !job.refresh

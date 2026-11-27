@@ -597,7 +597,6 @@ impl<D: DataSource> Presenter<D> {
             .map_err(HostError::Painter)?;
         #[cfg(not(windows))]
         let (backend, painter) = painter.open().map_err(HostError::Painter)?;
-        crate::image::keep_on_disk(data.app_id());
         let mut images = (services.open_images)(assets.clone());
         images.fit(viewport, scale);
         let (mut host, error) = Host::boot_decoded(

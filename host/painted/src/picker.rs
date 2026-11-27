@@ -315,6 +315,7 @@ fn agent_scratch() -> Result<Option<String>, DataError> {
 /// storage is configured ([`set_roots`]).
 pub fn know_roots(app_id: &str) {
     if let Ok(Some((roots, _))) = app_dirs(app_id) {
+        crate::image::keep_on_disk(&roots[1]);
         *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(roots);
     }
 }
