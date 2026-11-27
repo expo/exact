@@ -96,10 +96,10 @@ impl Head {
             return Use::Refetch;
         };
         let since = now.duration_since(UNIX_EPOCH).unwrap_or_default();
-        let age = f.age + since.saturating_sub(self.received);
+        let age = f.age.saturating_add(since.saturating_sub(self.received));
         if !f.validate && age < f.lifetime {
             Use::Fresh
-        } else if !f.validate && age < f.lifetime + f.stale_while_revalidate {
+        } else if !f.validate && age < f.lifetime.saturating_add(f.stale_while_revalidate) {
             Use::StaleWhileRevalidate
         } else if self.validators().is_empty() {
             Use::Refetch
@@ -193,10 +193,12 @@ impl Disk {
     }
     /// Keep `body` (`len` bytes at the start of the file) as `url`'s answer,
     /// if its head lets it be stored and it is at most 1/20 of the cap, as
-    /// `URLCache` keeps none larger; then the least recently used go to the cap.
+    /// `URLCache` keeps none larger (else the old answer goes); then the least
+    /// recently used go to the cap.
     pub fn put(&self, url: &str, head: &Head, body: &Path, len: u64) {
         let storable = exact_executor::freshness_of(&head.headers, head.delay, head.received);
         if storable.is_none() || len > self.cap / 20 || url.contains(['\n', '\r']) {
+            self.remove(url);
             return;
         }
         let mut text = format!(

@@ -67,6 +67,23 @@ fn freshness_decides_what_a_load_does() {
     );
     // Nothing to go by: never stored, and never used if it were.
     assert_eq!(at(0, &[]), Use::Refetch);
+    // An unreadable `Age` is as old as can be; a huge lifetime does not overflow.
+    assert_eq!(
+        at(
+            10,
+            &[
+                ("cache-control", "max-age=60"),
+                ("age", "x"),
+                ("etag", "\"a\"")
+            ]
+        ),
+        Use::Validate
+    );
+    let huge = (
+        "cache-control",
+        "max-age=99999999999999999999, stale-while-revalidate=60",
+    );
+    assert_eq!(at(10, &[huge]), Use::Fresh);
     // Only `Last-Modified`, 1,000 s before its `Date`: fresh for 100 s.
     let received = UNIX_EPOCH + Duration::from_secs(784_111_777);
     let modified = Head::of(
@@ -113,6 +130,28 @@ fn an_entry_outlives_its_process_under_its_own_url_and_a_304_freshens_it() {
     assert_eq!(entry.head.delay, Duration::from_millis(40));
     assert_eq!(read_body(&mut entry, &dir), vec![7; 100]);
     assert_eq!(entry.head.validators(), [("if-none-match", "\"v1\"")]);
+    drop(entry);
+
+    // An answer it may not keep takes the stored one with it.
+    let no_store = Head::of(
+        &headers(&[("cache-control", "no-store")]),
+        SystemTime::now(),
+        Duration::ZERO,
+    );
+    disk.put(
+        "https://cdn.example/b.jpg",
+        &stored,
+        &body(&dir, 8, 100),
+        100,
+    );
+    disk.put(
+        "https://cdn.example/b.jpg",
+        &no_store,
+        &body(&dir, 8, 100),
+        100,
+    );
+    assert!(disk.get("https://cdn.example/b.jpg").is_none());
+    let mut entry = disk.get(url).expect("stored");
 
     // A 304's headers replace the stored ones; the old exchange's `Date` goes.
     let freshened = entry.head.refreshed(

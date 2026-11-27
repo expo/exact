@@ -507,9 +507,21 @@ impl Downloads {
             };
             let _running = Running(&self.running);
             if job.refresh {
+                // Not before its server said (LLP 1011 §4).
+                if self.cooling(&job.url).is_some() {
+                    continue;
+                }
                 let (controller, mut then) = (AbortController::new(), None);
                 let whole = Instant::now() + self.policy.whole;
                 let result = self.fetch(&job, &controller.signal(), whole, &mut then);
+                if let Err(Failure {
+                    after: Some(at),
+                    message,
+                    ..
+                }) = &result
+                {
+                    self.cool(&job.url, *at, message);
+                }
                 let body = result.ok().filter(|body| body.status.is_none());
                 if let Some(body) = &body {
                     self.cache.lock().unwrap().put(&job.url, body.clone());
@@ -598,14 +610,15 @@ impl Downloads {
             let usable = entry.head.usable(SystemTime::now());
             let shown = !job.refresh
                 && matches!(usable, disk::Use::Fresh | disk::Use::StaleWhileRevalidate);
-            // One that cannot be copied is fetched instead.
-            if let Some(body) = shown.then(|| spooled(entry)).and_then(Result::ok) {
+            let copied = shown.then(|| spooled(entry));
+            if let Some(Ok(body)) = copied {
                 if usable == disk::Use::StaleWhileRevalidate {
                     *then = Some(Then::Refresh);
                 }
                 return Ok(body);
             }
-            if entry.head.validators().is_empty() {
+            // One that cannot be copied is fetched whole instead.
+            if copied.is_some() || entry.head.validators().is_empty() {
                 stored = None;
             }
         }
@@ -617,7 +630,8 @@ impl Downloads {
             self.fetches.fetch_add(1, Ordering::Relaxed);
             let mut request = Request::get(url.as_str());
             request.headers.set("accept", ACCEPT);
-            for (name, value) in stored.iter().flat_map(|entry| entry.head.validators()) {
+            let validated = stored.iter().filter(|_| permanent);
+            for (name, value) in validated.flat_map(|entry| entry.head.validators()) {
                 request.headers.set(name, value);
             }
             // The cap applies to the answer, after its status (below).
