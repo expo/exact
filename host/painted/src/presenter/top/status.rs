@@ -138,6 +138,7 @@ impl<D: DataSource> Presenter<D> {
                     subtitle: None,
                     direction: exact_kernel::Direction::Ltr,
                     symbol: None,
+                    symbol_direction: exact_kernel::Direction::Ltr,
                     destructive: false,
                     enabled: true,
                     cancel: false,
@@ -409,9 +410,9 @@ impl<D: DataSource> Presenter<D> {
         } else {
             [0, 0, 0, 228]
         };
-        let face = node.computed_style(exact_kernel::StyleMask::of(
-            exact_kernel::StyleId::FontWeight,
-        ));
+        let mut mask = exact_kernel::StyleMask::of(exact_kernel::StyleId::FontWeight);
+        mask.set(exact_kernel::StyleId::Direction);
+        let face = node.computed_style(mask);
         Some(crate::paint::Painter::symbol_picture(
             self.text.clone(),
             role,

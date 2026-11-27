@@ -34,7 +34,8 @@ package final class ControlBars {
         return k
     }
 
-    static func laid(_ node: NodeView) -> CGRect {
+    /// Where layout put `node`, before a transform: a riding control bar's ride, or an authored one.
+    package static func laid(_ node: NodeView) -> CGRect {
         CGRect(x: node.center.x - node.bounds.width / 2, y: node.center.y - node.bounds.height / 2,
                width: node.bounds.width, height: node.bounds.height)
     }

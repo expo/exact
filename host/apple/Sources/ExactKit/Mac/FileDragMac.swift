@@ -36,6 +36,8 @@ enum FileDrag {
     /// innermost first, and the drag's last window point.
     nonisolated(unsafe) private static var entered: [NodeView] = []
     nonisolated(unsafe) private static var last = NSPoint.zero
+    /// The window `last` is measured in.
+    nonisolated(unsafe) private static weak var lastWindow: NSWindow?
     /// Bumped by every callback: a pending exit's clear is stale once it moves.
     nonisolated(unsafe) private static var turn = 0
     /// The nodes a drop still waiting for promised files was over, each to its
@@ -62,7 +64,23 @@ enum FileDrag {
     /// field's own; otherwise it is the field's to insert.
     static func destination(_ view: NSView, _ info: NSDraggingInfo) -> NodeView? {
         guard carries(info), info.draggingSourceOperationMask.contains(.copy) else { return nil }
-        return destination(view, files: carriesFiles(info))
+        return destination(over(view, at: info.draggingLocation), files: carriesFiles(info))
+    }
+
+    /// The view a drag reported to `view` is over: for a scroller's clip
+    /// view, the drag's one destination over its scroller, what is under the
+    /// drag's point, as AppKit's scrolling under a still drag does not move
+    /// the drag to another destination (LLP 1094.000 D15); for any other,
+    /// `view`.
+    static func over(_ view: NSView, at point: NSPoint) -> NSView {
+        guard view is DropClipView else { return view }
+        return hit(at: point, in: view.window) ?? view
+    }
+
+    /// The view under `point` in `window`, a list's row cell for the row.
+    static func hit(at point: NSPoint, in window: NSWindow?) -> NSView? {
+        guard let content = window?.contentView, content.bounds.contains(content.convert(point, from: nil)) else { return nil }
+        return TableRowCell.whatIsThere { content.hitTest(content.superview?.convert(point, from: nil) ?? point) }
     }
 
     /// `destination` for a drag that does or does not carry files, as the
@@ -78,44 +96,73 @@ enum FileDrag {
     /// The nodes hearing `dragenter` or `dragleave` whose box holds `point`
     /// in `window`, innermost first: what is under it and its ancestors.
     static func chain(at point: NSPoint, in window: NSWindow?) -> [NodeView] {
-        guard let content = window?.contentView, content.bounds.contains(content.convert(point, from: nil)) else { return [] }
-        var view = TableRowCell.whatIsThere { content.hitTest(content.superview?.convert(point, from: nil) ?? point) }
+        var view = hit(at: point, in: window)
         var out: [NodeView] = []
         while let at = view {
-            if let node = at as? NodeView, !node.inert, !node.formDisabled,
+            let node = at as? NodeView
+            if let node, !node.inert, !node.formDisabled,
                node.handlers.contains("dragenter") || node.handlers.contains("dragleave") { out.append(node) }
-            view = at.superview
+            view = parent(of: at, node: node)
         }
         return out
+    }
+
+    /// Where a drag's chain and its target go up from `view`, which is `node`
+    /// when it is one: a node's
+    /// authored parent, as a press's does (`presentationParent`, then
+    /// `eventParent`), so a data table's cell reaches its row and a node in
+    /// an open popover the node it is declared under; else the superview.
+    static func parent(of view: NSView, node: NodeView?) -> NSView? {
+        guard let node, let presenter = node.presenter else { return view.superview }
+        let parent = presenter.presentationParent(of: node) ?? presenter.eventParent(of: node)
+        // The walk stays in the drag's window, whose points its records are measured in
+        if let other = parent?.window, other !== view.window { return view.superview }
+        return parent
     }
 
     /// The drag is over `next`: the nodes it came over hear `dragenter`,
     /// then those it left `dragleave`, each innermost first, as the DOM
     /// fires the new target's enter (bubbling) before the old one's leave.
-    static func update(_ next: [NodeView], at point: NSPoint) {
-        let before = entered
+    static func update(_ next: [NodeView], at point: NSPoint, in window: NSWindow?, records: [ObjectIdentifier: String] = [:]) {
+        let before = entered, previous = (last, lastWindow)
         entered = next
-        last = point
-        for node in next where node.handlers.contains("dragenter") && !before.contains(where: { $0 === node }) {
+        (last, lastWindow) = (point, window)
+        // Every record is taken before any handler runs, as one may move what is under the drag; a node in the
+        // window the drag left takes its last point there, as `point` is measured in the new one
+        let record = { (node: NodeView) in records[ObjectIdentifier(node)] ?? node.dragLine(at(node, point, in: window, previous)) }
+        let enters = next.filter { node in node.handlers.contains("dragenter") && !before.contains(where: { $0 === node }) }
+            .map { ($0, record($0)) }
+        let leaves = before.filter { node in !next.contains(where: { $0 === node }) }.map { ($0, record($0)) }
+        for (node, line) in enters {
             if waiting[ObjectIdentifier(node)] != nil { held.insert(ObjectIdentifier(node)); continue }
-            node.presenter?.mouseEvent(node.id, 55, node.dragLine(point))
+            // An earlier handler may have made this node inert or disabled: then the drag is over it no longer
+            guard !node.inert, !node.formDisabled, node.handlers.contains("dragenter") else { entered.removeAll { $0 === node }; continue }
+            node.presenter?.mouseEvent(node.id, 55, line)
         }
-        for node in before where !next.contains(where: { $0 === node }) {
+        for (node, line) in leaves {
             if held.remove(ObjectIdentifier(node)) != nil || !node.handlers.contains("dragleave") { continue }
-            node.presenter?.mouseEvent(node.id, 56, node.dragLine(point))
+            node.presenter?.mouseEvent(node.id, 56, line)
         }
+    }
+
+    /// Where `node`'s record is measured for a drag now at `point` in
+    /// `window`: there, or, for a node of the window the drag came from, at
+    /// its last point in that window, as `point` is measured in the new one.
+    private static func at(_ node: NodeView, _ point: NSPoint, in window: NSWindow?, _ previous: (NSPoint, NSWindow?)) -> NSPoint {
+        node.window !== window && node.window === previous.1 ? previous.0 : point
     }
 
     /// The drag drops, into a node or a field: an enter it has held is heard first.
-    static func heldEnters(at point: NSPoint) {
-        for node in entered where held.remove(ObjectIdentifier(node)) != nil { release(node, at: point) }
+    static func heldEnters(at point: NSPoint, records: [ObjectIdentifier: String] = [:]) {
+        for node in entered where held.remove(ObjectIdentifier(node)) != nil { release(node, at: point, record: records[ObjectIdentifier(node)]) }
     }
 
     /// A held enter is heard, unless the node has since stopped hearing it (the waiting drop's action disabled it or
-    /// made it inert): then the drag is over it no longer, with no leave for an enter it never heard.
-    private static func release(_ node: NodeView, at point: NSPoint) {
+    /// made it inert): then the drag is over it no longer, with no leave for an enter it never heard. Its record is
+    /// `record` when the release took it with the others.
+    private static func release(_ node: NodeView, at point: NSPoint, record: String? = nil) {
         guard !node.inert, !node.formDisabled, node.handlers.contains("dragenter") else { return entered.removeAll { $0 === node } }
-        node.presenter?.mouseEvent(node.id, 55, node.dragLine(point))
+        node.presenter?.mouseEvent(node.id, 55, record ?? node.dragLine(point))
     }
 
     /// A drop over `nodes` waits for promised files.
@@ -142,7 +189,7 @@ enum FileDrag {
     static func moved(_ view: NSView, _ info: NSDraggingInfo) -> NSDragOperation? {
         guard carries(info) else { return nil }
         turn &+= 1
-        update(chain(at: info.draggingLocation, in: view.window), at: info.draggingLocation)
+        update(chain(at: info.draggingLocation, in: view.window), at: info.draggingLocation, in: view.window)
         return destination(view, info) != nil ? .copy : nil
     }
 
@@ -154,9 +201,9 @@ enum FileDrag {
         guard let info, carries(info) else { return }
         turn &+= 1
         let mine = turn, point = info.draggingLocation
-        update(chain(at: point, in: view.window), at: point)
+        update(chain(at: point, in: view.window), at: point, in: view.window)
         guard !entered.isEmpty else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { if turn == mine { update([], at: last) } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { if turn == mine { update([], at: last, in: lastWindow) } }
     }
 
     /// A destination's `performDragOperation` at `view`: the drop at the
@@ -165,16 +212,30 @@ enum FileDrag {
     /// carried nothing that arrived is their leave, whenever it resolves.
     /// Nil when no node takes it.
     static func perform(_ view: NSView, _ info: NSDraggingInfo) -> Bool? {
-        guard let target = destination(view, info) else { heldEnters(at: info.draggingLocation); ended(); return nil }
-        // The records are the release's: the point in each box and the keys held as it dropped
-        let point = info.draggingLocation, id = target.id, line = target.dragLine(point)
-        heldEnters(at: point)
-        let dropped = entered, leaves = entered.filter { $0.handlers.contains("dragleave") }.map { ($0, $0.dragLine(point)) }
+        // The chain, the target and their records are taken together at the release, before any handler runs: a scroll
+        // since the last update may have moved what is under it (LLP 1094.000 D15). The records are the point in each
+        // box and the keys held as it dropped.
+        // A deferred exit's clear is a turn behind now, so a handler that turns the main queue cannot run it
+        turn &+= 1
+        let point = info.draggingLocation, carried = carries(info), previous = (last, lastWindow)
+        let target = destination(view, info), line = target?.dragLine(point)
+        let now = carried ? chain(at: point, in: view.window) : entered
+        let records = Dictionary((now + entered).map { (ObjectIdentifier($0), $0.dragLine(at($0, point, in: view.window, previous))) },
+                                 uniquingKeysWith: { first, _ in first })
+        if carried { update(now, at: point, in: view.window, records: records) }
+        guard let target, let line else { heldEnters(at: point, records: records); ended(records: records); return nil }
+        let id = target.id
+        heldEnters(at: point, records: records)
+        // Who the drop was over, after the enters ran: one an earlier handler made ineligible heard no enter, and
+        // owes no leave
+        let dropped = entered
+        let leaves = dropped.filter { $0.handlers.contains("dragleave") }.compactMap { node in records[ObjectIdentifier(node)].map { (node, $0) } }
         ended(dropped: true)
         var landed: Bool?, delayed = false
         receive(info, for: target.presenter?.session) { files, text, url in
-            // A node gone, or no longer hearing `drop`, while its promised files arrived takes nothing
-            let live = target.presenter?.views[id] === target && target.handlers.contains("drop")
+            // A node gone, no longer hearing `drop`, or made inert or disabled (by an enter at the release, or while its
+            // promised files arrived) takes nothing
+            let live = target.presenter?.views[id] === target && target.handlers.contains("drop") && !target.inert && !target.formDisabled
             let ok = live && target.drop(files, text: text, url: url, line: line)
             if !ok { leave(leaves) }
             if delayed { lands(dropped) }
@@ -261,9 +322,9 @@ enum FileDrag {
     /// The drag ended: cancelled, or dropped where nothing took it, every
     /// node still entered leaves; `dropped`, none does (the DOM's `drop` is
     /// the last event of a drag that lands).
-    static func ended(dropped: Bool = false) {
+    static func ended(dropped: Bool = false, records: [ObjectIdentifier: String] = [:]) {
         turn &+= 1
-        if dropped { entered = [] } else if !entered.isEmpty { update([], at: last) }
+        if dropped { entered = [] } else if !entered.isEmpty { update([], at: last, in: lastWindow, records: records) }
     }
 
     // The agent's drag (`tap <target> dragenter <path…>`, `tap … drop`,
@@ -271,7 +332,44 @@ enum FileDrag {
     /// A drag of files comes over `point`, and stays.
     static func agentEnter(at point: NSPoint, in window: NSWindow) {
         turn &+= 1
-        update(chain(at: point, in: window), at: point)
+        update(chain(at: point, in: window), at: point, in: window)
+    }
+}
+
+/// A scroller's clip view: the drag's one destination over its scroller
+/// while the presenter holds a node hearing `drop`, `dragenter` or
+/// `dragleave`, so that AppKit scrolls it under a drag held near its edge,
+/// and the nodes inside register for nothing (LLP 1094.000 D15). As an
+/// `NSTableView` finds the row under a drag by its point, the tracker finds
+/// the node under it (`FileDrag.over`).
+package class DropClipView: NSClipView {
+    /// Whether this clip view is a destination.
+    package var isDestination = false {
+        didSet {
+            guard isDestination != oldValue else { return }
+            if isDestination { registerForDraggedTypes(FileDrag.types) } else { unregisterDraggedTypes() }
+        }
+    }
+    package override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { FileDrag.moved(self, sender) ?? [] }
+    package override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { FileDrag.moved(self, sender) ?? [] }
+    package override func draggingExited(_ sender: NSDraggingInfo?) { FileDrag.exited(self, sender) }
+    package override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { FileDrag.perform(self, sender) ?? false }
+    package override func draggingEnded(_ sender: NSDraggingInfo) { FileDrag.ended() }
+}
+
+extension Presenter {
+    /// Each scroller's clip view is the drag's one destination over it while
+    /// a node here hears a drag's events, and a node that hears them inside
+    /// one registers for nothing (LLP 1094.000 D15); checked at each pass, as
+    /// iOS installs its window's interaction.
+    func syncDragDestinations() {
+        let heard = views.values.contains { !$0.handlers.isDisjoint(with: FileDrag.events) }
+        guard heard || dragDestinations else { return }
+        dragDestinations = heard
+        (viewport.contentView as? DropClipView)?.isDestination = heard
+        for view in views.values { (view.scroll?.contentView as? DropClipView)?.isDestination = heard }
+        for clip in dataTables.clips { clip.isDestination = heard }
+        for view in views.values where !view.handlers.isDisjoint(with: FileDrag.events) { view.syncDropTypes() }
     }
 }
 
@@ -325,15 +423,18 @@ extension Agent {
         }
         guard let paths = req["drop"] as? [String] else { return nil }
         guard !paths.isEmpty || !text.isEmpty || !url.isEmpty else { return ["malformed": true, "error": "drop: expected the dropped paths, --text or --url"] }
-        let hit = win.contentView?.hitTest(p) ?? v
+        let hit = FileDrag.hit(at: p, in: win) ?? v
         guard let node = FileDrag.destination(hit, files: !paths.isEmpty) else {
             FileDrag.ended()
             if NodeView.dropTarget(hit) != nil { return ["error": "drop: the field under the point inserts text and links itself (LLP 1094.001 D2), which the agent's drop does not: drop on the node's own box, or declare `drop` on the field"] }
             return ["error": "view \(v.id) takes no drop: nothing under it declares `drop`"]
         }
+        // The record is the release's, taken before the enters run; the node takes the drop only if it still may then
+        let line = node.dragLine(p), id = node.id
         FileDrag.agentEnter(at: p, in: win)
         FileDrag.heldEnters(at: p)
-        let ok = node.drop(paths.map { URL(fileURLWithPath: $0) }, text: text, url: url, line: node.dragLine(p))
+        let live = node.presenter?.views[id] === node && node.handlers.contains("drop") && !node.inert && !node.formDisabled
+        let ok = live && node.drop(paths.map { URL(fileURLWithPath: $0) }, text: text, url: url, line: line)
         FileDrag.ended(dropped: ok)
         session.presenter.settlePump()
         guard ok else { return ["error": "drop: refused: no file could be opened, and it carried no text or link"] }

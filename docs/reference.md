@@ -1871,6 +1871,24 @@ development profile, `production` otherwise; CloudKit uses `Development` and
 `Contents/embedded.provisionprofile`, and always assembles the `.app`, where
 the profile holds.
 
+To prepare a native Mac app for a separate Developer ID signer, run
+`bun exact.mjs mac --distribution --unsigned --json`. The ad-hoc `.app` keeps
+production update trust and the baked HTTPS callback requirements in
+`Contents/Resources/receipt.json` (`build.compat`), isolates its bake output,
+capture, standalone products and `.app` under `unsigned/` so signed or local
+builds and publish receipts are untouched, and reports `requiresResigning: true`
+in the `--json` output only (not inside `receipt.json`). The build embeds no
+profile or restricted entitlements and refuses other profile requirements,
+extensions, `--run`, `EXACT_MAC_PROFILE`, `EXACT_PROFILE`, and any
+`EXACT_DEVELOPER_ID` other than `-`. Before distribution, the signer must verify
+the receipt, embed a matching Developer ID profile, sign inside out with
+hardened runtime, a secure timestamp and the derived entitlements (including
+re-signing `Contents/MacOS/libexact_gpu*.dylib` in place, whose `code_digest`
+excludes the signature blob), and notarize. Any whole-file-verified
+`Contents/Resources/rust/*.dylib` companions must arrive already signed for the
+final app's team (for example via `EXACT_RUST_SIGN_IDENTITY`) and remain
+untouched, because re-signing them changes the verified bytes.
+
 With no profile that fits, a development build signs none of them and says,
 for each grant, what the app then reports (`available: false`,
 `NotSupportedError`). A release build is refused (`grant-needs-profile`) for
@@ -3842,9 +3860,29 @@ message's ceiling, wait for the runtime; one more ends the stream with
 receive-only socket's says `4096 messages`) after the mapper has seen those
 waiting, so nothing is dropped unseen. `coalesced` is 0 for every event: only
 an upload's progress folds (below). The end is
-`{type: 'error', kind, message, status}`: `kind` is `Network` (the far side
+`{type: 'error', kind, message, status, headers?}`: `kind` is `Network` (the far side
 closed: `the socket closed (1000)`), `Refused` (outside the grants), `Aborted`,
-or `Response` with the status and body of a reply that was not an event stream.
+or `Response` with the status, immutable `headers` (`Headers`), and body of a
+reply that was not an event stream.
+
+Pass `exactStreamOpen: true` beside `exactStream` on an `http:`/`https:` event
+or byte stream to receive one standalone `open` event before any event or byte
+chunk when the 2xx response opens:
+`{type: 'open', status, headers, data: '', lastEventId: '', coalesced: 0}`,
+where `headers` is an immutable WHATWG `Headers` (on the web wasm target's
+unhardened browser realms, `Headers` carries no guard, as for `Response.headers`;
+LLP 1016.000 D12). Check `event.type === 'open' && event.headers` to
+distinguish the host's open event from a server-sent `event: open`. Receiving
+the head counts as the stream's first message for `pending` and `clock settle`
+once mapped, and does not reset `exactIdleTimeout` (only body bytes count, D11).
+On Apple hosts, `NSURLSession` delays delivering the head until the first body
+bytes arrive (content sniffing); servers that need `open` before the first
+application event should flush an initial SSE comment (`:\n\n`). On the web,
+cross-origin servers must list custom headers in `Access-Control-Expose-Headers`.
+`exactStreamOpen` must be a boolean; `true` without `exactStream` or on a
+WebSocket, non-HTTP scheme, long poll, upload, listener, or child process throws
+a `TypeError` before I/O. A bundle that names `exactStreamOpen` needs
+`typescriptRuntime` 20.
 
 For authentication, use the runnable [single-use ticket recipe](recipes/socket-ticket.md):
 an authorized HTTPS request obtains a ticket, and a second source opens its WSS

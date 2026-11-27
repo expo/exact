@@ -357,6 +357,7 @@ impl Collection {
             end_travel: 0,
             end_sent: f64::NAN,
             reuse,
+            live: std::cell::Cell::new(false),
         });
         this.update_data(u, frames, true, false)?;
         Ok(Some(this))

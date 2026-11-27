@@ -202,3 +202,201 @@ fn a_stream_outlives_urlsessions_quiet_limit() {
         }
     });
 }
+
+/// LLP 1016.000 D12: `stream_open` delivers one standalone HTTP `open` head
+/// before any SSE event or byte chunk, preserves response status and headers,
+/// is omitted when false, and is refused at admission for non-HTTP/non-streams.
+#[test]
+fn stream_open_delivers_standalone_head_before_events_and_bytes() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for _ in 0..4 {
+            let Ok((mut conn, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let n = conn.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            if req.starts_with("GET /no-content ") {
+                let _ = write!(
+                    conn,
+                    "HTTP/1.1 204 No Content\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: s-204\r\nConnection: close\r\n\r\n"
+                );
+                let _ = conn.flush();
+                continue;
+            }
+            let is_bytes = req.starts_with("GET /bytes ");
+            let ctype = if is_bytes {
+                "application/octet-stream"
+            } else {
+                "text/event-stream"
+            };
+            let _ = write!(
+                conn,
+                "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nMcp-Session-Id: sess-42\r\nX-Protocol-Version: 2025-03-26\r\nX-Dup: a\r\nX-Dup: b\r\nConnection: close\r\n\r\n"
+            );
+            let _ = conn.flush();
+            if is_bytes {
+                let _ = conn.write_all(&[9, 8, 7]);
+            } else {
+                let _ =
+                    conn.write_all(b"event: open\nid: srv-1\ndata: from-server\n\ndata: hello\n\n");
+            }
+            let _ = conn.flush();
+        }
+    });
+
+    let (wake, woke) = channel();
+    let core = Core::start_on(
+        None,
+        &format!("net.fetch http://127.0.0.1:{port}"),
+        Box::new(move || {
+            let _ = wake.send(());
+        }),
+        Arc::new(crate::tests::abort::portable_host),
+        crate::WorkerBudget::Thread,
+    );
+    let drain_all = |ticket: u64, out: RequestOut| -> Vec<Outcome> {
+        core.run_owned(out, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut seen = vec![];
+        loop {
+            core.begin_pump();
+            for (t, outcome, _) in core.drain() {
+                if t != ticket {
+                    continue;
+                }
+                let end = !matches!(outcome, Outcome::Message(_) | Outcome::Messages(_));
+                seen.push(outcome);
+                if end {
+                    return seen;
+                }
+            }
+            assert!(Instant::now() < deadline, "stream never ended: {seen:?}");
+            let _ = woke.recv_timeout(Duration::from_millis(20));
+        }
+    };
+
+    // 1. SSE with stream_open: true -> standalone open head, then server events, then end.
+    let mut sse = stream(1, "/events", 4096);
+    sse.request.url = format!("http://127.0.0.1:{port}/events");
+    sse.request.stream_open = true;
+    let seen = drain_all(1, sse);
+    let Outcome::Message(first) = &seen[0] else {
+        panic!("expected standalone open message first, got {seen:?}");
+    };
+    let head = first
+        .head
+        .as_ref()
+        .expect("first message must carry StreamHead");
+    assert_eq!(first.event, "open");
+    assert_eq!(head.status, 200);
+    assert!(head
+        .headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("mcp-session-id") && v == "sess-42"));
+    assert!(head
+        .headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("x-protocol-version") && v == "2025-03-26"));
+    assert!(head
+        .headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("x-dup") && v == "a, b"));
+    // Server-sent `event: open` must carry head: None (no collision).
+    let rest_messages: Vec<&Message> = seen[1..]
+        .iter()
+        .flat_map(|o| match o {
+            Outcome::Message(m) => vec![m],
+            Outcome::Messages(ms) => ms.iter().collect(),
+            _ => vec![],
+        })
+        .collect();
+    assert_eq!(rest_messages.len(), 2, "{rest_messages:?}");
+    assert_eq!(rest_messages[0].event, "open");
+    assert_eq!(rest_messages[0].id, "srv-1");
+    assert_eq!(rest_messages[0].data, "from-server");
+    assert!(rest_messages[0].head.is_none());
+    assert_eq!(rest_messages[1].data, "hello");
+    assert!(rest_messages[1].head.is_none());
+
+    // 2. Byte stream with stream_open: true -> standalone open head before binary chunk.
+    let mut bytes = stream(2, "/bytes", 4096);
+    bytes.request.url = format!("http://127.0.0.1:{port}/bytes");
+    bytes.request.bytes = true;
+    bytes.request.stream_open = true;
+    let seen = drain_all(2, bytes);
+    assert!(matches!(&seen[0], Outcome::Message(m) if m.is_http_open()));
+    assert!(
+        seen[1..].iter().any(
+            |o| matches!(o, Outcome::Message(m) if m.binary.as_deref() == Some(&[9, 8, 7][..]))
+        ),
+        "{seen:?}"
+    );
+
+    // 3. SSE with stream_open: false -> no open head delivered.
+    let mut plain = stream(3, "/events", 4096);
+    plain.request.url = format!("http://127.0.0.1:{port}/events");
+    let seen = drain_all(3, plain);
+    assert!(
+        !seen
+            .iter()
+            .any(|o| matches!(o, Outcome::Message(m) if m.is_http_open())),
+        "stream_open: false must not deliver open head: {seen:?}"
+    );
+
+    // 4. 204 No Content with Content-Type: text/event-stream and stream_open: true ->
+    // bodyless response returns a terminal Response (matching browser), never open + error.
+    let mut no_content = stream(4, "/no-content", 4096);
+    no_content.request.url = format!("http://127.0.0.1:{port}/no-content");
+    no_content.request.stream_open = true;
+    let seen = drain_all(4, no_content);
+    assert_eq!(
+        seen.len(),
+        1,
+        "204 must return one terminal Response: {seen:?}"
+    );
+    let Outcome::Response(resp) = &seen[0] else {
+        panic!("expected terminal Response for 204, got {seen:?}");
+    };
+    assert_eq!(resp.status, 204);
+    assert!(resp
+        .headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("mcp-session-id") && v == "s-204"));
+
+    // 5. Admission refuses stream_open on a WebSocket.
+    let mut ws = stream(5, "/ws", 4096);
+    ws.request.url = "wss://example.test/ws".into();
+    ws.request.stream_open = true;
+    assert!(core.run_owned(ws, None).is_err());
+}
+
+/// LLP 1016.000 D12: delivering the HTTP `open` head must not count as body
+/// bytes received for `exactIdleTimeout`. Delay the head by 450 ms on a 1000 ms
+/// idle timeout so a buggy reset at head delivery would fire at >= 1450 ms.
+#[test]
+fn stream_open_head_does_not_reset_idle_timeout() {
+    let (core, script, woke) = setup();
+    let mut out = stream(1, "/events", 4096);
+    out.request.stream_open = true;
+    out.request.idle_timeout_ms = Some(1000);
+    let asked = Instant::now();
+    core.run_owned(out, None).unwrap();
+    std::thread::sleep(Duration::from_millis(450));
+    let _wire = feed(&script, 0);
+    let (_, first) = next(&core, &woke);
+    assert!(
+        matches!(&first, Outcome::Message(m) if m.is_http_open()),
+        "expected open head first: {first:?}"
+    );
+    let (_, end) = next(&core, &woke);
+    assert!(timed_out(&end), "expected idle timeout after open: {end:?}");
+    let took = asked.elapsed();
+    assert!(
+        took >= Duration::from_millis(900) && took < Duration::from_millis(1300),
+        "idle timeout elapsed unexpectedly (head must not reset the 1000 ms timer): {took:?}"
+    );
+}

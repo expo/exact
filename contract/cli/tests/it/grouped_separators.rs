@@ -228,3 +228,46 @@ fn a_full_width_native_button_row_stays_in_its_card() {
     let symbol = frame("class-symbol");
     assert_eq!((symbol.x, symbol.x + symbol.width), (32.0, 386.0));
 }
+
+/// LLP 1127 D17: `listStyle="sidebar"` names UIKit's sidebar list, and a
+/// host with no sidebar list draws it as the plain list: its rows, sections,
+/// ground and separators.
+#[test]
+fn a_sidebar_list_is_the_plain_list_where_the_host_has_no_sidebar() {
+    let list = |style: &str| {
+        boot(&format!(
+            "list appearance=\"auto\" listStyle=\"{style}\" testId=\"list\" flex=1
+  section testId=\"a\"
+    row testId=\"first\"
+      text \"First\"
+    row testId=\"second\"
+      text \"Second\"
+  section testId=\"b\"
+    row testId=\"third\"
+      text \"Third\""
+        ))
+    };
+    let (sidebar, plain) = (list("sidebar"), list("plain"));
+    let (k, kp) = (sidebar.kernel(), plain.kernel());
+    assert_eq!(
+        k.grouped_list(id(&sidebar, "list")).unwrap().style,
+        "sidebar"
+    );
+    for t in ["list", "a", "first", "second", "b", "third"] {
+        let (s, p) = (
+            k.node(id(&sidebar, t)).unwrap(),
+            kp.node(id(&plain, t)).unwrap(),
+        );
+        assert_eq!(s.frame, p.frame, "{t}: the plain list's layout");
+        assert_eq!(
+            s.style.background_color, p.style.background_color,
+            "{t}: the plain list's ground"
+        );
+        assert_eq!(
+            k.grouped_separator(s.id),
+            kp.grouped_separator(p.id),
+            "{t}: the plain list's separator"
+        );
+    }
+    assert!(k.grouped_separator(id(&sidebar, "first")).is_some());
+}

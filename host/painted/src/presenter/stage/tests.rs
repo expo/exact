@@ -746,6 +746,211 @@ fn a_push_and_a_pop_cross_on_the_shared_x_axis() {
 }
 
 #[test]
+fn rtl_shared_x_mirrors_push_and_pop_by_container_direction() {
+    // 1. RTL container: push brings the arriving route in from the left (`dx < 0`),
+    // and pop brings the revealed route back from the right (`dx > 0`).
+    let rtl_app = APP.replace("main navigationKey", "main direction=\"rtl\" navigationKey");
+    let mut p = phone_source(&rtl_app);
+    tap(&mut p, "open-detail");
+    after(&mut p, 0.0);
+    assert!(p.stage_moving());
+    after(&mut p, 150.0);
+    let push_x = rect(&mut p, "detail-body").0;
+    assert!(
+        push_x < 0.0 && push_x > -AXIS_SHIFT,
+        "RTL push enters from left: {push_x}"
+    );
+    after(&mut p, 400.0);
+    assert!(near(rect(&mut p, "detail-body").0, 0.0));
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    let pop_x = rect(&mut p, "home-body").0;
+    assert!(pop_x > 0.0, "RTL pop enters from right: {pop_x}");
+    after(&mut p, 400.0);
+    assert!(near(rect(&mut p, "home-body").0, 0.0));
+
+    // 2. Mixed direction: an RTL container pushing an LTR detail route stays
+    // symmetric across push and pop (both governed by the container, not the arriving route).
+    let mixed = rtl_app.replace(
+        "testId=\"route-detail\"",
+        "testId=\"route-detail\" direction=\"ltr\"",
+    );
+    let mut p = phone_source(&mixed);
+    tap(&mut p, "open-detail");
+    after(&mut p, 150.0);
+    assert!(
+        rect(&mut p, "detail-body").0 < 0.0,
+        "RTL container pushes LTR detail from left"
+    );
+    after(&mut p, 400.0);
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    assert!(
+        rect(&mut p, "home-body").0 > 0.0,
+        "popping LTR detail inside RTL container reverses push (enters from right)"
+    );
+
+    // 3. Push and pop inside an RTL modal sheet mirror identically, even when the
+    // outer stack has the opposite direction (both outer=ltr/sheet=rtl and outer=rtl/sheet=ltr).
+    let ltr_outer_rtl_sheet = APP.replace(
+        "testId=\"route-info\"",
+        "testId=\"route-info\" direction=\"rtl\"",
+    );
+    let mut p = phone_source(&ltr_outer_rtl_sheet);
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.0);
+    tap(&mut p, "open-settings");
+    after(&mut p, 150.0);
+    assert!(
+        rect(&mut p, "settings-body").0 < 0.0,
+        "RTL sheet inside LTR stack pushes from left"
+    );
+    after(&mut p, 400.0);
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    assert!(
+        rect(&mut p, "info-body").0 > 0.0,
+        "RTL sheet inside LTR stack pops from right"
+    );
+
+    let rtl_outer_ltr_sheet = rtl_app.replace(
+        "testId=\"route-info\"",
+        "testId=\"route-info\" direction=\"ltr\"",
+    );
+    let mut p = phone_source(&rtl_outer_ltr_sheet);
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.0);
+    tap(&mut p, "open-settings");
+    after(&mut p, 150.0);
+    assert!(
+        rect(&mut p, "settings-body").0 > 0.0,
+        "LTR sheet inside RTL stack pushes from right"
+    );
+    after(&mut p, 400.0);
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    assert!(
+        rect(&mut p, "info-body").0 < 0.0,
+        "LTR sheet inside RTL stack pops from left"
+    );
+
+    // 4. A tabpanel with its own `direction="rtl"` mirrors crossings inside that tab
+    // even when the outer navigation root is LTR.
+    let tabbed = r##"routes nav
+  home "/"
+    detail "/detail"
+component App
+  action open(url: string)
+    nav = push(nav, url)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" direction="ltr" viewport-fit="cover" width="100%" height="100%"
+      column role="tabpanel" id="panel-a" direction="rtl" position="absolute" inset=0
+        for e in stack(nav) key=e.id
+          if e.name == "home"
+            column navigationKey=`${e.id}` testId="route-home" position="absolute" inset=0 background-color="#ffffff"
+              text "Home" testId="home-body"
+              button press=open("/detail") testId="open-detail" height=40
+                text "Detail"
+          if e.name == "detail"
+            column navigationKey=`${e.id}` testId="route-detail" position="absolute" inset=0 background-color="#ffffff"
+              text "Detail" testId="detail-body"
+      row role="tablist" position="absolute" bottom=0
+        button role="tab" aria-controls="panel-a" aria-selected=true
+          text "Tab"
+"##;
+    let mut p = phone_source(tabbed);
+    tap(&mut p, "open-detail");
+    after(&mut p, 150.0);
+    assert!(
+        rect(&mut p, "detail-body").0 < 0.0,
+        "RTL tabpanel pushes from left"
+    );
+    after(&mut p, 400.0);
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    assert!(
+        rect(&mut p, "home-body").0 > 0.0,
+        "RTL tabpanel pops from right"
+    );
+
+    // 5. Predictive Back in RTL keeps physical finger direction from either edge,
+    // restores rest on cancel, and commits cleanly from the preview pose.
+    for edge in [0i32, 1i32] {
+        // Cancel restores rest.
+        let mut p = phone_source(&rtl_app);
+        tap(&mut p, "open-detail");
+        after(&mut p, 1000.0);
+        let rest = rect(&mut p, "detail-body");
+        let rest_center = rest.0 + rest.2 / 2.0;
+        let now = p.host().now();
+        assert!(p.back_progress(0, 0.0, edge, now));
+        assert!(p.back_progress(1, 0.5, edge, now + 50.));
+        after(&mut p, 50.0);
+        let preview = rect(&mut p, "detail-body");
+        let preview_center = preview.0 + preview.2 / 2.0;
+        if edge == 0 {
+            assert!(
+                preview_center > rest_center,
+                "left-edge swipe shifts center right: {preview_center} vs {rest_center}"
+            );
+        } else {
+            assert!(
+                preview_center < rest_center,
+                "right-edge swipe shifts center left: {preview_center} vs {rest_center}"
+            );
+        }
+        p.back_progress(2, 0.0, edge, now + 60.);
+        after(&mut p, 400.0);
+        assert!(
+            near(rect(&mut p, "detail-body").0, rest.0),
+            "cancelled RTL predictive back restores rest (edge {edge})"
+        );
+        assert!(has(&p, "route-detail"));
+
+        // Commit continues from the preview pose (incoming home stays at rest without snapping,
+        // outgoing detail exits in the preview edge's physical direction) and settles on home.
+        let now = p.host().now();
+        assert!(p.back_progress(0, 0.0, edge, now));
+        assert!(p.back_progress(1, 0.5, edge, now + 50.));
+        after(&mut p, 50.0);
+        let (preview_out, _) = p.shift_poses(p.host().now(), None);
+        assert!(p.system_back(p.host().now()));
+        p.run_commands(|| ());
+        after(&mut p, 60.0);
+        assert!(!has(&p, "route-detail"));
+        assert!(
+            near(rect(&mut p, "home-body").0, 0.0),
+            "committed RTL predictive back keeps revealed home at rest (edge {edge})"
+        );
+        let (commit_out, commit_in) = p.shift_poses(p.host().now(), None);
+        assert_eq!(commit_in, Pose::REST);
+        if edge == 0 {
+            assert!(
+                commit_out.dx > preview_out.dx,
+                "left-edge commit continues moving right: {} vs {}",
+                commit_out.dx,
+                preview_out.dx
+            );
+        } else {
+            assert!(
+                commit_out.dx < preview_out.dx,
+                "right-edge commit continues moving left: {} vs {}",
+                commit_out.dx,
+                preview_out.dx
+            );
+        }
+        after(&mut p, 400.0);
+        assert!(!p.stage_moving());
+        assert!(near(rect(&mut p, "home-body").0, 0.0));
+    }
+}
+
+#[test]
 fn a_route_a_push_covers_keeps_its_pictures_while_it_slides_out() {
     let source = APP.replace(
         r#"text "The page under the sheet" testId="home-body""#,

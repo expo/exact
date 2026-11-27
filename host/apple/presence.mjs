@@ -62,39 +62,43 @@ export function signsGrant(line, compat, provisioning) {
 
 /** What a macOS build needs a profile for, from its bake (`compat`): `{ entitlement, lines, effect, mandatory }`
  * each, where a mandatory one refuses a release that cannot sign it. */
-export function macProfileNeeds(compat, app = null) {
+function macProfileNeedEntries(compat, app = null) {
   const ceiling = compat?.inputs?.grantCeiling ?? '', needs = [];
   for (const name of compat?.reach?.profileEntitlements ?? []) {
     const [lines, effect, mandatory] = ROW_EFFECTS[name] ?? [name, `${name} is not signed`, true];
-    needs.push({ entitlement: name, lines, effect, mandatory });
+    needs.push({ kind: 'row', entitlement: name, lines, effect, mandatory });
   }
   const kept = presenceLines(ceiling);
   if (kept.length) {
     const mandatory = kept.filter((l) => !l.optional).map((l) => `secret.keep ${l.name}`);
-    needs.push({ entitlement: KEYCHAIN, lines: kept.map((l) => `secret.keep ${l.name}`).join(', '), mandatory: mandatory.length > 0,
+    needs.push({ kind: 'keychain', entitlement: KEYCHAIN, lines: kept.map((l) => `secret.keep ${l.name}`).join(', '), mandatory: mandatory.length > 0,
       effect: `localAuthStatus().presenceSecrets is false${mandatory.length ? `, a set of ${mandatory.join(', ')} throws NotSupportedError` : ''}${mandatory.length < kept.length ? ', an optional name stays plain and protect() rejects' : ''}` });
   }
   const passkeys = passkeyLines(ceiling);
-  if (passkeys.length) needs.push({ entitlement: DOMAINS, lines: passkeys.map((rp) => `auth.passkey ${rp}`).join(', '), mandatory: true,
+  if (passkeys.length) needs.push({ kind: 'passkey', entitlement: DOMAINS, lines: passkeys.map((rp) => `auth.passkey ${rp}`).join(', '), mandatory: true,
     effect: 'getClientCapabilities().available is false and create and get fail NotSupportedError' });
   const callbacks = (compat?.reach?.auth?.callbacks ?? []).filter((callback) => {
     const url = new URL(callback);
     return url.protocol === 'https:' && !webAuthCallback(url);
   });
-  if (callbacks.length) needs.push({ entitlement: DOMAINS, lines: callbacks.map((callback) => `auth.callback ${callback}`).join(', '), mandatory: true,
+  if (callbacks.length) needs.push({ kind: 'auth-callback', entitlement: DOMAINS, lines: callbacks.map((callback) => `auth.callback ${callback}`).join(', '), mandatory: true,
     effect: 'HTTPS auth sessions fail association validation' });
   // Verified links (LLP 1038 D8) are not mandatory: unsigned, they open in the browser.
   const links = app?.manifest ? appleLinkDomains(app.manifest) : [];
-  if (links.length) needs.push({ entitlement: DOMAINS, lines: 'handle_links "preferred"', mandatory: false,
+  if (links.length) needs.push({ kind: 'links', entitlement: DOMAINS, lines: 'handle_links "preferred"', mandatory: false,
     effect: `links to ${links.map((d) => d.slice('applinks:'.length)).join(', ')} open in the browser` });
   // Both report unavailable unsigned (packages/sign-in, packages/payments), so a release without them ships.
   const clients = compat?.reach?.auth?.signIn?.apple ?? [];
-  if (clients.length) needs.push({ entitlement: SIGN_IN, lines: clients.map((id) => `auth.apple ${id}`).join(', '), mandatory: false,
+  if (clients.length) needs.push({ kind: 'sign-in', entitlement: SIGN_IN, lines: clients.map((id) => `auth.apple ${id}`).join(', '), mandatory: false,
     effect: 'getIdentityCapabilities() reports Apple inactive and an Apple identity request fails NotSupportedError' });
   const merchants = compat?.reach?.payments?.merchantIds ?? [];
-  if (merchants.length) needs.push({ entitlement: PAY, lines: merchants.map((id) => `payment.apple-pay ${id}`).join(', '), mandatory: false,
+  if (merchants.length) needs.push({ kind: 'apple-pay', entitlement: PAY, lines: merchants.map((id) => `payment.apple-pay ${id}`).join(', '), mandatory: false,
     effect: 'Apple Pay reads unavailable: canMakePayment() is false' });
   return needs;
+}
+
+export function macProfileNeeds(compat, app = null) {
+  return macProfileNeedEntries(compat, app).map(({ entitlement, lines, effect, mandatory }) => ({ entitlement, lines, effect, mandatory }));
 }
 
 /** The bake's entitlement values, with CloudKit's default container derived from the bundle id at signing. */
@@ -225,12 +229,24 @@ export function shareStoreProfile(app, team, { installed, find = macProfile } = 
  * `{ provisioning, widgets, sha1, sandbox?, shareTeam?, shareProfile? }`. A null identity is resolved from fitting
  * profiles before deciding which extensions to build. With widgets one profile serves both their shared groups and the
  * grants. Explicit ad hoc signing (EXACT_IDENTITY=-) omits extensions and signs no profile's entitlements. */
-export function macSigning(app, compat, { current, widgets = null, release = false, distribution = false, store = null, sandboxed = false, preflight = false, log = console.log,
+export function macSigning(app, compat, { unsigned = false, current, widgets = null, release = false, distribution = false, store = null, sandboxed = false, preflight = false, log = console.log,
   find = macProfile, widgetProfiles = macWidgetProfiles, identityFor = macProfileIdentity, teamOf = certificateTeam,
   signWidgets = macWidgetSigning, namedWidgetProfile, identities = developmentIdentities, adHoc = current === '-' && (!distribution || !!store),
   shareProfile = shareStoreProfile } = {}) {
   const wantsWidgets = app.manifest && platformWidgetEntries(app, 'macos').length > 0;
   const wantsShare = !!app.manifest?.share_target;
+  // Unsigned distribution input carries no profile or restricted entitlements. Keep the baked HTTPS
+  // callback requirements in `compat` for the separate Developer ID signer to verify and sign.
+  if (unsigned) {
+    if (!distribution || !release || store || sandboxed || current !== '-' || widgets || wantsWidgets || wantsShare)
+      throw new Error('Mac --unsigned requires an ad-hoc Developer ID distribution input without extensions');
+    if (!preflight) {
+      const unsupported = macProfileNeedEntries(compat, app).filter(n => n.kind !== 'auth-callback');
+      if (unsupported.length)
+        throw new Error(`unsigned-distribution: Mac --unsigned cannot defer ${unsupported.map(n => n.lines).join(', ')}`);
+    }
+    return { provisioning: null, widgets: null, sha1: '-' };
+  }
   const method = store ?? (distribution ? 'developerid' : 'development');
   const values = grantEntitlementValues(app, compat?.reach);
   // A store build signs the App Sandbox, as `mac --sandbox` does with the dev server's connection besides (LLP 1030.005

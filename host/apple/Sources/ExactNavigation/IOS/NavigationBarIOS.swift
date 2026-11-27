@@ -15,6 +15,7 @@ import ExactKit
 /// change projects it again.
 struct BarSource: Equatable {
     let bar: NavigationRules.Bar
+    var family: Int? = nil
     let authored: [UInt32], placed: [UInt32]
     let header: UInt32?, heading: UInt32?, title: String, level: Int, leading: [String], trailing: [String], group: String, canGoBack: Bool
 }
@@ -32,6 +33,13 @@ struct HatchSource: Equatable {
 /// At a transparent route's clear edge, the empty band also leaves touches
 /// to the page; the title, items and scrolled material keep theirs.
 final class RouteNavigationBar: UINavigationBar {
+    #if os(iOS)
+    var appearanceChanged: (() -> Void)?
+    override var standardAppearance: UINavigationBarAppearance { didSet { appearanceChanged?() } }
+    override var compactAppearance: UINavigationBarAppearance? { didSet { appearanceChanged?() } }
+    override var scrollEdgeAppearance: UINavigationBarAppearance? { didSet { appearanceChanged?() } }
+    override var compactScrollEdgeAppearance: UINavigationBarAppearance? { didSet { appearanceChanged?() } }
+    #endif
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         let onControl = sequence(first: hit, next: { $0 === self ? nil : $0.superview }).contains { $0 is UIControl || $0 is UISearchBar }
@@ -369,6 +377,7 @@ final class NavigationStack {
     var showsBar: Bool
     let order: Int
     let label: String
+    var observesHeaderFonts = false
     var hatched = false
     var barTint: UIColor?, hatchTintsBar = false
     init(showsBar: Bool, order: Int) { (self.showsBar, self.order, label) = (showsBar, order, "#\(order)") }
@@ -438,7 +447,9 @@ extension NavigationHost {
         let dialogs: [RouteController] = []
         #endif
         guard bottom || shown.contains(where: { c in
-            c.barPresses.contains { $0.id == node.id } || c.lifted.map { node === $0 || node.isDescendant(of: $0) } == true
+            c.barPresses.contains { $0.id == node.id }
+                || c.barNodes.contains { $0 === node }
+                || c.lifted.map { node === $0 || node.isDescendant(of: $0) } == true
         }) || dialogs.contains(where: { bar in bar.barPresses.contains { $0.id == node.id } }) else { return nil }
         guard !node.disabled, !node.inert, before(nil), !node.disabled, !node.inert, presenter.views[node.id] === node else { return ["error": "bar item #\(id) is unavailable"] }
         // An item whose button only opens a menu is UIKit's pull-down, which
@@ -569,25 +580,34 @@ extension NavigationHost {
         presenter.session?.log("hatch navigation \(stack.label): showsBar changed after the first frame; the content moves once")
     }
 
+    /// Which detail route supplies the Back appearance for a split's list root.
+    enum SplitDetailProjection {
+        /// Read the detail column's currently installed first route.
+        case installed
+        /// Project from the incoming first detail route before `split.show(...)` installs it (or `nil` to clear).
+        case incoming(RouteController?)
+    }
+
     /// Project each route of a stack into its navigation item when its
     /// authored source changed, then run the route hatch — before UIKit lays
     /// the stack out (LLP 1075.003 §3.2, §3.5 "projected defaults"). A plain
     /// tab (PlainTabIOS) has no bar: its route's header is its content.
-    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController) {
+    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController, splitDetail: SplitDetailProjection = .installed) {
         let nav = stack as? UINavigationController
         if let nav {
             hatchNavigation(nav)
             #if os(iOS)
             presenter.menus.focus.watch(nav.navigationBar) // a bar item's menu (MenuFocusIOS), every stack, rebuilt or not
             #endif
-            projectBack(routes, in: nav)
+            projectBack(routes, in: nav, splitDetail: splitDetail)
         }
         followTablist(routes, in: stack)
         let presented = isPresented(nav)
         // Count UIKit's list before a tab's root under More: More pushes the root over it, with a Back to it
         let front = nav?.stackFront.count ?? 0
         // A split's detail column counts as pushed, its first route included (LLP 1127 D7)
-        let detail = nav != nil && nav === split?.detail
+        let columns = nav.flatMap { n in (split?.detail === n ? split : nil) ?? tabSplits.values.first { $0.detail === n } }
+        let detail = columns != nil
         for (index, c) in routes.enumerated() {
             // The bar is each route's (LLP 1115.000 D5.2, D5.3): its header,
             // the system Back alone on a pushed route with none of its own
@@ -608,12 +628,14 @@ extension NavigationHost {
             // Let a root under More go back: UIKit's Back returns to More's list
             let canGoBack = (index > 0 || detail ? canInvokeBack : front > 0) && shape?.authoredBack != true
             #if os(iOS)
+            let naturallyPopsRouter = shows && (index > 0 || (detail && columns?.nested == true))
+            projectBackAction(c, wants: naturallyPopsRouter && canGoBack)
             projectBottomToolbar(c, in: nav)
             #endif
             let scroller = contentScroller(of: c), scroll = contentScrollView(of: c)
             let dataset = c.node.props["dataset"]
             func barSource(_ key: (HeaderShape.Item) -> String) -> BarSource {
-                BarSource(bar: bar, authored: shape?.authored.map(\.id) ?? [], placed: shape?.placed.map(\.id) ?? [], header: shape?.header.id, heading: shape?.heading?.id, title: shape?.title ?? "", level: shape?.level ?? 0, leading: shape?.leading.map(key) ?? [],
+                BarSource(bar: bar, family: shape?.family, authored: shape?.authored.map(\.id) ?? [], placed: shape?.placed.map(\.id) ?? [], header: shape?.header.id, heading: shape?.heading?.id, title: shape?.title ?? "", level: shape?.level ?? 0, leading: shape?.leading.map(key) ?? [],
                           trailing: shape?.trailing.map(key) ?? [], group: shape?.group?.source ?? "", canGoBack: canGoBack)
             }
             let source = barSource(\.source)
@@ -649,12 +671,29 @@ extension NavigationHost {
             #else
             let fonts: NavigationTitleInk.Fonts? = nil // tvOS's bar title font is not measured: its own stays.
             #endif
-            c.titleInk.update(shows ? shape?.heading?.ownUIColor("text_color") : nil, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
+            let color = shows ? shape?.heading?.ownUIColor("text_color") : nil
+            #if os(iOS)
+            let family = shows && shape?.family != nil ? shape.flatMap(HeaderFamily.init) : nil
+            if family != nil, let nav { observeHeaderTypography(in: nav) }
+            if family != nil || c.titleInk.hasHeaderFamily {
+                c.titleInk.updateFamily(family, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts, transparent: transparent)
+            } else {
+                c.titleInk.update(color, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
+            }
+            #else
+            c.titleInk.update(color, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
+            #endif
             guard c.projected != signature || !c.hatched else { continue }
             c.projected = signature
             guard presenter.session?.natives.hatchesConnected == true else { continue }
             hatching(nav) { presenter.session?.natives.routeHatch(c.hatched ? .changed : .built, controller: c, navigation: nav, scroll: scroll,
                                                                   key: c.key, dataset: dataset) }
+            #if os(iOS)
+            if let family {
+                c.titleInk.updateFamily(family, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts,
+                                        transparent: transparent, afterHatch: true)
+            }
+            #endif
             c.hatched = true
             c.ownedScroll = scroller
             // Run the passes again for a selection this route's hatch made, before UIKit lays out its stack, unless a
@@ -668,6 +707,21 @@ extension NavigationHost {
         if let nav, nav.transitionCoordinator == nil, let top = nav.topViewController as? RouteController, routes.contains(top) {
             showBar(nav, animated: nav.view.window != nil)
         }
+    }
+
+    /// Re-sync Back appearance and `backAction` across a split's columns when
+    /// it collapses, expands, or updates its stack, without touching `showBar`
+    /// or re-running hatches.
+    func syncSplitBack(_ columns: SplitIOS, splitDetail: SplitDetailProjection = .installed) {
+        projectBack(columns.list.stackRoutes.compactMap { $0 as? RouteController }, in: columns.list, splitDetail: splitDetail)
+        #if os(iOS)
+        for (index, c) in columns.detailRoutes.enumerated() {
+            let (shape, bar) = barShape(of: c, in: columns.detail)
+            let canGoBack = canInvokeBack && shape?.authoredBack != true
+            let naturallyPopsRouter = bar != .hidden && (index > 0 || columns.nested)
+            projectBackAction(c, wants: naturallyPopsRouter && canGoBack)
+        }
+        #endif
     }
 
     /// The header shape and the bar a route shows in its stack
@@ -718,7 +772,11 @@ extension NavigationHost {
         guard let stack = c.stack else { return }
         let nav = stack as? UINavigationController
         let (shape, bar) = barShape(of: c, in: nav)
-        collapse(c, shape: shape, shows: bar != .hidden, scroller: contentScroller(of: c))
+        // Only skip a header in `collapse` once `project` has actually lifted it out of layout.
+        let liftedShape = shape.flatMap { s in
+            (c.lifted === s.header || c.projectedSource?.header == s.header.id) ? s : nil
+        }
+        collapse(c, shape: liftedShape, shows: bar != .hidden, scroller: contentScroller(of: c))
         reachBottom(c, in: stack, presented: isPresented(nav))
     }
 
@@ -1023,16 +1081,15 @@ extension NavigationHost {
     /// shaped as it is (LLP 1075.003, James's review): a symbol alone is the
     /// chevron alone (`.minimal`); text is the button's title. UIKit reads
     /// both from the item beneath, which is where they are written, on change.
-    private func projectBack(_ routes: [RouteController], in nav: UINavigationController) {
-        guard barShows(nav), routes.count > 1 else { return }
+    private func projectBack(_ routes: [RouteController], in nav: UINavigationController, splitDetail: SplitDetailProjection = .installed) {
+        guard barShows(nav) else { return }
         let name = container?.props["navigationBack"]
-        for index in 1..<routes.count {
-            let control = name.flatMap { element(named: $0, in: routes[index].node) }
+        func apply(from upper: RouteController?, to below: RouteController) {
+            let control = upper.flatMap { up in name.flatMap { element(named: $0, in: up.node) } }
             control?.rejectNativeActiveProperties(on: "UIKit back button")
             let shape = control.map { HeaderShape.Item($0) }
             let source = shape.map { "\($0.symbol ?? "")|\($0.title)" } ?? "-"
-            let below = routes[index - 1]
-            guard below.backSource != source else { continue }
+            guard below.backSource != source else { return }
             below.backSource = source
             // tvOS has no back button.
             #if !os(tvOS)
@@ -1043,6 +1100,19 @@ extension NavigationHost {
             case nil: item.backButtonDisplayMode = .default; item.backButtonTitle = nil
             }
             #endif
+        }
+        if routes.count > 1 {
+            for index in 1..<routes.count { apply(from: routes[index], to: routes[index - 1]) }
+        }
+        // In a split view, the list column's root supplies the Back item for the detail column's first route.
+        if let root = routes.first,
+           let columns = (split?.list === nav ? split : tabSplits.values.first { $0.list === nav }) {
+            let firstDetail: RouteController?
+            switch splitDetail {
+            case .installed: firstDetail = columns.showsDetail ? columns.detailRoutes.first : nil
+            case .incoming(let detail): firstDetail = detail
+            }
+            apply(from: firstDetail, to: root)
         }
     }
 
@@ -1062,14 +1132,26 @@ extension NavigationHost {
     /// with no bar in containers that take the whole view puts its first
     /// scroller under the status bar the same way (LLP 1130 D3).
     private func collapse(_ c: RouteController, shape: HeaderShape?, shows: Bool, scroller: NodeView?) {
-        let kids = c.node.container.subviews.compactMap { $0 as? NodeView }
+        let kids = Self.orderedChildren(of: c.node)
         // In flow by layout: a popover a context preview lays out is hidden
         // here while it pushes the scroller down (`MenusIOS`), and a title
         // must not collapse with a scroller that is no longer the route's top.
-        let flowing = Self.flowingTopContent
+        let flowing: (FlowChild) -> Bool = { child in
+            switch child {
+            case .view(let view): Self.flowingTopContent(view)
+            case .leaf(let leaf): leaf.isInFlow
+            }
+        }
         let whole = wantsWholeView && presenter.viewportFit != "cover"
-        let node = shape.map { shape in kids.firstIndex { $0 === shape.header }.flatMap { kids[($0 + 1)...].first(where: flowing) } }
-            ?? (shows || whole ? kids.first(where: flowing) : nil)
+        let first: FlowChild?
+        if let shape {
+            first = kids.firstIndex { $0.view === shape.header }.flatMap { kids[($0 + 1)...].first(where: flowing) }
+        } else if shows || whole {
+            first = kids.first(where: flowing)
+        } else {
+            first = nil
+        }
+        let node = first?.view
         var riders: [NodeView] = []
         #if os(iOS)
         if #available(iOS 26.0, *), shape?.level == 1, let scroller, !RouteGeometry.transparentBar(c.node),
@@ -1082,9 +1164,10 @@ extension NavigationHost {
         c.rideBars()
         let covered: Bool
         if case .edges(let edges)? = covers[c.node.id] { covered = edges.top > 0.5 } else { covered = false }
-        let ordinary = shape?.authored.isEmpty != false ? node.flatMap { Self.topScroller($0, target: scroller) } : nil
-        let arranged = scroller.flatMap { node in arrangementScrollers(in: c, top: true).contains(where: { $0 === node }) ? node : nil }
-        let target = !riders.isEmpty ? (covered ? nil : scroller) : (ordinary ?? arranged)
+        let fullyLifted = shape.map { c.lifted === $0.header } ?? true
+        let ordinary = fullyLifted ? node.flatMap { Self.topScroller($0, target: scroller) } : nil
+        let arranged = fullyLifted ? scroller.flatMap { node in arrangementScrollers(in: c, top: true).contains(where: { $0 === node }) ? node : nil } : nil
+        let target = !fullyLifted ? nil : (!riders.isEmpty ? (covered ? nil : scroller) : (ordinary ?? arranged))
         if let target, !riders.isEmpty {
             let frame = target.convert(target.bounds, to: c.node)
             let band = UIEdgeInsets(top: max(0, frame.minY), left: 0, bottom: target.pageBand.bottom, right: 0)
@@ -1203,7 +1286,8 @@ extension NavigationHost {
         #if os(iOS)
         if #available(iOS 27.1, *), presenter.arrangements.insets(node) { return true }
         #endif
-        return controllers.values.contains { $0.edgeScroll === node }
+        // A bottom-only scroller takes UIKit's adjustment unless its route has no top to inset (`reachBottom`)
+        return controllers.values.contains { $0.edgeScroll === node && !RouteGeometry.insetsNoTop($0.node) }
     }
 
     /// UIKit's zero-width fixed space splits shared glass without authored metrics.

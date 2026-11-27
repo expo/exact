@@ -2260,15 +2260,26 @@ out (LLP 1157).
   memory, and `test` and `verify` start it (`apps/mosaic/server.ts`); its
   `app.json` needs `"server": { "database": false }`, since the stand-in keeps
   no database. A function's second argument is who asks, `{ identity }`: the
-  `sub` of the JWT the client sent, unchecked, or `null` signed out. Convex's
+  `sub` of the JWT the client sent, unchecked, or `null` signed out. The
+  stand-in takes the socket on any path that ends in `/sync`, and Convex's
   HTTP API answers too (`POST /api/mutation`, `/api/query`, `/api/action`,
   `Authorization: Bearer <jwt>`), so a test's `request` can write as another
-  client; `http: (request) => Response | undefined` answers the app's other
-  routes (an auth endpoint), with CORS headers added. Keep the
+  client; after both, `http: (request) => Response | undefined` answers the
+  app's other routes (an auth endpoint), with CORS headers added. Keep the
   rules both run in a file with no Convex import (`convex/tiles.ts`). Each
   test starts an empty stand-in, including with `database: false`. Remote
   servers stay shared. Only `test` and `agent --test` share an ancestor's server,
   saying so; `verify` refuses an answering local server, including an ancestor's.
+- **The socket origin of a test build.** `test` and `verify` start the
+  stand-in at the socket origin the build reads, when that origin is a loopback
+  address with a port (`ws://127.0.0.1:3210`). With a cloud origin, no stand-in
+  starts and the tests run against that deployment. A setting
+  (`"env": ["CONVEX_SOCKET_URL"]` in app.json, read as
+  `import.meta.env.CONVEX_SOCKET_URL`) has the same value in a test or check
+  build as in any build: the environment's, else `.env.local`'s, else `.env`'s,
+  else the default in app.ts. Give tests, checks and drives the stand-in's
+  origin in the environment:
+  `CONVEX_SOCKET_URL=ws://127.0.0.1:3210 bun exact.mjs verify`.
 - **Driving a native host against a real deployment.** The driver seeds a
   native host's randomness (`EXACT_AGENT_SEED`, 1 by default), so two launches
   draw the same session id and Convex answers the second's writes with the
@@ -3141,6 +3152,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `button` (`buttonStyle`, native by default) | `UIButton` |
 | `list appearance="auto" listStyle="inset-grouped"` of `section`s (`header`, rows, `footer`) | `UICollectionView` list, as Settings ([human guide](contract-for-humans.md#choosing-a-native-button)); a row of your own parts starts and ends at the cell's margin, as UIKit's own rows do, so write no padding at its ends. Android shows Material's list items, with no line between rows |
 | the same, `listStyle="plain"`, each `section`'s `header` one letter (Contacts) | the list with UIKit's A–Z section index at its trailing edge, when every section has a row; sections above the letters (Favorites) stay out of it; a name that starts with no letter A–Z goes under `#`, not nowhere. Its headers pin as the list scrolls, over UIKit's blur; a `grouped` list's scroll away |
+| the same, `listStyle="sidebar"`, a list of places to go (folders, sections) | UIKit's sidebar list (`.sidebar`) at every width: its ground, no separators; the web, the Mac and the painted hosts draw the plain list |
 | a `section`'s `header` holding boxes of your own, not one `text`: `header` › `row gap=8 align-items="center"` › a sized `image` (or a box around one) and a `text` | UIKit's header holding your views (an avatar beside a name), laid out as you wrote them and starting at the cell's margin, so write no padding at its ends; a `padding-left` or `padding-right` you write is from the card's edge, as UIKit's header view spans the card (16 for a hand-built view pinned 16 inside it). Above and below them is UIKit's header inset, 10 points; `padding-top` and `padding-bottom` on the `header` replace it (12 for a hand-built header view's). Pinned in a plain list as a one-text header is, and one VoiceOver heading named by its texts (a header that holds a button keeps each part its own element). Several bare `text`s are refused: put them in a `row` or a `column`. A `footer` holds one `text` |
 | `list` with no `appearance`, its rows down the page (each child is a row) | a plain list's cells: UIKit's separators, the cell's grey ground while a row is pressed, the row selected under the screen it pushed. Draw none of it, and no inset either: a row's content stands at the cell's margin (16 at each end; UIKit's, 20 in an iPhone's landscape) where you write no padding, the row `border-box` (LLP 1138); write a padding to choose your own. The row is your box; a border you write on a row is yours and replaces the separator there (`border-bottom="none"`: none), and `appearance="none"` keeps rows of your own (a transcript, a feed of cards). The Mac shows a table, the web and the Linux desktop one line between rows, Android none (LLP 1115.000 D16) |
 | `delete=remove(id)` on either list's row (`disabled` beside it: no delete) | the cell's swipe action Delete, which a full swipe performs (`contract vocab swipe`) |
@@ -8572,6 +8584,8 @@ is the large title's, any other's the inline title's), on the Mac in a modal
 route's sheet title. The Mac's window title keeps AppKit's font, which no public
 API changes. A heading inside an iOS pressable title group takes the same
 authored typography over the bar's headline font.
+On an iOS route, set the inline and large title, text item and Back title fonts
+through the header's `font-family` or through a Swift hatch, choosing one per route.
 On iOS, a route's level-1 heading gives a large navigation title; other levels
 give an inline title. Set UIKit's `largeTitleDisplayMode` through a native access
 hatch to change presentation while keeping the semantic rank. Check the host's

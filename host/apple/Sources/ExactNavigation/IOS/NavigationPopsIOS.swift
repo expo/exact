@@ -198,6 +198,16 @@ extension NavigationHost {
         }
     }
 
+    #if os(iOS)
+    /// Fly the names both routes hold alongside `transition`, unless it zooms (LLP 1013.004 D3), cut out of the
+    /// picture of a route the app removed: drawn again, that route would show the views its batch emptied.
+    func crossFlights(_ transition: UIViewControllerTransitionCoordinator, to viewController: UIViewController, in nav: UINavigationController) {
+        guard let from = transition.viewController(forKey: .from) as? RouteController, let to = viewController as? RouteController else { return }
+        let zoom = (nav.viewControllers.contains(from) ? to : from).zoomSource
+        _ = presenter.flightHost.cross(transition, leaving: from.view, arriving: to.view, zoom: zoom, picture: from.frozen)
+    }
+    #endif
+
     /// The nodes of removed routes UIKit still shows (`prepare`).
     var retiringRoots: [NodeView] { retiringRoutes.allObjects.compactMap(\.retiringRoot) }
 

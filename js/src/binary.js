@@ -143,6 +143,26 @@
       return "exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000";
     return taken ? undefined : "exactIdleTimeout: only a WebSocket, event or byte stream takes an idle timeout";
   }
+  // `exactStreamOpen` (LLP 1016.000 D12): true when an HTTP(S) event or byte stream asks for an `open` event
+  // carrying the 2xx response status and immutable Headers, nothing when absent/false, or a refusal's words.
+  function streamOpenOf(init, stream, url, listen, own, child) {
+    var open = init ? init.exactStreamOpen : undefined;
+    if (open === undefined || open === false) return undefined;
+    if (open !== true) return "exactStreamOpen is true or false";
+    if (!stream)
+      return "exactStreamOpen reports an HTTP stream's response head on open: give exactStream too";
+    var text = String(url);
+    if (
+      listen ||
+      own ||
+      child ||
+      init.exactLongPoll !== undefined ||
+      init.exactUploadProgress === true ||
+      (/^[a-z][a-z0-9+.-]*:/i.test(text) && !/^https?:/i.test(text))
+    )
+      return "exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen";
+    return true;
+  }
   // An upload's event for its mapper, as XMLHttpRequest names them: `progress` for the host's count of the body's
   // bytes sent, and `load` for the reply, whatever its status, which ends the stream.
   function uploadEvent(o) {
@@ -771,7 +791,13 @@
       return s;
     }
     function headersOf(init, kind) {
-      return guard(new Headers(init), kind);
+      var headers = new Headers(init);
+      if (kind === "immutable") {
+        // Forbidden response-header names (WHATWG Fetch §2.2.2), matching Response().
+        headers["delete"]("set-cookie");
+        headers["delete"]("set-cookie2");
+      }
+      return guard(headers, kind);
     }
     // A copy of a response's headers, as Fetch copies its header list: through the platform's own iteration, never
     // an iterator an app gives the headers
@@ -1079,7 +1105,13 @@
         exactBodyTo: written === undefined ? null : { path: to, bytes: written },
       });
     }
-    return { Response: Response, reply: reply };
+    return {
+      Response: Response,
+      reply: reply,
+      headers: function (pairs) {
+        return headersOf(pairs, "immutable");
+      },
+    };
   }
   function FetchError(f) {
     Object.defineProperties(this, {
@@ -1125,6 +1157,7 @@
     longPollOf: longPollOf,
     uploadOf: uploadOf,
     idleRefusal: idleRefusal,
+    streamOpenOf: streamOpenOf,
     socketProtocols: socketProtocols,
     uploadEvent: uploadEvent,
     presence: presence,

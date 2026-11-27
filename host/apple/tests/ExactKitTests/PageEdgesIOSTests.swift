@@ -733,6 +733,25 @@ final class PageEdgesIOSTests: XCTestCase {
         }
     }
 
+    /// A control bar rides the large title by a transform, so on screen it lies over the list it stands above in layout,
+    /// and the list stays the route's bottom-edge scroller (LLP 1116 D2)
+    func testARidingControlBarLeavesTheListTheBottomEdge() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the title belongs to a scene window") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars require iOS 26") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        p.press(try node(session, "pick-large").id)
+        let filter = try node(session, "filter"), list = try node(session, "list")
+        p.apply(wireBatch([["op": "props", "id": Int(filter.id), "set": ["accessibilityRole": "group"]]]))
+        let route = try XCTUnwrap(p.navigationHost.activeRoute)
+        until("the filter rides the large title") {
+            route.scoped == nil && !Agent(session: session).nativeInFlight() && !route.ridingBars.isEmpty && filter.controlRide > 0
+        }
+        let drawn = filter.convert(filter.bounds, to: route.view), listed = list.convert(list.bounds, to: route.view)
+        XCTAssertGreaterThan(drawn.maxY - listed.minY, 0.5, "the ride draws the filter over the list on screen")
+        XCTAssertTrue(route.edgeScroll === list)
+    }
+
     func testLargeTitleRidersRequireBothEdgesAndTheBarsPaintOrder() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the title belongs to a scene window") }
         guard #available(iOS 26.0, *) else { throw XCTSkip("control bars require iOS 26") }
@@ -990,6 +1009,140 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(lead.convert(lead.bounds, to: nil), leadFrame, "the line over the scroller stays")
     }
 
+    /// A route's own padding under its banded scroller counts once: with the tab bar hidden, the scroller's open foot is
+    /// banded through that padding, and handing the scroller the route's bottom edge adds nothing more, so it rests
+    /// above the home indicator and the route's 12 points, as the band alone left it.
+    func testWithTheTabBarHiddenARoutesOwnPaddingUnderItsScrollerCountsOnce() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        guard #available(iOS 18.0, *) else { throw XCTSkip("hiding the tab bar is iOS 18's") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id]), tabs = try XCTUnwrap(route.tabBarController)
+        let shown = { (id: String) in p.views.values.first { $0.props["testId"] == id && $0.window != nil } }
+        p.press(try node(session, "use-titled-padded").id)
+        until("the scroller's foot runs under the tab bar") { (shown("list")?.pageBand.bottom ?? 0) > 0.5 }
+        let sv = try XCTUnwrap(shown("list")?.scrollView), home = try XCTUnwrap(route.view.window).safeAreaInsets.bottom
+        tabs.setTabBarHidden(true, animated: false)
+        until("the bar is hidden and the scroller takes the foot") {
+            tabs.isTabBarHidden && route.edgeScroll === shown("list") && !Agent(session: session).nativeInFlight()
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(route.edgeScroll === shown("list"), "the scroller holds the route's bottom edge")
+        XCTAssertEqual(sv.adjustedContentInset.bottom, home + 12, accuracy: 0.5, "the home indicator and the route's 12 points, once")
+    }
+
+    /// A route that ends 12 points above the screen's foot reaches only part of the home indicator's safe area: with
+    /// the tab bar hidden, its scroller holds the bottom edge and rests above that part and the route's 12 points of
+    /// padding, each once.
+    func testWithTheTabBarHiddenAShortRoutesOwnPaddingCountsOnce() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        try shortRoute("titled-padded-short", endingAbove: 12)
+    }
+
+    /// One ending 48 points above it, clear of the home indicator, has none of it to make up: its list ends at the
+    /// route's padding, with no bottom inset.
+    func testWithTheTabBarHiddenARouteClearOfTheSafeAreaTakesNoBottomInset() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        try shortRoute("titled-padded-clear", endingAbove: 48)
+    }
+
+    private func shortRoute(_ shape: String, endingAbove gap: CGFloat) throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("hiding the tab bar is iOS 18's") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id]), tabs = try XCTUnwrap(route.tabBarController)
+        let shown = { (id: String) in p.views.values.first { $0.props["testId"] == id && $0.window != nil } }
+        p.press(try node(session, "use-\(shape)").id)
+        let window = try XCTUnwrap(route.view.window), home = window.safeAreaInsets.bottom
+        waitFor("the route ends \(gap) points above the foot", cap: 5, facts: {
+            "route \(routeNode.convert(routeNode.bounds, to: nil)), its controller's view \(route.view.convert(route.view.bounds, to: nil)), window \(window.bounds)"
+        }) { abs(routeNode.convert(routeNode.bounds, to: nil).maxY - (window.bounds.maxY - gap)) < 0.5 }
+        tabs.setTabBarHidden(true, animated: false)
+        until("the bar is hidden and the scroller takes the foot") {
+            tabs.isTabBarHidden && route.edgeScroll === shown("list") && !Agent(session: session).nativeInFlight()
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let sv = try XCTUnwrap(shown("list")?.scrollView), reached = max(0, home - gap)
+        XCTAssertTrue(route.edgeScroll === shown("list"), "the scroller holds the route's bottom edge")
+        if reached > 0 {
+            XCTAssertEqual(sv.adjustedContentInset.bottom, reached + 12, accuracy: 0.5, "the part of the home indicator the route reaches and its 12 points, once each")
+        } else {
+            XCTAssertEqual(sv.adjustedContentInset.bottom, 0, accuracy: 0.5, "no part of the home indicator to make up")
+            XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, routeNode.convert(routeNode.bounds, to: nil).maxY - 12, accuracy: 0.5,
+                           "the list ends at the route's padding")
+        }
+    }
+
+    /// With the tabs shown away from the route's foot (an iPad's, at the top), a route's own padding under its banded
+    /// scroller counts once, as with the bar hidden: the band holds the route's space, no bar's.
+    func testWithTheTabsAwayFromTheFootARoutesOwnPaddingUnderItsScrollerCountsOnce() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id]), stack = try XCTUnwrap(route.stack)
+        let shown = { (id: String) in p.views.values.first { $0.props["testId"] == id && $0.window != nil } }
+        p.press(try node(session, "use-titled-padded").id)
+        until("the shape is laid out") { shown("list") != nil && !Agent(session: session).nativeInFlight() }
+        // Where the tab bar stands is read once it has settled, not at boot
+        guard p.navigationHost.bottomTabBar(route, in: stack) == .none, route.tabBarController.map({ tabs in
+            if #available(iOS 18.0, *) { return !tabs.isTabBarHidden } else { return true }
+        }) == true else { throw XCTSkip("the tabs are at the route's foot here; an iPad shows them at the top") }
+        until("the scroller takes the foot") { route.edgeScroll === shown("list") && !Agent(session: session).nativeInFlight() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let sv = try XCTUnwrap(shown("list")?.scrollView), home = try XCTUnwrap(route.view.window).safeAreaInsets.bottom
+        XCTAssertEqual(sv.adjustedContentInset.bottom, home + 12, accuracy: 0.5, "the home indicator and the route's 12 points, once")
+    }
+
+    /// Under a cover root with no tab bar, a pushed route with no bar that opts its top out of the clearance gives its
+    /// bottom edge to its scroller, which UIKit does not adjust: its bottom inset is the home indicator's, and its top,
+    /// opted out, takes none.
+    func testACoverRouteThatOptsOutOfItsTopKeepsItAsItsScrollerTakesTheBottomEdge() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the safe area is a scene window's") }
+        let (session, _) = try fixture("COVER_BARLESS_TOP")
+        let p = session.presenter
+        p.press(try node(session, "open").id)
+        until("the page is pushed") { p.views.values.contains { $0.props["testId"] == "route-page" && $0.window != nil } && !Agent(session: session).nativeInFlight() }
+        let routeNode = try node(session, "route-page"), list = try node(session, "page-list")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id]), sv = try XCTUnwrap(list.scrollView)
+        let home = try XCTUnwrap(route.view.window).safeAreaInsets.bottom
+        until("the scroller takes the bottom edge") { route.edgeScroll === list && abs(sv.adjustedContentInset.bottom - home) < 0.5 }
+        XCTAssertEqual(sv.contentInsetAdjustmentBehavior, .never, "UIKit adjusts none of it")
+        XCTAssertEqual(sv.adjustedContentInset.top, 0, accuracy: 0.5, "its top stays opted out")
+        if case .inset(top: let reported, bottom: _)? = p.navigationHost.covers[list.id] {
+            XCTAssertEqual(reported, 0, accuracy: 0.5, "the cover report insets none of its top")
+        }
+        XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, routeNode.convert(routeNode.bounds, to: nil).maxY, accuracy: 0.5, "it reaches the route's foot")
+    }
+
+    /// A cover route's bottom-only scroller follows its route's top while it stays mounted: UIKit's adjustment while
+    /// the route has a top to inset, none once its bar turns transparent, and UIKit's again when the bar comes back,
+    /// the scroller at its start throughout.
+    func testABottomOnlyScrollerFollowsItsRoutesTopWhileMounted() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the safe area is a scene window's") }
+        let (session, _) = try fixture("COVER_BARLESS_TOP")
+        let p = session.presenter, agent = Agent(session: session)
+        p.press(try node(session, "open-lead").id)
+        until("lead is pushed") { p.views.values.contains { $0.props["testId"] == "route-lead" && $0.window != nil } && !agent.nativeInFlight() }
+        let routeNode = try node(session, "route-lead"), list = try node(session, "lead-list")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id]), sv = try XCTUnwrap(list.scrollView)
+        until("the list holds the bottom edge alone, adjusted by UIKit") {
+            route.edgeScroll === list && route.collapseScroll !== list && sv.contentInsetAdjustmentBehavior == .automatic
+        }
+        p.press(try node(session, "clear").id)
+        until("its bar transparent, UIKit adjusts none of it") {
+            route.edgeScroll === list && sv.contentInsetAdjustmentBehavior == .never && !agent.nativeInFlight()
+        }
+        XCTAssertEqual(sv.contentOffset.y + sv.adjustedContentInset.top, 0, accuracy: 0.5, "it stays at its start")
+        if case .inset(top: let reported, bottom: _)? = p.navigationHost.covers[list.id] {
+            XCTAssertEqual(reported, 0, accuracy: 0.5, "the cover report insets none of its top")
+        }
+        p.press(try node(session, "clear").id)
+        until("its bar back, UIKit adjusts it again") {
+            route.edgeScroll === list && sv.contentInsetAdjustmentBehavior == .automatic && !agent.nativeInFlight()
+        }
+        XCTAssertEqual(sv.contentOffset.y + sv.adjustedContentInset.top, 0, accuracy: 0.5, "it stays at its start")
+    }
+
     /// A banded scroller's indicators count the band and its own safe area once each: UIKit's indicator adjustment,
     /// which would add its own top and bottom (and under a large title it hangs over, a top of its own) to the band,
     /// is off while the band is on, as on a large title's collapse scroller under a control bar that rides it (UI
@@ -1000,15 +1153,149 @@ final class PageEdgesIOSTests: XCTestCase {
         let (session, _) = try fixture("COVER_TABS")
         let p = session.presenter, routeNode = try node(session, "route-home")
         let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id])
+        // At the foot the scroller is banded through a tab bar there (an iPhone's), or holds the route's bottom edge
+        // (the folded Duo's side rail of tabs, an iPad's at the top, banded under its large title or not); either
+        // way its bottom inset counts the bars and the home indicator once
         let list = { p.views.values.first { $0.props["testId"] == "list" && $0.window != nil } }
         p.press(try node(session, "use-riding").id)
-        until("the control bar rides the large title and the scroller is banded at both edges") {
-            !route.ridingBars.isEmpty && (list()?.pageBand.top ?? 0) > 0.5 && (list()?.pageBand.bottom ?? 0) > 0.5
+        until("the control bar rides the large title and the scroller is banded at its top") {
+            !route.ridingBars.isEmpty && (list()?.pageBand.top ?? 0) > 0.5 && !Agent(session: session).nativeInFlight()
         }
-        let sv = try XCTUnwrap(list()?.scrollView)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let sv = try XCTUnwrap(list()?.scrollView), window = try XCTUnwrap(sv.window), home = window.safeAreaInsets.bottom
+        let stack = try XCTUnwrap(route.stack)
+        // Where the tab bar stands is read once it has settled, not at boot
+        if p.navigationHost.bottomTabBar(route, in: stack) == .reached {
+            until("banded through the tab bar at its foot") { (list()?.pageBand.bottom ?? 0) > 0.5 }
+            XCTAssertEqual(sv.adjustedContentInset.bottom, route.view.safeAreaInsets.bottom, accuracy: 0.5, "the tab bar's and the home indicator's, once")
+        } else {
+            XCTAssertTrue(route.edgeScroll === list(), "with no tab bar at its foot, the scroller holds the route's bottom edge")
+            XCTAssertEqual(sv.adjustedContentInset.bottom, home, accuracy: 0.5, "the home indicator's inset, once")
+        }
+        XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, window.bounds.maxY, accuracy: 0.5, "the list reaches the screen's foot")
         XCTAssertFalse(sv.automaticallyAdjustsScrollIndicatorInsets, "the band's writer holds UIKit's indicator adjustment off")
         XCTAssertEqual(sv.verticalScrollIndicatorInsets.top, sv.adjustedContentInset.top, accuracy: 0.5, "the indicator starts at the content's top")
         XCTAssertEqual(sv.verticalScrollIndicatorInsets.bottom, sv.adjustedContentInset.bottom, accuracy: 0.5, "and ends at its foot")
+    }
+
+    /// The bottom edge's scroller may sit deeper than the route's last child
+    /// (LLP 1116 D2, amended): a sheet whose component's root column holds
+    /// its header and then its scroller reaches the edge, as a hand-built
+    /// sheet's scroll view pinned to its view's bottom does. A footer, a
+    /// padding under it, or a sideways scroller does not.
+    func testANestedLastScrollerReachesTheBottomEdge() {
+        let p = Presenter()
+        var next: UInt32 = 0
+        func box(_ parent: NodeView?, y: CGFloat, height: CGFloat, overflow: String? = nil) -> NodeView {
+            next += 1
+            let n = NodeView(id: next, kind: "view", presenter: p)
+            n.frame = CGRect(x: 0, y: y, width: 400, height: height)
+            if let overflow { n.style[overflow == "x" ? "overflow_x" : "overflow_y"] = .string("scroll"); n.syncScroll() }
+            parent?.container.addSubview(n)
+            return n
+        }
+        // The route's cover pads 34 under its child, which stands at the foot
+        // of the route's content box less that cover: the box the kernel
+        // sends is the authored one, the cover said apart (`cover:`).
+        let route = box(nil, y: 0, height: 600)
+        let sheet = box(route, y: 0, height: 566)
+        let header = box(sheet, y: 0, height: 60)
+        let scroller = box(sheet, y: 60, height: 506, overflow: "y")
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "the component's scroller reaches the edge")
+        // A sibling stands where layout put it, not where a transform draws it: a control bar riding the navigation
+        // bar lies over the scroller below it on screen
+        header.transform = CGAffineTransform(translationX: 0, y: 100)
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "a header drawn over the scroller stays above it")
+        header.transform = .identity
+        // The scroller and the boxes around it are drawn where layout put their foot: one scaled about its top, or
+        // turned, draws the scroll view short of the edge
+        sheet.layer.anchorPoint = CGPoint(x: 0.5, y: 0)
+        sheet.frame = CGRect(x: 0, y: 0, width: 400, height: 566)
+        sheet.transform = CGAffineTransform(scaleX: 1, y: 0.75)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a wrapper scaled to 75% ends 141.5 above its laid-out foot")
+        sheet.transform = .identity
+        sheet.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        sheet.frame = CGRect(x: 0, y: 0, width: 400, height: 566)
+        scroller.transform = CGAffineTransform(rotationAngle: 0.02)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a turned scroller's corner crossing the edge is not its foot")
+        scroller.transform = CGAffineTransform(rotationAngle: .pi)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a half-turn brings the scroller's top to the edge")
+        scroller.transform = CGAffineTransform(scaleX: 1, y: -1)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a flipped scroller's top is at the edge")
+        scroller.transform = .identity
+        // Frames agree within half a device pixel, a sixth of a point at 3x (LLP 1123 D9), and not within half a
+        // point: a header reaching a tenth of a point into the scroller still ends above it, three tenths do not; a
+        // scroller drawn a tenth of a point off its laid-out foot keeps it, three tenths do not
+        let half = 0.5 / 3.0
+        header.frame.size.height = 60.1
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "a sibling within half a pixel")
+        header.frame.size.height = 60.3
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a sibling three tenths of a point into it")
+        header.frame.size.height = 60
+        scroller.transform = CGAffineTransform(translationX: 0, y: 0.1)
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "a foot within half a pixel")
+        scroller.transform = CGAffineTransform(translationX: 0, y: 0.3)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a foot drawn three tenths of a point off")
+        scroller.transform = .identity
+        // A layout gap is measured where layout put the scroller, apart from a nudge a transform draws: laid out just
+        // over half a point short, and drawn a quarter of a device pixel lower, within half a point on screen, is short
+        scroller.frame.size.height = 506 - (0.5 + half / 4)
+        scroller.transform = CGAffineTransform(translationX: 0, y: half / 2)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a scroller laid out over half a point short of the foot")
+        scroller.transform = .identity
+        scroller.frame.size.height = 506
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, scale: 3), "not with the cover unsaid: it ends 34 above the content box")
+        sheet.frame.size.height = 576
+        scroller.frame.size.height = 516
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a 24-point gap is neither the edge nor the 34-point bar")
+        sheet.frame.size.height = 566
+        scroller.frame.size.height = 506
+        sheet.applyKernelContentBox(CGRect(x: 0, y: 0, width: 400, height: 546), padding: [0, 0, 20, 0])
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a padding under it keeps the cover")
+        sheet.applyKernelContentBox(nil, padding: nil)
+        scroller.frame.size.height = 446
+        let footer = box(sheet, y: 506, height: 60)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a footer under it keeps the cover")
+        footer.removeFromSuperview()
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "nor does a scroller that ends short of its parent")
+        scroller.frame.size.height = 506
+        scroller.style["overflow_y"] = nil
+        scroller.style["overflow_x"] = .string("scroll")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a sideways scroller takes no bottom inset")
+        scroller.style["overflow_x"] = nil
+        scroller.style["overflow_y"] = .string("scroll")
+        // The route's child sized to its content, 200 points of a 600-point
+        // route: its scroller ends far above the home indicator.
+        sheet.frame.size.height = 200
+        scroller.frame.size.height = 140
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a route's child short of its content box keeps the cover")
+        sheet.frame.size.height = 566
+        scroller.frame.size.height = 506
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller)
+        // The component's column ends in a row filling it: a side column
+        // beside the scroller reaches the edge too.
+        scroller.removeFromSuperview()
+        let split = box(sheet, y: 60, height: 506)
+        _ = box(split, y: 0, height: 506)
+        let right = box(split, y: 0, height: 506, overflow: "y")
+        right.frame.origin.x = 200
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a row's scroller beside a column keeps the cover")
+        // A full-height row: a column with Save at its foot, and a scroller
+        // beside it. The Save button reaches the edge too: the cover stays.
+        sheet.removeFromSuperview()
+        let row = box(route, y: 0, height: 566)
+        let side = box(row, y: 0, height: 566)
+        _ = box(side, y: 522, height: 44)
+        let beside = box(row, y: 0, height: 566, overflow: "y")
+        beside.frame.origin.x = 200
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a scroller with a sibling beside it in a row keeps the cover")
+        side.removeFromSuperview()
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === beside, "the row's only child spans its bottom edge")
+        // A reversed column: its last child is at its top, above the scroller.
+        _ = box(row, y: 0, height: 60)
+        beside.frame.origin = CGPoint(x: 0, y: 60); beside.frame.size.height = 506
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a last child above its sibling is not at the edge")
     }
 }
 #endif

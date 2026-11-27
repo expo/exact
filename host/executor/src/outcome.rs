@@ -37,11 +37,23 @@ pub(super) fn retained(outcome: &Outcome) -> usize {
         Outcome::Storage(b) => b.capacity(),
         Outcome::Message(_) | Outcome::Messages(_) => (outcome.messages().iter())
             .map(|m| {
+                let head = m.head.as_deref().map_or(0, |h| {
+                    h.headers
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<(String, String)>())
+                        .saturating_add(
+                            h.headers
+                                .iter()
+                                .map(|(k, v)| k.capacity().saturating_add(v.capacity()))
+                                .sum::<usize>(),
+                        )
+                });
                 m.data
                     .capacity()
                     .saturating_add(m.event.capacity())
                     .saturating_add(m.id.capacity())
                     .saturating_add(m.binary.as_ref().map_or(0, Vec::capacity))
+                    .saturating_add(head)
             })
             .fold(0, usize::saturating_add),
         Outcome::Closed { reason, .. } => reason.capacity(),

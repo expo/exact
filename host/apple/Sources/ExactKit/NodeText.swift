@@ -82,11 +82,61 @@ extension NodeView {
         return out
     }
 
-    /// After a style change: where this box's lines, or their colour,
-    /// changed, the paragraphs it holds draw again.
+    /// Whether an in-flow ancestor above `self` propagates a text decoration line.
+    var hasDecoratedInFlowAncestor: Bool {
+        var box: NodeView = self
+        while let parent = box.nodeSuperview {
+            if let lines = parent.style["text_decoration_line"]?.string, !lines.isEmpty, lines != "none" { return true }
+            if ["absolute", "fixed"].contains(parent.layoutPosition) { break }
+            box = parent
+        }
+        return false
+    }
+
+    /// After a `popover` prop change that flips effective flow participation:
+    /// invalidate affected paragraphs only when a decorated in-flow ancestor exists.
+    func popoverFlowChanged(wasOutOfFlow: Bool) {
+        let outOfFlow = ["absolute", "fixed"].contains(layoutPosition)
+        guard outOfFlow != wasOutOfFlow, hasDecoratedInFlowAncestor else { return }
+        invalidateFlowDecorations()
+    }
+
+    private func invalidateFlowDecorations() {
+        if isParagraph {
+            invalidateText()
+            #if os(macOS)
+            needsDisplay = true
+            #else
+            setNeedsDisplay()
+            #endif
+            return
+        }
+        Self.visitParagraphs(in: subviews) { node in
+            node.invalidateText()
+            #if os(macOS)
+            node.needsDisplay = true
+            #else
+            node.setNeedsDisplay()
+            #endif
+        }
+    }
+
+    /// After a style change: where this box's lines, their colour, or whether
+    /// it stands in flow changed, the paragraphs it holds draw again.
     func decorationChanged(from old: NodeStyle) {
         let lines = style["text_decoration_line"], was = old["text_decoration_line"]
-        guard lines != was || (lines != nil && old["text_color"] != style["text_color"]) else { return }
+        let outOfFlow = ["absolute", "fixed"].contains(layoutPosition)
+        let wasOutOfFlow = ["absolute", "fixed"].contains(Self.layoutPosition(old, popover: props["popover"] != nil))
+        let positionFlipped = outOfFlow != wasOutOfFlow && hasDecoratedInFlowAncestor
+        guard lines != was || (lines != nil && old["text_color"] != style["text_color"]) || positionFlipped else { return }
+        if positionFlipped, isParagraph {
+            invalidateText()
+            #if os(macOS)
+            needsDisplay = true
+            #else
+            setNeedsDisplay()
+            #endif
+        }
         Self.visitParagraphs(in: subviews) { node in
             node.invalidateText()
             #if os(macOS)
@@ -134,6 +184,7 @@ extension NodeView {
         #if os(macOS)
         needsDisplay = true
         layer?.setNeedsDisplay()
+        if hasInlineLinkCursorRects { presenter?.noteInlineCursorRects(self) }
         #else
         setNeedsDisplay()
         layer.setNeedsDisplay()
@@ -156,6 +207,7 @@ extension NodeView {
         textRasterKey = nil
         #if os(macOS)
         textRasterPending = false
+        if hasInlineLinkCursorRects { presenter?.noteInlineCursorRects(self) }
         #else
         presenter?.requestTextPublication()
         #endif
@@ -280,7 +332,7 @@ extension NodeView {
         }
         var spec = TextStyle.spec(runs: runs, style: style, props: props, strut: strut,
                                   color: ink,
-                                  language: presenter?.documentLanguage ?? "", flow: !flowShapes.isEmpty) { runs in
+                                  language: paragraphLanguage, flow: !flowShapes.isEmpty) { runs in
             guard props["markup"] == "markdown", let text else { return runs }
             return MarkdownLink.installed?.atomIcons(text, runs, node: self) ?? runs
         }

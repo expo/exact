@@ -152,7 +152,7 @@ extension Presenter {
         #endif
         #if os(macOS)
         // Its `href` runs' pointing hand (`resetCursorRects`).
-        if hadLinks || rows.contains(where: \.isLink) { node.window?.invalidateCursorRects(for: node) }
+        if hadLinks || rows.contains(where: \.isLink) { noteInlineCursorRects(node) }
         keyViewLoopStale = true
         if !node.inlineKeyViews.isEmpty { _ = node.syncInlineKeyViews() }
         #endif

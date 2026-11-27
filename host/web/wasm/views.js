@@ -1,4 +1,4 @@
-import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
+import { symbolSize, symbolPlaceholder, symbolMask, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
 import { downForDrag, dragPathFrom, elementOf, observeDragInput, pressedAt } from "../drag-input.js";
 import { picker, track, iframeLoading, localAssetURL, host, agentMode, pageFacts, pageNative, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
 import { resolveShortcuts, pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, fieldText, replaceFieldText, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
@@ -233,21 +233,20 @@ export function refreshSymbols() {
       el,
       point: parseFloat(cs.fontSize) * (parseFloat(cs.getPropertyValue("--exact-symbol-scale")) || 1),
       weight: Number(cs.fontWeight),
-      objectFit: cs.objectFit
+      objectFit: cs.objectFit,
+      rtl: cs.direction === "rtl"
     };
   });
-  for (const { el, point, weight } of configs) {
-    const path = el.getAttribute("data-symbol-path"), filled = el.hasAttribute("data-symbol-fill"), box = el.getAttribute("data-symbol-viewbox") || "0 0 24 24", source = el.getAttribute("data-symbol-source"), key = `${path}:${filled}:${point}:${weight}:${box}:${el.hasAttribute("data-symbol-nonzero")}:${source}`;
+  for (const { el, point, weight, rtl } of configs) {
+    const path = el.getAttribute("data-symbol-path"), filled = el.hasAttribute("data-symbol-fill"), nonzero = el.hasAttribute("data-symbol-nonzero"), mirror = rtl && el.hasAttribute("data-symbol-mirror"), box = el.getAttribute("data-symbol-viewbox") || "0 0 24 24", source = el.getAttribute("data-symbol-source"), key = `${path}:${filled}:${point}:${weight}:${box}:${nonzero}:${mirror}:${source}`;
     if (!path && !el.dataset.symbolSource?.startsWith("symbol:sf/") && el.dataset.symbolSource !== "symbol:" && el.symbolRefusal !== el.dataset.symbolSource) {
       log(`image ${el.dataset.symbolSource} refused: unknown symbol role`);
       el.symbolRefusal = el.dataset.symbolSource;
     }
     if (el.symbolKey !== key) {
       el.symbolKey = key;
-      const stroke = 1.1 + (Math.max(100, Math.min(900, weight)) - 100) / 400;
-      const paint = filled ? `fill="black" fill-rule="${el.hasAttribute("data-symbol-nonzero") ? "nonzero" : "evenodd"}"` : `fill="none" stroke="black" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"`;
       const [width, height] = symbolSize(box, point, source);
-      el.symbolMask = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${width === height ? `width="${width}" height="${height}" ` : ""}viewBox="${symbolBox(box).join(" ")}">${path.split(";").map((d) => `<path d="${d}" ${paint}/>`).join("")}</svg>`)}")`;
+      el.symbolMask = symbolMask(path, filled, nonzero, box, width, height, weight, mirror);
       el.symbolPlaceholder = symbolPlaceholder(width, height);
     }
     syncSymbolPlaceholder(el, refreshSymbols);

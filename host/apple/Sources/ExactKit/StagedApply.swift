@@ -121,10 +121,15 @@ final class StagePlan {
     /// The style it gives each live node: a style op carries a node's whole
     /// style, a sampled paint value with the rest.
     let styles: [UInt32: NodeStyle]
+    /// Whether this batch updates the document language or direction.
+    let changesLanguage: Bool
     #if os(macOS)
     /// The views share this flag so they join the committed tree together.
     /// It can outlive the plan without retaining its views or operations.
-    final class Publication { var committed = false }
+    final class Publication {
+        var committed = false
+        fileprivate(set) var language: String?
+    }
     let publication = Publication()
     var tips: [NodeView] = [], cursorRects: [NodeView] = []
     /// Plain destroyed descendants under a plain retiring top, pulled out of
@@ -228,6 +233,11 @@ final class StagePlan {
             while at != found, let up = parent[at] { below[up, default: 0] += 1; at = up; d += 1 }
             depth[id] = d
         }
+        let language = batch.ops.last(where: { $0.op == .language })
+        self.changesLanguage = language != nil
+        #if os(macOS)
+        publication.language = language.map { $0.payload["lang"] as? String ?? "" }
+        #endif
         self.depth = depth
         self.large = Set(below.filter { $0.value > Self.attachLimit }.keys)
         self.structural = structural
@@ -344,6 +354,7 @@ extension StagePlan {
         if other.rootTabs != nil, batch.rootTabs != nil { return false }
         if other.routeInspectors != nil, batch.routeInspectors != nil { return false }
         if other.splitChanged { return false }
+        if changesLanguage, other.ops.contains(where: { $0.op != .present }) { return false }
         if let theirs = other.controlReads, theirs.contains(where: { structural.contains($0.key) || reads[$0.key]?.isDisjoint(with: $0.value.parts) == false }) { return false }
         for op in other.ops {
             switch op.op {
@@ -756,6 +767,8 @@ struct BatchFootprint {
     /// Whether it may go ahead of anything: it restructures nothing and runs
     /// no command, which may name what an earlier batch makes.
     private(set) var movable = true
+    /// Whether it changes the document language or direction, which affects every node.
+    private(set) var changesLanguage = false
     /// The motion samples it carries (`present` ops), which a newer one supersedes.
     private(set) var samples = Set<String>()
     static func sample(_ op: BatchOp) -> String { "\(op.id) \(op.property)" }
@@ -779,6 +792,7 @@ struct BatchFootprint {
             if op.op == .style { styled.insert(op.id); if sampling { paints.insert(op.id) } }
             if Self.structuralOps.contains(op.op) { movable = false; continue }
             if op.op == .command { movable = false }
+            if op.op == .language { changesLanguage = true; movable = false }
             if op.op == .present { samples.insert(Self.sample(op)) }
             // A style op carries the node's whole style: two never commute.
             let key = op.op == .props ? nil : op.op == .present ? "present." + op.property : op.op.rawValue
@@ -789,7 +803,7 @@ struct BatchFootprint {
     /// Whether `later` may apply before the batch this is of: where they are
     /// disjoint, or with a newer sample of a property this one samples.
     func admits(_ later: BatchFootprint) -> Bool {
-        guard later.movable else { return false }
+        guard later.movable, !changesLanguage else { return false }
         for (id, keys) in later.written where restructured.contains(id) || !(written[id]?.isDisjoint(with: keys.filter { !$0.hasPrefix("present.") }) ?? true) { return false }
         return true
     }

@@ -3,8 +3,8 @@
 //! whose single displayed child is a filled box holding a picture, initial text
 //! or symbol) into Android's painted Material 3 top app bar.
 use crate::image::Bitmap;
-use crate::paint::{border, object_fit, object_fit_of, rgba, Backend, Rect4, Shape};
-use crate::presenter::top::look::{directed_paragraph, label_x, symbol, Type};
+use crate::paint::{border, object_fit, object_fit_of, paint_symbol, rgba, Backend, Rect4, Shape};
+use crate::presenter::top::look::{directed_paragraph, label_x, Type};
 use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::{Direction, ImageRendering, Kernel, ObjectFit, StyleId, SymbolSet, ViewId};
 use std::collections::BTreeMap;
@@ -67,6 +67,8 @@ pub struct Badge {
     pub picture: Option<BadgePicture>,
     /// Fallback symbol role when no picture is loaded.
     pub symbol: Option<String>,
+    /// Fallback symbol image's computed direction.
+    pub symbol_direction: Direction,
     /// Fallback initial text when neither picture nor symbol is shown.
     pub text: String,
     /// Fallback text direction.
@@ -151,6 +153,12 @@ impl Badge {
             })
         });
 
+        let symbol_direction = found
+            .symbol_node
+            .and_then(|id| kernel.node(id))
+            .unwrap_or(box_node)
+            .computed_row(StyleId::Direction, |s| s.direction);
+
         Some(Self {
             size: BADGE_SIZE,
             fill,
@@ -158,6 +166,7 @@ impl Badge {
             corners,
             picture,
             symbol: found.symbol,
+            symbol_direction,
             text: found.text,
             text_direction,
             text_size,
@@ -174,7 +183,7 @@ pub(super) struct DrawnBadge {
     ink: [u8; 4],
     enabled: bool,
     picture: Option<(Arc<Bitmap>, Rect4, ImageRendering)>,
-    symbol: Option<(String, Rect4)>,
+    symbol: Option<(String, Rect4, Direction)>,
     text: Option<(Rc<Paragraph>, (f32, f32), ViewId)>,
 }
 
@@ -201,7 +210,7 @@ impl DrawnBadge {
                     s,
                     s,
                 );
-                Some((role.clone(), r))
+                Some((role.clone(), r, badge.symbol_direction))
             })
             .flatten();
         let text = (picture.is_none() && symbol.is_none() && !badge.text.is_empty()).then(|| {
@@ -236,7 +245,7 @@ impl DrawnBadge {
         if let Some((_, dst, _)) = &mut self.picture {
             dst.0 += dx;
         }
-        if let Some((_, r)) = &mut self.symbol {
+        if let Some((_, r, _)) = &mut self.symbol {
             r.0 += dx;
         }
         if let Some((_, at, _)) = &mut self.text {
@@ -258,16 +267,16 @@ impl DrawnBadge {
                 None,
                 *rendering,
             );
-        } else if let Some((role, rect)) = &self.symbol {
+        } else if let Some((role, rect, direction)) = &self.symbol {
             backend.push_clip(&self.shape, ts);
-            symbol(
+            paint_symbol(
                 backend,
                 role,
                 *rect,
                 self.ink,
                 SymbolSet::Material,
                 400,
-                false,
+                *direction,
             );
             backend.pop_clip();
         } else if let Some((p, at, source)) = &self.text {

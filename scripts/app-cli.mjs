@@ -473,7 +473,7 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     if (refused != null) { reply({ code: 'unknown_flag', error: refusal }); return log(refused); }
   }
   if (['ios', 'mac'].includes(verb)) {
-    const error = (await import(resolve(exact2, 'scripts/help.mjs'))).appleBuildRefusal(rest);
+    const error = (await import(resolve(exact2, 'scripts/help.mjs'))).appleBuildRefusal(verb === 'ios' ? ['--ios', ...rest] : rest);
     if (error) { console.error(error); reply?.({ code: 'build_failed', error }); return log(2); }
   }
   // A long build says which Exact it builds with: a worktree's launcher can resolve the main tree's checkout, and a

@@ -12,9 +12,9 @@ fn resolved_language_is_published_at_boot_and_after_switching() {
     // No format data: the formatters print en-US (LLP 1054.000.003 D6).
     let format = exact_plan::StrId(plan.strings.len() as u32);
     plan.strings.push("");
-    for rtl in [false, true] {
+    for (tag, rtl) in [("en", false), ("de", false), ("ar", true)] {
         let name = exact_plan::StrId(plan.strings.len() as u32);
-        plan.strings.push(if rtl { "ar" } else { "en" });
+        plan.strings.push(tag);
         plan.locales.push(exact_plan::LocalesRow {
             name,
             rtl,
@@ -32,15 +32,26 @@ fn resolved_language_is_published_at_boot_and_after_switching() {
     )
     .unwrap();
     assert!(batch.contains(r#"{"op":"language","lang":"en","dir":"ltr"}"#));
+    let kernel = host.runner().kernel();
+    let label = kernel
+        .node_by_key(kernel.find_by_test_id("text")[0])
+        .unwrap()
+        .id;
+    let paragraph = format!(r#"{{"op":"paragraph","id":{label},"runs":[]}}"#);
+    let batch = host.set_place("de", "UTC", None, None);
+    assert!(batch.contains(r#"{"op":"language","lang":"de","dir":"ltr"}"#));
+    assert!(batch.contains(&paragraph), "{batch}");
     let batch = host.set_place("ar-EG", "UTC", None, None);
     assert!(
         batch.contains(r#"{"op":"language","lang":"ar","dir":"rtl"}"#),
         "{batch}"
     );
+    assert!(batch.contains(&paragraph), "{batch}");
     assert!(batch.contains(r#""direction":"rtl""#), "{batch}");
     assert!(!host
         .set_place("ar-SA", "UTC", None, None)
         .contains(r#""op":"language""#));
-    let batch = host.set_place("de", "UTC", None, None);
+    let batch = host.set_place("fr", "UTC", None, None);
     assert!(batch.contains(r#"{"op":"language","lang":"en","dir":"ltr"}"#));
+    assert!(batch.contains(&paragraph), "{batch}");
 }

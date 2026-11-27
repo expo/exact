@@ -157,7 +157,7 @@
         body.ready = { url: y.url, interval: millis("spawn", "exactReady.interval", y.interval, 3600000), timeout: millis("spawn", "exactReady.timeout", y.timeout, 3600000), accept: y.accept, onTimeout: y.onTimeout || "retry" };
       }
     } catch (e) { return Promise.reject(e); }
-    return seam.request("exact-process:", { method: "POST", body: JSON.stringify(body), exactStream: o.exactStream }, undefined, childOwner(body.stdio[0] === "ignore"));
+    return seam.request("exact-process:", { method: "POST", body: JSON.stringify(body), exactStream: o.exactStream, exactStreamOpen: o.exactStreamOpen }, undefined, childOwner(body.stdio[0] === "ignore"));
   }
 
   // A one-shot request to the host's process work: its JSON answer.

@@ -256,6 +256,8 @@ pub(crate) struct Collection {
     /// What a retiring row may be rebound to another item under (LLP 1078):
     /// `None` when no row of this list can be.
     reuse: Option<Rc<reuse::Reuse>>,
+    /// It has shown its settled first rows (`live`): latched the first time it is asked once so.
+    live: std::cell::Cell<bool>,
 }
 fn index_error(e: index::IndexError) -> InstanceError {
     InstanceError::Collection(e.to_string())
@@ -301,6 +303,23 @@ impl Collection {
             nest::PinEpoch::bump();
         }
         self.geometry = Some(g);
+    }
+
+    /// @ref LLP 1010 §6.12 — whether the list has shown its settled first
+    /// rows: the host has reported where it shows them, no correction it
+    /// owes is outstanding (the start at a list's end included) and no row
+    /// in its window awaits a measurement. Opening, restoring and a new
+    /// incarnation are not live, and what changes rows then moves none.
+    /// Once live, it stays so.
+    pub(crate) fn live(&self) -> bool {
+        if !self.live.get()
+            && self.geometry.is_some()
+            && self.correction.is_none()
+            && !self.any_awaiting
+        {
+            self.live.set(true);
+        }
+        self.live.get()
     }
 
     pub(super) fn follow_end(&mut self, enabled: bool) {

@@ -290,3 +290,23 @@ test('unsigned device builds and archives refuse incompatible options before bui
   assert.match(result.stderr, process.platform === 'linux' ? /--run needs an iOS simulator/ : /--unsigned takes no --run/);
   assert.doesNotMatch(result.stderr, /no app at/);
 });
+
+test('an unsigned Mac distribution input requires --distribution and refuses incompatible options and credentials', async () => {
+  const { appleBuildRefusal } = await import('./help.mjs');
+  for (const flags of [['--distribution', '--unsigned', '--json'], ['--distribution', '--unsigned', '--bundle', '--json']]) {
+    assert.equal(appleBuildRefusal(flags, {}, 'darwin'), null);
+    assert.equal(appleBuildRefusal(flags, { EXACT_DEVELOPER_ID: '-' }, 'darwin'), null);
+  }
+  const flags = ['--distribution', '--unsigned', '--bundle', '--json'];
+  for (const flag of ['--run', '--ios', '--tvos', '--appstore', '--ad-hoc', '--sandbox', '--development',
+    '--archive', '--host', '--embed', '--test', '--prebuild', '--url', '--painted-benchmark', '--extensions'])
+    assert.ok(appleBuildRefusal([...flags, flag], {}, 'darwin'), flag);
+  assert.match(appleBuildRefusal(['--ios', '--distribution', '--unsigned'], {}, 'darwin'), /macOS bundles only/);
+  assert.match(appleBuildRefusal(['--ios', '--device', '--distribution', '--unsigned'], {}, 'darwin'), /macOS bundles only/);
+  assert.match(appleBuildRefusal(['--device', '--unsigned', '--test'], {}, 'darwin'), /--unsigned takes no --test/);
+  assert.ok(appleBuildRefusal(['--unsigned'], {}, 'darwin'));
+  assert.ok(appleBuildRefusal(flags, { EXACT_DEV_PLAN: 'plan' }, 'darwin'));
+  assert.match(appleBuildRefusal(flags, { EXACT_DEVELOPER_ID: 'ABCDEF0123456789' }, 'darwin'), /EXACT_DEVELOPER_ID/);
+  assert.match(appleBuildRefusal(flags, { EXACT_MAC_PROFILE: '/tmp/a.provisionprofile' }, 'darwin'), /EXACT_MAC_PROFILE/);
+  assert.match(appleBuildRefusal(flags, { EXACT_PROFILE: '/tmp/a.provisionprofile' }, 'darwin'), /EXACT_PROFILE/);
+});

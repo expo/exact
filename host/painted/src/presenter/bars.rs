@@ -423,6 +423,7 @@ impl<D: DataSource> Presenter<D> {
             title: row.title,
             direction: row.direction,
             symbol: if badge.is_some() { None } else { row.symbol },
+            symbol_direction: row.symbol_direction,
             badge,
             // An inert button is no enabled item, as an inert tab is none,
             // and nor is one under a disabled header or box: a press on it
@@ -610,6 +611,7 @@ impl<D: DataSource> Presenter<D> {
                         label: row.title,
                         direction: row.direction,
                         symbol: row.symbol,
+                        symbol_direction: row.symbol_direction,
                         selected: node.props.bool(PropId::AccessibilitySelected) == Some(true),
                         enabled: row.enabled && !self.host.authored_visibility(*id).1,
                         badge: kernel.press_face(*id).and_then(|face| face.badge),

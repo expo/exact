@@ -2,9 +2,11 @@ import { test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { armArgs, armKey, armSourceKey, armOutput, evictArms, keepRoster, keptRoster, packageKeyArgs, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
+import { armArgs, armKey, armSourceKey, armOutput, contentStamp, evictArms, hasIntentSignal, keepRoster, keptRoster, normalizeModuleCacheArgs, packageKeyArgs, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
+import { staleModuleCache } from './extensions.mjs';
+import { gathered, nativeIntentModule } from './intents.mjs';
 
 test('a qualified native roster is bound to the exact probe bytes, including when imported from a simulator run', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-roster-'));
@@ -69,7 +71,7 @@ test('a probe qualification covers its launcher, library, packages and framework
 });
 
 test("a device build's roster routes each take the packages compiled for that route, and a route lacks only a missing xcframework slice", () => {
-  const routes = (build) => rosterRoutes({ ...build, packageDir: '/b/packages', missingSlice: () => undefined }).map(r => [r.via, r.lacking, r.packages]);
+  const routes = (build) => rosterRoutes({ ...build, packageDir: '/b/packages', missingSlice: () => undefined, platform: 'darwin' }).map(r => [r.via, r.lacking, r.packages]);
   assert.deepEqual(routes({ tv: false, device: true }), [
     ['Mac Catalyst', undefined, '/b/packages-maccatalyst'],
     ['iOS Simulator', undefined, '/b/packages-simulator'],
@@ -79,7 +81,7 @@ test("a device build's roster routes each take the packages compiled for that ro
   assert.deepEqual(routes({ tv: false, device: false }).map(r => r[2]), ['/b/packages-maccatalyst', '/b/packages', '/b/packages-macos']);
   assert.deepEqual(routes({ tv: true, device: true }), [['macOS', undefined, '/b/packages-macos']]);
   // Only an xcframework without the route's slice makes it lack.
-  const lacking = rosterRoutes({ tv: false, device: true, packageDir: '/b/packages', missingSlice: (v) => v === 'maccatalyst' ? '/app/modules/apple/Map.xcframework' : undefined });
+  const lacking = rosterRoutes({ tv: false, device: true, packageDir: '/b/packages', missingSlice: (v) => v === 'maccatalyst' ? '/app/modules/apple/Map.xcframework' : undefined, platform: 'darwin' });
   assert.deepEqual(lacking.map(r => r.lacking ?? null), ['/app/modules/apple/Map.xcframework', null, null]);
 });
 
@@ -156,7 +158,7 @@ test('relocating generated sources keeps private Swift arms only while all input
     const args = armArgs(['swiftc', '-sdk', sdk, '-target', target, '-emit-library', flag, source, ...snapshot.copies,
       '-I', packages, resolve(packages, 'ExactPackage.o'), '-o', built], built);
     const packageDirs = [packageDir, ...[true, false].flatMap(device =>
-      rosterRoutes({ packageDir, device, missingSlice: () => false }).map(r => r.packages + '-probe'))];
+      rosterRoutes({ packageDir, device, missingSlice: () => false, platform: 'darwin' }).map(r => r.packages + '-probe'))];
     return armSourceKey(args, files, { built, snapshot, packageDir, packageDirs, linkRoot, swiftc, extra });
   };
   try {
@@ -202,4 +204,138 @@ test('package keys retain unrelated arguments even when they contain the private
   const key = packageKeyArgs([...other, ...outputs], dir, dir, new Set(), 'M');
   expect(key.slice(0, other.length)).toEqual(other);
   expect(key.slice(other.length)).toEqual(['-L', '<dir>', '-emit-module-path', join('<dir>', 'M.swiftmodule'), '-o', join('<dir>', 'M.dylib')]);
+});
+
+test('workspace relocation keeps module-cache, ObjC, root, app, sound-object, and swift-package keys stable (#1612)', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-relocate-1612-'));
+  try {
+    const buildArmKey = (slot, { userText = 'let v = 1', objcHeader = 'int f(void);', soundHash = '0123456789abcdef' } = {}) => {
+      const ws = resolve(dir, slot), root = resolve(ws, 'exact2'), appDir = resolve(ws, 'app');
+      const linkRoot = resolve(ws, 'link'), swiftRootDir = resolve(ws, 'swift-pkgs'), pkgDir = resolve(ws, 'packages');
+      const webCache = resolve(ws, 'cache', 'webarm-module-cache'), modCache = resolve(ws, 'cache', 'modules-module-cache');
+      for (const d of [resolve(root, 'host/apple/modules'), resolve(root, 'host/apple/soundarm'), resolve(appDir, 'modules/apple'), linkRoot, swiftRootDir, pkgDir]) {
+        mkdirSync(d, { recursive: true });
+      }
+      const seam = resolve(root, 'host/apple/modules/ExactNativeModule.swift');
+      const header = resolve(root, 'host/apple/soundarm/sound_render.h');
+      const soundObj = resolve(ws, 'arms', `sound_mixer-c-${soundHash}.o`);
+      const user = resolve(appDir, 'modules/apple/View.swift');
+      writeFileSync(seam, 'public enum Seam {}');
+      writeFileSync(header, objcHeader);
+      writeFileSync(user, userText);
+      const snapshot = snapshotSources([user], resolve(ws, 'copies'));
+      const built = resolve(ws, 'libexact_modules.dylib');
+      const args = armArgs([
+        'swiftc', '-sdk', '/sdk', '-target', 'arm64-apple-ios17.0',
+        '-module-cache-path', modCache, `-fmodules-cache-path=${webCache}`,
+        '-emit-library', '-O', seam, ...snapshot.copies,
+        '-I', pkgDir, '-I', resolve(swiftRootDir, 'bin'),
+        '-import-objc-header', header, soundObj,
+        resolve(pkgDir, 'ExactPackage.o'), '-o', built,
+      ], built);
+      return armSourceKey(args, [seam, header, ...snapshot.copies], {
+        built, snapshot, packageDir: pkgDir, packageDirs: [pkgDir], linkRoot, swiftc: 'swift-6', extra: '', root, appDir, swiftRootDir,
+      });
+    };
+    expect(buildArmKey('ws-a')).toBe(buildArmKey('ws-b'));
+    expect(buildArmKey('ws-a', { soundHash: 'fedcba9876543210' })).not.toBe(buildArmKey('ws-b'));
+    expect(buildArmKey('ws-a', { userText: 'let p = #filePath' })).not.toBe(buildArmKey('ws-b', { userText: 'let p = #filePath' }));
+
+    // ObjC package keys: -I <dir>/objc-<M>, <dir>/<M>_objc_0.o, -fmodules-cache-path=, and exact2 root/app header dirs normalize.
+    const pkgKey = (slot, { pathSensitive = false } = {}) => {
+      const ws = resolve(dir, slot), root = resolve(ws, 'exact2'), appDir = resolve(ws, 'app'), swiftRootDir = resolve(ws, 'swift-pkgs');
+      const packageDir = resolve(ws, 'tmp-build', 'packages'), outDir = packageDir + '-probe';
+      const copy = resolve(packageDir, 'src-Media', '0-Media.swift');
+      const headerDir = resolve(root, 'packages/media/apple');
+      const objcSrc = resolve(root, 'packages/media/apple/Bridge.m');
+      const args = [
+        '--sdk', 'iphoneos', 'clang', '-O2', '-fmodules',
+        `-fmodules-cache-path=${resolve(ws, 'cache/modules-module-cache')}`,
+        '-module-cache-path', resolve(ws, 'cache/modules-module-cache'),
+        '-I', resolve(outDir, 'objc-Media'), '-I', headerDir,
+        '-I', resolve(swiftRootDir, 'bin'), '-c', objcSrc,
+        copy, resolve(outDir, 'Media_objc_0.o'), '-o', resolve(outDir, 'Media.dylib'),
+      ];
+      return packageKeyArgs(args, outDir, packageDir, new Set([copy]), 'Media', { root, appDir, swiftRootDir, pathSensitive });
+    };
+    expect(pkgKey('ws-a')).toEqual(pkgKey('ws-b'));
+    expect(pkgKey('ws-a', { pathSensitive: true })).not.toEqual(pkgKey('ws-b', { pathSensitive: true }));
+
+    // Linux non-tvOS iOS builds emit only the iOS Simulator route; darwin keeps all three.
+    expect(rosterRoutes({ tv: false, device: true, packageDir: '/b/packages', missingSlice: () => undefined, platform: 'linux' }))
+      .toEqual([{ via: 'iOS Simulator', variant: true, lacking: undefined, packages: '/b/packages-simulator' }]);
+    expect(rosterRoutes({ tv: true, device: true, packageDir: '/b/packages', missingSlice: () => undefined, platform: 'linux' })
+      .map(r => r.via)).toEqual(['macOS']);
+    expect(rosterRoutes({ tv: false, device: true, packageDir: '/b/packages', missingSlice: () => undefined, platform: 'darwin' })
+      .map(r => r.via)).toEqual(['Mac Catalyst', 'iOS Simulator', 'macOS']);
+
+    // staleModuleCache recognizes both Swift (-module-cache-path) and Clang (-fmodules-cache-path=).
+    const msg = "fatal error: file.pcm was compiled with module cache path '/old' but the path is currently '/new'";
+    expect(staleModuleCache(['swiftc', '-module-cache-path', '/new/swift'], msg)).toBe('/new/swift');
+    expect(staleModuleCache(['clang', '-fmodules-cache-path=/new/clang'], msg)).toBe('/new/clang');
+    expect(staleModuleCache(['clang', '-fmodules-cache-path=/new/clang'], 'unrelated error')).toBeNull();
+    expect(normalizeModuleCacheArgs(['-module-cache-path', '/a', '-fmodules-cache-path=/b', '-O']))
+      .toEqual(['-module-cache-path', '<module-cache>', '-fmodules-cache-path=<module-cache>', '-O']);
+
+    // contentStamp tracks file bytes and relative slice paths regardless of mtime or directory prefix.
+    const f1 = resolve(dir, 'a/Lib'), f2 = resolve(dir, 'b/Lib');
+    mkdirSync(resolve(dir, 'a'), { recursive: true }); mkdirSync(resolve(dir, 'b'), { recursive: true });
+    writeFileSync(f1, 'binary-bytes'); writeFileSync(f2, 'binary-bytes');
+    utimesSync(f1, 1000, 1000); utimesSync(f2, 9999, 9999);
+    expect(contentStamp([['Foo.framework/Headers/a/Foo.h', f1]])).toEqual(contentStamp([['Foo.framework/Headers/a/Foo.h', f2]]));
+    expect(contentStamp([['Foo.framework/Headers/a/Foo.h', f1]])).not.toEqual(contentStamp([['Foo.framework/Headers/b/Foo.h', f2]]));
+    writeFileSync(f2, 'changed-bytes');
+    expect(contentStamp([f1])).not.toEqual(contentStamp([f2]));
+
+    // -fmodule-map-file=, relocated XCFramework -F, -import-objc-header, and #sourceLocation() resets normalize soundly.
+    const fwKey = (slot, body = 'let x = 1') => {
+      const ws = resolve(dir, slot), root = resolve(ws, 'exact2'), appDir = resolve(ws, 'app'), swiftRootDir = resolve(ws, 'swift-pkgs');
+      const linkRoot = resolve(ws, 'link'), packageDir = resolve(ws, 'tmp/packages'), built = resolve(ws, 'out.dylib');
+      const user = resolve(appDir, 'modules/apple/User.swift');
+      mkdirSync(dirname(user), { recursive: true }); writeFileSync(user, body);
+      const snapshot = snapshotSources([user], resolve(ws, 'copies'));
+      const args = ['swiftc', '-F', resolve(appDir, 'modules/apple/Map.xcframework/ios-arm64'),
+        '-Xcc', `-fmodule-map-file=${resolve(swiftRootDir, 'include/module.modulemap')}`, ...snapshot.copies, '-o', built];
+      return armSourceKey(args, snapshot.copies, { built, snapshot, packageDir, packageDirs: [packageDir], linkRoot, swiftc: 'swift-6', extra: '', root, appDir, swiftRootDir });
+    };
+    expect(fwKey('fw-a')).toBe(fwKey('fw-b'));
+    expect(fwKey('fw-a', '#sourceLocation(file: "M/F.swift", line: 1)\n#sourceLocation()\nlet p = #filePath'))
+      .not.toBe(fwKey('fw-b', '#sourceLocation(file: "M/F.swift", line: 1)\n#sourceLocation()\nlet p = #filePath'));
+
+    // hasIntentSignal detects AppIntents/protocols and stays false for ordinary view Swift.
+    const plain = resolve(dir, 'Plain.swift'), intent = resolve(dir, 'Intent.swift');
+    writeFileSync(plain, 'import UIKit\nfinal class MyView: UIView {}');
+    writeFileSync(intent, 'import AppIntents\nstruct RunAction: AppIntent {}');
+    expect(hasIntentSignal([plain], gathered)).toBe(false);
+    expect(hasIntentSignal([plain, intent], gathered)).toBe(true);
+
+    // nativeIntentModule hits cache across fresh temporary build dirs and rebases cached t.file paths on hit.
+    const intentDir = resolve(dir, 'native-intents');
+    const bin = resolve(dir, 'libexact_modules.dylib');
+    writeFileSync(bin, 'fake-dylib');
+    let invokes = 0;
+    const srcA = resolve(dir, 'tmp-a/User.swift'), srcB = resolve(dir, 'tmp-b/User.swift');
+    mkdirSync(resolve(dir, 'tmp-a'), { recursive: true }); mkdirSync(resolve(dir, 'tmp-b'), { recursive: true });
+    writeFileSync(srcA, 'struct RunIntent {}'); writeFileSync(srcB, 'struct RunIntent {}');
+    const fakeRunApple = (_cmd, args) => {
+      invokes++;
+      const constPath = args[args.indexOf('-emit-const-values-path') + 1];
+      expect(constPath).toBeTruthy();
+      expect(args.indexOf('-const-gather-protocols-file')).toBeGreaterThan(-1);
+      writeFileSync(constPath, JSON.stringify([{ file: srcA, mangledTypeName: 'RunIntent', typeName: 'ExactLaunchParts.RunIntent' }]));
+    };
+    const firstIntent = nativeIntentModule({
+      moduleName: 'ExactAppModules', binary: bin, sources: [srcA],
+      args: ['swiftc', '-module-cache-path', '/tmp/a/cache', '-o', '/tmp/a/out.dylib', srcA],
+      directory: intentDir, swiftc: 'swift-6', runApple: fakeRunApple,
+    });
+    expect(JSON.parse(readFileSync(firstIntent.values, 'utf8'))[0].file).toBe(srcA);
+    const secondIntent = nativeIntentModule({
+      moduleName: 'ExactAppModules', binary: bin, sources: [srcB],
+      args: ['swiftc', '-module-cache-path', '/tmp/b/cache', '-o', '/tmp/b/out.dylib', srcB],
+      directory: intentDir, swiftc: 'swift-6', runApple: fakeRunApple,
+    });
+    expect(JSON.parse(readFileSync(secondIntent.values, 'utf8'))[0].file).toBe(srcB);
+    expect(invokes).toBe(1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

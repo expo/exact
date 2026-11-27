@@ -13,6 +13,38 @@ pub fn wall_since(started: std::time::Instant) -> Wall {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// A motion frame.
+    pub fn tick(&mut self, now_ms: f64) {
+        let animating = self.arrange.is_some()
+            || self.group.is_some()
+            || self.focus.is_some()
+            || self.brush.moving()
+            || self.bars_ripple_moving()
+            || self.surface_ripple_moving()
+            || self.stage_moving();
+        let (layout, paint) = self.host.tick_effects(now_ms);
+        self.release_overdue();
+        if layout {
+            self.hatches.stale = true;
+            self.dirty = true;
+            self.clamp_scroll();
+            self.queue_collections();
+            if let Some(error) = self.refresh_transform_geometry() {
+                self.host.log(error);
+            }
+        }
+        self.tick_arrange(self.host.now());
+        self.tick_drag_edge(self.host.now());
+        self.tick_field_drag(self.host.now());
+        self.settle_wheel_snaps();
+        self.step_glides(now_ms);
+        self.step_zooms(now_ms);
+        if let Some(error) = self.deliver_scroll_ends() {
+            self.host.log(error);
+        }
+        self.dirty |= paint || animating;
+    }
+
     /// Android's painted loop: defer an ordinary timer behind a waiting paint,
     /// but bring a due motion sample's clock forward before testing frame demand.
     #[cfg(any(target_os = "android", test))]

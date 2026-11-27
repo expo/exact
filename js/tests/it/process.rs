@@ -380,3 +380,18 @@ fn outside_the_agent_programs_start_and_a_raw_request_is_refused() {
         .to_string();
     assert!(raw.contains("@exact/child-process's"), "{raw}");
 }
+
+#[test]
+fn spawn_refuses_exact_stream_open_before_starting_a_child() {
+    let mut m = module();
+    m.load().unwrap();
+    let src =
+        "component App\n  resource bad = openRefused() as shape string\n  view\n    text bad\n";
+    let plan = contract::compile(src).unwrap();
+    let mut r = Runner::boot(plan, m, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    assert_eq!(
+        r.resource("bad").and_then(Value::as_str),
+        Some("TypeError: exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen")
+    );
+    assert!(r.take_requests().is_empty());
+}

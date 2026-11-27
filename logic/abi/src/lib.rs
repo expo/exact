@@ -412,6 +412,7 @@ fn read_outcome(r: &mut Reader<'_>) -> Result<Outcome, String> {
             coalesced: r.u32().map_err(error)?,
             protocol: r.string().map_err(error)?.into(),
             binary,
+            head: None,
         }));
     }
     if tag == 11 {
@@ -533,6 +534,13 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 )),
             )
         }
+        // Nor a stream's opt-in open head event (LLP 1016.000 D12).
+        Ok(Answer::Later(r)) if r.stream_open => encode_result(
+            w,
+            Err(DataError::Unavailable(
+                "exactStreamOpen cannot cross the Rust module seam".into(),
+            )),
+        ),
         // Nor a byte stream: refused, never read as events instead.
         Ok(Answer::Later(r)) if r.bytes => encode_result(
             w,
@@ -811,6 +819,7 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
     let mut request = Request {
         module: None,
         stream: tag >= 9,
+        stream_open: false,
         socket: tag == 11,
         bytes: false,
         upload_progress: false,

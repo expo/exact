@@ -57,6 +57,7 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
         .or(request.body_to_refusal())
         .or(request.long_poll_refusal())
         .or(request.upload_progress_refusal())
+        .or(request.stream_open_refusal())
 }
 
 pub(crate) fn quote(s: &str, out: &mut String) {
@@ -857,6 +858,10 @@ impl Batch {
         // body as events and delivers each as a message (kind 8).
         if r.request.stream {
             s.push_str(",\"stream\":true");
+        }
+        // Opt-in HTTP stream open head event (LLP 1016.000 D12, kind 11).
+        if r.request.stream_open {
+            s.push_str(",\"streamOpen\":true");
         }
         // An upload (LLP 1016.000 D10): the page sends it with XMLHttpRequest and
         // delivers its bytes sent as messages, then its reply.

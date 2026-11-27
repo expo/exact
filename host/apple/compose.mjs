@@ -1,17 +1,20 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, symlinkSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { within } from '../../scripts/paths.mjs';
 import { directDependencies, swiftPackageFiles, swiftPackageInventories, swiftPackageOutputs } from '../../scripts/package-libraries.mjs';
-import { spawnSync, swiftOptimization } from './toolchain.mjs';
-import { evictArms, packageKeyArgs, probeDigest } from './arms.mjs';
+import { spawn, spawnSync, swiftOptimization } from './toolchain.mjs';
+import { evictArms, isPathSensitive, packageKeyArgs, probeDigest } from './arms.mjs';
+import { staleModuleCache } from './extensions.mjs';
 import { swiftPackagesProblems } from '../../scripts/app.mjs';
 import { appleImplementations, moduleInterfaces } from '../../js/bake/src/typescript.mjs';
 import { packageConfig, sourceString } from '../../js/bake/src/package-config.mjs';
 import { machOType } from './assets.mjs';
 import { capturePrivacyManifest } from './privacy.mjs';
+const exactRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 // The Swift that composes an app's module with its packages' implementations (LLP 1133.001 D5), which
 // host/apple/build.mjs writes beside the module's sources and never commits.
 
@@ -51,7 +54,7 @@ export function rosterProbe({ library, launcher, built, packagesIn, packages, pl
       const ready = await launcher();
       if (ready !== true) return ready;
     }
-    placePackages(packagesIn);
+    await placePackages(packagesIn);
     const name = `${basename(built)}-artifact`, dir = dirname(library.cached);
     const making = resolve(dir, `${name}.${process.pid}.tmp`);
     rmSync(making, { recursive: true, force: true });
@@ -143,30 +146,62 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
     if (changed.length) throw new Error(`${changed[0].interface}/${changed[0].directory} changed after its bake. Run the build again.`);
   }
   if (graph.length) assertSwiftLock(app, graph);
-  const placed = new Set();
+  const placed = new Map();
   const productsByDirectory = new Map(), resources = [], frameworks = [];
-  const run = args => {
-    const result = spawnSync('xcrun', args, { encoding: 'utf8' });
-    if (result.status !== 0) throw new Error(`host/apple: package compilation failed:\n${result.stderr ?? result.error ?? ''}`);
+  const swiftRootDir = app ? swiftRoot(app) : undefined;
+  let tmpNonce = 0, cacheGen = 0, stopped = false;
+  const stoppers = new Set();
+  const stopAllPlacements = () => { stopped = true; for (const fn of stoppers) fn(); };
+  const makeRunner = () => {
+    const children = new Set();
+    let aborted = false;
+    const stop = () => { aborted = true; for (const c of children) if (c.exitCode === null && !c.killed) c.kill(); };
+    stoppers.add(stop);
+    const run = args => new Promise((accept, reject) => {
+      if (aborted || stopped) return reject(new Error('host/apple: package compilation aborted'));
+      const child = spawn('xcrun', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      if (children.size === 0) process.once('exit', stop);
+      children.add(child);
+      let stderr = '', stdout = '', settled = false;
+      child.stdout?.on('data', chunk => { stdout += chunk; });
+      child.stderr?.on('data', chunk => { stderr += chunk; });
+      const finish = (status, error) => {
+        if (settled) return;
+        settled = true;
+        children.delete(child);
+        if (children.size === 0) process.removeListener('exit', stop);
+        if (status === 0 && !error) return accept();
+        const output = `${stdout}${stderr}${error?.message ?? ''}`;
+        const err = new Error(`host/apple: package compilation failed:\n${stderr || error?.message || stdout}`);
+        err.staleCache = staleModuleCache(args, output);
+        reject(err);
+      };
+      child.once('error', error => finish(null, error));
+      child.once('close', status => finish(status, null));
+    });
+    return { run, stop, isAborted: () => aborted || stopped, release: () => { stoppers.delete(stop); process.removeListener('exit', stop); } };
   };
-  const flags = dir => ['--sdk', packageTargets.get(dir)[0], 'swiftc',
-    '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'),
+  const flags = (dir, cachePath) => ['--sdk', packageTargets.get(dir)[0], 'swiftc',
+    '-module-cache-path', cachePath,
     '-parse-as-library', swiftOptimization(), '-swift-version', '5', ...packageTargets.get(dir)[1]];
-  const objectArgs = (name, sources, dir, linkName = name) => [...flags(dir), '-wmo', '-module-name', name,
+  const objectArgs = (name, sources, dir, cachePath, linkName = name) => [...flags(dir, cachePath), '-wmo', '-module-name', name,
     ...(linkName ? ['-module-link-name', linkName] : []),
     '-emit-module', '-emit-module-path', resolve(dir, `${name}.swiftmodule`),
     '-I', dir, '-c', ...sources, '-o', resolve(dir, `${name}.o`)];
   const copies = new Set(packageCopies?.flat());
-  const kept = (name, args, sources, imports, dir, compile) => {
-    const key = createHash('sha256').update(JSON.stringify([name, packageKeyArgs(args, dir, packageDir, copies, name), sources.map(f => readFileSync(f, 'utf8')), imports, swiftc])).digest('hex').slice(0, 20);
+  const kept = async (name, args, sources, imports, dir, compile, keyOptions) => {
+    const sourceTexts = sources.map(f => readFileSync(f, 'utf8'));
+    const pathSensitive = keyOptions?.pathSensitive ?? sourceTexts.some(isPathSensitive);
+    const keyArgs = packageKeyArgs(args, dir, packageDir, copies, name, { root: exactRoot, appDir: app?.dir, swiftRootDir, pathSensitive });
+    const key = createHash('sha256').update(JSON.stringify([name, keyArgs, sourceTexts, imports, swiftc])).digest('hex').slice(0, 20);
     const entry = resolve(packagesRoot, 'packages-kept', `${name}-${key}`);
     const outputs = d => readdirSync(d).filter(f => f.startsWith(`${name}.`));
     if (existsSync(entry)) {
       for (const f of outputs(entry)) copyFileSync(resolve(entry, f), resolve(dir, f));
       return key;
     }
-    compile();
-    const making = `${entry}.${process.pid}.tmp`;
+    await compile();
+    const making = `${entry}.${process.pid}.${++tmpNonce}.tmp`;
     rmSync(making, { recursive: true, force: true });
     mkdirSync(making, { recursive: true });
     for (const f of outputs(dir)) copyFileSync(resolve(dir, f), resolve(making, f));
@@ -174,11 +209,18 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
     catch { rmSync(making, { recursive: true, force: true }); }
     return key;
   };
+  const headerStamp = headerDir => readdirSync(headerDir, { withFileTypes: true })
+    .filter(e => e.isFile() && /\.(?:h|hh|hpp|modulemap)$/.test(e.name))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(e => [e.name, readFileSync(resolve(headerDir, e.name), 'utf8')]);
   const libraries = packages.map(p => ({ module: p.module, load: `lib${p.module}.dylib`, framework: p.module,
     built: resolve(packageDir, `${p.module}.dylib`), placed: resolve(packageDir, `${p.module}.framework`),
     privacyManifest: p.privacyManifest }));
-  const place = dir => {
-    if (placed.has(dir)) return;
+  const placeImpl = async dir => {
+    const runner = makeRunner();
+    let cachePath = dir === packageDir ? resolve(packagesRoot, 'modules-module-cache') : resolve(packagesRoot, `probe-module-cache-${basename(dir)}`);
+    const nextCache = () => { cachePath = resolve(dir, `retry-module-cache-${++cacheGen}`); return cachePath; };
+    try {
     mkdirSync(dir, { recursive: true });
     const wrapped = dir === packageDir && frameworkBundles;
     const os = packageTargets.get(dir)[1].some(arg => /-apple-(ios|tvos)/.test(arg)) ? 'ios' : 'macos';
@@ -187,7 +229,7 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
     const declarations = swiftPackageGraph({ dir: app?.dir, manifest: { host: { [os]: app?.manifest.host?.[os] } } }, packages, { ...cache, traitChecks }, platform);
     verifySwiftCopies(cache.snapshots);
     const product = declarations.length ? buildSwiftDependencies({ app, graph, declarations, traitChecks,
-      compile: flags(dir).slice(3), sdkName: packageTargets.get(dir)[0], directory: dir, wrapped }) : null;
+      compile: flags(dir, cachePath).slice(3), sdkName: packageTargets.get(dir)[0], directory: dir, wrapped }) : null;
     if (product) {
       verifySwiftCopies(cache.snapshots);
       for (const library of product.libraries) library.privacyManifestPaths = packages
@@ -199,20 +241,29 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
         resources.push(...product.resources);
       }
     }
-    if (!packages.length) { placed.add(dir); return; }
+    if (!packages.length) return;
     const coreName = wrapped ? '@rpath/ExactModules.framework/ExactModules' : '@rpath/libexact_modules.dylib';
     const buildCondition = production || distribution ? [] : ['-D', 'EXACT_DEVELOPMENT'];
-    const seamObject = [...objectArgs('ExactPackage', [seam], dir, null), ...buildCondition];
-    const stub = [...flags(dir), ...buildCondition, '-module-name', 'ExactPackage', '-emit-module',
-      '-emit-module-path', resolve(dir, 'ExactPackage.swiftmodule'),
-      '-emit-tbd', '-emit-tbd-path', resolve(dir, 'ExactPackage.tbd'),
-      '-Xfrontend', '-tbd-install_name', '-Xfrontend', coreName, seam];
-    const seamKey = kept('ExactPackage', [...seamObject, ...stub], [seam], [], dir, () => {
-      run(seamObject);
-      run(stub);
-    });
+    const seamArgs = cp => [
+      [...objectArgs('ExactPackage', [seam], dir, cp, null), ...buildCondition],
+      [...flags(dir, cp), ...buildCondition, '-module-name', 'ExactPackage', '-emit-module',
+        '-emit-module-path', resolve(dir, 'ExactPackage.swiftmodule'),
+        '-emit-tbd', '-emit-tbd-path', resolve(dir, 'ExactPackage.tbd'),
+        '-Xfrontend', '-tbd-install_name', '-Xfrontend', coreName, seam],
+    ];
+    const [seamObject, stub] = seamArgs(cachePath);
+    const compileSeam = async () => {
+      try { await runner.run(seamObject); await runner.run(stub); }
+      catch (err) {
+        if (!err.staleCache) throw err;
+        // Retry in an isolated cache generation rather than deleting a cache another concurrent placement may read.
+        const [retryObj, retryStub] = seamArgs(nextCache());
+        await runner.run(retryObj); await runner.run(retryStub);
+      }
+    };
+    const seamKey = await kept('ExactPackage', [...seamObject, ...stub], [seam], [], dir, compileSeam);
     copyFileSync(resolve(dir, 'ExactPackage.tbd'), resolve(dir, 'libexact_modules.tbd'));
-    packages.forEach((p, i) => {
+    const compilePackage = async (p, i, cp) => {
       const adapter = resolve(dir, `adapter-${p.module}.swift`);
       writeFileSync(adapter, packageAdapter(p));
       const sources = [...packageCopies[i], adapter];
@@ -222,46 +273,78 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
         const objcDir = resolve(dir, `objc-${p.module}`);
         mkdirSync(objcDir, { recursive: true });
         const headerPath = realpathSync(p.objcModule.header);
-        const headerBytes = readFileSync(headerPath, 'utf8');
+        const headerDir = dirname(headerPath);
+        const headers = headerStamp(headerDir);
+        const moduleMapKey = [p.objcModule.name, basename(headerPath), headers];
         writeFileSync(resolve(objcDir, 'module.modulemap'), `module ${p.objcModule.name} {\n  header ${JSON.stringify(headerPath)}\n  export *\n}\n`);
         objcImports.push('-I', objcDir);
-        objcInputs.push(headerBytes);
+        objcInputs.push(moduleMapKey);
         const [sdkName, targetFlags] = packageTargets.get(dir);
         const targetAt = targetFlags.indexOf('-target'), sdkAt = targetFlags.indexOf('-sdk');
         const clangTarget = targetAt >= 0 ? ['-target', targetFlags[targetAt + 1]] : [];
         const clangSdk = sdkAt >= 0 ? ['-isysroot', targetFlags[sdkAt + 1]] : [];
         const clangFsys = [];
         for (let k = 0; k < targetFlags.length; k++) if (targetFlags[k] === '-Fsystem') clangFsys.push('-iframework', targetFlags[k + 1]);
-        const clangCache = resolve(packagesRoot, 'modules-module-cache');
-        p.objc.forEach((src, j) => {
+        const headerAllText = headers.map(([, t]) => t).join('\n');
+        for (let j = 0; j < p.objc.length; j++) {
+          const src = p.objc[j];
           const objName = `${p.module}_objc_${j}`;
           const objPath = resolve(dir, `${objName}.o`);
           const clangArgs = ['--sdk', sdkName, 'clang', '-O2', '-fobjc-arc', '-fobjc-arc-exceptions', '-fmodules',
-            `-fmodules-cache-path=${clangCache}`, ...clangTarget, ...clangSdk, ...clangFsys, '-I', dirname(headerPath), '-c', src, '-o', objPath];
-          const objKey = kept(objName, clangArgs, [src], [headerBytes], dir, () => run(clangArgs));
+            `-fmodules-cache-path=${cp}`, ...clangTarget, ...clangSdk, ...clangFsys, '-I', headerDir, '-c', src, '-o', objPath];
+          const objcPathSensitive = /\b(?:__FILE__|__FILE_NAME__|__builtin_FILE|assert|NSAssert)\b/.test(readFileSync(src, 'utf8') + headerAllText);
+          const objKey = await kept(objName, clangArgs, [src], [headers], dir, () => runner.run(clangArgs), { pathSensitive: objcPathSensitive });
           objcObjects.push(objPath);
           objcInputs.push(objKey);
-        });
+        }
       }
       const sdkImports = p.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...product.imports] : [];
-      const object = [...objectArgs(p.module, sources, dir), ...objcImports, ...sdkImports, ...buildCondition];
-      const os = dir === packageDir ? (ios ? tv ? 'tvos' : 'ios' : 'macos')
+      const object = [...objectArgs(p.module, sources, dir, cp), ...objcImports, ...sdkImports, ...buildCondition];
+      const pkgOs = dir === packageDir ? (ios ? tv ? 'tvos' : 'ios' : 'macos')
         : packageTargets.get(dir)[1].some(arg => arg.includes('-apple-ios')) ? 'ios' : 'macos';
-      const floor = minimum && typeof minimum === 'object' ? minimum[os] : minimum;
-      const link = [...flags(dir), '-emit-library', resolve(dir, `${p.module}.o`), ...objcObjects,
-        '-L', dir, '-lexact_modules', ...systemFrameworks([p], os, floor),
+      const floor = minimum && typeof minimum === 'object' ? minimum[pkgOs] : minimum;
+      const link = [...flags(dir, cp), '-emit-library', resolve(dir, `${p.module}.o`), ...objcObjects,
+        '-L', dir, '-lexact_modules', ...systemFrameworks([p], pkgOs, floor),
         ...moduleLibraryLinkArgs({ wrapped, module: p.module }), ...(p.swiftPackages?.length ? product.link : []), '-o', resolve(dir, `${p.module}.dylib`)];
-      kept(p.module, [...object, ...link], sources, [seamKey, product?.digest, ...objcInputs], dir, () => {
-        run(object);
-        run(link);
+      await kept(p.module, [...object, ...link], sources, [seamKey, product?.digest, ...objcInputs], dir, async () => {
+        await runner.run(object);
+        await runner.run(link);
       });
       copyFileSync(resolve(dir, `${p.module}.dylib`), resolve(dir, `lib${p.module}.dylib`));
-    });
-    placed.add(dir);
+    };
+    const jobs = Math.max(1, Math.min(packages.length, Number(process.env.EXACT_SWIFT_JOBS) || Math.min(availableParallelism(), 4)));
+    let cursor = 0;
+    const failed = [];
+    let staleCache = null;
+    await Promise.all(Array.from({ length: jobs }, async () => {
+      while (!runner.isAborted() && cursor < packages.length) {
+        const i = cursor++;
+        try { await compilePackage(packages[i], i, cachePath); }
+        catch (err) {
+          failed.push({ i, err });
+          if (err.staleCache) staleCache ??= err.staleCache;
+          else { runner.stop(); break; }
+        }
+      }
+    }));
+    if (failed.length && staleCache && failed.every(f => f.err.staleCache) && !runner.isAborted()) {
+      const retryCache = nextCache();
+      for (const { i } of failed) await compilePackage(packages[i], i, retryCache);
+    } else if (failed.length) {
+      throw failed[0].err;
+    }
+    } finally { runner.release(); }
+  };
+  const place = dir => {
+    if (!placed.has(dir)) {
+      const promise = placeImpl(dir).catch(err => { placed.delete(dir); throw err; });
+      placed.set(dir, promise);
+    }
+    return placed.get(dir);
   };
   const imports = dir => (productsByDirectory.get(dir) ?? []).flatMap(p => p.imports);
   const link = dir => (productsByDirectory.get(dir) ?? []).flatMap(p => p.link);
-  return { graph, place, libraries, frameworks, resources, imports, link, products: dir => productsByDirectory.get(dir) ?? [] };
+  return { graph, place, stop: stopAllPlacements, libraries, frameworks, resources, imports, link, products: dir => productsByDirectory.get(dir) ?? [] };
 }
 
 const swiftPathIdentity = path => basename(path).replace(/\.git$/i, '').toLowerCase();
@@ -533,7 +616,7 @@ let package = Package(name: "ExactSwiftProducts", platforms: [.macOS("${floors.m
     swiftSettings: [.unsafeFlags(${JSON.stringify(compile)})], linkerSettings: [.unsafeFlags(${JSON.stringify(link)})])])
 `;
 }
-const swiftRoot = app => resolve(app.target ?? resolve(app.dir, '.exact'), 'swift-packages', createHash('sha256').update(JSON.stringify([app.dir, app.id ?? app.manifest?.app?.id])).digest('hex').slice(0, 16));
+export const swiftRoot = app => resolve(app.target ?? resolve(app.dir, '.exact'), 'swift-packages', createHash('sha256').update(JSON.stringify([app.dir, app.id ?? app.manifest?.app?.id])).digest('hex').slice(0, 16));
 function swiftRun(args, cwd) {
   const env = { ...process.env }; delete env.SDKROOT;
   const result = spawnSync('swift', args, { cwd, env, encoding: 'utf8', maxBuffer: 1 << 26 });

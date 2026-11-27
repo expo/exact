@@ -12,6 +12,7 @@ package final class PageScrollView: NSScrollView {
 
     package override init(frame: NSRect) {
         super.init(frame: frame)
+        contentView = DropClipView()
         for name in [NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(liveScrolled), name: name, object: self)
         }

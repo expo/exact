@@ -3,7 +3,10 @@ fn validate(schema: &Schema) {
     validate_controls(schema);
     validate_style_hosts(schema);
     let mut roles = BTreeSet::new();
-    for [role, apple, path] in &schema.symbols {
+    for SymbolRow {
+        role, apple, path, ..
+    } in &schema.symbols
+    {
         // Digits name a skip's seconds (`skip-back-15`, podcast F3), never first.
         assert!(
             role.starts_with(|c: char| c.is_ascii_lowercase())
@@ -25,13 +28,19 @@ fn validate(schema: &Schema) {
         let base = role.strip_suffix("-fill");
         assert!(
             base.is_some() == apple.ends_with(".fill")
-                && base.is_none_or(|base| schema.symbols.iter().any(|row| row[0] == base)),
+                && base.is_none_or(|base| schema.symbols.iter().any(|row| row.role == base)),
             "schema: symbol {role}: `-fill` is exactly Apple's `.fill`, beside its role"
         );
     }
     symbol_spellings(schema);
     let mut glyphs = BTreeSet::new();
-    for (role, platform, path, _) in &schema.symbol_glyphs {
+    for SymbolGlyphRow {
+        role,
+        platform,
+        path,
+        ..
+    } in &schema.symbol_glyphs
+    {
         assert!(
             roles.contains(role) && ["fluent", "material"].contains(&platform.as_str()),
             "schema: symbol glyph {role} on {platform}: no such role or platform"

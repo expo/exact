@@ -219,17 +219,20 @@ internal class Access(private val host: View) {
         if (!manager.isEnabled) return
         // Told whole: one change, of everything. The changes it still lists are live regions that speak.
         if (t.whole) changed(HOST, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
+        // Nodes that already emitted a text or subtree change in this statement: a live region whose own text
+        // changed is listed twice (TEXT and LIVE), and one content change from the region is what TalkBack reads.
+        val read = HashSet<Int>()
         var i = 0
         while (i < t.changes.size) {
             val id = t.changes[i]; val what = t.changes[i + 1]
             val source = if (id == 0) HOST else id
             val was = before[id]; val n = now[id]
-            if (what and SUBTREE != 0) changed(source, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
+            if (what and SUBTREE != 0) { if (changed(source, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)) read.add(source) }
             else if (what and (TEXT_CHANGED or STATE) != 0) {
                 var types = 0
                 if (what and TEXT_CHANGED != 0) types = types or AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT or AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
                 if (what and STATE != 0 && Build.VERSION.SDK_INT >= 30) types = types or AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION
-                changed(source, types)
+                if (changed(source, types) && what and TEXT_CHANGED != 0) read.add(source)
             }
             if (what and STATE != 0 && n != null && was != null && n.has(SELECTED) && !was.has(SELECTED)) send(id, AccessibilityEvent.TYPE_VIEW_SELECTED)
             if (what and SCROLLED != 0 && n != null) {
@@ -240,7 +243,7 @@ internal class Access(private val host: View) {
                 }
             }
             // A live region speaks: a content change from the region itself is what TalkBack reads it by.
-            if (what and LIVE != 0) changed(source, if (was != null && n != null && was.name != n.name) AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT else AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
+            if (what and LIVE != 0 && source !in read) changed(source, if (was != null && n != null && was.name != n.name) AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT else AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
             i += 4
         }
     }

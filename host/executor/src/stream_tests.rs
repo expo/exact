@@ -745,6 +745,7 @@ fn the_parser_reads_lines_fields_and_cursors_as_html_does() {
                 coalesced: 0,
                 protocol: Box::default(),
                 binary: None,
+                head: None,
             },
             Message {
                 id: "7".into(),

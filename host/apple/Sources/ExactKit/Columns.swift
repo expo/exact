@@ -63,6 +63,7 @@ extension NodeView {
         #if os(macOS)
         needsDisplay = true
         layer?.setNeedsDisplay()
+        if hasInlineLinkCursorRects { presenter?.noteInlineCursorRects(self) }
         #else
         setNeedsDisplay()
         layer.setNeedsDisplay()

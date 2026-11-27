@@ -323,13 +323,14 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     internal fun fieldKeeps() = contacts.fieldKeeps
 
     /** exact2 asks the software keyboard ([Requests], kind 6): hidden ([state] 0), or shown for an input (1) or a
-     * textarea (3). For a hosted field ([field], LLP 1115.001 D8) the field takes the focus and shows its own; for
-     * one exact2 paints, this view's ([Keys]). */
+     * textarea (3). For a hosted field ([field], LLP 1115.001 D8) the field takes the focus and shows its keyboard
+     * only when editable ([state] != 0); a read-only hosted field keeps its focus with the keyboard hidden. For one
+     * exact2 paints, this view's ([Keys]). */
     internal fun keyboard(state: Int, field: Int) {
         val hosted = fields
-        if (state != 0 && field != 0 && hosted != null) { keys?.show(0); hosted.focus(field) }
         // A field in a frame's page took the focus from exact2's: the keyboard up is the page's.
-        else if (state == 0 && rootView.findFocus() is android.webkit.WebView) { hosted?.blur(false); keys?.show(0, hide = false) }
+        if (state == 0 && rootView.findFocus() is android.webkit.WebView) { hosted?.blur(false); keys?.show(0, hide = false) }
+        else if (field != 0 && hosted != null) { keys?.show(0, hide = false); hosted.focus(field, keyboard = state != 0) }
         else { hosted?.blur(state == 0); keys?.show(state) }
     }
 

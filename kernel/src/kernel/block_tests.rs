@@ -292,6 +292,45 @@ fn a_block_that_changes_lays_out_its_subtree_alone() {
 /// A route with a block inside a box the host replaced whole (a tab not
 /// yet built, LLP 1075.003 §9.12) is not laid out: none of its text is
 /// measured. Given back, it is laid out as one never replaced is.
+/// A route its host will present with a block of its own waits for it (LLP 1123, "a presented owner waits for its
+/// block"): until the host gives the block, none of it is laid out, measured or placed, and its geometry is
+/// unavailable; given the block, it is laid out there once, as a layout that had the block from the start lays it out.
+#[test]
+fn a_pending_route_is_laid_out_only_in_its_block() {
+    let counts = Rc::new(RefCell::new(BTreeMap::new()));
+    let mut k = page(&counts);
+    let (route, letter) = ROUTES[0];
+    assert!(k.set_pending(route, true).unwrap());
+    k.compute_layout(1, OFFER).unwrap();
+    assert!(
+        !counts.borrow().contains_key(&letter),
+        "{:?}",
+        counts.borrow()
+    );
+    for id in std::iter::once(route).chain(rows_of(route)) {
+        assert!(k.laid_out_frame(k.node(id).unwrap().key).is_none(), "{id}");
+    }
+    counts.borrow_mut().clear();
+    k.set_host_block(route, is(300.0, 500.0)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert!(
+        counts.borrow().contains_key(&letter),
+        "{:?}",
+        counts.borrow()
+    );
+    // The block ended the wait
+    assert!(!k.set_pending(route, false).unwrap());
+    let mut fresh = page(&Rc::new(RefCell::new(BTreeMap::new())));
+    fresh.set_host_block(route, is(300.0, 500.0)).unwrap();
+    fresh.compute_layout(1, OFFER).unwrap();
+    for id in std::iter::once(route).chain(rows_of(route)) {
+        let (a, b) = (k.node(id).unwrap().frame, fresh.node(id).unwrap().frame);
+        assert!(a.bits_eq(b), "{id}: {a:?} {b:?}");
+    }
+    // A route its host has placed does not wait
+    assert!(!k.set_pending(route, true).unwrap());
+}
+
 #[test]
 fn a_block_in_a_box_replaced_whole_waits_for_the_box() {
     let counts = Rc::new(RefCell::new(BTreeMap::new()));

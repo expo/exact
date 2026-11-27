@@ -194,3 +194,52 @@ test('viewport media changes update resources, rendered text and packed facts', 
     rmSync(dir, { recursive: true, force: true });
   }
 }, 180000);
+
+// LLP 1078 D6, D7: the wasm target's agent applies a `prefer` fold group and announces it once to the page's fold
+// listeners, and an empty group drops the substitute, so the browser's own fold returns
+test("the wasm agent announces each fold preference once and an empty one restores the browser's fold", async () => {
+  // Any app's wasm build has the agent: Interaction Gallery's
+  const dist = mkdtempSync(resolve(tmpdir(), 'exact-fold-agent-'));
+  let server, browser;
+  try {
+    const build = spawnSync(process.execPath, ['host/web/build.mjs', 'interaction-gallery', '--wasm'], {
+      cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20, env: { ...process.env, EXACT_WEB_DIST: dist },
+    });
+    expect(build.status, build.stderr + build.stdout).toBe(0);
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: req => {
+      const path = new URL(req.url).pathname;
+      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/?agent`);
+    await page.waitForFunction(() => typeof globalThis.exact?.agentSettled === 'function');
+    await page.evaluate(() => exact.ready);
+    // The browser's own fold: two segments either side of a 20 px hinge
+    const cdp = await page.context().newCDPSession(page);
+    const { width, height } = page.viewportSize(), offset = Math.floor(width / 2) - 10;
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 1, mobile: false, displayFeature: { orientation: 'vertical', offset, maskLength: 20 },
+    });
+    await cdp.send('Emulation.setDevicePostureOverride', { posture: { type: 'folded' } });
+    await page.waitForFunction(() => matchMedia('(horizontal-viewport-segments: 2)').matches);
+    // Each announcement, with the substitute's columns the page holds as it is heard (0 for none)
+    await page.evaluate(() => { globalThis.folds = []; addEventListener('exact-fold', () => globalThis.folds.push(exact.foldSubstitute?.cols ?? 0)); });
+    const prefer = request => page.evaluate(r => exact.agentSettled({ op: 'prefer', ...r }), request);
+    const folds = () => page.evaluate(() => globalThis.folds);
+    expect((await prefer({ fold: { cols: 3, rows: 1, gap: 0 } })).fold['horizontal-viewport-segments']).toBe(3);
+    expect(await folds()).toEqual([3]);
+    expect((await prefer({ fold: {} })).fold).toEqual({
+      'device-posture': 'folded', 'horizontal-viewport-segments': 2, 'vertical-viewport-segments': 1,
+      'viewport-segments': [[0, 0, offset, height], [offset + 20, 0, width - offset - 20, height]],
+    });
+    expect(await folds()).toEqual([3, 0]);
+    // A preference without a fold group, applied, announces none
+    expect((await prefer({ page: { online: 'false' } })).page.online).toBe(false);
+    expect(await folds()).toEqual([3, 0]);
+  } finally {
+    await browser?.close();
+    server?.stop(true);
+    rmSync(dist, { recursive: true, force: true });
+  }
+}, 600000);

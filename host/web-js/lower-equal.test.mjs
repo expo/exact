@@ -112,7 +112,7 @@ beforeAll(async () => {
 test('b5-edges: every lowered node and every refusal computes as inline, at every arm, held or not', async () => {
   const program = readFileSync(resolve(edgesLow, '.gen/app.js'), 'utf8');
   // (The feed's run and the inheriting column carry no test id.)
-  expect(program.match(/Pc\(e\d+/g)?.length).toBe(LOWERED.length + 2);
+  expect(program.match(/Pc\((?:e|v)\d+/g)?.length).toBe(LOWERED.length + 2);
   expect(readFileSync(resolve(edgesInline, '.gen/app.js'), 'utf8')).not.toContain('Pc(');
   const { suite, low, inline } = await pair(edgesLow, edgesInline, { init: countRules });
   try {

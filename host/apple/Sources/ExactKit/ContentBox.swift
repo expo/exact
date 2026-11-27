@@ -65,13 +65,18 @@ extension NodeView {
 
     /// A content-box update can move content without changing the node's frame.
     func applyKernelContentBox(_ box: CGRect?, padding: [CGFloat?]?) {
+        let moved = kernelContentBox != box
         kernelContentBox = box; kernelPadding = padding
+        // Flow exclusion shapes are translated by `-contentBox().origin`, so a
+        // same-width origin shift invalidates the cached flow layout.
+        if moved, !flowShapes.isEmpty { cachedTextLayout = nil }
         layoutField(); layoutTextArea(); video?.layout(); layoutContent()
         #if os(iOS) || os(tvOS)
         setNeedsLayout(); setNeedsDisplay()
         #else
         layerPaintCache = nil
         needsLayout = true; needsDisplay = true
+        if moved, hasInlineLinkCursorRects { presenter?.noteInlineCursorRects(self) }
         #endif
     }
 

@@ -77,11 +77,13 @@ extension NavigationHost {
 
     func startSplit(_ split: SplitIOS, first: [RouteController]) {
         let list = split.list, detail = split.detail
-        prepareRoutes(Array(first.prefix(1)), in: list)
+        let firstDetail = first.dropFirst().first
+        prepareRoutes(Array(first.prefix(1)), in: list, splitDetail: .incoming(firstDetail))
         prepareRoutes(Array(first.dropFirst()), in: detail)
         // The detail's column keeps its bar, the empty detail's too (LLP 1127 D7)
         detail.setNavigationBarHidden(!barShows(detail), animated: false)
         split.show(first, animated: false)
+        syncSplitBack(split, splitDetail: .incoming(firstDetail))
         for nav in [list, detail] { watchPops(nav) }
     }
 
@@ -105,7 +107,8 @@ extension NavigationHost {
     /// while UIKit moves neither them nor the columns (`changing`). Returns
     /// whether a lifted header or a column move holds the projection.
     func syncSplit(_ split: SplitIOS, _ stack: [RouteController], animated: Bool) -> Bool {
-        prepareRoutes(Array(stack.prefix(1)), in: split.list)
+        let firstDetail = stack.dropFirst().first
+        prepareRoutes(Array(stack.prefix(1)), in: split.list, splitDetail: .incoming(firstDetail))
         prepareRoutes(Array(stack.dropFirst()), in: split.detail)
         let top = split.detailRoutes.last
         let changingRoutes = !split.shown.elementsEqual(stack, by: ===)
@@ -114,6 +117,7 @@ extension NavigationHost {
         let location = stack.count > 1 ? stack.last.flatMap { split.rule?.locations[$0.node.id] } : nil
         let relocated = location != nil && split.topLocation != nil && location != split.topLocation && stack.last === split.detailRoutes.last
         guard split.show(stack, animated: animated, relocated: relocated) else { return split.moving }
+        syncSplitBack(split, splitDetail: .incoming(firstDetail))
         split.topLocation = location
         if changingRoutes { lastTransition = "idle" }
         // A press that opened a detail may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS)
@@ -154,9 +158,11 @@ extension NavigationHost {
             }
             return
         }
-        prepareRoutes(Array(routes.prefix(1)), in: columns.list)
+        let firstDetail = routes.dropFirst().first
+        prepareRoutes(Array(routes.prefix(1)), in: columns.list, splitDetail: .incoming(firstDetail))
         prepareRoutes(Array(routes.dropFirst()), in: columns.detail)
         guard columns.show(routes, animated: false) else { tabsHeld = true; return }
+        syncSplitBack(columns, splitDetail: .incoming(firstDetail))
         columns.pressedRows = columns.pressedRows.filter { id, _ in routes.contains { $0.node.id == id } }
         columns.sidebarRow = detailRow(columns, in: columns.rule, base: routes.dropFirst().first)
         if let list = columns.listNode { presenter.groupedLists?.sync(changed: [list]) }
@@ -196,6 +202,7 @@ extension NavigationHost {
     /// which routes are live (`routesShown`) and a sync its move held follow.
     func splitChanged() {
         guard let split else { return }
+        syncSplitBack(split)
         // Nested, N1's bar is UIKit's; N0's shows the top of the column on top (`showBar`)
         if !split.nested { showBar(split.detail, animated: false) }
         showBar(split.list, animated: false)

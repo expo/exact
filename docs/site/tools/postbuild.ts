@@ -94,7 +94,7 @@ function structuredData(p: Page): object {
     headline: p.title,
     description: p.description,
     inLanguage: 'en',
-    ...(p.updated ? { dateModified: p.updated } : {}),
+    ...(p.updated ? { dateModified: `${p.updated}T00:00:00Z` } : {}),
     ...(p.section ? { articleSection: p.section } : {}),
     ...(ORIGIN ? { image: ORIGIN + site.shareImage } : {}),
     author: byExpo,

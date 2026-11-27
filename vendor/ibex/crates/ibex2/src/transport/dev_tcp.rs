@@ -213,7 +213,15 @@ impl Transport for DevTcpTransport {
                     }
                     chunked = true;
                 }
-                headers.set_response(name, value);
+                if name.eq_ignore_ascii_case("content-type")
+                    || name.eq_ignore_ascii_case("content-length")
+                    || name.eq_ignore_ascii_case("location")
+                    || name.eq_ignore_ascii_case("set-cookie")
+                {
+                    headers.set_response(name, value);
+                } else {
+                    headers.append(name, value);
+                }
             }
             if status == 101 {
                 return Err(failed("protocol upgrades are unsupported"));

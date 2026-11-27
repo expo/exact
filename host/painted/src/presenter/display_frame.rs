@@ -254,6 +254,23 @@ impl<D: DataSource> Presenter<D> {
             })
     }
 
+    /// The kernel epoch of the picture a hit test reads: the frame the
+    /// display acknowledged when one is attached (a frame only submitted, or
+    /// one that failed, leaves its boxes as they were), else the last paint.
+    pub(super) fn hit_epoch(&self) -> Option<u64> {
+        if self.display.attached() {
+            self.display.witness().map(|w| w.epoch)
+        } else {
+            self.brush.paint_epoch
+        }
+    }
+
+    /// Whether a newer picture is on its way to the hit test: the presenter
+    /// is dirty, or a frame is out to the display.
+    pub(super) fn picture_coming(&self) -> bool {
+        self.dirty || (self.display.attached() && self.display.blocked())
+    }
+
     /// The frame to submit to the display, painted if it is dirty; `None`
     /// while an earlier one is still pending.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]

@@ -280,6 +280,26 @@ final class LocalInsetsIOSTests: XCTestCase {
             abs(self.onScreen(clip).maxY - foot) < 0.5 && abs(self.onScreen(clipped).maxY - foot) < 0.5
                 && abs(clipped.adjustedContentInset.bottom - (foot - safe)) < 0.5
         }
+        // Hiding the tab bar is iOS 18's (`setTabBarHidden`)
+        if #available(iOS 18.0, *) {
+            // With the bar hidden, the list holds the route's foot as UIKit's own does: the route pads nothing, and
+            // the list, with no band left, is inset by the home indicator. The route opts its top out (`topOff`), so
+            // that inset is its clearance, not UIKit's adjustment, which would inset its top too.
+            let home = try XCTUnwrap(window).safeAreaInsets.bottom
+            try press("tabs")
+            waitFor("the separate list takes the foot, inset by the home indicator", facts: {
+                "edge \(route.edgeScroll.map { $0.props["testId"] ?? "?" } ?? "none"), clip foot \(route.node.convert(ControlBars.laid(clip), from: clip.superview).maxY) of \(route.node.bounds.maxY), list \(self.onScreen(clipped)) to \(foot), inset \(clipped.adjustedContentInset) of \(clipped.contentInset), home \(home), noTop \(RouteGeometry.insetsNoTop(route.node)), band \(self.node(session, "clipped-list")?.pageBand.bottom ?? -1), tab bar \(self.onScreen(bar))"
+            }) {
+                route.edgeScroll === self.node(session, "clipped-list")
+                    && abs(route.node.convert(ControlBars.laid(clip), from: clip.superview).maxY - route.node.bounds.maxY) < 0.5
+                    && abs(self.onScreen(clipped).maxY - foot) < 0.5
+                    && abs(clipped.adjustedContentInset.bottom - home) < 0.5
+                    && (self.node(session, "clipped-list")?.pageBand.bottom ?? 1) < 0.5
+            }
+            XCTAssertEqual(clipped.contentInsetAdjustmentBehavior, .never, "UIKit adjusts none of it, the route having no top")
+            XCTAssertEqual(clipped.contentInset.bottom, home, accuracy: 0.5, "the clearance is the home indicator's")
+            try press("tabs")
+        }
         let page = try XCTUnwrap(node(session, "list")?.scrollView)
         try press("footer")
         until("the footer keeps the list above the bar") { self.onScreen(page).maxY < safe && route.edgeScroll == nil }
@@ -298,17 +318,52 @@ final class LocalInsetsIOSTests: XCTestCase {
         }
     }
 
-    func testCoverRouteWithoutTabsKeepsItsBottomClearance() throws {
+    func testCoverRouteWithoutTabsGivesItsBottomEdgeToItsScroller() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "the home indicator needs a window") }
         let (session, _) = try fixture(scene, "COVER_SCROLL")
         let route = try XCTUnwrap(session.presenter.navigationHost.activeRoute)
-        let page = try XCTUnwrap(node(session, "home-scroll")?.scrollView)
-        let window = try XCTUnwrap(window)
-        waitFor("the list ends at the window's safe edge") {
-            abs(self.onScreen(page).maxY - window.safeAreaLayoutGuide.layoutFrame.maxY) < 0.5
+        let list = try XCTUnwrap(node(session, "home-scroll"))
+        let page = try XCTUnwrap(list.scrollView)
+        // UIKit's own: a scroll view filling a large-title screen's view, which UIKit insets past the home indicator
+        let reference = UIViewController()
+        reference.title = "Home"
+        let native = UIScrollView(frame: reference.view.bounds)
+        native.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        native.contentSize = CGSize(width: 100, height: 2500)
+        reference.view.addSubview(native)
+        reference.setContentScrollView(native, for: .all)
+        let stack = UINavigationController(rootViewController: reference)
+        stack.navigationBar.prefersLargeTitles = true
+        let oracle = UIWindow(windowScene: scene)
+        oracle.rootViewController = stack
+        oracle.isHidden = false
+        defer { oracle.isHidden = true }
+        waitFor("UIKit insets its own scroll view past the home indicator") {
+            oracle.layoutIfNeeded()
+            return native.adjustedContentInset.bottom > 0
         }
-        XCTAssertNil(route.edgeScroll)
-        XCTAssertEqual(page.adjustedContentInset.bottom, 0, accuracy: 0.5)
+        waitFor("the route's list reaches the bottom edge with UIKit's inset", facts: {
+            "list \(self.onScreen(page)), inset \(page.adjustedContentInset); UIKit's \(self.onScreen(native)), inset \(native.adjustedContentInset)"
+        }) {
+            abs(self.onScreen(page).maxY - self.onScreen(native).maxY) < 0.5
+                && abs(page.adjustedContentInset.bottom - native.adjustedContentInset.bottom) < 0.5
+        }
+        XCTAssertTrue(route.edgeScroll === list)
+        // The window changes size with the app still in the foreground, as an iPhone Duo unfolds after a folded
+        // launch: the list follows to the new foot with UIKit's inset, with no trip to the background to refresh it
+        let window = try XCTUnwrap(self.window), resized = CGRect(origin: .zero, size: CGSize(width: window.bounds.width, height: window.bounds.height - 120))
+        let footBefore = onScreen(native).maxY
+        window.frame = resized
+        oracle.frame = resized
+        waitFor("after the resize the list reaches the new foot with UIKit's inset", facts: {
+            "list \(self.onScreen(page)), inset \(page.adjustedContentInset); UIKit's \(self.onScreen(native)), inset \(native.adjustedContentInset)"
+        }) {
+            oracle.layoutIfNeeded()
+            return abs(self.onScreen(native).maxY - (footBefore - 120)) < 0.5
+                && abs(self.onScreen(page).maxY - self.onScreen(native).maxY) < 0.5
+                && abs(page.adjustedContentInset.bottom - native.adjustedContentInset.bottom) < 0.5
+                && route.edgeScroll === list
+        }
     }
 
     func testCoverRouteScrollInsetsMatchUIKitOnEachEdge() throws {
@@ -327,11 +382,10 @@ final class LocalInsetsIOSTests: XCTestCase {
         let bottomTabs = RouteGeometry.shownBar(tabs.tabBar).map {
             $0.bounds.width > $0.bounds.height && onScreen($0).midY > onScreen(tabs.view).midY
         } ?? false
-        if !bottomTabs && !cover { throw XCTSkip("the UIKit reference needs tabs at the bottom of the screen") }
         session.presenter.press(try XCTUnwrap(node(session, "open")).id)
         waitFor("UIKit takes the pushed route") { nav.viewControllers.count == 2 }
         let route = try XCTUnwrap(nav.topViewController as? RouteController)
-        XCTAssertEqual(route.edgeScroll != nil, bottomTabs, "UIKit takes the pushed route's bottom scroller when its tabs are there")
+        XCTAssertNotNil(route.edgeScroll, "UIKit takes the pushed route's bottom scroller")
         waitFor("the orientation route is on screen") {
             nav.viewControllers.count == 2 && !navigation.inTransition && self.node(session, "open") == nil
         }
@@ -344,9 +398,13 @@ final class LocalInsetsIOSTests: XCTestCase {
         let page = try XCTUnwrap(list.scrollView)
         XCTAssertTrue(page.isDescendant(of: route.view))
         if !bottomTabs {
-            XCTAssertNil(route.edgeScroll)
-            XCTAssertEqual(onScreen(page).maxY, window.safeAreaLayoutGuide.layoutFrame.maxY, accuracy: 0.5)
-            XCTAssertEqual(page.adjustedContentInset.bottom, 0, accuracy: 0.5)
+            // Tabs at the top or in a sidebar leave the route the screen's foot, under either fit
+            waitFor("the list runs under the home indicator, inset by it", facts: {
+                "frame \(self.onScreen(page)), inset \(page.adjustedContentInset), window \(window.safeAreaInsets)"
+            }) {
+                route.edgeScroll === list && abs(self.onScreen(page).maxY - self.onScreen(tabs.view).maxY) < 0.5
+                    && abs(page.adjustedContentInset.bottom - window.safeAreaInsets.bottom) < 0.5
+            }
             return
         }
         let last = try XCTUnwrap(node(session, "end"))
@@ -436,10 +494,11 @@ final class LocalInsetsIOSTests: XCTestCase {
             }
             if #available(iOS 18.0, *), cover {
                 try press("tabs")
-                waitFor("the hidden tab bar gives the cover page its bottom edge back", facts: {
+                waitFor("with the tab bar hidden the list runs under the home indicator, inset by it", facts: {
                     "frame \(self.onScreen(page)), inset \(page.adjustedContentInset), edge \(String(describing: route.edgeScroll))"
                 }) {
-                    route.edgeScroll == nil && abs(self.onScreen(page).maxY - window.safeAreaLayoutGuide.layoutFrame.maxY) < 0.5 && page.adjustedContentInset.bottom == 0
+                    route.edgeScroll === list && abs(self.onScreen(page).maxY - self.onScreen(tabs.view).maxY) < 0.5
+                        && abs(page.adjustedContentInset.bottom - window.safeAreaInsets.bottom) < 0.5
                 }
                 try press("tabs")
                 waitFor("the scroller takes the tab bar again") {

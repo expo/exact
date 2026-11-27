@@ -1,0 +1,139 @@
+// Reproducer and regression fixture for #2071:
+// - Tab 0 (`agents`) and Tab 1 (`sessions`) with pushed routes:
+//   - `/sessions/detail`: authored `button id="back"` (`press=leaveSession`, symbol-only or titled)
+//     plus inline `h2` heading and two trailing buttons (shifts iOS 27 inline title left).
+//   - `/sessions/plain`: no authored Back button; Back routes through root `navigate=follow`.
+//   - `/sessions/mixed`: authored `button id="back"` beside an `appearance="none"` sibling button.
+// - `mode` controls `leaveSession` / `follow`: `"confirm"` opens a modal confirmation dialog
+//   while staying on the pushed route; `"redirect"` switches to `agents`; `"pop"` pops normally.
+routes nav
+  tab agents "/"
+  tab sessions "/sessions"
+    detail "/sessions/detail"
+    plain "/sessions/plain"
+    mixed "/sessions/mixed"
+
+component NavBackGuard
+  state mode = "confirm"
+  state leaves = 0
+  state navigated = 0
+  state backTitled = false
+  state backDisabled = false
+  action pick(name: string)
+    nav = select(nav, name)
+  action open(url: string)
+    nav = push(nav, url)
+  action setMode(next: string)
+    mode = next
+  action toggleTitled
+    backTitled = not backTitled
+  action toggleDisabled
+    backDisabled = not backDisabled
+  action leaveSession
+    leaves = leaves + 1
+    if mode == "confirm"
+      showModal("leave-confirm")
+    else if mode == "redirect"
+      nav = select(nav, "agents")
+    else
+      nav = back(nav)
+  action follow(url: string)
+    navigated = navigated + 1
+    if mode == "confirm"
+      showModal("leave-confirm")
+    else if mode == "redirect"
+      nav = select(nav, "agents")
+    else
+      nav = go(nav, url)
+  action confirmLeave
+    close("leave-confirm")
+    nav = back(nav)
+  action cancelLeave
+    close("leave-confirm")
+  action noop
+    let _ = 0
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%" display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0 display="flex" flex-direction="column"
+                if e.name == "agents"
+                  header display="flex" align-items="center" padding="8px 16px"
+                    text "Agents" role="heading" aria-level=1
+                  column padding=16 gap=8
+                    text "Agents Home" testId="agents-home"
+                    button press=pick("sessions") testId="go-sessions"
+                      text "Sessions"
+                else if e.name == "sessions"
+                  header display="flex" align-items="center" padding="8px 16px"
+                    text "Sessions" role="heading" aria-level=1
+                  column padding=16 gap=8
+                    button press=open("/sessions/detail") testId="open-detail"
+                      text "Open Detail"
+                    button press=open("/sessions/plain") testId="open-plain"
+                      text "Open Plain"
+                    button press=open("/sessions/mixed") testId="open-mixed"
+                      text "Open Mixed"
+                    button press=setMode("confirm") testId="mode-confirm"
+                      text "Mode Confirm"
+                    button press=setMode("redirect") testId="mode-redirect"
+                      text "Mode Redirect"
+                    button press=setMode("pop") testId="mode-pop"
+                      text "Mode Pop"
+                    button press=toggleTitled testId="toggle-titled"
+                      text "Toggle Titled"
+                else if e.name == "detail"
+                  header display="flex" align-items="center" padding="8px 16px" gap=8
+                    button id="back" press=leaveSession disabled=backDisabled testId="back-detail" aria-label="Back to Agents"
+                      if backTitled
+                        text "Agents"
+                      else
+                        image "symbol:back"
+                    text "Implement navigation bar back guard" role="heading" aria-level=2 testId="title-detail"
+                    button press=noop testId="share-detail" aria-label="Share"
+                      image "symbol:share"
+                    button press=noop testId="more-detail" aria-label="More"
+                      image "symbol:more"
+                  column padding=16 gap=8
+                    text `leaves:${leaves}` testId="leaves-readout"
+                    button press=setMode("confirm") testId="detail-mode-confirm"
+                      text "Confirm"
+                    button press=setMode("redirect") testId="detail-mode-redirect"
+                      text "Redirect"
+                    button press=setMode("pop") testId="detail-mode-pop"
+                      text "Pop"
+                    button press=toggleDisabled testId="detail-toggle-disabled"
+                      text "Toggle Disabled"
+                    button press=toggleTitled testId="detail-toggle-titled"
+                      text "Toggle Titled"
+                else if e.name == "plain"
+                  header display="flex" align-items="center" padding="8px 16px"
+                    text "Plain Detail" role="heading" aria-level=2 testId="title-plain"
+                  column padding=16 gap=8
+                    text `navigated:${navigated}` testId="navigated-readout"
+                    button press=setMode("confirm") testId="plain-mode-confirm"
+                      text "Confirm"
+                    button press=setMode("pop") testId="plain-mode-pop"
+                      text "Pop"
+                else if e.name == "mixed"
+                  header display="flex" align-items="center" padding="8px 16px" gap=8
+                    button id="back" press=leaveSession testId="back-mixed" aria-label="Back"
+                      image "symbol:back"
+                    text "Mixed" role="heading" aria-level=2
+                    button press=noop appearance="none" testId="custom-sibling" padding="4px 8px"
+                      text "Custom"
+                  column padding=16
+                    text `leaves:${leaves}` testId="mixed-leaves"
+      row role="tablist" aria-label="Tabs" testId="tabs"
+        button role="tab" aria-controls="panel-agents" aria-selected=(nav.tab == "agents") press=pick("agents") testId="tab-agents"
+          text "Agents"
+        button role="tab" aria-controls="panel-sessions" aria-selected=(nav.tab == "sessions") press=pick("sessions") testId="tab-sessions"
+          text "Sessions"
+      dialog id="leave-confirm" role="alertdialog" aria-label="Stop running task?" testId="confirm-dialog"
+        text "Work is still running."
+        button press=confirmLeave command="close" commandfor="leave-confirm" testId="confirm-leave"
+          text "Leave"
+        button command="close" commandfor="leave-confirm" press=cancelLeave testId="cancel-leave"
+          text "Stay"

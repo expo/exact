@@ -768,8 +768,13 @@ if (siteBase !== '/') {
   writeFileSync(file, "import { siteHref } from './site.js';\n" + code.replace(boundary, 'span.href = siteHref(href.trim());'));
 }
 
-const grantNames = Object.keys(await import('../web/grant-admission.js'))
-  .filter(name => !['isCloudMetadata', 'isLocalNetwork'].includes(name));
+const [grantModule, networkModule] = await Promise.all([
+  import('../web/grant-admission.js'),
+  import('../web/navigation/network.js'),
+]);
+const networkNames = Object.keys(grantModule)
+  .filter(name => name in networkModule && Object.is(grantModule[name], networkModule[name]));
+const grantNames = Object.keys(grantModule).filter(name => !networkNames.includes(name));
 writeFileSync(resolve(gen, 'grant-network.js'), await bundleHostModule(root, 'navigation/network.js', { production }));
 // A production page whose every grant set is empty (no TypeScript grant, no Rust module, no native module, no page
 // module, no declared source) admits nothing, and says so without the parser (LLP 1047.002 D3): each export of admission answers as it
@@ -799,7 +804,7 @@ const emptyGrantAdmission = () => {
   return ['// Generated: the grant admission of a page that admits nothing (LLP 1047.002 D3). Every set is the empty set the compiler normalized.',
     `const EMPTY = Object.freeze({ ...${JSON.stringify(tsGrantSet)}, entries: Object.freeze([]) });`,
     ...grantNames.map(name => `export const ${name} = ${answers[name]};`),
-    "export { isCloudMetadata, isLocalNetwork } from './grant-network.js';"].join('\n');
+    ...(networkNames.length ? [`export { ${networkNames.join(', ')} } from './grant-network.js';`] : [])].join('\n');
 };
 // The agent adapter reads its own copies of the modules it shares with the
 // entry: a module lives in one chunk, so what only the agent reads from
@@ -858,7 +863,7 @@ writeFileSync(resolve(gen, 'admission.js'), localImports(stubbed));
 if (fetchRefused) writeFileSync(resolve(gen, 'ts-fetch-refused.js'), [
   '// Generated: `fetch` for sources with no network grant (LLP 1047.002 D3): the app\'s own assets, else the refusal by name.',
   "import { fetchWith } from './admission.js'; import { ordinary, owned, fetchReply, STREAM_REFUSAL } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
-  'export const fetch = (input, init) => init?.exactStream !== undefined ? owned(Promise.reject(new TypeError(STREAM_REFUSAL))) : fetchReply(ordinary(() => fetchWith(tsGrantSet, input, init)));', ''].join('\n'));
+  `export const fetch = (input, init) => init?.exactStream !== undefined ? owned(Promise.reject(new TypeError(STREAM_REFUSAL))) : init?.exactStreamOpen !== undefined && init.exactStreamOpen !== false ? owned(Promise.reject(new TypeError(init.exactStreamOpen === true ? "exactStreamOpen reports an HTTP stream's response head on open: give exactStream too" : "exactStreamOpen is true or false"))) : fetchReply(ordinary(() => fetchWith(tsGrantSet, input, init)));`, ''].join('\n'));
 const tsFetch = readFileSync(resolve(here, 'ts-fetch.js'), 'utf8');
 if (!tsFetch.includes(refusalLine)) throw new Error(`host/web-js/ts-fetch.js: build.mjs replaces a line it no longer has: ${refusalLine}`);
 writeFileSync(resolve(gen, 'ts-fetch.js'), streams ? tsFetch : tsFetch.replace(refusalLine, `export const STREAM_REFUSAL = ${JSON.stringify(STREAM_REFUSAL)};`));

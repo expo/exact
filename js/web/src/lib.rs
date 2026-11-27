@@ -493,6 +493,12 @@ impl Module {
             request.held = r["held"] == true;
             // `exactUploadProgress`: the page sends it with XMLHttpRequest.
             request.upload_progress = r["upload_progress"] == true;
+            // `exactStreamOpen` (LLP 1016.000 D12): the page delivers the 2xx head on open.
+            request.stream_open = match &r["stream_open"] {
+                Json::Null => false,
+                Json::Bool(b) => *b,
+                _ => return Err(unavailable("exactStreamOpen is true or false")),
+            };
             // `exactBodyFrom`: the page reads the file into the body.
             match &r["body_from"] {
                 Json::Null => {}
@@ -510,20 +516,27 @@ impl Module {
                 let n = u32::try_from(n).map_err(|_| unavailable("invalid response ceiling"))?;
                 request = request.independent_http(n);
             }
-            if r["stream"] == true {
+            let is_stream = r["stream"] == true;
+            if is_stream {
                 // The page opens it; its events come back as messages.
                 request = match Answer::stream(request) {
                     Answer::Later(request) => request,
                     Answer::Now(_) => unreachable!("a stream is a request"),
                 };
-                self.streams.insert(key, ());
             } else {
                 // What an app's abort names it by (`take_aborted`).
                 request.fetch = response["ticket"].as_u64();
-                self.waiting.insert(key, false);
             }
-            if let Some(why) = request.long_poll_refusal() {
+            if let Some(why) = request
+                .long_poll_refusal()
+                .or(request.stream_open_refusal())
+            {
                 return Err(unavailable(why));
+            }
+            if is_stream {
+                self.streams.insert(key, ());
+            } else {
+                self.waiting.insert(key, false);
             }
             Answer::Later(request)
         } else if response["tag"] == 0 {
@@ -566,6 +579,26 @@ fn outcome_json(outcome: Outcome) -> Result<Json, DataError> {
                 ("message", message.into()),
             ]),
         )]),
+        Outcome::Message(m) if m.head.is_some() => {
+            let head = m.head.as_deref().unwrap();
+            object([(
+                "message",
+                object([
+                    ("event", m.event.into()),
+                    ("id", m.id.into()),
+                    ("data", "".into()),
+                    ("coalesced", m.coalesced.into()),
+                    ("protocol", m.protocol.to_string().into()),
+                    (
+                        "head",
+                        object([
+                            ("status", head.status.into()),
+                            ("headers", pairs(&head.headers)),
+                        ]),
+                    ),
+                ]),
+            )])
+        }
         Outcome::Message(m) => object([(
             "message",
             object([

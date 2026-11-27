@@ -98,7 +98,9 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// 19: LLP 1195.000 Stage 1 — minimal frozen `process` shim, virtualized
 /// `Date`/`performance.now()`/`Math.random()`, WHATWG `Blob`/`File`/`FormData`/`Request`,
 /// and `crypto.subtle` HMAC, AES-GCM, PBKDF2, HKDF, RSASSA-PKCS1-v1_5 verify, and Ed25519.
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 19;
+/// 20: `fetch`'s `exactStreamOpen` (LLP 1016.000 D12), which an older prelude would ignore,
+/// delivering no `open` head event when an HTTP stream opens.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 20;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -109,7 +111,8 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 19;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 36] = [
+const RUNTIME_OPTIONS: [(u32, &str); 37] = [
+    (20, "exactStreamOpen"),
     (19, "FormData"),
     (19, "RSASSA-PKCS1-v1_5"),
     (19, "AES-GCM"),

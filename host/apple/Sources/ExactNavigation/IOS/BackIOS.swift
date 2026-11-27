@@ -117,6 +117,47 @@ extension NavigationHost {
         if let route = selectedRoute, declaresBack(route) { return "its navigationBack control is disabled or has no press handler" }
         return "no visit beneath the active route"
     }
+
+    #if os(iOS)
+    /// Identifier of the `UINavigationItem.backAction` Exact installs so a
+    /// `routeHatch`-owned `backAction` is neither overwritten nor cleared.
+    static let exactBackActionID = UIAction.Identifier("exact.navigation.back")
+
+    /// Route UIKit's navigation-bar Back tap through Exact before UIKit pops:
+    /// install when a pushed route can go back through the router and no hatch
+    /// already owns `backAction`; clear only Exact's own action when not needed.
+    func projectBackAction(_ route: RouteController, wants: Bool) {
+        let existing = route.navigationItem.backAction
+        if wants {
+            guard existing == nil else { return }
+            route.navigationItem.backAction = UIAction(title: "", identifier: Self.exactBackActionID) { [weak self, weak route] _ in
+                guard let self, let route else { return }
+                self.backActionTriggered(from: route)
+            }
+        } else if existing?.identifier == Self.exactBackActionID {
+            route.navigationItem.backAction = nil
+        }
+    }
+
+    /// Invoked when UIKit's navigation-bar Back button fires Exact's `backAction`.
+    /// Defers one main-queue turn (matching `BarPress`) so UIKit finishes button
+    /// dispatch before Exact runs the authored Back action or root `navigate`,
+    /// letting the app refuse, open confirmation UI, redirect, or pop cleanly.
+    private func backActionTriggered(from route: RouteController) {
+        guard !syncing, !changing, !presenter.modalHost.inTransition, !backActionPending else { return }
+        backActionPending = true
+        presenter.enqueueBarWork { [weak self, weak route] in
+            guard let self else { return }
+            self.backActionPending = false
+            guard let route,
+                  !self.syncing, !self.changing, !self.presenter.modalHost.inTransition,
+                  let nav = route.navigationController,
+                  nav.topViewController === route,
+                  self.follows(nav) else { return }
+            self.invokeBack(from: route.node)
+        }
+    }
+    #endif
 }
 
 #if os(tvOS)

@@ -97,6 +97,7 @@ impl Request {
             stream,
             socket: stream,
             bytes: false,
+            stream_open: false,
             upload_progress: false,
             long_poll: None,
             timeout_ms: None,

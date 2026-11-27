@@ -133,15 +133,26 @@ impl Em<'_> {
     }
 
     /// A development build's binding `k` of node `i`, counted (LLP 1079 D1,
-    /// perf.js): declared once, as `p{i}_{k}`, which every write it feeds
-    /// reads, so a mapped write does not make a counter per evaluation.
-    pub(super) fn counted(&mut self, i: u32, k: usize, f: String) -> String {
+    /// perf.js): declared once, which every write it feeds reads, so a mapped
+    /// write does not make a counter per evaluation.
+    pub(super) fn counted(
+        &mut self,
+        i: u32,
+        e: &str,
+        k: usize,
+        scope: &crate::code::Scope,
+        f: String,
+    ) -> String {
         if !self.site_attrs {
             return f;
         }
         let pf = self.uses.rt("pf");
-        let _ = write!(self.out, "const p{i}_{k}={pf}({i},{f});");
-        format!("p{i}_{k}")
+        let site = self.site_number(scope, i);
+        let name = e
+            .strip_prefix('e')
+            .map_or_else(|| format!("p{e}_{k}"), |n| format!("p{n}_{k}"));
+        let _ = write!(self.out, "const {name}={pf}({site},{f});");
+        name
     }
 
     pub(super) fn style_row(

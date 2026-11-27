@@ -109,6 +109,62 @@ final class DataTableMacTests: XCTestCase {
 
         """
 
+    /// A drag over a native data table's cell is its authored row's, though
+    /// AppKit holds the cell in a view of its own, when the table's clip view
+    /// is the drag's one destination over it (LLP 1094.000 D15).
+    func testADragOverANativeTablesCellIsItsRowsDrop() throws {
+        let plan = try TableFixture.plan("""
+        component App
+          state up = true
+          state log = ""
+          derive names = up ? ["Ada", "Lin"] : ["Lin", "Ada"]
+          action sort
+            up = !up
+          action entered(name: string)
+            log = `${log}enter ${name};`
+          action dropped(name: string, e: DragEvent)
+            log = `${log}drop ${name} ${e.text};`
+          view
+            table testId="people"
+              thead
+                tr
+                  th testId="name" press=sort aria-sort=(up ? "ascending" : "descending")
+                    text "Name"
+                  th
+                    text "Team"
+              tbody
+                for name in names key=name
+                  tr dragenter=entered(name) drop=dropped(name)
+                    td testId=name
+                      text name
+                    td
+                      text "Engineering"
+
+        """)
+        try withWindow(plan) { presenter, window, people in
+            func table(in view: NSView) -> NSTableView? {
+                if let found = view as? NSTableView { return found }
+                return view.subviews.lazy.compactMap { table(in: $0) }.first
+            }
+            let native = try XCTUnwrap(table(in: presenter.viewport), "a native table")
+            let clip = try XCTUnwrap(native.enclosingScrollView?.contentView as? DropClipView)
+            XCTAssertTrue(clip.isDestination)
+            let lin = try XCTUnwrap(presenter.views.values.first { $0.props["testId"] == "Lin" })
+            let point = lin.convert(NSPoint(x: lin.bounds.midX, y: lin.bounds.midY), to: nil)
+            let board = NSPasteboard(name: .init("exact-test-\(UUID().uuidString)"))
+            board.clearContents()
+            board.setString("Mount Fuji", forType: .string)
+            let info = TableDragInfo(board: board, location: point, window: window)
+            XCTAssertEqual(clip.draggingUpdated(info), .copy, "the row under the cell takes it")
+            XCTAssertTrue(clip.performDragOperation(info))
+            clip.draggingEnded(info)
+            presenter.settlePump()
+            let state = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(presenter.session!.agent(#"{"op":"state"}"#).utf8)) as? [String: Any])
+            XCTAssertEqual((state["slots"] as? [String: Any])?["log"] as? String, "enter Lin;drop Lin Mount Fuji;")
+            board.releaseGlobally()
+        }
+    }
+
     func testAnAuthoredSortableTableHasResizableAppKitColumns() throws {
         try withWindow(TableFixture.plan(Self.people)) { presenter, window, people in
             let name = try XCTUnwrap(presenter.views.values.first { $0.props["testId"] == "name" })
@@ -214,5 +270,26 @@ final class DataTableMacTests: XCTestCase {
             XCTAssertEqual(cell.frame.width, 113, accuracy: 0.5)
         }
     }
+}
+/// A drag of plain text at `location` in `window`, from a source allowing a copy.
+private final class TableDragInfo: NSObject, NSDraggingInfo {
+    let board: NSPasteboard, location: NSPoint
+    weak var window: NSWindow?
+    init(board: NSPasteboard, location: NSPoint, window: NSWindow) { self.board = board; self.location = location; self.window = window }
+    var draggingDestinationWindow: NSWindow? { window }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingLocation: NSPoint { location }
+    var draggedImageLocation: NSPoint { location }
+    var draggedImage: NSImage? { nil }
+    var draggingPasteboard: NSPasteboard { board }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func resetSpringLoading() {}
 }
 #endif

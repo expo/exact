@@ -178,7 +178,12 @@ final class FaceSymbolTests: XCTestCase {
     static func roles() throws -> [[String]] {
         let schema = repository.appendingPathComponent("kernel/tables/schema.json")
         let table = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: schema)) as? [String: Any])
-        return try XCTUnwrap(table["symbols"] as? [[String]])
+        let rows = try XCTUnwrap(table["symbols"] as? [[Any]])
+        return try rows.map { row in
+            let prefix = row.prefix(3).compactMap { $0 as? String }
+            XCTAssertEqual(prefix.count, 3)
+            return prefix
+        }
     }
 
     /// Every portable role's Apple name is an SF Symbol this OS draws (LLP

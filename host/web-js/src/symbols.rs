@@ -1,7 +1,7 @@
 //! The symbol tables symbols.js draws a bound source from (LLP 1011; LLP
-//! 1121 D10): each entry `name: [path, filled]`, and an icon's
-//! `[path, filled, viewBox, file]` (a path drawn, or a file the page shows),
-//! with a fifth `1` for an icon filled even-odd (stage 14 C2).
+//! 1121 D10): each entry `name: [path, flags]` (bit 0 = filled, bit 1 = mirror
+//! in RTL), and an icon's `[path, flags, viewBox, file]` (a path drawn, or a
+//! file the page shows), with a fifth `1` for an icon filled even-odd (stage 14 C2).
 
 use exact_plan::Plan;
 
@@ -10,18 +10,20 @@ fn entry(
     name: &str,
     path: &str,
     filled: bool,
+    mirror: bool,
     view_box: &str,
     file: &str,
     even_odd: bool,
 ) -> String {
     let j = |s: &str| serde_json::to_string(s).unwrap();
+    let flags = u8::from(filled) | (u8::from(mirror) << 1);
     match (view_box, file) {
-        ("", "") => format!("{}:[{},{}]", j(name), j(path), filled as u8),
+        ("", "") => format!("{}:[{},{}]", j(name), j(path), flags),
         _ => format!(
             "{}:[{},{},{},{}{}]",
             j(name),
             j(path),
-            filled as u8,
+            flags,
             j(view_box),
             j(file),
             if even_odd { ",1" } else { "" }
@@ -32,12 +34,20 @@ fn entry(
 /// A role's entries: by its name, and (`sf`) by its Apple name as an SF
 /// Symbol, which draws the role where no SF Symbol is.
 fn role(name: &str, sf: bool) -> Vec<String> {
-    let Some((apple, path, filled)) = exact_kernel::generated::symbol(name) else {
+    let Some((apple, path, filled, mirror)) = exact_kernel::generated::symbol(name) else {
         return Vec::new();
     };
-    let mut out = vec![entry(name, path, filled, "", "", false)];
+    let mut out = vec![entry(name, path, filled, mirror, "", "", false)];
     if sf && !apple.is_empty() {
-        out.push(entry(&format!("sf/{apple}"), path, filled, "", "", false));
+        out.push(entry(
+            &format!("sf/{apple}"),
+            path,
+            filled,
+            mirror,
+            "",
+            "",
+            false,
+        ));
     }
     out
 }
@@ -62,6 +72,7 @@ pub(crate) fn table(plan: &Plan, bound: bool) -> String {
             s(i.name.0),
             path,
             true,
+            false,
             icon.view_box,
             file,
             icon.even_odd,
@@ -71,6 +82,7 @@ pub(crate) fn table(plan: &Plan, bound: bool) -> String {
                 &format!("sf/{}", icon.sf),
                 path,
                 true,
+                false,
                 icon.view_box,
                 file,
                 icon.even_odd,
@@ -146,5 +158,23 @@ mod tests {
             "{t}"
         );
         assert!(!t.contains("icon.odd") && !t.contains("evenodd:"), "{t}");
+    }
+
+    #[test]
+    fn symbol_tables_encode_mirror_bit_for_directional_web_roles() {
+        let all = super::every();
+        let back = exact_kernel::generated::symbol("back").unwrap();
+        let send = exact_kernel::generated::symbol("send").unwrap();
+        let star_fill = exact_kernel::generated::symbol("star-fill").unwrap();
+        assert!(all.contains(&format!("\"back\":[{:?},2]", back.1)), "{all}");
+        assert!(
+            all.contains(&format!("\"sf/chevron.backward\":[{:?},2]", back.1)),
+            "{all}"
+        );
+        assert!(all.contains(&format!("\"send\":[{:?},0]", send.1)), "{all}");
+        assert!(
+            all.contains(&format!("\"star-fill\":[{:?},1]", star_fill.1)),
+            "{all}"
+        );
     }
 }

@@ -69,6 +69,8 @@ export const answer: Answer = ${usesFetch ? `async () => {
       ['trimGrant', ['\u0085auth.session https://login.example\u0085']], ['trimGrant', ['\ufeffauth.session']],
       ['grantWords', ['secret.keep\u0085token user-presence optional']],
       ['grantError', [empty]], ['rawGrantText', [empty]], ['sameGrantDeclaration', [empty, 'app.ts']], ['sameGrantDeclaration', [empty, 42]],
+      ['isLoopback', ['127.0.0.1']], ['isLoopback', ['localhost']], ['isLoopback', ['example.com']],
+      ['isLocalNetwork', ['192.168.1.1']], ['isCloudMetadata', ['169.254.169.254']],
     ]) expect(stub[name](...args), name).toEqual(parser[name](...args));
     for (const name of ['createGrantSet', 'scopedGrantSet', 'unionGrantSets']) expect(stub[name](empty, 'app.ts'), name).toEqual(empty);
     // A grant brings the parser back.

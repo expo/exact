@@ -1410,11 +1410,14 @@ activate its `:hover` shadow yet.
 Row buttons and their detail accessories stay bare by default, preserving the
 cell's title and action. Explicit `appearance="auto"` makes one a custom native control.
 
-`listStyle` is `inset-grouped` (the default), `grouped` or `plain`, a literal.
-iOS draws UIKit's own list (`UICollectionView` with a list configuration); the
-other hosts draw a sheet measured from it, and your own attributes replace any
-of its rows. A section's own `margin-top` or `margin-bottom` is the space iOS
-leaves there too, collapsed with its neighbour's as on the web (LLP 1084 §6.4).
+`listStyle` is `inset-grouped` (the default), `grouped`, `plain` or `sidebar`,
+a literal. iOS draws UIKit's own list (`UICollectionView` with a list
+configuration); the other hosts draw a sheet measured from it, and your own
+attributes replace any of its rows. `sidebar` is UIKit's sidebar list at every
+width, for a list of places to go (folders, sections); the hosts with no
+sidebar list draw it as the plain list. A section's own `margin-top` or
+`margin-bottom` is the space iOS leaves there too, collapsed with its
+neighbour's as on the web (LLP 1084 §6.4).
 The rest of a section's layout is the platform's, its rows one under another
 across the card: besides those margins a section takes only `display` `"block"`
 or `"none"` of its own layout, written or from its `class`, and the compiler

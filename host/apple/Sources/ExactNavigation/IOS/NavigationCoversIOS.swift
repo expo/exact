@@ -242,6 +242,43 @@ extension NavigationHost {
         return false
     }
 
+    /// Whether `c` is the outgoing route of its stack's active transition.
+    private func isDeparting(_ c: RouteController) -> Bool {
+        stackTransition(for: c)?.viewController(forKey: .from).map { owns(c, in: $0) } == true
+    }
+
+    /// Whether `c` sits inside a modal presentation currently being dismissed or retired.
+    private func isDismissingModal(_ c: RouteController) -> Bool {
+        sequence(first: c as UIViewController, next: \.parent).contains {
+            $0.isBeingDismissed || presenter.modalHost.retires($0)
+        }
+    }
+
+    /// Bar visibility and settlement state shared between cover reporting and mid-transition
+    /// scroll-edge refreshes so both agree on when a route's bar state is settled.
+    private func barSettlement(for c: RouteController, in nav: UINavigationController?, departing: Bool) -> (search: Bool, barAbove: Bool, settled: Bool) {
+        let search = searching(c)
+        let barAbove = nav.map { c.parent is PlainTab ? !$0.isNavigationBarHidden : routeShowsBar(c, in: $0) } ?? false
+        // Nested in a split's list column, the detail's routes are under that column's bar (LLP 1127 §1, item 2)
+        let barNav = split.flatMap { $0.nested && nav === $0.detail ? $0.list : nil } ?? nav
+        // A departing route holds its settled cover through the stack transition: sliding it
+        // away clears its side safe area (e.g. an open iPhone Duo's vertical bar) mid-swipe (#1942).
+        let settled = c.surface.window != nil && !departing && (search || (barNav?.isNavigationBarHidden ?? true) != barAbove)
+        return (search, barAbove, settled)
+    }
+
+    /// Re-select top and bottom scroll edges for settled non-departing routes whose content changed
+    /// while a stack or modal transition holds full projection (expo/exact#2055). Preserves native
+    /// `setContentScrollView` holds (`scrollEdgesOwed`) and modal presentation setup (`safeAreaOwed`).
+    func refreshScrollEdgesInTransition(in routes: [RouteController]? = nil) {
+        for c in routes ?? Array(controllers.values) where presenter.views[c.node.id] === c.node {
+            guard c.inStack, !c.scrollEdgesOwed, !c.safeAreaOwed, !isDismissingModal(c) else { continue }
+            let departing = isDeparting(c)
+            guard barSettlement(for: c, in: c.navigationController, departing: departing).settled else { continue }
+            selectScrollEdges(of: c)
+        }
+    }
+
     /// What Exact's containers cover of each route — its controller's safe
     /// area past the insets the kernel already has as `env()`: a shown bar's
     /// top, and every edge while the containers take the whole view for a
@@ -269,8 +306,7 @@ extension NavigationHost {
             // A lifted header takes no room, on a stack yet or not (`coverLifted`).
             for node in c.coveredBarNodes { wanted[node.id] = NavigationHost.cover(of: node, in: c) }
             // Include the departing route until UIKit finishes its transition
-            let transition = stackTransition(for: c)
-            let departing = transition?.viewController(forKey: .from).map { owns(c, in: $0) } == true
+            let departing = isDeparting(c)
             let nav = c.navigationController ?? (departing ? c.lastStack : nil)
             let stacked = c.stack?.stackRoutes.contains(c) == true || departing
             // A cancelled swipe's source leaves the stack for a moment before UIKit puts it back: while it shows,
@@ -298,13 +334,7 @@ extension NavigationHost {
             // UIKit's own does, but a title's insets are not sampled.
             // A plain tab's route has no bar of its own: More's shows above it
             // under More, and none on the tab bar.
-            let search = searching(c)
-            let barAbove = nav.map { c.parent is PlainTab ? !$0.isNavigationBarHidden : routeShowsBar(c, in: $0) } ?? false
-            // Nested in a split's list column, the detail's routes are under that column's bar (LLP 1127 §1, item 2)
-            let barNav = split.flatMap { $0.nested && nav === $0.detail ? $0.list : nil } ?? nav
-            // A departing route holds its settled cover through the stack transition: sliding it
-            // away clears its side safe area (e.g. an open iPhone Duo's vertical bar) mid-swipe (#1942).
-            let settled = c.surface.window != nil && !departing && (search || (barNav?.isNavigationBarHidden ?? true) != barAbove)
+            let (search, barAbove, settled) = barSettlement(for: c, in: nav, departing: departing)
             // A route showing no bar has no title: its inset is the status bar's, none in landscape (LLP 1130 D3).
             let barless = !barAbove
             let topPeers = arrangementScrollers(in: c, top: true), bottomPeers = arrangementScrollers(in: c, top: false)
@@ -394,13 +424,15 @@ extension NavigationHost {
                     // A band's part of the safe area is a UI inset over control bars, not layout (LLP 1131 D2).
                     let title = ownsTop ? node.scrollOrigin : 0
                     let stretched = title > 0 && node.scrollView.map { Self.stretched($0, origin: title) } == true
-                    let noTop = node === c.collapseScroll && RouteGeometry.insetsNoTop(c.node)
+                    // A route's top opt-out holds for its bottom-only scroller as for its title's
+                    let noTop = (node === c.collapseScroll || node === c.edgeScroll) && RouteGeometry.insetsNoTop(c.node)
                     let top = noTop ? 0 : max(0, max(stretched ? min(safe.top, title) : safe.top, title) - node.pageBand.top)
                     // Only the scroller whose clearance takes back UIKit's inset loses it in layout.
                     let back = min(0, node.scrollView.flatMap { extras[ObjectIdentifier($0)]?.bottom } ?? 0)
                     let bottomOff = RouteGeometry.clearanceOff(c.node) & 4 != 0
-                    // When a tab bar goes away on a cover page, the route takes its padding back.
-                    // The title scroller's old safe area disappears after that layout.
+                    // A cover page's route that keeps its bottom clearance (its title scroller does not hold the
+                    // bottom edge) pads it, and the scroller takes none: its safe area can still hold a tab bar
+                    // that went away until UIKit lays it out again.
                     let keepsBottom = covered && !presented && c.tabBarController != nil && !bottomOff && node !== c.edgeScroll && !peerBottom
                     let bottom = keepsBottom || (noTop && node !== c.edgeScroll) ? 0 : max(0, max(safe.bottom, bottomOff ? 0 : reach) + back - node.pageBand.bottom)
                     if top > 0 || bottom > 0 { wanted[node.id] = .inset(top: top, bottom: bottom) }

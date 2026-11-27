@@ -120,7 +120,7 @@ impl<D: DataSource> Host<D> {
             for key in &r.touched {
                 if let Some(node) = self.runner.kernel().node_by_key(*key) {
                     let id = node.id;
-                    self.update(id, &mut batch);
+                    self.update_node(id, node.paragraph_stamp(), &mut batch);
                 }
             }
             if let Some(node) = r

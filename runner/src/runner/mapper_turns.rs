@@ -313,9 +313,17 @@ impl<D: DataSource> Runner<D> {
 
 /// What a held outcome counts against `MOST_HELD_BYTES`.
 fn size(outcome: &Outcome) -> usize {
+    let head_bytes = |m: &crate::Message| {
+        m.head.as_deref().map_or(0, |h| {
+            h.headers
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>()
+        })
+    };
     match outcome {
-        Outcome::Message(m) => m.data.len() + m.binary.as_ref().map_or(0, Vec::len),
-        Outcome::Messages(ms) => ms.iter().map(|m| m.data.len()).sum(),
+        Outcome::Message(m) => m.data.len() + m.binary.as_ref().map_or(0, Vec::len) + head_bytes(m),
+        Outcome::Messages(ms) => ms.iter().map(|m| m.data.len() + head_bytes(m)).sum(),
         _ => 0,
     }
 }

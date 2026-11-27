@@ -125,7 +125,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// Immutable boot-time media grants (`device.camera` bit 0, `device.microphone` bit 1)
     /// for Android-only grant-gated `WebChromeClient.onPermissionRequest` (LLP 1156.008.001 B1b).
     pub fn frame_media_grants(&self) -> i32 {
-        let grants = self.p.host.runner().data().grants();
+        let grants = self.p.host.runner().data_ref().grants();
         let cam = i32::from(exact_runner::device::granted(grants, "camera"));
         let mic = i32::from(exact_runner::device::granted(grants, "microphone"));
         cam | (mic << 1)

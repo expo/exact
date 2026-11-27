@@ -32,7 +32,7 @@ class FieldsTest {
          * (x, y, width, height; none when null). */
         data class Told(val id: Int, val x: Float, val y: Float, val w: Float, val h: Float, val state: Int, val flags: Int = 0,
             val value: String = "$id", val features: String = "", val align: Int = 0, val revision: Int = 0, val caret: Int = 0,
-            val clip: FloatArray? = null, val edit: Int = 0)
+            val clip: FloatArray? = null, val edit: Int = 0, val keyboard: Int = 0)
 
         fun statement(told: List<Told>): IntArray {
             val words = mutableListOf(told.size)
@@ -47,7 +47,7 @@ class FieldsTest {
                 val clip = t.clip ?: floatArrayOf(0f, 0f, -1f, -1f)
                 words.addAll(listOf(t.id, 0, t.state, 0, t.x.toBits(), t.y.toBits(), t.w.toBits(), t.h.toBits()) + clip.map(Float::toBits) + t.edit)
                 string(t.value)
-                words.addAll(listOf(t.flags, 0, 0, 0, -1, t.align, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, t.revision, t.caret, t.caret))
+                words.addAll(listOf(t.flags, t.keyboard, 0, 0, -1, t.align, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, t.revision, t.caret, t.caret))
                 for (s in listOf("", "", family, "", t.features)) string(s)
             }
             return words.toIntArray()
@@ -188,5 +188,179 @@ class FieldsTest {
         assertEquals(2 to 3, ordered(3, 2))
         assertEquals(2 to 3, ordered(2, 3))
         assertEquals(0 to 0, ordered(-1, -1))
+    }
+
+    @Test fun readOnlyFieldIsSelectableAndTogglesBackToEditableCleanly() {
+        val fields = Fields(RuntimeEnvironment.getApplication())
+        // Initial read-only field (flags = READONLY = 8).
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "Solo lectura"))))
+        val text = (fields.getChildAt(0) as FrameLayout).getChildAt(0) as EditText
+        assertNull(text.keyListener)
+        assertTrue(text.isTextSelectable)
+        assertFalse(text.showSoftInputOnFocus)
+        assertTrue(text.isFocusable)
+        assertTrue(text.isFocusableInTouchMode)
+        assertTrue(text.isLongClickable)
+
+        // Unrelated style changes while still read-only must keep the active selection intact.
+        text.setSelection(0, 4)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "Solo lectura", align = 1))))
+        assertNull(text.keyListener)
+        assertTrue(text.isTextSelectable)
+        assertEquals(0, text.selectionStart)
+        assertEquals(4, text.selectionEnd)
+
+        // Programmatic value updates still apply while read-only.
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "Nuevo valor", align = 1))))
+        assertEquals("Nuevo valor", text.text.toString())
+
+        // Leaving read-only restores editable input, movement, touch focus, click and long-click.
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 0, value = "Nuevo valor", align = 1))))
+        assertFalse(text.isTextSelectable)
+        assertNotNull(text.keyListener)
+        assertTrue(text.showSoftInputOnFocus)
+        assertTrue(text.movementMethod is android.text.method.ArrowKeyMovementMethod)
+        assertTrue(text.isFocusable)
+        assertTrue(text.isFocusableInTouchMode)
+        assertTrue(text.isClickable)
+        assertTrue(text.isLongClickable)
+        text.text.append(" ok")
+        assertEquals("Nuevo valor ok", text.text.toString())
+    }
+
+    @Test fun inertReadOnlyFieldStaysNonFocusable() {
+        val fields = Fields(RuntimeEnvironment.getApplication())
+        // state = PLACED (1) | INERT (2) = 3, flags = READONLY (8).
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 3, flags = 8, value = "covered"))))
+        val text = (fields.getChildAt(0) as FrameLayout).getChildAt(0) as EditText
+        assertTrue(text.isTextSelectable)
+        assertFalse(text.isFocusable)
+        assertFalse(text.isFocusableInTouchMode)
+        // Becoming interactive restores focusability.
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "covered"))))
+        assertTrue(text.isFocusable)
+        assertTrue(text.isFocusableInTouchMode)
+    }
+
+    @Config(shadows = [ScrollTouchTest.Host::class])
+    @Test fun keyboardZeroForHostedReadOnlyFieldPreservesFocusAndSelection() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.intent.putExtra("warm", "0")
+        val view = ExactView(activity, false) {}
+        val fields = Fields(activity).also { it.view = view }
+        val root = FrameLayout(activity)
+        root.addView(view, FrameLayout.LayoutParams(400, 400))
+        root.addView(fields, FrameLayout.LayoutParams(400, 400))
+        activity.setContentView(root)
+        view.fields = fields
+        view.keys = Keys(view)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "Solo lectura"))))
+        val text = fields.text(1)!!
+
+        // Simulate a long-press on an unfocused read-only field: Android focuses the field and selects a word,
+        // then exact2 responds with Request::Keyboard(state = 0, field = 1). That response must hide any
+        // keyboard without blurring the read-only field or clearing its selection.
+        val imm = activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+        val shadowImm = org.robolectric.Shadows.shadowOf(imm)
+        assertTrue(text.requestFocus())
+        imm.showSoftInput(text, 0)
+        assertTrue(shadowImm.isSoftInputVisible)
+        text.setSelection(0, 4)
+        view.keyboard(0, 1)
+        assertTrue("read-only field kept focus after keyboard(0, 1)", text.isFocused)
+        assertFalse("keyboard(0, 1) hid open IME", shadowImm.isSoftInputVisible)
+        assertEquals(0, text.selectionStart)
+        assertEquals(4, text.selectionEnd)
+
+        // Copy succeeds while cut and paste are refused and do not mutate a read-only field or bump edits.
+        val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+        assertTrue(text.onTextContextMenuItem(android.R.id.copy))
+        assertEquals("Solo", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("test", "OTHER"))
+        assertFalse(text.onTextContextMenuItem(android.R.id.cut))
+        assertFalse(text.onTextContextMenuItem(android.R.id.paste))
+        assertFalse(text.onTextContextMenuItem(android.R.id.pasteAsPlainText))
+        assertEquals("Solo lectura", text.text.toString())
+        assertEquals("OTHER", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+
+        // Blurring (state = 0, field = 0) moves focus off the hosted field.
+        view.keyboard(0, 0)
+        assertFalse("read-only field blurred after keyboard(0, 0)", text.isFocused)
+
+        // Programmatic focus of an unfocused read-only field (state = 0, field = 1) focuses it without keyboard.
+        imm.showSoftInput(view, 0)
+        assertTrue(shadowImm.isSoftInputVisible)
+        view.keyboard(0, 1)
+        assertTrue("read-only field focused by keyboard(0, 1)", text.isFocused)
+        assertFalse("programmatic focus of read-only field keeps IME hidden", shadowImm.isSoftInputVisible)
+
+        // Focused read-only field toggling back to editable preserves focus and selection.
+        text.setSelection(1, 5)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 0, value = "Solo lectura"))))
+        assertTrue("focus survives readonly -> editable transition", text.isFocused)
+        assertEquals(1, text.selectionStart)
+        assertEquals(5, text.selectionEnd)
+
+        // Already-selectable read-only field changing between password and plain with unchanged text keeps focus and selection.
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 10, value = "secret"))))
+        assertTrue(text.transformationMethod is android.text.method.PasswordTransformationMethod)
+        assertTrue(text.requestFocus())
+        text.setSelection(1, 5)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "secret"))))
+        assertFalse(text.transformationMethod is android.text.method.PasswordTransformationMethod)
+        assertTrue("focus survives read-only password -> plain", text.isFocused)
+        assertEquals(1, text.selectionStart)
+        assertEquals(5, text.selectionEnd)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 10, value = "secret"))))
+        assertTrue(text.transformationMethod is android.text.method.PasswordTransformationMethod)
+        assertTrue("focus survives read-only plain -> password", text.isFocused)
+        assertEquals(1, text.selectionStart)
+        assertEquals(5, text.selectionEnd)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "plain"))))
+        assertFalse(text.transformationMethod is android.text.method.PasswordTransformationMethod)
+
+        // Read-only field blocks accessibility ACTION_SET_TEXT and autofill mutation.
+        val info = android.view.accessibility.AccessibilityNodeInfo.obtain()
+        try {
+            text.onInitializeAccessibilityNodeInfo(info)
+            assertFalse("read-only field reports non-editable in accessibility", info.isEditable)
+            assertFalse("read-only field omits ACTION_SET_TEXT", info.actionList.contains(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT))
+        } finally {
+            info.recycle()
+        }
+        val args = android.os.Bundle().apply { putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "tampered") }
+        assertFalse(text.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, args))
+        assertEquals(android.view.View.AUTOFILL_TYPE_NONE, text.autofillType)
+        text.autofill(android.view.autofill.AutofillValue.forText("tampered"))
+        assertEquals("plain", text.text.toString())
+
+        // inputmode="none" (keyboard = 7) hides the IME even when focus is requested with keyboard = true.
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 0, value = "plain", keyboard = 7))))
+        imm.showSoftInput(text, 0)
+        assertTrue(shadowImm.isSoftInputVisible)
+        fields.focus(1, keyboard = true)
+        assertTrue(text.isFocused)
+        assertFalse("inputmode=none hides IME on focus", shadowImm.isSoftInputVisible)
+
+        // Unfocusable inert field still hides an open IME on keyboard = false and retries focus once interactive.
+        fields.blur(false)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 3, flags = 8, value = "plain"))))
+        imm.showSoftInput(view, 0)
+        assertTrue(shadowImm.isSoftInputVisible)
+        fields.focus(1, keyboard = false)
+        assertFalse("inert field could not take focus yet", text.isFocused)
+        assertFalse("failed requestFocus with keyboard=false still hid IME", shadowImm.isSoftInputVisible)
+        fields.told(statement(listOf(Told(1, 0f, 0f, 200f, 48f, 1, flags = 8, value = "plain"))))
+        assertTrue("pending focus succeeded once field became interactive", text.isFocused)
+
+        // When a WebView owns focus, keyboard(0, 1) keeps the WebView guard and does not focus the hosted field.
+        val web = object : android.webkit.WebView(activity) { override fun findFocus(): android.view.View = this }
+        val inner = android.view.View(activity).apply { isFocusable = true; isFocusableInTouchMode = true }
+        web.addView(inner, FrameLayout.LayoutParams(200, 200))
+        root.addView(web, FrameLayout.LayoutParams(200, 200))
+        assertTrue(inner.requestFocus())
+        assertTrue(view.rootView.findFocus() is android.webkit.WebView)
+        view.keyboard(0, 1)
+        assertFalse("WebView guard prevented hosted focus steal on keyboard(0, 1)", text.isFocused)
     }
 }

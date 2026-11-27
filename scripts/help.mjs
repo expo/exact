@@ -354,13 +354,15 @@ Ports    none. Runs to completion, or until Ctrl-C with --watch.`,
   },
   mac: {
     line: 'build the macOS app (--run launches it here)',
-    usage: 'bun exact.mjs mac [--run|--prebuild] [--json] [--release] [--bundle] [--sandbox] [--url <url>] [--optimize speed|size|balanced]',
+    usage: 'bun exact.mjs mac [--run|--prebuild] [--json] [--release] [--bundle] [--distribution [--unsigned]] [--sandbox] [--url <url>] [--optimize speed|size|balanced]',
     flags: [
       ['--run', 'assemble the .app and launch it when built, in the foreground (its log here) until it quits'],
-      jsonBuilt(', signing (an identity\'s SHA-1, or ad-hoc)', '; not with --run, --prebuild or --test'),
+      jsonBuilt(', signing (an identity\'s SHA-1, or ad-hoc), and requiresResigning: true on --distribution --unsigned', '; not with --run, --prebuild or --test'),
       PREBUILD,
       RELEASE,
       ['--bundle', 'assemble the .app bundle (the macOS default)'],
+      ['--distribution', 'prepare the Mac distribution bundle with production update trust'],
+      ['--unsigned', 'with --distribution, prepare an ad-hoc .app bundle for separate Developer ID signing; no --run'],
       ['--sandbox', 'sign the App Sandbox the Mac App Store build signs, and refuse what it refuses; the agent drives it, its stores in ~/Library/Containers/<id>'],
       ['--painted-benchmark', 'build the app’s <macos-crate>-painted bin with ink; benchmark carrier only (LLP 1149 S1.1)'],
       ['--url <url> · --no-live', 'connect the app to that dev server (web\'s URL) for live reload (else auto-connects a running dev loop on --run) · launch standalone without attaching'],
@@ -750,7 +752,21 @@ export function appleBuildRefusal(args, env = process.env, platform = process.pl
   // link.mjs `linksByPlan` reads any other word as no flag, and the build links every capability.
   if (args.includes('--link') && args[args.indexOf('--link') + 1] !== 'plan') return `--link takes plan, not ${args[args.indexOf('--link') + 1] ?? 'nothing'}`;
   if (unsigned && args.includes('--watchos')) return '--unsigned takes no --watchos: --watchos builds the simulator companion, and an --unsigned --device build embeds the watch app';
-  if (unsigned && !args.includes('--device')) return '--unsigned needs --device: it builds an ad-hoc signed device bundle';
+  if (unsigned && args.includes('--test')) return '--unsigned takes no --test';
+  if (unsigned && args.includes('--distribution') && (args.includes('--ios') || args.includes('--tvos')))
+    return '--distribution --unsigned is supported for macOS bundles only';
+  if (unsigned && !args.includes('--device')) {
+    if (!args.includes('--distribution') || args.includes('--ios') || args.includes('--tvos'))
+      return '--unsigned needs --device or a Mac --distribution bundle';
+    const incompatible = ['--run', '--appstore', '--ad-hoc', '--sandbox', '--development', '--archive',
+      '--host', '--embed', '--prebuild', '--url', '--painted-benchmark', '--extensions'].find(flag => args.includes(flag));
+    if (incompatible) return `Mac --distribution --unsigned takes no ${incompatible}`;
+    if (env.EXACT_DEV_PLAN) return 'Mac --distribution --unsigned takes no development plan';
+    if (env.EXACT_DEVELOPER_ID && env.EXACT_DEVELOPER_ID !== '-')
+      return 'Mac --distribution --unsigned takes no EXACT_DEVELOPER_ID (unset it or set EXACT_DEVELOPER_ID=-)';
+    if (env.EXACT_MAC_PROFILE) return 'Mac --distribution --unsigned takes no EXACT_MAC_PROFILE';
+    if (env.EXACT_PROFILE) return 'Mac --distribution --unsigned takes no EXACT_PROFILE';
+  }
   if (args.includes('--development') && !(archive && unsigned)) return '--development needs --archive and --unsigned: it packages the development build as an .ipa a service re-signs';
   if (args.includes('--development') && (args.includes('--release') || env.EXACT_UPDATE_TRUST === 'production')) return '--development packages the development build, so it takes neither --release nor EXACT_UPDATE_TRUST=production';
   if (unsigned && args.includes('--run')) return '--unsigned takes no --run: an ad-hoc signed device bundle cannot launch on a stock device; use a development profile and identity';

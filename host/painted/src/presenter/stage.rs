@@ -49,7 +49,6 @@ use tiny_skia::Transform;
 mod authored;
 mod detents;
 mod flights;
-use flights::bounds_spring;
 #[cfg(test)]
 pub(super) mod tests;
 mod touch;
@@ -220,6 +219,8 @@ struct Closing {
 /// A route crossing.
 struct Shift {
     forward: bool,
+    /// Whether the transition container's inline axis is right-to-left (shared-axis X).
+    rtl: bool,
     /// The route that leaves, drawn live or from its kept drawing once removed.
     outgoing: NodeKey,
     incoming: NodeKey,
@@ -333,8 +334,7 @@ pub(super) struct State {
     /// The routes given a block of the stage's.
     blocks: Vec<ViewId>,
     zooms: Vec<zoom::Source>,
-    /// The pairs a pop of the top route would fly, with the kernel epoch and
-    /// top route they were found at (`remember_pops`).
+    /// The pairs a pop of the top route flies, with the epoch and top route of `remember_pops`.
     pops: (u64, Option<NodeKey>, Vec<(NodeKey, NodeKey)>),
 }
 
@@ -791,7 +791,6 @@ impl<D: DataSource> Presenter<D> {
         };
         let preview = self.stage.preview.take();
         let from = preview.and_then(|p| p.pose_for(*old, size));
-        let seeked = (preview.and_then(|p| p.progress_for(*old))).map_or(0.0, zoom::emphasized);
         if still {
             return;
         }
@@ -807,8 +806,10 @@ impl<D: DataSource> Presenter<D> {
                 .and_then(|s| s.bar.clone())
                 .map(|tape| (tape, (0.0, 0.0, 0.0, 0.0))),
         };
+        let rtl = authored::shift_rtl(self.host.kernel(), stack, within);
         self.stage.shift = Some(Shift {
             forward,
+            rtl,
             outgoing: *old,
             incoming: *new,
             sheet,
@@ -835,7 +836,7 @@ impl<D: DataSource> Presenter<D> {
             through,
             left,
         });
-        self.fly_shift(forward, (*old, *new), (through, container), seeked);
+        self.fly_shift(forward, (*old, *new), (through, container), preview);
     }
 
     /// Whether anything on the stage moves on its own: frames are owed.
@@ -1065,17 +1066,13 @@ impl<D: DataSource> Presenter<D> {
         if let Some((outgoing, incoming)) = page_pair {
             let (out_pose, in_pose) = self.shift_poses(now, None);
             let forward = page_shift.is_some_and(|s| s.forward);
-            // A crossing kept the leaving route's bar; under a preview the
-            // bar is still the leaving route's, and the one beneath shows the
-            // bar it kept only where the leaving route has none.
+            // A crossing kept the leaving route's bar; under a preview the bar is still the leaving
+            // route's, and the one beneath shows the bar it kept where the leaving route has none.
+            let kept =
+                (self.stage.bar.clone()).and_then(|(r, t, f)| (r == incoming).then_some((t, f)));
             let (out_bar, in_bar) = match page_shift {
                 Some(s) => (s.bar.clone(), bar_top.clone()),
-                None => (
-                    bar_top.clone(),
-                    (self.stage.bar.clone())
-                        .filter(|(route, ..)| *route == incoming)
-                        .map(|(_, tape, frame)| (tape, frame)),
-                ),
+                None => (bar_top.clone(), kept),
             };
             let order = match forward {
                 true => [(outgoing, out_pose, out_bar), (incoming, in_pose, in_bar)],
@@ -1415,7 +1412,11 @@ impl<D: DataSource> Presenter<D> {
                 };
                 return (out_pose, in_pose);
             }
-            let way = if shift.forward { 1.0 } else { -1.0 };
+            let way = if shift.forward != shift.rtl {
+                1.0
+            } else {
+                -1.0
+            };
             // The fades go by the clock, the moves by the curve.
             let out_fade = (1.0 - linear / AXIS_FADE).clamp(0.0, 1.0);
             let in_fade = ((linear - AXIS_FADE) / (1.0 - AXIS_FADE)).clamp(0.0, 1.0);

@@ -953,6 +953,7 @@ impl Kernel {
         }
         let mut picture = None;
         let mut symbol = None;
+        let mut symbol_node = None;
         let mut text = String::new();
         let mut ink_node = None;
         fn walk(
@@ -960,6 +961,7 @@ impl Kernel {
             id: ViewId,
             picture: &mut Option<ViewId>,
             symbol: &mut Option<String>,
+            symbol_node: &mut Option<ViewId>,
             text: &mut String,
             ink_node: &mut Option<ViewId>,
         ) {
@@ -988,6 +990,7 @@ impl Kernel {
                             if let Some(role) = src.strip_prefix("symbol:") {
                                 if symbol.is_none() {
                                     *symbol = Some(role.to_string());
+                                    *symbol_node = Some(child_id);
                                 }
                                 if ink_node.is_none() {
                                     *ink_node = Some(child_id);
@@ -1014,7 +1017,15 @@ impl Kernel {
                             }
                         }
                     }
-                    _ => walk(kernel, child_id, picture, symbol, text, ink_node),
+                    _ => walk(
+                        kernel,
+                        child_id,
+                        picture,
+                        symbol,
+                        symbol_node,
+                        text,
+                        ink_node,
+                    ),
                 }
             }
         }
@@ -1023,6 +1034,7 @@ impl Kernel {
             box_node,
             &mut picture,
             &mut symbol,
+            &mut symbol_node,
             &mut text,
             &mut ink_node,
         );
@@ -1033,6 +1045,7 @@ impl Kernel {
             box_node,
             picture,
             symbol,
+            symbol_node,
             text,
             ink_node,
         })
@@ -1049,6 +1062,8 @@ pub struct HeaderBadge {
     pub picture: Option<ViewId>,
     /// First `symbol:` image descendant's role (without `symbol:`), if any.
     pub symbol: Option<String>,
+    /// The `symbol:` image node that supplied [`Self::symbol`], if any.
+    pub symbol_node: Option<ViewId>,
     /// First non-empty text descendant's collapsed text, if any.
     pub text: String,
     /// The text or symbol node whose `color` supplies fallback ink, if any.

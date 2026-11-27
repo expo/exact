@@ -30,6 +30,7 @@
       fileRefusal = binary.fileRefusal,
       uploadOf = binary.uploadOf;
     var idleRefusal = binary.idleRefusal,
+      streamOpenOf = binary.streamOpenOf,
       socketOwner = env.sockets.socketOwner,
       listenOwner = env.sockets.listenOwner;
     // The browser realm supplies the page's base at the fetch call. Native data sources
@@ -107,7 +108,7 @@
     // rejection is journaled, never dispatched, so a reporter whose requests fail sets off no further round.
     var REPORTS = 16,
       reporting = 0;
-    var NOT_PLAIN = ["exactStream", "exactLongPoll", "exactHeld", "exactUploadProgress", "exactBodyFrom",
+    var NOT_PLAIN = ["exactStream", "exactStreamOpen", "exactLongPoll", "exactHeld", "exactUploadProgress", "exactBodyFrom",
       "exactBodyTo", "exactPreload", "exactPrefetch"];
     // What a plain request reads of its options: each read once, into the copy the request is made from.
     var PLAIN = ["method", "headers", "body", "signal", "redirect", "cache", "exactTimeout", "exactIdleTimeout",
@@ -320,6 +321,9 @@
       // An upload whose stream gets its progress, then its reply (`exactUploadProgress`, LLP 1016.000 D10).
       var upload = uploadOf(init, stream, method, url);
       if (typeof upload === "string") return optionRefused(new TypeError(upload));
+      // An HTTP stream's opt-in `open` head event (`exactStreamOpen`, LLP 1016.000 D12).
+      var streamOpen = streamOpenOf(init, stream, url, listen, own, child);
+      if (typeof streamOpen === "string") return optionRefused(new TypeError(streamOpen));
       // A deadline for the whole exchange (headers and body), in milliseconds: the host cancels the request
       // when it passes and the fetch rejects with a FetchError of kind "Timeout". A stream has none; an upload may.
       var timeout = init ? init.exactTimeout : undefined,
@@ -418,6 +422,7 @@
         body_base64: bytes && !bytesDoor ? toBase64(bytes) : undefined,
         max_response_bytes: ceiling,
         stream: stream ? true : undefined,
+        stream_open: streamOpen ? true : undefined,
         socket: socket ? true : undefined,
         bytes: stream && !socket && !poll && !upload ? true : undefined,
         upload_progress: upload ? true : undefined,
@@ -542,7 +547,11 @@
         }
         return request(
           String(address),
-          { exactStream: o.exactStream, exactIndependentHttp: { maxResponseBytes: 1048576 } },
+          {
+            exactStream: o.exactStream,
+            exactStreamOpen: o.exactStreamOpen,
+            exactIndependentHttp: { maxResponseBytes: 1048576 },
+          },
           listen
         );
       };

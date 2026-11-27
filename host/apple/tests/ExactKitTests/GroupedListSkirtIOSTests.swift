@@ -48,5 +48,21 @@ final class GroupedListSkirtIOSTests: GroupedListFixture {
         p.apply(wireBatch([["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 600.0]]))
         XCTAssertTrue(skirts().isEmpty)
     }
+
+    /// An authored sidebar (LLP 1127 D17) goes on with UIKit's sidebar ground, its collection view's, not the sheet's,
+    /// which is the plain list's for the hosts with no sidebar list.
+    func testASidebarGoesOnWithUIKitsSidebarGround() throws {
+        let p = presenter(height: 840) { self.model("sidebar") }
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["background_color": [[255, 255, 255, 255], [0, 0, 0, 255]]]]]))
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        p.pageMargins = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 0)
+        p.apply(wireBatch([["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 840.0]]))
+        let skirt = try XCTUnwrap(p.viewport.subviews.first { $0 !== p.root && !$0.isHidden && $0.frame.maxY == 874 })
+        let ground = try XCTUnwrap(try list(p).collection.backgroundColor)
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            XCTAssertEqual(try XCTUnwrap(skirt.backgroundColor).resolvedColor(with: traits), ground.resolvedColor(with: traits), "\(style.rawValue)")
+        }
+    }
 }
 #endif

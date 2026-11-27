@@ -68,7 +68,7 @@ impl Em<'_> {
         let mut inner = scope.clone();
         inner.unsettled = true;
         inner.evaluation = None;
-        inner.capture = !self.site_attrs && !self.dev_reload;
+        inner.capture = true;
         let mut templates = super::templates::Templates::computations(
             self.mount_templates.scope_depth + 1,
             "$budget",
@@ -88,15 +88,11 @@ impl Em<'_> {
                 Some((name, _)) => name.clone(),
                 None => format!("d_{i}"),
             };
-            let getter = if inner.capture {
-                // Resolve captures when the value is read. Its resource or another
-                // getter may be declared after this one in the same scope.
-                let body = f.strip_prefix("($budget)=>").expect("at-read function");
-                let expr = templates.expression(body.into());
-                format!("$budget=>{expr}")
-            } else {
-                f
-            };
+            // Resolve captures when the value is read. Its resource or another
+            // getter may be declared after this one in the same scope.
+            let body = f.strip_prefix("($budget)=>").expect("at-read function");
+            let expr = templates.expression(body.into());
+            let getter = format!("$budget=>{expr}");
             write!(out, "const {name}={read}({getter});").unwrap();
         }
         let (declarations, getters) = templates.render(out, scope.capture, "$read");
@@ -109,27 +105,14 @@ impl Em<'_> {
         match row.kind {
             RegionKind::When | RegionKind::Match => {
                 let subject = self.region_subject(r, parent, scope)?;
-                let depth = scope.frames.len();
-                let capture = !self.site_attrs && !self.dev_reload;
                 let arm_scope_depth = self.mount_templates.scope_depth + 1;
-                let bound = (row.kind == RegionKind::Match).then(|| {
-                    if capture {
-                        "b".to_string()
-                    } else {
-                        format!("b{depth}")
-                    }
-                });
-                let bound_param = (row.kind == RegionKind::Match).then(|| {
-                    if capture {
-                        code::binder_decl(arm_scope_depth, "b", "")
-                    } else {
-                        format!("b{depth}")
-                    }
-                });
+                let bound = (row.kind == RegionKind::Match).then(|| "b".to_string());
+                let bound_param = (row.kind == RegionKind::Match)
+                    .then(|| code::binder_decl(arm_scope_depth, "b", ""));
                 let mut inner = scope.clone();
                 inner.frames.push(Frame {
                     bound: bound.clone(),
-                    depth: if capture { arm_scope_depth } else { 0 },
+                    depth: arm_scope_depth,
                     ..Frame::default()
                 });
                 let mut bodies = Vec::new();
@@ -143,7 +126,7 @@ impl Em<'_> {
                         s.frames.push(Frame::default());
                         s
                     };
-                    sc.capture = capture;
+                    sc.capture = true;
                     // The arm's own slots, started from their initializers
                     // each time it shows, dropped when it hides (LLP 1017 P4c).
                     // A tab panel's one arm (LLP 1075.003 §9.14): the dev
@@ -159,9 +142,9 @@ impl Em<'_> {
                     let decl = self.owned(arm, &format!("$a{arm}"), &mut sc, carry.as_deref())?;
                     self.out.push_str(&decl);
                     let outer_names = self.next_local_element;
-                    self.next_local_element = capture.then_some(0);
+                    self.next_local_element = Some(0);
                     let binds = !path.is_empty() || !decl.is_empty() || (k == 0 && bound.is_some());
-                    if binds && sc.capture {
+                    if binds {
                         // This arm's bindings (getters, row state, match payload, path) are lexical
                         // operands so mounts shared outside the arm receive them from the caller.
                         self.mount_templates.scope_depth += 1;
@@ -169,9 +152,7 @@ impl Em<'_> {
                         self.mount_templates.scope_depth -= 1;
                         children?;
                     } else {
-                        self.template_scope(binds, |em| {
-                            em.children(em.sites.of_arm(arm), "p", &sc)
-                        })?;
+                        self.children(self.sites.of_arm(arm), "p", &sc)?;
                     }
                     self.next_local_element = outer_names;
                     let built = std::mem::replace(&mut self.out, saved);
@@ -308,6 +289,7 @@ impl Em<'_> {
             if let Some(panel) = carry {
                 let quoted = serde_json::to_string(plan.str(slot.name)).unwrap();
                 let declared = type_json(plan, slot.ty);
+                let k = scope.operand(k.to_string());
                 let _ = write!(
                     decl,
                     "{name}[{k}]=$devSig({quoted}+\"@\"+{panel},{init},{ty},{declared});"
@@ -380,24 +362,18 @@ impl Em<'_> {
         let row = &plan.regions[r as usize];
         let subject = self.region_subject(r, parent, scope)?;
         let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
-        let depth = scope.frames.len();
-        let capture = !self.site_attrs && !self.dev_reload;
         let row_depth = self.mount_templates.scope_depth + 1;
-        let (item, index) = if capture {
-            (
-                code::binder_decl(row_depth, "i", ""),
-                code::binder_decl(row_depth, "x", ""),
-            )
-        } else {
-            (format!("i{depth}"), format!("x{depth}"))
-        };
+        let (item, index) = (
+            code::binder_decl(row_depth, "i", ""),
+            code::binder_decl(row_depth, "x", ""),
+        );
         let mut inner = scope.clone();
-        inner.capture = capture;
+        inner.capture = true;
         inner.frames.push(Frame {
-            item: Some(if capture { "i".into() } else { item.clone() }),
-            index: Some(if capture { "x".into() } else { index.clone() }),
+            item: Some("i".into()),
+            index: Some("x".into()),
             bound: None,
-            depth: if capture { row_depth } else { 0 },
+            depth: row_depth,
         });
         let before = self.uses.metered;
         let key = code::function(
@@ -411,13 +387,9 @@ impl Em<'_> {
             &mut self.uses,
         )
         .map_err(|x| format!("region {r} key: {x}"))?;
-        let pure = if capture {
-            let expanded = self.mount_templates.expand_inline(&key);
-            let idx = row_depth - self.mount_templates.declaration_depth() - 1;
-            crate::reads::pure_key(&expanded, &format!("i{idx}"), &format!("x{idx}"))
-        } else {
-            crate::reads::pure_key(&key, &item, &index)
-        };
+        let expanded = self.mount_templates.expand_inline(&key);
+        let idx = row_depth - self.mount_templates.declaration_depth() - 1;
+        let pure = crate::reads::pure_key(&expanded, &format!("i{idx}"), &format!("x{idx}"));
         let key = code::called_expression(code::evaluated(
             key,
             &self.site_evaluation(&inner, region_site(plan, r), "each key".into(), true),
@@ -439,33 +411,23 @@ impl Em<'_> {
         let saved = std::mem::take(&mut self.out);
         let outer_names = self.next_local_element;
         if list.is_none() {
-            self.next_local_element = (!self.site_attrs && !self.dev_reload).then_some(0);
+            self.next_local_element = Some(0);
         }
         self.out.push_str(&path);
         self.out.push_str(&rows_decl);
-        if inner.capture {
-            self.mount_templates.scope_depth += 1;
-            let children = self.children(self.sites.of_arm(arms[0]), "p", &inner);
-            self.mount_templates.scope_depth -= 1;
-            children?;
-        } else {
-            self.template_scope(true, |em| {
-                em.children(em.sites.of_arm(arms[0]), "p", &inner)
-            })?;
-        }
+        self.mount_templates.scope_depth += 1;
+        let children = self.children(self.sites.of_arm(arms[0]), "p", &inner);
+        self.mount_templates.scope_depth -= 1;
+        children?;
         self.next_local_element = outer_names;
         let built = std::mem::replace(&mut self.out, saved);
         match list {
             Some(opts) => {
                 let inputs = self.row_inputs(r, scope)?;
-                let text = if inner.capture {
-                    self.mount_templates.scope_depth += 1;
-                    let text = self.logical_children(self.sites.of_arm(arms[0]), &inner);
-                    self.mount_templates.scope_depth -= 1;
-                    text?
-                } else {
-                    self.logical_children(self.sites.of_arm(arms[0]), &inner)?
-                };
+                self.mount_templates.scope_depth += 1;
+                let text = self.logical_children(self.sites.of_arm(arms[0]), &inner);
+                self.mount_templates.scope_depth -= 1;
+                let text = text?;
                 let _ = write!(
                     self.out,
                     "$vl({parent},{subject},({item},{index})=>{key},(p,{item},{index})=>{{{}}},{{...{opts},{inputs},text:({item},{index})=>{{{}}}}});",
@@ -478,18 +440,19 @@ impl Em<'_> {
                 let pure = if pure { ",1" } else { "" };
                 // A development build names the region, for inspect mode's
                 // instance paths (rt.js `Eaches`, LLP 1122 T2b).
-                let pure = match (self.dev_reload, pure) {
-                    (true, "") => format!(",0,{r}"),
-                    (true, p) => format!("{p},{r}"),
-                    (false, p) => p.to_string(),
+                let pure = if self.dev_reload {
+                    let region = scope.operand(r.to_string());
+                    match pure {
+                        "" => format!(",0,{region}"),
+                        p => format!("{p},{region}"),
+                    }
+                } else {
+                    pure.to_string()
                 };
                 let params = format!("p,{item},{index}{row_key}");
-                let row = if inner.capture {
+                let row =
                     self.mount_templates
-                        .mount(&params, built, None, Some(region_site(plan, r)))
-                } else {
-                    format!("({params})=>{{{}}}", crate::hoist::mark(&built))
-                };
+                        .mount(&params, built, None, Some(region_site(plan, r)));
                 let _ = write!(
                     self.out,
                     "{each}({parent},{subject},({item},{index})=>{key},{row}{pure});"

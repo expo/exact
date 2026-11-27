@@ -12,6 +12,7 @@ component App
   resource idle_zero = idle_zero() as shape string
   resource idle_large = idle_large() as shape string
   resource idle_upload = idle_upload() as shape string
+  resource open_socket = open_socket() as shape string
   resource valid = valid() as shape string
   resource stored = stored() as shape string
   view
@@ -26,6 +27,7 @@ const sources: Sources = {
   idle_zero: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactIdleTimeout: 0 }),
   idle_large: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactIdleTimeout: 3600001 }),
   idle_upload: async () => await fetch('https://example.test', { method: 'POST', body: 'x', exactUploadProgress: true, exactStream: () => 'live', exactIdleTimeout: 1000 }),
+  open_socket: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactStreamOpen: true }),
   valid: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactIdleTimeout: 1000 }),
   stored: async (_, store, storage) => { await storage.sqlite.open('app:/data/notes.db'); return 'stored'; },
 };
@@ -47,6 +49,7 @@ fn bake_warns_once_per_resource_for_refused_stream_options_and_launch_still_refu
         ("idle_zero", "exactIdleTimeout must be an integer"),
         ("idle_large", "exactIdleTimeout must be an integer"),
         ("idle_upload", "exactIdleTimeout"),
+        ("open_socket", "exactStreamOpen"),
     ];
     assert_eq!(baked.warnings.len(), rejected.len(), "{:?}", baked.warnings);
     for (name, why) in rejected {
@@ -97,6 +100,7 @@ fn bake_warns_once_per_resource_for_refused_stream_options_and_launch_still_refu
         "idle_zero",
         "idle_large",
         "idle_upload",
+        "open_socket",
         "valid",
         "stored",
     ] {
@@ -125,7 +129,8 @@ fn bake_warns_once_per_resource_for_refused_stream_options_and_launch_still_refu
             .replace("exactTimeout: 1000", "exactIdleTimeout: 1000")
             .replace("exactIdleTimeout: 0", "exactIdleTimeout: 1000")
             .replace("exactIdleTimeout: 3600001", "exactIdleTimeout: 1000")
-            .replace("exactUploadProgress: true, ", ""),
+            .replace("exactUploadProgress: true, ", "")
+            .replace("exactStreamOpen: true", "exactStreamOpen: false"),
     );
     assert!(f.bake().warnings.is_empty());
 }

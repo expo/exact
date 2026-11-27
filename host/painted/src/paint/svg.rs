@@ -108,14 +108,74 @@ fn parsed_symbol(d: &str) -> std::rc::Rc<SymbolGeometry> {
     })
 }
 
+#[cfg(test)]
+pub(crate) fn fitted(view_box: &str, rect: Rect4) -> Transform {
+    fitted_in(view_box, rect, false)
+}
+
 /// The transform that draws a viewBox's units in `rect`, its aspect kept
-/// and centred (SVG's `xMidYMid meet`).
-pub(crate) fn fitted(view_box: &str, (x, y, w, h): Rect4) -> Transform {
+/// and centred (SVG's `xMidYMid meet`), reflected horizontally inside the
+/// viewBox when `mirror` is true.
+fn fitted_in(view_box: &str, (x, y, w, h): Rect4, mirror: bool) -> Transform {
     let [bx, by, bw, bh] = self::view_box(view_box);
     let scale = (w / bw).min(h / bh);
-    Transform::from_translate(x + (w - bw * scale) / 2.0, y + (h - bh * scale) / 2.0)
+    let fit = Transform::from_translate(x + (w - bw * scale) / 2.0, y + (h - bh * scale) / 2.0)
         .pre_scale(scale, scale)
-        .pre_translate(-bx, -by)
+        .pre_translate(-bx, -by);
+    if mirror {
+        fit.pre_translate(2.0 * bx + bw, 0.0).pre_scale(-1.0, 1.0)
+    } else {
+        fit
+    }
+}
+
+/// Paint a symbol role (or icon token / `sf/` Apple name) into `backend` inside
+/// `rect` in `set`'s shape at `weight`, mirroring horizontally when the
+/// resolved glyph declares `mirror` and `direction` is RTL.
+pub(crate) fn paint_symbol(
+    backend: &mut dyn super::Backend,
+    role: &str,
+    rect: Rect4,
+    colour: [u8; 4],
+    set: exact_kernel::SymbolSet,
+    weight: u16,
+    direction: exact_kernel::Direction,
+) {
+    let Some(symbol) = exact_kernel::symbol_path_in(role, set) else {
+        return;
+    };
+    let glyph = parsed_symbol(symbol.d);
+    let weight = f32::from(weight).clamp(100.0, 900.0);
+    let mirror = symbol.mirror && direction == exact_kernel::Direction::Rtl;
+    let fit = fitted_in(symbol.view_box, rect, mirror);
+    let bw = self::view_box(symbol.view_box)[2];
+    let stroke = (1.1 + (weight - 100.0) / 400.0) * bw / 24.0;
+    let group = glyph.paths.len() > 1 && colour[3] < 255;
+    let colour = if group {
+        backend.push_opacity(f32::from(colour[3]) / 255.0);
+        [colour[0], colour[1], colour[2], 255]
+    } else {
+        colour
+    };
+    for path in &glyph.paths {
+        let paint = SvgPaint {
+            path,
+            fill: symbol.filled.then_some(Ink::Solid(colour)),
+            even_odd: symbol.even_odd,
+            stroke: (!symbol.filled).then_some(Ink::Solid(colour)),
+            order: [0, 1, 2],
+            width: stroke,
+            cap: 1,
+            join: 1,
+            miter: 4.0,
+            dash: Vec::new(),
+            phase: 0.0,
+        };
+        backend.svg_path(&paint, fit);
+    }
+    if group {
+        backend.pop_opacity();
+    }
 }
 
 /// A viewBox's `min-x min-y width height`; a role's 24-unit box when it
@@ -182,9 +242,10 @@ fn clipped_glyph(
     // Subdivision below the precision of the glyph's coordinates adds no detail.
     let tolerance = tolerance.max(size.width.max(size.height) * f64::from(f32::EPSILON));
     if let Some(width) = stroke {
+        let scale = fit.sx.hypot(fit.ky);
         path = kurbo::stroke(
             &path,
-            &Stroke::new(f64::from(width * fit.sx)),
+            &Stroke::new(f64::from(width * scale)),
             &StrokeOpts::default(),
             tolerance,
         );
@@ -244,9 +305,9 @@ impl Painter {
             return;
         };
         let colour = ink.unwrap_or_else(|| rgba(node.text_color().resolve(self.dark)));
-        let face = node.computed_style(exact_kernel::StyleMask::of(
-            exact_kernel::StyleId::FontWeight,
-        ));
+        let mut mask = exact_kernel::StyleMask::of(exact_kernel::StyleId::FontWeight);
+        mask.set(exact_kernel::StyleId::Direction);
+        let face = node.computed_style(mask);
         self.draw_glyph(path, &face, rect, colour, ts, Some(edge));
     }
 
@@ -291,7 +352,8 @@ impl Painter {
     ) {
         let glyph = parsed_symbol(symbol.d);
         let weight = f32::from(style.font_weight).clamp(100.0, 900.0);
-        let fit = fitted(symbol.view_box, rect);
+        let mirror = symbol.mirror && style.direction == exact_kernel::Direction::Rtl;
+        let fit = fitted_in(symbol.view_box, rect, mirror);
         let bw = self::view_box(symbol.view_box)[2];
         // The stroke is in the role's 24 units whatever the box.
         let stroke = (1.1 + (weight - 100.0) / 400.0) * bw / 24.0;

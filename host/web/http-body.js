@@ -349,14 +349,14 @@ export async function readLongPoll(op, init, limit, message, controller, admits,
       } else {
         const bytes = await boundedHttpBody(response, limit);
         const headers = [...response.headers].map(([k, v]) => `${k}: ${v}`).join('\n');
-        if (status < 200 || status > 299) { replied(); return { kind: 0, status, headers, body: bytes }; }
+        if (status < 200 || status > 299) { replied(); return { kind: 0, status, headers, headersObj: response.headers, body: bytes }; }
         failures = 0;
         const text = new TextDecoder().decode(bytes);
         if (/^[ \t\n\r]*$/.test(text)) { noEvent(); wait = floor(); }
         else {
           const next = cursorOf(text);
           if (next instanceof Error) { replied(); return failed(2, next.message); }
-          if (next === undefined) { replied(); return { kind: 0, status, headers, body: bytes }; }
+          if (next === undefined) { replied(); return { kind: 0, status, headers, headersObj: response.headers, body: bytes }; }
           if (!sameCursorEvent && asked === next) { noEvent(); wait = floor(); }
           else {
             if (controller.signal.aborted) return aborted();
@@ -536,6 +536,9 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
   if (op.idleTimeoutMs !== undefined && (!op.stream || op.longPoll || op.upload || (/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^(wss?|https?):/i.test(url))))
     return failed(2, 'only a WebSocket, event or byte stream takes an idle timeout');
   if (op.idleTimeoutMs !== undefined && (!Number.isInteger(op.idleTimeoutMs) || op.idleTimeoutMs < 1 || op.idleTimeoutMs > 3600000)) return failed(2, 'an idle timeout must be 1 to 3600000 ms');
+  // `exactStreamOpen` (LLP 1016.000 D12): only an HTTP(S) event or byte stream takes it.
+  if (op.streamOpen && (!op.stream || op.longPoll || op.upload || socket || (/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^https?:/i.test(url))))
+    return failed(2, 'exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen');
   if (invalid) return failed(2, invalid);
   const grant = native || asset ? null : admittingGrant(effective, url, socket ? 'websocket' : 'fetch');
   const self = globalThis.__exactFetchSelf !== false && isSelfGrant(effective, grant);
@@ -695,6 +698,13 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     // anything else is its one answer.
     // A timeout's record wins over what the abort it made produced.
     const read = async (reader) => {
+      if (op.streamOpen) {
+        message({ event: 'open', id: '', data: '', coalesced: 0, head: true, status: response.status, headers: response.headers, received: performance.now() });
+        if (controller.signal.aborted) {
+          await response.body?.cancel().catch(() => {});
+          return quiet?.passed ? quietEnd() : failed(4, 'request aborted');
+        }
+      }
       const o = await reader(response, op.maxResponseBytes ?? 1024 * 1024, message, controller, quiet);
       return quiet?.passed ? quietEnd() : o;
     };
@@ -705,7 +715,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     const headerText = [...response.headers].map(([k, v]) => `${k}: ${v}`).join('\n');
     // Written: its size first, as a pseudo-header (host.rs `outcome_from`); any other reply is read as usual, at most 1 MiB.
     if (target && response.ok) return { kind: 0, status: response.status, headers: `:exact-body-to: ${await target.put(response, op.maxResponseBytes ?? 1024 * 1024 * 1024)}\n${headerText}`, body: new Uint8Array() };
-    const result = { kind: 0, status: response.status, headers: headerText, body: await boundedHttpBody(response, target ? Math.min(op.maxResponseBytes ?? 1024 * 1024, 1024 * 1024) : op.maxResponseBytes, quiet?.heard) };
+    const result = { kind: 0, status: response.status, headers: headerText, headersObj: response.headers, body: await boundedHttpBody(response, target ? Math.min(op.maxResponseBytes ?? 1024 * 1024, 1024 * 1024) : op.maxResponseBytes, quiet?.heard) };
     if (fixture) {
       if (expired()) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
       if (signal.aborted) return failed(4, 'request aborted');
@@ -731,7 +741,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
 // is the asking commit's (LLP 1133.036 D6); a request without one is
 // checked as a non-app one is, never taken for the app's.
 export function streamed(req, grantSet, message, controller, bodyFile, protocol) {
-  return request({ method: req.method ?? 'GET', url: req.url, headers: req.headers ?? [], credentials: req.credentials, body: '', bodyBytes: req.raw?.length ? Uint8Array.from(req.raw) : undefined, bodyFrom: req.bodyFrom, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, redirect: req.redirect, longPoll: req.longPoll, upload: req.upload, timeoutMs: req.timeoutMs, idleTimeoutMs: req.idleTimeoutMs, protocols: req.protocols, stream: true, maxResponseBytes: req.maxResponseBytes, scope: req.scope, origin: req.origin ?? UNATTRIBUTED },
+  return request({ method: req.method ?? 'GET', url: req.url, headers: req.headers ?? [], credentials: req.credentials, body: '', bodyBytes: req.raw?.length ? Uint8Array.from(req.raw) : undefined, bodyFrom: req.bodyFrom, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, redirect: req.redirect, longPoll: req.longPoll, upload: req.upload, timeoutMs: req.timeoutMs, idleTimeoutMs: req.idleTimeoutMs, protocols: req.protocols, stream: true, streamOpen: req.streamOpen, maxResponseBytes: req.maxResponseBytes, scope: req.scope, origin: req.origin ?? UNATTRIBUTED },
     { grantSet, controllers: new Set(), controller, message, bodyFile, protocol, localAssetURL: url => new URL(url, location.href).href,
       loadPageNative: () => Promise.reject(new Error('a stream is not a page-module request')) })
     .then(outcome => controller.dropped ? { kind: 1, status: 0, headers: '', body: new TextEncoder().encode('stream dropped by test') } : outcome)

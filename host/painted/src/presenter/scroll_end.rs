@@ -10,6 +10,9 @@ pub(super) enum Completion {
     Instant,
     Reader,
     Edge(ReorderToken),
+    /// A drag held near a scroller's edge (LLP 1094.000 D15): over when the
+    /// drag no longer scrolls it.
+    DragEdge,
     Collection,
     /// An element's smooth reveal (`glide.rs`): over when it lands.
     Glide,
@@ -128,7 +131,8 @@ impl<D: DataSource> Presenter<D> {
             // Corrections made while an owned edge scroll is active belong
             // to that owner, including the sample which reaches its boundary.
             if completion == Completion::Collection
-                && matches!(previous.kind, Completion::Edge(token) if self.scroll_edge_owned(token))
+                && (matches!(previous.kind, Completion::Edge(token) if self.scroll_edge_owned(token))
+                    || (previous.kind == Completion::DragEdge && self.drag_edge().is_some()))
             {
                 completion = previous.kind;
             }
@@ -142,6 +146,7 @@ impl<D: DataSource> Presenter<D> {
                         || matches!(
                             completion,
                             Completion::Edge(_)
+                                | Completion::DragEdge
                                 | Completion::Collection
                                 | Completion::Glide
                                 | Completion::Wheel
@@ -163,6 +168,7 @@ impl<D: DataSource> Presenter<D> {
             Completion::Instant => self.host.now(),
             Completion::Reader => self.host.now() + 100.,
             Completion::Edge(_)
+            | Completion::DragEdge
             | Completion::Collection
             | Completion::Glide
             | Completion::Wheel => f64::INFINITY,
@@ -363,6 +369,7 @@ impl<D: DataSource> Presenter<D> {
     fn scroll_end_finished(&self, view: ViewId, pending: &Pending) -> bool {
         match pending.kind {
             Completion::Edge(token) => !self.scroll_edge_active(view, token),
+            Completion::DragEdge => self.drag_edge().is_none_or(|e| e.0 != view),
             Completion::Collection => false,
             Completion::Reader if self.scroll_end.held.contains_key(&view) => false,
             Completion::Glide => {

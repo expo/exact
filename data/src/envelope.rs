@@ -58,6 +58,10 @@ pub fn encode_optional(
             let why = request.long_poll_refusal().unwrap_or_default();
             body["error"] = error_json(&unavailable(why));
         }
+        Ok(Some(Answer::Later(request))) if request.stream_open_refusal().is_some() => {
+            let why = request.stream_open_refusal().unwrap_or_default();
+            body["error"] = error_json(&unavailable(why));
+        }
         // A listener's connections are handles a worker's turn cannot hold,
         // as a socket's are (LLP 1133.005); the envelope carries no listener.
         Ok(Some(Answer::Later(request)))
@@ -243,6 +247,7 @@ fn request_json(request: &Request) -> Json {
         "headers": request.headers,
         "body": base64(&request.body),
         "stream": request.stream,
+        "stream_open": request.stream_open.then_some(true),
         "protocols": request.protocols,
         "upload_progress": request.upload_progress.then_some(true),
         "long_poll": request.long_poll.as_ref().map(|p| json!({
@@ -309,6 +314,11 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         headers,
         body: json["body"].as_str().and_then(unbase64).unwrap_or_default(),
         stream: json["stream"].as_bool().unwrap_or(false),
+        stream_open: match &json["stream_open"] {
+            Json::Null => false,
+            Json::Bool(b) => *b,
+            _ => return Err(unavailable("exactStreamOpen is true or false")),
+        },
         // A worker's stream only listens: its handle is the main thread's
         // (LLP 1016.000 D7, worker-placed streams). Nor does it read a byte
         // stream: a body that is not events is its one answer.
@@ -396,6 +406,7 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
     match request
         .long_poll_refusal()
         .or(request.upload_progress_refusal())
+        .or(request.stream_open_refusal())
     {
         Some(why) => Err(unavailable(format!("turn reply: {why}"))),
         None => Ok(request),
@@ -669,6 +680,28 @@ mod tests {
             Answer::Later(r) => assert_eq!(r.long_poll, request.long_poll),
             _ => panic!("a yield"),
         }
+    }
+
+    #[test]
+    fn a_worker_s_stream_open_round_trips_and_invalid_ones_are_refused() {
+        let request = Request {
+            stream: true,
+            ..Request::get("https://x.test/events")
+                .independent_http(4096)
+                .stream_open()
+        };
+        let outcome = encode(Ok(Answer::Later(request)), &mut Store::default(), vec![]);
+        match apply(outcome, &mut Store::default(), &mut Vec::new()).unwrap() {
+            Answer::Later(r) => assert!(r.stream && r.stream_open, "{r:?}"),
+            _ => panic!("a yield"),
+        }
+        let invalid = Request::get("https://x.test/events").stream_open();
+        let outcome = encode(Ok(Answer::Later(invalid)), &mut Store::default(), vec![]);
+        let refused = apply(outcome, &mut Store::default(), &mut Vec::new()).unwrap_err();
+        assert!(
+            format!("{refused:?}").contains("exactStreamOpen"),
+            "{refused:?}"
+        );
     }
 
     #[test]

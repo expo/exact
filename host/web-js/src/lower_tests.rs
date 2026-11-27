@@ -301,6 +301,32 @@ fn a_development_build_lowers_and_counts_the_key() {
     assert!(!js.contains("const p1_"), "{js}");
 }
 
+/// Repeated component mounts under `--sites` share their lowered `Pc` helper
+/// and pass each instance's plan site to `pf`.
+#[test]
+fn repeated_development_mounts_share_lowered_styles_with_relative_sites() {
+    let source = r##"component App
+  state a = "a"
+  state b = "b"
+  view
+    column
+      Badge(mode=a)
+      Badge(mode=b)
+component Badge
+  props
+    mode: string
+  view
+    text "badge-label" color=(mode == "a" ? "#000000" : "#007AFF")
+"##;
+    let plan = contract::compile(source).unwrap();
+    let js = crate::emit::emit(&plan, true, true).unwrap().js;
+    assert_eq!(js.matches("\"badge-label\"").count(), 1, "{js}");
+    assert_eq!(js.matches("Pc(").count(), 1, "{js}");
+    assert!(js.contains("pf($site,"), "{js}");
+    assert!(js.contains("\"data-site\":$site"), "{js}");
+    assert!(!js.contains("pf(v"), "{js}");
+}
+
 /// Round 1 B1: a tinted image's template rows (symbols.js `template`) are
 /// glue-written there; a dynamic source makes the tint a binding too.
 #[test]

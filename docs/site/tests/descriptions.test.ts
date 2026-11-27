@@ -93,6 +93,9 @@ test('the Markdown checker accepts a setext H2 and reports invalid heading outli
     ['/feedback-open', '### After feedback', header => header.replace('<AgentInstructions>\n\n', '<AgentInstructions>\nProse follows the tag.\n\n')],
     ['/feedback-close', '### After feedback', header => header.replace('\n\n</AgentInstructions>', '\n</AgentInstructions>')],
     ['/feedback-prose', '### After feedback', header => header.replace('</AgentInstructions>\n\n', '</AgentInstructions>\nProse follows the tag.\n\n')],
+    ['/feedback-gap', '### After feedback', header => header.replace('# Guide\n\n', '# Guide\n\n\n')],
+    ['/feedback-after-prose', '### After feedback', header => header.replace('# Guide\n\n', '# Guide\n\nProse comes before the tag.\n\n')],
+    ['/feedback-setext', '### After feedback', header => header.replace('# Guide\n', 'Guide\n=====\n')],
     ['/empty', '##\n\n### After an empty H2'],
   ];
   write('content/pages.json', JSON.stringify(pages.map(([path]) => ({ path, title: 'Guide', description }))));
@@ -129,7 +132,7 @@ description: "${description}"
   });
   expect(check.exitCode).toBe(1);
   expect(check.stderr.toString().trimEnd().split('\n')).toEqual([
-    'markdown-check: 9 problems',
+    'markdown-check: 15 problems',
     '  /list.md: a level 4 heading below a level 2 heading: #### In a list',
     '  /callout.md: a level 4 heading below a level 2 heading: #### In a callout',
     '  /feedback.md: a level 3 heading below a level 1 heading: ### After malformed feedback',
@@ -137,6 +140,12 @@ description: "${description}"
     '  /feedback-open.md: a level 3 heading below a level 1 heading: ### After feedback',
     '  /feedback-close.md: a level 3 heading below a level 1 heading: ### After feedback',
     '  /feedback-prose.md: a level 3 heading below a level 1 heading: ### After feedback',
+    '  /feedback-gap.md: a level 3 heading below a level 1 heading: ### After feedback',
+    '  /feedback-gap.md: no policy-aware feedback block naming this page below the H1',
+    '  /feedback-after-prose.md: a level 3 heading below a level 1 heading: ### After feedback',
+    '  /feedback-after-prose.md: no policy-aware feedback block naming this page below the H1',
+    '  /feedback-setext.md: a level 3 heading below a level 1 heading: ### After feedback',
+    '  /feedback-setext.md: no policy-aware feedback block naming this page below the H1',
     '  /empty.md: an empty heading: ##',
     '  /empty.md: a level 3 heading below a level 1 heading: ### After an empty H2',
   ]);

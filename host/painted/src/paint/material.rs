@@ -711,6 +711,7 @@ pub(super) fn role_path(d: &str, filled: bool) -> exact_kernel::SymbolPath<'_> {
         filled,
         even_odd: true,
         view_box: "0 0 24 24",
+        mirror: false,
     }
 }
 

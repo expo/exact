@@ -64,8 +64,8 @@ component Chat
 - **A drive against a real deployment** takes a new `--seed` each
   launch, or Convex answers the second launch's writes without running them.
 
-Use `apps/mosaic/server.ts` as a model for tests. The stand-in handles
-`POST /api/query`, `/api/mutation` and `/api/action` before its `http` callback.
+Use `apps/mosaic/server.ts` as a model for tests. `test` and `verify` start
+it only when the build's socket origin is a loopback one, as Mosaic's is.
 
 ## Convex Auth v2
 

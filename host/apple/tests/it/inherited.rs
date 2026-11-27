@@ -1262,3 +1262,53 @@ fn image_rendering_reaches_images_when_their_ancestor_changes() {
     assert!(op(&batch, image).contains("\"image_rendering\":\"crisp-edges\""));
     assert!(!batch.contains(&format!("\"op\":\"style\",\"id\":{own},")));
 }
+
+#[test]
+fn moving_a_paragraph_updates_only_its_frame_until_its_text_changes() {
+    let plan = contract::compile(
+        r#"component App
+  state x = 0
+  state label = "before"
+  action move
+    x = x + 10
+  action edit
+    x = x + 10
+    label = "after"
+  view
+    column
+      button "Move" testId="move" press=move
+      button "Edit" testId="edit" press=edit
+      text label position="absolute" left=x top=60 testId="plain"
+      text position="absolute" translate=`${x}px 0px` top=100 testId="rich"
+        text label
+"#,
+    )
+    .unwrap();
+    let (mut host, _) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        300.,
+    )
+    .unwrap();
+    let labels = ["plain", "rich"].map(|name| view(&host, name));
+    for (action, paragraphs) in [("move", 0), ("edit", 1)] {
+        let batch = host.dispatch(view(&host, action), Event::Press);
+        let json: serde_json::Value = serde_json::from_str(&batch).unwrap();
+        let ops = json["ops"].as_array().unwrap();
+        for id in labels {
+            let count = |kind| {
+                ops.iter()
+                    .filter(|o| o["id"] == id && o["op"] == kind)
+                    .count()
+            };
+            let movement = if id == labels[0] { "frame" } else { "present" };
+            assert_eq!(count(movement), 1, "{batch}");
+            assert_eq!(count("paragraph"), paragraphs, "{batch}");
+        }
+        if action == "edit" {
+            assert!(batch.contains("after"), "{batch}");
+        }
+    }
+}

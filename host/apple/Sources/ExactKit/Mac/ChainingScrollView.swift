@@ -508,7 +508,7 @@ extension NodeView {
 /// content draws that much lower though the box has nothing to scroll. Less
 /// than a device pixel outside the range is that alignment, not an
 /// overscroll, and goes to the range's edge; an elastic overscroll is AppKit's.
-class RangeClipView: NSClipView {
+class RangeClipView: DropClipView {
     override func scroll(to newOrigin: NSPoint) {
         guard let document = documentView?.frame else { return super.scroll(to: newOrigin) }
         let pixel = 1 / max(1, pixelScale ?? 1), inset = contentInsets, size = bounds.size

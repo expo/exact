@@ -59,6 +59,62 @@ final class StagedApplyMacTests: XCTestCase {
         return wireBatch(ops)
     }
 
+    func testStagedParagraphsHyphenateInTheLanguageTheyWillShow() throws {
+        let p = Presenter()
+        show(p.viewport)
+        p.apply(wireBatch(tree + [
+            ["op": "create", "id": 9006, "kind": "text", "props": ["text": "Donaudampfschifffahrtsgesellschaft"], "style": ["hyphens": "auto"]],
+            ["op": "children", "id": 9004, "ids": [9005, 9006]],
+            ["op": "frame", "id": 9006, "x": 0, "y": 24, "w": 90, "h": 90],
+            ["op": "language", "lang": "en", "dir": "ltr"],
+        ]))
+        let ids = Array(9300..<9304)
+        var ops: [[String: Any]] = []
+        for id in ids {
+            ops += [["op": "create", "id": id, "kind": "text", "props": ["text": "Donaudampfschifffahrtsgesellschaft", "markup": "markdown", "atoms": "mention"], "style": ["hyphens": "auto"]],
+                    ["op": "paragraph", "id": id, "runs": id == 9300 ? [
+                        ["id": 9310, "parent": id, "paint": true, "props": ["text": "Donaudampfschifffahrtsgesellschaft", "href": "/link"], "style": ["hyphens": "auto"]],
+                    ] : []],
+                    ["op": "frame", "id": id, "x": 0, "y": 0, "w": 90, "h": 90]]
+        }
+        ops += [["op": "children", "id": 9004, "ids": [9006] + ids], ["op": "language", "lang": "de", "dir": "ltr"]]
+        let plan = try XCTUnwrap(p.stagePlan(wireBatch(ops)))
+        while !plan.preparedAll { p.prepare(plan, until: .infinity) }
+        let label = try XCTUnwrap(plan.made[9300])
+        XCTAssertTrue((label.accessibilityChildren() ?? []).isEmpty, "held staged nodes expose no accessibility children before reveal")
+        let stagedInline = try XCTUnwrap((label.textAccessibilityChildren() as? [NSAccessibilityElement])?.first)
+        XCTAssertEqual(p.documentLanguage, "en")
+        XCTAssertEqual(label.accessibilityAttributeValue(.init(rawValue: "AXLanguage")) as? String, "de")
+        XCTAssertEqual(stagedInline.accessibilityAttributeValue(.init(rawValue: "AXLanguage")) as? String, "de",
+                       "staged inline links report the staged batch's language before reveal")
+        XCTAssertEqual(label.paragraphSpec().language, "de")
+        // A later paragraph or style batch cannot pass a staged batch that changes the document language.
+        XCTAssertFalse(plan.disjoint(wireBatch([["op": "style", "id": 9002, "style": ["font_size": 16.0]]])))
+        XCTAssertTrue(plan.disjoint(wireBatch([["op": "present", "id": 9002, "property": "translate", "x": 10.0, "y": 0.0]])))
+        // A queued language batch blocks later style/paragraph batches from jumping ahead of it.
+        let langPrint = BatchFootprint(wireBatch([["op": "language", "lang": "fr", "dir": "ltr"]])) { _, _ in false }
+        let stylePrint = BatchFootprint(wireBatch([["op": "style", "id": 9002, "style": ["font_size": 16.0]]])) { _, _ in false }
+        XCTAssertFalse(langPrint.admits(stylePrint))
+        XCTAssertFalse(stylePrint.admits(langPrint))
+        // Populate an auto-hyphenated live paragraph's cached spec in English before revealing the German staged batch.
+        let liveHyphen = try XCTUnwrap(p.views[9006])
+        let livePlain = try XCTUnwrap(p.views[9003])
+        let beforeSpec = liveHyphen.paragraphSpec()
+        _ = livePlain.paragraphSpec()
+        XCTAssertEqual(beforeSpec.language, "en")
+        XCTAssertNotNil(livePlain.cachedTextSpec)
+        p.revealing = plan
+        p.apply(plan.reveal())
+        XCTAssertEqual(p.documentLanguage, "de")
+        XCTAssertEqual(label.paragraphSpec().language, "de")
+        XCTAssertNotNil(livePlain.cachedTextSpec, "ordinary non-hyphenated labels keep their cached spec across language switches")
+        let afterSpec = liveHyphen.paragraphSpec()
+        XCTAssertEqual(afterSpec.language, "de", "revealing a language switch invalidates stale auto-hyphenated live paragraphs even without a paragraph op")
+        XCTAssertFalse(afterSpec.source.inserted.isEmpty)
+        XCTAssertNotEqual(beforeSpec.source.inserted, afterSpec.source.inserted, "hyphenation points update for the new document language")
+        XCTAssertFalse(label.paragraphSpec().source.inserted.isEmpty)
+    }
+
     func testAStagedBatchShowsNothingUntilItsRevealAndAllOfItThen() throws {
         let p = Presenter()
         show(p.viewport)

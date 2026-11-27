@@ -124,9 +124,9 @@ public final class Bridge: ExactPackage {
       seam: resolve(import.meta.dir, '../host/apple/modules/ExactPackage.swift') });
     const copied = resolve(compiler.graph[0].path, 'Sources/Lib/Value.swift'), captured = readFileSync(copied);
     writeFileSync(copied, 'public func value() -> Int { 0 }');
-    assert.throws(() => compiler.place(dest), /cached Swift package changed/);
+    await assert.rejects(() => compiler.place(dest), /cached Swift package changed/);
     writeFileSync(copied, captured);
-    compiler.place(dest);
+    await compiler.place(dest);
     assert.ok(readFileSync(resolve(dest, 'libExactPkg_probe.dylib')).length);
     const [{ identity }] = swiftPackageInventories(app, bound([local]), 'macos');
     assert.equal(swiftPackageInputChanged(dir, identity), false);

@@ -34,6 +34,27 @@ extension Presenter {
             if NSCursor.current === NSCursor.iBeam { (leaf?.cursorRect(at: point) ?? .arrow).set() }
         }
     }
+
+    /// Defer inline-link cursor-rect invalidation until the enclosing batch has
+    /// applied its final geometry, styles, and props so `resetCursorRects()`
+    /// never reads stale mid-batch state in a key window.
+    func noteInlineCursorRects(_ node: NodeView) {
+        if applying {
+            dirtyCursorRects.insert(node.id)
+        } else if !node.held {
+            node.window?.invalidateCursorRects(for: node)
+        }
+    }
+
+    func flushInlineCursorRects() {
+        guard !dirtyCursorRects.isEmpty else { return }
+        let ids = dirtyCursorRects
+        dirtyCursorRects.removeAll(keepingCapacity: true)
+        for id in ids {
+            guard let view = views[id], !view.held else { continue }
+            view.window?.invalidateCursorRects(for: view)
+        }
+    }
 }
 
 extension NodeView {
@@ -43,6 +64,7 @@ extension NodeView {
     }
 
     var hasCursorRects: Bool { boxCursor != nil || inlineText.contains { $0.isLink && !$0.hidden } }
+    var hasInlineLinkCursorRects: Bool { boxCursor == nil && inlineText.contains { $0.isLink && !$0.hidden } }
 
     /// Whether a point over this node, in window points, shows the I-beam:
     /// it is text a drag from here selects (`selectsText`, `textSelectable`:

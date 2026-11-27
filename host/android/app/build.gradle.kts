@@ -365,11 +365,13 @@ android {
         val text = { v: String -> attr(v).replace("\\", "\\\\").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1") }
         res.deleteRecursively()
         res.resolve("drawable").mkdirs()
+        res.resolve("drawable-ldrtl").mkdirs()
         symbols.forEach { row ->
             val role = row[0] as String
             val glyph = glyphs.firstOrNull { it[0] == role }
             val path = (glyph?.get(2) ?: row[2]) as String
             val filled = (glyph?.get(3) as Boolean?) ?: role.endsWith("-fill")
+            val mirrored = (if (glyph != null) glyph.getOrNull(4) else row.getOrNull(3)) as Boolean? ?: false
             // A role's path is in a 24-unit box; Material's glyphs are in Material Symbols' `0 -960 960 960`.
             val material = glyph?.get(2) != null
             val (size, open, close) = if (!material) Triple(24, "", "") else Triple(960, "    <group android:translateY=\"960\">\n", "    </group>\n")
@@ -377,10 +379,18 @@ android {
             val paint = if (filled) "android:fillColor=\"#FF000000\"" + (if (!material) " android:fillType=\"evenOdd\"" else "") else
                 "android:fillColor=\"#00000000\" android:strokeColor=\"#FF000000\" android:strokeWidth=\"${size / 12}\" " +
                     "android:strokeLineCap=\"round\" android:strokeLineJoin=\"round\""
+            val paths = path.split(';').joinToString("") { "    <path android:pathData=\"${attr(it)}\" $paint />\n" }
+            val autoMirrored = if (mirrored) " android:autoMirrored=\"true\"" else ""
             res.resolve("drawable/${iconName(role)}.xml").writeText(
                 "<vector xmlns:android=\"http://schemas.android.com/apk/res/android\" android:width=\"24dp\" android:height=\"24dp\" " +
-                    "android:viewportWidth=\"$size\" android:viewportHeight=\"$size\">\n" + open +
-                    path.split(';').joinToString("") { "    <path android:pathData=\"${attr(it)}\" $paint />\n" } + close + "</vector>\n")
+                    "android:viewportWidth=\"$size\" android:viewportHeight=\"$size\"$autoMirrored>\n" + open + paths + close + "</vector>\n")
+            if (mirrored) {
+                // Pre-reflected RTL resource for launcher/system surfaces that rasterize shortcut drawables without autoMirrored.
+                res.resolve("drawable-ldrtl/${iconName(role)}.xml").writeText(
+                    "<vector xmlns:android=\"http://schemas.android.com/apk/res/android\" android:width=\"24dp\" android:height=\"24dp\" " +
+                        "android:viewportWidth=\"$size\" android:viewportHeight=\"$size\">\n" +
+                        "    <group android:translateX=\"$size\" android:scaleX=\"-1\">\n" + open + paths + close + "    </group>\n</vector>\n")
+            }
         }
         val strings = StringBuilder()
         val shortcuts = StringBuilder()

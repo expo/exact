@@ -12,6 +12,9 @@ final class NavigationTitleInk {
 
     private var saved: [UINavigationBarAppearance?]?
     private var projected: [UINavigationBarAppearance?]?
+    #if os(iOS)
+    private var written: [UINavigationBarAppearance?]?
+    #endif
     private var ink: UIColor?
     private var fonts: Fonts?
     private var transparent = false
@@ -50,6 +53,18 @@ final class NavigationTitleInk {
         let styled = color != nil || fonts != nil
         if saved == nil, styled || transparent { saved = current }
         guard let saved else { return }
+        let next = appearances(saved, color: color, fonts: fonts, bar: bar, transparent: transparent)
+        item.standardAppearance = next[0]
+        item.compactAppearance = next[1]
+        item.scrollEdgeAppearance = next[2]
+        item.compactScrollEdgeAppearance = next[3]
+        projected = next
+        if !styled, !transparent { self.saved = nil }
+    }
+
+    private func appearances(_ saved: [UINavigationBarAppearance?], color: UIColor?, fonts: Fonts?,
+                             bar: UINavigationBar?, transparent: Bool) -> [UINavigationBarAppearance?] {
+        let styled = color != nil || fonts != nil
         let base = bar?.standardAppearance ?? UINavigationBarAppearance()
         func painted(_ appearance: UINavigationBarAppearance?) -> UINavigationBarAppearance? {
             guard styled else { return appearance }
@@ -62,18 +77,84 @@ final class NavigationTitleInk {
             #endif
             return copy
         }
-        let next = [
+        return [
             painted(saved[0]),
             painted(styled ? saved[1] ?? bar?.compactAppearance : saved[1]),
             painted(transparent ? NavigationHost.clearScrollEdge : styled ? saved[2] ?? bar?.scrollEdgeAppearance : saved[2]),
             painted(transparent ? NavigationHost.clearScrollEdge : styled ? saved[3] ?? bar?.compactScrollEdgeAppearance : saved[3])
         ]
-        item.standardAppearance = next[0]
-        item.compactAppearance = next[1]
-        item.scrollEdgeAppearance = next[2]
-        item.compactScrollEdgeAppearance = next[3]
-        projected = next
-        if !styled, !transparent { self.saved = nil }
     }
+
+    #if os(iOS)
+    private(set) var hasHeaderFamily = false
+
+    func updateFamily(_ family: HeaderFamily?, shape: HeaderShape?, route: RouteController, bar: UINavigationBar?,
+                      color: UIColor?, fonts: Fonts?, transparent: Bool, afterHatch: Bool = false) {
+        let item = route.navigationItem
+        let current = [item.standardAppearance, item.compactAppearance, item.scrollEdgeAppearance, item.compactScrollEdgeAppearance]
+        let standard = bar?.standardAppearance ?? UINavigationBarAppearance()
+        let defaults = [standard, bar?.compactAppearance, bar?.scrollEdgeAppearance, bar?.compactScrollEdgeAppearance]
+        // The route hatch sees the prepared colours and edges. Its return changes only fonts.
+        var next = current
+        var saved = self.saved ?? current
+        if hasHeaderFamily, let written {
+            for i in current.indices where current[i] != written[i] {
+                if current[i] == nil {
+                    saved[i] = nil
+                } else {
+                    let inherited = defaults[i] ?? (i == 3 ? saved[2] ?? defaults[2] ?? saved[1] ?? defaults[1] : nil) ?? saved[0] ?? standard
+                    let base = saved[i] ?? inherited
+                    let edited = HeaderFamily.nativeEdit(current[i], after: written[i], base: base)
+                    if edited != base { saved[i] = edited }
+                }
+            }
+            self.saved = saved
+        }
+        if !afterHatch {
+            self.saved = saved
+            self.ink = color
+            self.fonts = fonts
+            self.transparent = transparent
+            hasHeaderFamily = family != nil
+            next = appearances(saved, color: color, fonts: fonts, bar: bar, transparent: transparent)
+        }
+        var bases = next
+        if let family {
+            for i in next.indices {
+                guard let base = next[i] ?? defaults[i] else { continue }
+                let branded = family.appearance(over: base, heading: fonts, ownTitle: shape?.heading?.authoredFontFamily != nil,
+                                                traits: bar?.traitCollection ?? route.traitCollection)
+                if branded != base {
+                    bases[i] = base.copy()
+                    next[i] = branded
+                }
+            }
+            route.titleView?.applyHeaderFont(family)
+        }
+        HeaderFamily.applyItems(in: route, shape: shape, family: family)
+        if next != current {
+            item.standardAppearance = next[0]
+            item.compactAppearance = next[1]
+            item.scrollEdgeAppearance = next[2]
+            item.compactScrollEdgeAppearance = next[3]
+            if #available(iOS 26, *), bar?.topItem === item, zip(current, next).contains(where: {
+                $0?.buttonAppearance != $1?.buttonAppearance || $0?.doneButtonAppearance != $1?.doneButtonAppearance
+            }) {
+                if let transition = route.transitionCoordinator {
+                    transition.animate(alongsideTransition: nil) { [weak bar, weak item] _ in
+                        if let item, bar?.topItem === item { HeaderFamily.refreshItems(in: item) }
+                    }
+                } else {
+                    HeaderFamily.refreshItems(in: item)
+                }
+            }
+        }
+        // Track the actual item appearances written so unchanged slots continue inheriting live bar changes,
+        // and post-hatch resets to nil are not overwritten by stale pre-hatch snapshots.
+        projected = bases
+        written = family != nil ? next : nil
+        if family == nil, color == nil, fonts == nil, !transparent { self.saved = nil }
+    }
+    #endif
 }
 #endif

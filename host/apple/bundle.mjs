@@ -45,7 +45,7 @@ function libraryPrivacyManifests(library, captured) {
   const paths = new Set([library?.privacyManifest, ...(library?.privacyManifestPaths ?? [])]);
   return [...captured.filter(manifest => paths.has(manifest.path)), ...(library?.privacyManifests ?? [])];
 }
-export function assembleMac({intents, shared, library, moduleLibraries = [], packageLibraries = [], packageResources = [], serviceDylibs, macWidgets, shareTeam = null, shareProfile = null, provisioning = null, sandbox = null, triple, appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements}) {
+export function assembleMac({intents, shared, library, moduleLibraries = [], packageLibraries = [], packageResources = [], serviceDylibs, macWidgets, shareTeam = null, shareProfile = null, provisioning = null, sandbox = null, unsigned = false, triple, appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements}) {
     const sign = args => run('codesign', args, { stdio: 'ignore', macDevelopmentSign: !distribution });
     assertLibraryNames([library, ...moduleLibraries, ...packageLibraries, shared && { placed: shared.framework }].filter(Boolean));
     // `--bundle`'s assembled `.app`, when one was asked for: what `--run`
@@ -119,8 +119,8 @@ export function assembleMac({intents, shared, library, moduleLibraries = [], pac
     // A profile's entitlements hold only in a bundle that embeds it.
     // What runs beside an executable in its bundle's MacOS directory: the app's and the sample host's.
     const beside = [...loaded, ...(canvasGpuBuilt ? [canvasGpuLoadName] : []), ...(modulesBuilt ? [modulesLoadName] : []), ...serviceDylibs.map(svc => svc.load), ...packageLibraries.map(p => p.load), ...(hasGpu ? [loadName] : []), ...moduleDylibs.map(m => m.load)];
-    if (shared || provisioning || args.includes('--bundle') || args.includes('--run') || buildReceipt.binary.metadata.appleAssetCatalogs?.length) {
-      const bundleDestination = appleArtifacts(app).bundle;
+    if (shared || provisioning || unsigned || args.includes('--bundle') || args.includes('--run') || buildReceipt.binary.metadata.appleAssetCatalogs?.length) {
+      const bundleDestination = unsigned ? paths.bundle : appleArtifacts(app).bundle;
       const output = resolve(bundleDestination, '..');
       mkdirSync(output, { recursive: true });
       // Assemble beside the stable app path, then replace atomically (LLP 1033 D2).
@@ -178,7 +178,7 @@ export function assembleMac({intents, shared, library, moduleLibraries = [], pac
       placeAppleArtifact(bundle, placed);
       rmSync(stage, { recursive: true, force: true });
       bundlePath = placed;
-      console.log(`local client: ${placed}\n  ${development ? `Open this app once to register its opening link for ${development.origins[0]}.` : 'No development opening link: build with --url <dev server URL> to register one.'}`);
+      if (!unsigned) console.log(`local client: ${placed}\n  ${development ? `Open this app once to register its opening link for ${development.origins[0]}.` : 'No development opening link: build with --url <dev server URL> to register one.'}`);
     }
     // The sample host (LLP 1031 D10) is a bundle beside the app's, as on iOS: its executable over the app's resources
     // and frameworks, under the app's profile and entitlements when the app's build has a profile, so what a profile
@@ -222,6 +222,7 @@ export function assembleMac({intents, shared, library, moduleLibraries = [], pac
       placeAppleArtifact(bundle, destination);
       console.log(`sample host: ${destination} (${host.id}${signedBy ? `, under "${signedBy.name}"` : ''})`);
     }
+    if (unsigned && !bundlePath) throw new Error('Mac --unsigned produced no .app bundle');
     return bundlePath;
 }
 /** The app's prebuilt frameworks (LLP 1154 D3), its own and its native modules' dynamic xcframeworks, each placed in

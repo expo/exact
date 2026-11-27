@@ -93,6 +93,7 @@ pub fn attributes_by_data(node_type: NodeType) -> Vec<&'static str> {
             "data-symbol-evenodd",
             "data-symbol-file",
             "data-symbol-fill",
+            "data-symbol-mirror",
             "data-symbol-nonzero",
             "data-symbol-path",
             "data-symbol-source",

@@ -27,6 +27,7 @@ mod layout_refusal;
 mod live;
 mod mount_opacity;
 mod paint;
+mod paragraph_invalidation;
 mod presence;
 mod reset_gate;
 mod route_overflow;

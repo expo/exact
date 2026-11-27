@@ -619,6 +619,7 @@ fn message() -> Outcome {
         data: "{}".into(),
         coalesced: 0,
         binary: None,
+        head: None,
     })
 }
 

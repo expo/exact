@@ -15,6 +15,17 @@ export function symbolPlaceholder(width, height) {
   return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"${ratio}/>`)}`;
 }
 
+export function symbolMask(path, filled, nonzero, box, width, height, weight, mirror) {
+  const [minX, minY, w, h] = symbolBox(box);
+  const stroke = 1.1 + (Math.max(100, Math.min(900, weight)) - 100) / 400;
+  const paint = filled
+    ? `fill="black" fill-rule="${nonzero ? 'nonzero' : 'evenodd'}"`
+    : `fill="none" stroke="black" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"`;
+  const shapes = path.split(';').map((d) => `<path d="${d}" ${paint}/>`).join('');
+  const body = mirror ? `<g transform="translate(${2 * minX + w} 0) scale(-1 1)">${shapes}</g>` : shapes;
+  return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${width === height ? `width="${width}" height="${height}" ` : ''}viewBox="${minX} ${minY} ${w} ${h}">${body}</svg>`)}")`;
+}
+
 const pendingRefits = new Set();
 function refitAfterPlaceholder({ currentTarget: el }) {
   const refit = el.symbolRefit;

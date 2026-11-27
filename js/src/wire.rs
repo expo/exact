@@ -46,6 +46,11 @@ pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Reque
             None => field("body").unwrap_or_default().into_bytes(),
         },
         stream: j.get("stream").and_then(Json::as_bool).unwrap_or(false),
+        stream_open: match j.get("stream_open") {
+            None | Some(Json::Null) => false,
+            Some(Json::Bool(b)) => *b,
+            Some(_) => return Err("exactStreamOpen is true or false".into()),
+        },
         protocols: serde_json::from_value(j.get("protocols").cloned().unwrap_or_else(|| json!([])))
             .map_err(|_| "exactProtocols must be an array of protocol names")?,
         socket: j.get("socket").and_then(Json::as_bool).unwrap_or(false),
@@ -162,6 +167,7 @@ pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Reque
     match (request.long_poll_refusal().or(request.ceiling_refusal()))
         .or(request.upload_progress_refusal())
         .or(request.idle_timeout_refusal())
+        .or(request.stream_open_refusal())
     {
         Some(why) => Err(why.into()),
         None => match request.listen_refusal() {
@@ -208,6 +214,22 @@ pub(crate) fn outcome_to_json(outcome: &Outcome) -> Json {
         Outcome::Failed { kind, message } => json!({
             "failed": { "kind": format!("{kind:?}"), "message": message }
         }),
+        Outcome::Message(m) if m.head.is_some() => {
+            let head = m.head.as_deref().unwrap();
+            json!({
+                "message": {
+                    "event": m.event,
+                    "id": m.id,
+                    "data": "",
+                    "coalesced": m.coalesced,
+                    "protocol": m.protocol,
+                    "head": {
+                        "status": head.status,
+                        "headers": head.headers.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
+                    }
+                }
+            })
+        }
         Outcome::Message(m) => match &m.binary {
             Some(bytes) => json!({
                 "message": { "event": m.event, "id": m.id, "data": "", "coalesced": m.coalesced, "protocol": m.protocol, "binary": base64(bytes) }

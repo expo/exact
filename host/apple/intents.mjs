@@ -14,17 +14,18 @@
 // door's press directly and so compiles against ExactToolDoor's module once
 // SwiftPM has built it (`swiftPMImports`).
 import { dirname, resolve } from 'node:path';
-import { existsSync, mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync, cpSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, cpSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { intentsMetadata as emittedIntentsMetadata } from './intents-metadata.mjs';
 import { DOCUMENT_UTIS } from '../../scripts/app.mjs';
 import { extensionModuleCache } from './extensions.mjs';
+import { normalizeModuleCacheArgs } from './arms.mjs';
 import { launchPartsObjects } from './launch-parts.mjs';
 import { controlIntentsSource, offeredControls } from './controls.mjs';
 
 /** The protocols whose conformers' constant values the metadata pass reads (Xcode's list for App Intents). */
-const gathered = ['AppIntent', 'EntityQuery', 'AppEntity', 'TransientEntity', 'AppEnum', 'AppShortcutProviding', 'AppShortcutsProvider',
+export const gathered = ['AppIntent', 'EntityQuery', 'AppEntity', 'TransientEntity', 'AppEnum', 'AppShortcutProviding', 'AppShortcutsProvider',
   'AnyResolverProviding', 'AppIntentsPackage', 'DynamicOptionsProvider', 'OpenIntent', 'EntityStringQuery'];
 
 /** The faces this platform compiles: `compat.inputs.faces` of the bake, each `{signature, face}` whose doors name `apple`. */
@@ -354,15 +355,25 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
 
 
 /** Gather constants under the shipping module's name and compiler context.
- * The binary, compiler and arguments identify the cached constants. */
-export function nativeIntentModule({ moduleName, binary, sources, args, directory, swiftc, runApple }) {
+ * The binary, compiler and normalized arguments identify the cached constants. */
+export function nativeIntentModule({ moduleName, binary, sources, args, keyArgs, directory, swiftc, runApple }) {
   const binaries = [binary].flat();
-  const hash = createHash('sha256').update(JSON.stringify([swiftc, args, gathered, sources.map(f => readFileSync(f, 'utf8'))]));
+  const sourceIndex = new Map();
+  for (let i = 0; i < sources.length; i++) {
+    sourceIndex.set(sources[i], i);
+    try { sourceIndex.set(realpathSync(sources[i]), i); } catch {}
+  }
+  const normalized = keyArgs ?? normalizeModuleCacheArgs(args).map((a, i) => {
+    if (args[i - 1] === '-o') return '<out>';
+    if (sourceIndex.has(a)) return ['source', sourceIndex.get(a)];
+    return a;
+  });
+  const hash = createHash('sha256').update(JSON.stringify([swiftc, normalized, gathered, sources.map(f => readFileSync(f, 'utf8'))]));
   for (const file of binaries) hash.update(readFileSync(file));
   const digest = hash.digest('hex').slice(0, 16);
-  const dir = resolve(directory, digest), values = resolve(dir, `${moduleName}.swiftconstvalues`);
+  const dir = resolve(directory, digest), values = resolve(dir, `${moduleName}.swiftconstvalues`), template = resolve(dir, `${moduleName}.template.swiftconstvalues`);
   binary = binaries.length === 1 ? binaries[0] : resolve(dir, `${moduleName}.o`);
-  if (!existsSync(values) || !existsSync(binary)) {
+  if (!existsSync(template) || !existsSync(binary)) {
     mkdirSync(dir, { recursive: true });
     // A typecheck or object compile refuses object inputs, such as a native package's ExactPackage.o that the link takes.
     const object = a => /\.[oa]$/.test(a ?? '');
@@ -373,10 +384,27 @@ export function nativeIntentModule({ moduleName, binary, sources, args, director
     try {
       const constants = constValueArgs(values, dir);
       runApple('xcrun', [...checking, '-wmo', ...(binaries.length > 1 ? ['-c', '-o', binary] : ['-typecheck']), ...constants]);
+      const raw = JSON.parse(readFileSync(values, 'utf8'));
+      // Store source indices so relocated cache hits rebase `t.file` to the current checkout's source path.
+      const portable = raw.map(t => {
+        let idx = sourceIndex.get(t.file);
+        if (idx === undefined && t.file) try { idx = sourceIndex.get(realpathSync(t.file)); } catch {}
+        return idx === undefined ? t : { ...t, file: undefined, __sourceIndex: idx };
+      });
+      const tmp = `${template}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(portable));
+      renameSync(tmp, template);
     }
     catch (error) { rmSync(dir, { recursive: true, force: true }); throw error; }
   }
-  const constants = JSON.parse(readFileSync(values, 'utf8'));
+  const constants = JSON.parse(readFileSync(template, 'utf8')).map(t => {
+    if (typeof t.__sourceIndex !== 'number') return t;
+    const { __sourceIndex, ...rest } = t;
+    return { ...rest, file: sources[__sourceIndex] };
+  });
+  const tmpValues = `${values}.${process.pid}.tmp`;
+  writeFileSync(tmpValues, JSON.stringify(constants));
+  renameSync(tmpValues, values);
   return constants.length ? { moduleName, binary, sources, values } : null;
 }
 

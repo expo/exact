@@ -25,6 +25,7 @@ fn labelled(badge: Option<&str>, symbols: bool) -> Layout {
         label: label.into(),
         direction: Direction::Ltr,
         symbol: symbols.then(|| "star".into()),
+        symbol_direction: Direction::Ltr,
         selected,
         enabled,
         badge: badge.filter(|_| node == 3).map(Into::into),
@@ -76,6 +77,7 @@ fn truncated_rtl_bar_labels_fit_and_center_in_their_targets() {
             title: title.into(),
             direction: Direction::Rtl,
             symbol: None,
+            symbol_direction: Direction::Rtl,
             enabled: true,
             destructive: false,
             tint: None,
@@ -102,6 +104,7 @@ fn truncated_rtl_bar_labels_fit_and_center_in_their_targets() {
                     label: title.repeat(2),
                     direction: Direction::Rtl,
                     symbol,
+                    symbol_direction: Direction::Rtl,
                     selected: true,
                     enabled: true,
                     badge: None,
@@ -280,6 +283,7 @@ fn a_title_has_the_room_what_leads_and_trails_leave_it() {
         title: "Star".into(),
         direction: Direction::Ltr,
         symbol: Some("star".into()),
+        symbol_direction: Direction::Ltr,
         enabled: true,
         destructive: false,
         tint: None,
@@ -334,7 +338,7 @@ fn bars_without_authored_colours_keep_every_device_paint_role() {
             .items
             .iter()
             .map(|item| match item {
-                Item::Fill(_, c) | Item::Symbol(_, _, c) | Item::Text(_, _, c, _, _) => *c,
+                Item::Fill(_, c) | Item::Symbol(_, _, c, _) | Item::Text(_, _, c, _, _) => *c,
                 Item::Badge(_) => panic!("unexpected badge item"),
             })
             .collect::<Vec<_>>()
@@ -415,7 +419,7 @@ fn the_root_accent_seeds_only_the_bars_accent_roles() {
         let bottom = &p.bars.bottom.as_ref().unwrap().layout;
         assert!(matches!(&top.items[0], Item::Text(_, _, c, _, _) if *c == rgba(primary)));
         assert!(matches!(&bottom.items[0], Item::Fill(_, c) if *c == rgba(indicator)));
-        assert!(matches!(&bottom.items[1], Item::Symbol(_, _, c) if *c == rgba(symbol)));
+        assert!(matches!(&bottom.items[1], Item::Symbol(_, _, c, _) if *c == rgba(symbol)));
         assert!(matches!(&bottom.items[2], Item::Text(_, _, c, _, _) if *c == rgba(label)));
         assert_eq!(top.container, Role::Surface.color(dark));
         assert_eq!(bottom.container, Role::SurfaceContainer.color(dark));
@@ -447,7 +451,7 @@ fn each_bar_uses_its_own_scheme_with_the_roots_single_seed() {
     ));
     assert!(matches!(
         &bottom.items[1],
-        Item::Symbol(_, _, [0x35, 0x4b, 0x41, 255])
+        Item::Symbol(_, _, [0x35, 0x4b, 0x41, 255], _)
     ));
     // Both secondary roles miss on #4c6358. Material's foreground tone is 86.28.
     assert!(matches!(
@@ -483,7 +487,7 @@ fn a_seeded_bar_tracks_material_contrast_and_respects_action_tints() {
             Item::Text(_, _, [0xbb, 0x22, 0x22, 255], _, _)
         ));
         assert!(matches!(&bottom.items[0], Item::Fill(_, c) if *c == indicator));
-        assert!(matches!(&bottom.items[1], Item::Symbol(_, _, c) if *c == [255; 4]));
+        assert!(matches!(&bottom.items[1], Item::Symbol(_, _, c, _) if *c == [255; 4]));
     }
     drop(p);
     let lone = source.replace(r#"          image "symbol:home""#, "");
@@ -532,7 +536,7 @@ fn a_disabled_selected_symbol_keeps_its_on_colour_over_the_seeded_indicator() {
     ));
     assert!(matches!(
         &bottom.items[1],
-        Item::Symbol(_, _, [0x5a, 0x3f, 0x47, 97])
+        Item::Symbol(_, _, [0x5a, 0x3f, 0x47, 97], _)
     ));
     assert!(matches!(
         &bottom.items[2],
@@ -549,7 +553,7 @@ fn the_navigation_bar_has_materials_indicator_and_colours() {
     for item in &bar.items {
         match item {
             Item::Text(_, _, color, node, _) => texts.push((*node, *color)),
-            Item::Symbol(_, rect, color) => symbols.push((*rect, *color)),
+            Item::Symbol(_, rect, color, _) => symbols.push((*rect, *color)),
             Item::Fill(shape, _) => fills.push(shape.rect),
             Item::Badge(_) => panic!("unexpected badge item"),
         }
@@ -584,7 +588,7 @@ fn a_destinations_badge_is_materials_large_badge_on_its_icon() {
         .items
         .iter()
         .filter_map(|item| match item {
-            Item::Symbol(_, rect, _) => Some(*rect),
+            Item::Symbol(_, rect, _, _) => Some(*rect),
             _ => None,
         })
         .nth(1)
@@ -635,5 +639,106 @@ fn a_destination_of_a_label_alone_keeps_its_badge_on_the_label() {
     assert_eq!(
         (pill.0, pill.1 + pill.3),
         (label.0 + label.2 - 12.0, label.1 + 14.0)
+    );
+}
+
+#[test]
+fn rtl_bars_mirror_directional_symbols_and_respect_item_direction() {
+    use crate::paint::Backend;
+    let mut engine = TextEngine::from_font_files(
+        &[std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/fixtures/fonts/assets"
+        ))],
+        "DejaVu Sans",
+    );
+    let btn = |node, role: &str, symbol_direction| Button {
+        node,
+        title: role.into(),
+        direction: Direction::Ltr,
+        symbol: Some(role.into()),
+        symbol_direction,
+        badge: None,
+        enabled: true,
+        destructive: false,
+        tint: None,
+    };
+    let top = Top {
+        route: 1,
+        heading: None,
+        direction: Direction::Rtl,
+        title: String::new(),
+        title_direction: Direction::Rtl,
+        subtitle_node: None,
+        subtitle: String::new(),
+        subtitle_direction: Direction::Rtl,
+        up: true,
+        leading: vec![],
+        trailing: vec![
+            btn(2, "send", Direction::Rtl),
+            btn(3, "forward-chevron", Direction::Rtl),
+            btn(4, "forward-chevron", Direction::Ltr),
+            btn(5, "play", Direction::Rtl),
+        ],
+        scrolled: false,
+    };
+    let inputs = Inputs {
+        device_inks: &Default::default(),
+        colors: BarColors::default(),
+        dark: false,
+        font_scale: 1.0,
+        width: 360.0,
+        edge: 0.0,
+        sides: (0.0, 0.0),
+    };
+    let layout = Layout::top(&mut engine, &top, &inputs);
+    let mut raster = crate::raster::Raster::new();
+    raster.begin(layout.size.0, layout.size.1, 2.0);
+    layout.paint(&mut raster, &mut engine, None);
+    let pix = raster.finish().unwrap();
+    let rects: Vec<(String, Rect4)> = layout
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Symbol(role, rect, _, _) => Some((role.clone(), *rect)),
+            _ => None,
+        })
+        .collect();
+    let dark_at = |rect: Rect4, u: f32, v: f32| {
+        let px = ((rect.0 + u / 24.0 * rect.2) * 2.0) as u32;
+        let py = ((rect.1 + v / 24.0 * rect.3) * 2.0) as u32;
+        let c = pix.pixel(px, py).unwrap().demultiply();
+        c.red() < 180
+    };
+    let up = rects.iter().find(|(r, _)| r == "back").unwrap().1;
+    assert!(
+        dark_at(up, 16., 8.) && !dark_at(up, 8., 8.),
+        "RTL Up arrow points right"
+    );
+    let send = rects.iter().find(|(r, _)| r == "send").unwrap().1;
+    assert!(
+        dark_at(send, 20., 6.) && !dark_at(send, 4., 6.),
+        "RTL Material send flips left"
+    );
+    let chevrons: Vec<Rect4> = rects
+        .iter()
+        .filter(|(r, _)| r == "forward-chevron")
+        .map(|(_, rect)| *rect)
+        .collect();
+    let [ltr_chev, rtl_chev] = chevrons[..] else {
+        panic!("expected two chevrons: {chevrons:?}");
+    };
+    assert!(
+        dark_at(ltr_chev, 13., 12.) && !dark_at(ltr_chev, 11., 12.),
+        "LTR item stays right-pointing"
+    );
+    assert!(
+        dark_at(rtl_chev, 11., 12.) && !dark_at(rtl_chev, 13., 12.),
+        "RTL item mirrors left-pointing"
+    );
+    let play = rects.iter().find(|(r, _)| r == "play").unwrap().1;
+    assert!(
+        dark_at(play, 9., 7.) && !dark_at(play, 18., 7.),
+        "play never mirrors"
     );
 }

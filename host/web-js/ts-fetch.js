@@ -65,6 +65,16 @@ function fetchInCall(input, options) {
     if (options.exactStream === undefined || options.exactUploadProgress === true || options.exactLongPoll !== undefined || !(/^(wss?|https?):/i.test(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url)))
       return Promise.reject(new TypeError('exactIdleTimeout: only a WebSocket, event or byte stream takes an idle timeout'));
   }
+  const streamOpen = options?.exactStreamOpen; // LLP 1016.000 D12
+  if (streamOpen !== undefined) {
+    if (streamOpen !== true && streamOpen !== false) return Promise.reject(new TypeError('exactStreamOpen is true or false'));
+    if (streamOpen) {
+      if (options.exactStream === undefined) return Promise.reject(new TypeError("exactStreamOpen reports an HTTP stream's response head on open: give exactStream too"));
+      let url; try { url = input instanceof Request ? input.url : String(input); } catch (e) { return Promise.reject(e); }
+      if (options.exactUploadProgress === true || options.exactLongPoll !== undefined || (/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^https?:/i.test(url)))
+        return Promise.reject(new TypeError('exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen'));
+    }
+  }
   let protocols;
   try {
     const prefetch = options?.exactPrefetch;

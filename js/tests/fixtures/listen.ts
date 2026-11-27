@@ -48,6 +48,11 @@ function answer(source: string, args: unknown[]): unknown {
     case "reply": return reply(String(args[0]), String(args[1]));
     case "listenFromMutation":
       try { return control(); } catch (x) { return (x as Error).name; }
+    case "openRefused":
+      return (globalThis as any).exactListen("unix:/tmp/exact-listen-js/a.sock", {
+        exactStream() { return ""; },
+        exactStreamOpen: true,
+      }).then(() => "sent", (x: Error) => `${x.name}: ${x.message}`);
     default: throw new Error("unknown source " + source);
   }
 }

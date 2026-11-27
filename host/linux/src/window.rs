@@ -299,6 +299,9 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
                         }
                         drop::Heard::Gone => {
                             live.presenter.set_lifter(None);
+                            if let Some(drops) = live.drops.as_mut() {
+                                drops.gone(&mut live.presenter);
+                            }
                             let now = live.presenter.host().now();
                             live.input.unlisten(&mut live.presenter, now)
                         }

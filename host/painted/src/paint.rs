@@ -86,7 +86,9 @@ mod split;
 pub(crate) mod stage;
 mod svg;
 pub(crate) mod tape;
-pub(crate) use svg::{fitted, view_box};
+#[cfg(test)]
+pub(crate) use svg::fitted;
+pub(crate) use svg::paint_symbol;
 mod text_clip;
 mod text_decoration;
 mod text_shadow;

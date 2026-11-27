@@ -665,6 +665,7 @@ fn subtitle_aligns_and_clips_to_allocated_column_in_ltr_and_rtl() {
         title: "Star".into(),
         direction: exact_kernel::Direction::Ltr,
         symbol: Some("star".into()),
+        symbol_direction: exact_kernel::Direction::Ltr,
         badge: None,
         enabled: true,
         destructive: false,

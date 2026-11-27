@@ -233,3 +233,48 @@ fn prefetch_is_part_of_equality_and_only_plain_http_takes_it() {
         assert!(request.prefetch().prefetch_refusal().is_some());
     }
 }
+
+#[test]
+fn a_summary_is_the_text_format_wrote() {
+    for (status, len) in [(200, 0), (404, 5), (u16::MAX, 70_000)] {
+        let outcome = Outcome::Response(Response {
+            status,
+            headers: vec![],
+            body: vec![0; len],
+        });
+        assert_eq!(outcome.summary(), format!("HTTP {status}, {len} bytes"));
+        let storage = Outcome::Storage(vec![1; len]);
+        assert_eq!(storage.summary(), format!("storage, {len} bytes"));
+        let captured = Outcome::Surface(SurfaceOutcome::Captured(vec![2; len]));
+        assert_eq!(captured.summary(), format!("surface captured, {len} bytes"));
+    }
+}
+
+#[test]
+fn a_failure_summary_lowers_its_kind_as_unicode_would() {
+    for kind in [
+        FailureKind::Network,
+        FailureKind::Refused,
+        FailureKind::Unsupported,
+        FailureKind::Aborted,
+        FailureKind::Timeout,
+        FailureKind::NotFound,
+    ] {
+        // Every variant is listed: adding one breaks this match.
+        match kind {
+            FailureKind::Network
+            | FailureKind::Refused
+            | FailureKind::Unsupported
+            | FailureKind::Aborted
+            | FailureKind::Timeout
+            | FailureKind::NotFound => {}
+        }
+        let name = format!("{kind:?}");
+        assert!(name.is_ascii(), "{name}");
+        let outcome = Outcome::Failed {
+            kind,
+            message: "no".into(),
+        };
+        assert_eq!(outcome.summary(), format!("{}: no", name.to_lowercase()));
+    }
+}

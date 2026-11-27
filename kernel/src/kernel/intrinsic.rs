@@ -220,9 +220,27 @@ impl Kernel {
         self.arena
             .flags_mut(owner)
             .insert(crate::NodeFlags::TEXT_DIRTY);
+        self.inline_image_paragraphs.push(self.arena.key(owner));
         if let (Some(node), Some(layout)) = (self.arena.taffy(owner), self.layout.as_deref_mut()) {
             layout.mark_dirty(node);
         }
+    }
+
+    /// Paragraphs whose inline-image reservations changed since the last call
+    /// (lazy symbol measurement, viewport-relative sizes/margins, or intrinsic
+    /// updates). A host re-emits them after layout even when frames stay stable.
+    pub fn take_inline_image_paragraphs(&mut self) -> Vec<ViewId> {
+        let mut out = Vec::new();
+        for key in std::mem::take(&mut self.inline_image_paragraphs) {
+            let Some(slot) = self.arena.resolve(key) else {
+                continue;
+            };
+            let id = self.arena.local_id(slot);
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        out
     }
 
     /// Whether a symbol's natural size is the one the kernel measured: for

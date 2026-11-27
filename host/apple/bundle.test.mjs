@@ -91,7 +91,7 @@ read()
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60_000);
 
-function staticArchiveFixture(check) {
+async function staticArchiveFixture(check) {
   const dir = mkdtempSync(join(tmpdir(), 'swift-force-load-'));
   let swift;
   try {
@@ -125,7 +125,7 @@ function staticArchiveFixture(check) {
       if (command === 'swift') manifest = readFileSync(join(opts.cwd, 'Package.swift'), 'utf8');
       return { status: 0, stdout: args.includes('--show-bin-path') ? `${bin}\n` : '', stderr: '' };
     });
-    packageCompiler({ app: { dir, target: dir, manifest: { host: { ios: { swiftPackages } } } }, packages: [], extensions: {},
+    await packageCompiler({ app: { dir, target: dir, manifest: { host: { ios: { swiftPackages } } } }, packages: [], extensions: {},
       packageDir: destination, packageTargets: new Map([[destination, ['iphonesimulator', ['-target', 'arm64-apple-ios17.0-simulator']]]]),
       packageCopies: [], packagesRoot: dir, swiftc: 'fixture', ios: true }).place(destination);
     const [, encodedFlags] = manifest.match(/linkerSettings: \[\.unsafeFlags\((.*)\)\]\)\]\)$/m);
@@ -135,7 +135,7 @@ function staticArchiveFixture(check) {
   } finally { swift?.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
 }
 
-test('SwiftPM force-loads its copies of static binary targets', () => staticArchiveFixture(({ bin, loaded }) => {
+test('SwiftPM force-loads its copies of static binary targets', async () => staticArchiveFixture(({ bin, loaded }) => {
   expect(loaded).toEqual(['Static.framework/Static', 'libPlain.a'].map(path =>
     ['-Xclang-linker', '-force_load', '-Xclang-linker', join(bin, path)]));
 }));

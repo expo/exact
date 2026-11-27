@@ -182,7 +182,7 @@ fn authored_background_color_and_uniform_radius_honor_contrast_and_theme() {
                     );
                 }
             }
-            Item::Symbol(_, _, color) => {
+            Item::Symbol(_, _, color, _) => {
                 assert!(
                     contrast(*color, open.layout.container) >= 3.0,
                     "symbol ink {color:?} fails 3.0:1 on white"
@@ -233,7 +233,7 @@ fn authored_background_color_and_uniform_radius_honor_contrast_and_theme() {
                         "dark={dark}: text {color:?} on {expected_bg:?}"
                     );
                 }
-                Item::Symbol(_, _, color) => {
+                Item::Symbol(_, _, color, _) => {
                     assert!(
                         contrast(*color, expected_bg) >= 3.0,
                         "dark={dark}: symbol {color:?} on {expected_bg:?}"
@@ -335,6 +335,62 @@ fn select_and_windows_menus_ignore_container_overrides() {
     let open = win.top.open.as_ref().unwrap();
     assert_eq!(open.layout.container, Role::Surface.color(false));
     assert_eq!(open.layout.radius, 8.);
+}
+
+#[test]
+fn rtl_material_menu_mirrors_directional_symbols_and_respects_item_direction() {
+    let src = r#"component App
+  action noop
+    let _ = 0
+  view
+    column direction="rtl"
+      button "Open" popovertarget="m" testId="open"
+      column id="m" popover="auto" role="menu"
+        button press=noop
+          image "symbol:send"
+          text "Send"
+        button press=noop
+          image "symbol:send" direction="ltr"
+          text "Raw"
+        button role="menuitemcheckbox" aria-checked=true press=noop
+          text "Checked"
+"#;
+    let (mut p, _) = boot(src, "android", (400., 800.), false);
+    open_menu(&mut p, "open");
+    let open = p.top.open.as_ref().unwrap();
+    let mut raster = crate::raster::Raster::new();
+    raster.begin(open.layout.size.0, open.layout.size.1, 2.0);
+    open.layout.paint(
+        &mut raster,
+        &mut crate::text::fixtures::engine(),
+        Feedback::default(),
+    );
+    let pix = raster.finish().unwrap();
+    let icons: Vec<(String, Rect4, Direction)> = open
+        .layout
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Symbol(role, rect, _, dir) => Some((role.clone(), *rect, *dir)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(icons.len(), 3, "{icons:?}");
+    let dark_at = |rect: Rect4, u: f32, v: f32| {
+        let px = ((rect.0 + u / 24.0 * rect.2) * 2.0) as u32;
+        let py = ((rect.1 + v / 24.0 * rect.3) * 2.0) as u32;
+        let c = pix.pixel(px, py).unwrap().demultiply();
+        c.red() < 180
+    };
+    // Row 0: Material `send` in RTL mirrors (base at right, u=20).
+    assert_eq!(icons[0].2, Direction::Rtl);
+    assert!(dark_at(icons[0].1, 20., 6.) && !dark_at(icons[0].1, 4., 6.));
+    // Row 1: `send` overridden to LTR stays pointing right (base at left, u=4).
+    assert_eq!(icons[1].2, Direction::Ltr);
+    assert!(dark_at(icons[1].1, 4., 6.) && !dark_at(icons[1].1, 20., 6.));
+    // Row 2: `checkmark` stays unmirrored even in RTL (long right stroke at upper-right u=18, v=8).
+    assert_eq!(icons[2].0, "checkmark");
+    assert!(dark_at(icons[2].1, 18., 8.) && !dark_at(icons[2].1, 6., 8.));
 }
 
 #[test]
@@ -571,7 +627,7 @@ fn midtone_background_keeps_text_contrast_under_focus_state_layer() {
                     "text {color:?} fails 4.5:1 on container {container:?} or focused {lit:?}"
                 );
             }
-            Item::Symbol(_, _, color) => {
+            Item::Symbol(_, _, color, _) => {
                 assert!(
                     contrast(*color, container) >= 3.0 && contrast(*color, lit) >= 3.0,
                     "symbol {color:?} fails 3.0:1 on container {container:?} or focused {lit:?}"

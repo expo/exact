@@ -277,15 +277,21 @@ final class DeferredPresses {
 }
 
 extension Presenter {
+    /// Enqueue `work` on the next main-queue turn as a native bar control's tap,
+    /// preserving the person's input origin across the turn (LLP 1132 D1).
+    package func enqueueBarWork(origin: NavigationMarks.Origin = NavigationMarks.shared.personNow(), _ work: @escaping () -> Void) {
+        deferredPresses.enqueue { NavigationMarks.shared.acting(origin) { work() } }
+    }
+
     /// Press `id` on the next main-queue turn as a native bar control's tap:
     /// carries the person's input origin across the turn (LLP 1132 D1) and works
     /// whether or not `ExactNativeViews` is linked.
     package func pressFromBar(_ id: UInt32, origin: NavigationMarks.Origin = NavigationMarks.shared.personNow()) {
         guard let node = views[id], node.handlers.contains("press"), !node.disabled, !node.inert else { return }
-        deferredPresses.enqueue { [weak self, weak node] in
+        enqueueBarWork(origin: origin) { [weak self, weak node] in
             guard let self, let node, self.views[id] === node,
                   node.handlers.contains("press"), !node.disabled, !node.inert else { return }
-            NavigationMarks.shared.acting(origin) { self.press(id) }
+            self.press(id)
         }
     }
 

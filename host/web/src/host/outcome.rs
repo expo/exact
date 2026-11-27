@@ -29,6 +29,7 @@ pub fn outcome_from(kind: u32, status: u32, headers: &str, body: Vec<u8>) -> Out
                         coalesced: field("coalesced").parse().unwrap_or(0),
                         data,
                         binary: None,
+                        head: None,
                     }
                 })
                 .collect();
@@ -37,6 +38,15 @@ pub fn outcome_from(kind: u32, status: u32, headers: &str, body: Vec<u8>) -> Out
                 _ => Outcome::Messages(messages),
             }
         }
+        11 => match serde_json::from_slice::<Vec<(String, String)>>(&body) {
+            Ok(headers) => {
+                Outcome::Message(exact_runner::Message::http_open(status as u16, headers))
+            }
+            Err(e) => Outcome::Failed {
+                kind: FailureKind::Refused,
+                message: format!("malformed stream open headers: {e}"),
+            },
+        },
         5 => Outcome::Storage(body),
         6 if body.len() <= exact_runner::MAX_HOST_WORK_BYTES => {
             Outcome::Surface(SurfaceOutcome::Captured(body))
@@ -74,5 +84,33 @@ pub fn outcome_from(kind: u32, status: u32, headers: &str, body: Vec<u8>) -> Out
             },
             message: String::from_utf8_lossy(&body).into_owned(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_11_decodes_http_open_head_with_json_header_pairs() {
+        let pairs = vec![
+            ("content-type".to_string(), "text/event-stream".to_string()),
+            ("mcp-session-id".to_string(), "abc:123".to_string()),
+            ("x-dup".to_string(), "one".to_string()),
+            ("x-dup".to_string(), "two".to_string()),
+        ];
+        let body = serde_json::to_vec(&pairs).unwrap();
+        let outcome = outcome_from(11, 200, "", body);
+        assert_eq!(
+            outcome,
+            Outcome::Message(exact_runner::Message::http_open(200, pairs))
+        );
+        assert!(matches!(
+            outcome_from(11, 200, "", b"not-json".to_vec()),
+            Outcome::Failed {
+                kind: FailureKind::Refused,
+                ..
+            }
+        ));
     }
 }

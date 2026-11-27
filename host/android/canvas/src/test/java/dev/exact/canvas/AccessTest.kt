@@ -22,16 +22,17 @@ class AccessTest {
         val flags: Int = 0, val range: List<Float> = listOf(0f, 0f, 0f),
     )
 
-    /** A statement of the page telling [nodes] whole, as the reader is given it. */
-    private fun statement(nodes: List<Said>): IntArray {
-        val w = mutableListOf(1, 0, 1, 0)
+    /** A statement of the page telling [nodes], whole or with [changes] (four words a change), as the reader is given it. */
+    private fun statement(nodes: List<Said>, changes: List<Int>? = null): IntArray {
+        val w = mutableListOf(1, 0, if (changes == null) 1 else 0, 0)
         fun string(s: String) {
             val bytes = s.toByteArray(Charsets.UTF_8)
             w.add(bytes.size)
             for (part in bytes.toList().chunked(4)) w.add(part.foldIndexed(0) { i, word, b -> word or ((b.toInt() and 255) shl (i * 8)) })
         }
         string("")
-        w.add(0)
+        w.add((changes?.size ?: 0) / 4)
+        changes?.let(w::addAll)
         w.add(nodes.size)
         for (n in nodes) {
             w.addAll(listOf(n.id, n.parent, n.id, n.role, n.flags, 0, 0, 100, 20))
@@ -262,6 +263,29 @@ class AccessTest {
         assertTrue(cancel in actions(1))
         assertFalse(root.access.provider.performAction(1, cancel, null))
         assertTrue(cancel !in actions(1) && start in actions(1))
+    }
+
+    /** A polite region whose own text changes is listed twice by the presenter, for its text and as spoken: TalkBack
+     * is sent one change from it, and a region whose child's text changes still speaks from the region. */
+    @Test @Config(sdk = [33]) fun aLiveRegionsChangeIsSentOnce() {
+        val activity = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        val manager = activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        org.robolectric.Shadows.shadowOf(manager).setEnabled(true)
+        val root = Root(activity).also { activity.setContentView(it); it.accessible = true }
+        val text = 1 shl 1; val live = 1 shl 4 // presenter::access::change::TEXT and LIVE
+        fun nodes(status: String, boxed: String) = listOf(
+            Said(1, 0, Access.TEXT, status, flags = Access.POLITE),
+            Said(2, 0, Access.GROUP, flags = Access.POLITE), Said(3, 2, Access.TEXT, boxed))
+        root.access.told(Access.Told(statement(nodes("1 selected", "Boxed 1"))))
+        val shadow = org.robolectric.Shadows.shadowOf(manager)
+        val before = shadow.sentAccessibilityEvents.size
+        root.access.told(Access.Told(statement(nodes("2 selected", "Boxed 2"),
+            listOf(1, text, 0, 0, 3, text, 0, 0, 1, live, 0, 0, 2, live, 0, 0))))
+        val sent = shadow.sentAccessibilityEvents.drop(before)
+            .filter { it.eventType == android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED }
+        assertEquals("one change from the region whose text changed", 1, sent.count { it.text.joinToString() == "2 selected" })
+        assertEquals("the child's change, and one from its region", listOf("Boxed 2", ""),
+            sent.filter { it.text.joinToString() != "2 selected" }.map { it.text.joinToString() })
     }
 
     @Test fun focusableFlagMapsToAccessibilityNodeFocusable() {

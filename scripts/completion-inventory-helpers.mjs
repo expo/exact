@@ -96,7 +96,7 @@ export function helperClassifications(group) {
   group("replies", ["one-shot", "subscription", "durable operation"], "pending ticket and source turn; UI target by default", "UI-owned",
     "The named public runner-crate source is the replies API or its value/admission helper. runner/src/runner/reply.rs:27-88 checks pending, background, tool and module-work tickets; reply.rs:309 preserves effectful reply writes. Ordinary resource/then ownership is inferred from PendingReq.target in commit.rs:960.", [
     ["runner:runner/src/request.rs", "Reply::message Reply::new Reply::send Reply::stream"],
-    ["runner:runner/src/upload.rs", "Message::sent Message::upload_progress Message::upload_start Message::upload_started Request::upload_progress Request::upload_progress_refusal"],
+    ["runner:runner/src/upload.rs", "Message::http_open Message::is_http_open Message::sent Message::upload_progress Message::upload_start Message::upload_started Request::stream_open Request::stream_open_refusal Request::upload_progress Request::upload_progress_refusal"],
   ], "durable when the ticket names background/tool work or retained effectful module work; see reply.rs:70-88 and module_work.rs. Not all tool handlers survive session teardown."),
   group("storage", ["durable operation"], "app store contents; inspection/adoption is synchronous", "durable",
     "The named public runner-crate source is the storage API or its value/admission helper. runner/src/runner/kept.rs adopts stored values and retries store readers; runner/src/runner.rs take_store_writes drains committed writes. Stored effects are distinct from UI settlement (reply.rs:309).", [

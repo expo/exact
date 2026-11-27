@@ -213,6 +213,7 @@ impl Em<'_> {
     /// where every condition holds; otherwise `out` is left as written.
     pub(super) fn lower(
         &mut self,
+        i: u32,
         e: &str,
         class: &str,
         parts: &exact_web::host::template::Parts,
@@ -248,7 +249,7 @@ impl Em<'_> {
         )
         .filter(|m| Some(m) != marks(read, scroll).as_ref());
         let key = crate::code::expression(self.plan, &key, scope, &mut self.uses)?;
-        let site = e.trim_start_matches('e');
+        let site = self.site_number(scope, i);
         let pick: String = lits
             .iter()
             .enumerate()
@@ -265,6 +266,7 @@ impl Em<'_> {
         } else {
             format!("c{class} ")
         };
+        let statics = scope.operand(serde_json::to_string(&statics).unwrap());
         // The name is the arm set's content: its recipe, literals and every
         // module constant the recipe reads, so a build or a dev generation
         // that changes any of them names new rules (theme2 07:33 condition 7),
@@ -280,7 +282,7 @@ impl Em<'_> {
         let pc = self.uses.rt("Pc");
         let s = self.uses.rt("S");
         let text = format!(
-            "{pc}({e},{},{statics:?},\"{name}\",{values},{props},({s},$b,$e)=>{{{recipe}}});",
+            "{pc}({e},{},{statics},\"{name}\",{values},{props},({s},$b,$e)=>{{{recipe}}});",
             match self.site_attrs {
                 true => format!(
                     "{}({site},()=>(v=>{pick}{})({key}))",

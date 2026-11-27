@@ -54,9 +54,17 @@ extension NavigationHost {
         if off & 4 != 0 { return -sv.safeAreaInsets.bottom }
         guard credit & 4 == 0 else { return 0 }
         // The previous cover can still pad the route while this report hands the edge
-        // to its scroller. Only the authored space below the route's content box adds clearance.
+        // to its scroller. Only the authored space below the route's content box adds clearance,
+        // and not the part an open foot's band already draws the scroller through (`openFoot`):
+        // with no tab bar at the route's foot (hidden, at the top, in a sidebar, or none), the band
+        // holds the route's own space below the scroller beyond the safe area the route reaches
+        // (`bottomClearance`, which a route ending above the controller's foot reaches only part
+        // of). A tab bar the route reaches at its foot holds the band, none of the route's space.
         let own = c.node.bounds.maxY - c.node.contentBox().maxY
-        return min(local.bottom, max(0, min(c.node.bounds.maxY - box.maxY, own)))
+        let barAtFoot = c.stack.map { bottomTabBar(c, in: $0) == .reached } ?? false
+        let banded = barAtFoot ? 0 : min(own, max(0, node.pageBand.bottom - c.bottomClearance))
+        // No more than the route has of the safe area: a route ending clear of it makes up none
+        return min(local.bottom, c.bottomClearance, max(0, min(c.node.bounds.maxY - box.maxY, own) - banded))
     }
 
     /// Set each route scroller's clearance part of its `contentInset` to

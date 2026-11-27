@@ -155,7 +155,7 @@ pub(crate) fn device_pending() -> bool {
 pub(crate) struct Window {
     window: usize,
     size: (u32, u32),
-    attached: bool,
+    pub(crate) attached: bool,
     awaiting_tick: bool,
     retry: super::retry::Retry,
     rest: super::retry::Rest,

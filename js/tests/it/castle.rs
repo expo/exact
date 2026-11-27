@@ -354,6 +354,7 @@ fn event(id: &str, data: &str, coalesced: u32) -> Outcome {
         data: data.into(),
         coalesced,
         binary: None,
+        head: None,
     })
 }
 

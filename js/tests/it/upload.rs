@@ -253,3 +253,205 @@ fn an_upload_fetch_refuses_is_a_type_error_before_any_request() {
     );
     assert_eq!(m.in_flight(), 0);
 }
+
+/// LLP 1016.000 D12: `exactStreamOpen` refusals are TypeErrors before any
+/// request, and marked for bake deferral at bake time.
+#[test]
+fn stream_open_refusals_and_bake_mark() {
+    let root = Root::new();
+    let mut m = root.module();
+    m.activate().unwrap();
+    let mut s = Store::new(super::storage::GRANTS, Vec::<(String, Vec<u8>)>::new());
+    let refused = call(&mut m, &mut s, "stream-open-refusals", "");
+    let only =
+        "TypeError: exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen";
+    assert_eq!(
+        refused.lines().collect::<Vec<_>>(),
+        [
+            "TypeError: exactStreamOpen is true or false",
+            "TypeError: exactStreamOpen reports an HTTP stream's response head on open: give exactStream too",
+            only,
+            only,
+            only,
+            only,
+        ],
+        "{refused}"
+    );
+    assert_eq!(m.in_flight(), 0);
+
+    assert_eq!(
+        call(&mut m, &mut s, "stream-open-bake-mark", ""),
+        "TypeError:undefined:undefined:exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen"
+    );
+    let mut bake = exact_js::Module::inspect(super::storage::HBC.to_vec()).unwrap();
+    bake.set_budget_ms(f64::INFINITY);
+    bake.bind(&super::storage::plan());
+    let marked = bake
+        .query("work", &super::storage::args("stream-open-bake-mark", ""))
+        .unwrap();
+    assert_eq!(
+        super::storage::text(marked),
+        "TypeError:Unavailable:bake:exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen"
+    );
+    let deferred = bake.query("work", &super::storage::args("stream-open-uncaught", ""));
+    assert!(
+        matches!(&deferred, Err(exact_runner::DataError::DeferredAtBake { message: msg, warning: true }) if msg.contains("exactStreamOpen")),
+        "{deferred:?}"
+    );
+}
+
+/// LLP 1016.000 D12 end-to-end on Hermes + portable executor: `exactStreamOpen: true`
+/// delivers status and immutable `Headers` before SSE events or byte chunks without
+/// colliding with a server-sent `event: open`, and a non-2xx terminal `Response` error
+/// carries immutable `Headers` even when `exactStreamOpen` is omitted.
+#[test]
+fn stream_open_and_terminal_response_headers_through_hermes() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for _ in 0..4 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            if req.starts_with("GET /sse ") {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: mcp-99\r\nX-Dup: a\r\nX-Dup: b\r\nSet-Cookie: sid=secret\r\nConnection: close\r\n\r\nevent: open\nid: srv-id-1\ndata: payload\n\ndata: next\n\n"
+                );
+            } else if req.starts_with("GET /bin ") {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nMcp-Session-Id: bin-7\r\nX-Dup: x\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(&[1, 2, 3, 4]);
+            } else {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm=\"mcp\"\r\nMcp-Session-Id: err-5\r\nSet-Cookie: sid=secret\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnope"
+                );
+            }
+            let _ = stream.flush();
+        }
+    });
+
+    let run = |op: &str, path: &str, expect_open: bool| -> Vec<String> {
+        let root = Root::new();
+        let mut m = root.module();
+        m.activate().unwrap();
+        let mut s = Store::new(super::storage::GRANTS, Vec::<(String, Vec<u8>)>::new());
+        let url = format!("http://127.0.0.1:{port}{path}");
+        let executor = exact_render::Executor::start(&format!("net.fetch http://127.0.0.1:{port}"));
+        let a = args(op, &url);
+        let Answer::Later(request) = m.answer(&mut s, "work", &a).unwrap() else {
+            panic!("stream is a request");
+        };
+        assert_eq!(request.stream_open, expect_open);
+        executor
+            .run(
+                RequestOut {
+                    completion: None,
+                    class: exact_runner::RequestClass::Ordered,
+                    ticket: 1,
+                    target: op.into(),
+                    request,
+                    forced: false,
+                },
+                None,
+            )
+            .unwrap();
+        let (mut said, until) = (Vec::new(), Instant::now() + Duration::from_secs(10));
+        loop {
+            let drained = executor.drain();
+            if drained.is_empty() {
+                assert!(Instant::now() < until, "no end after {said:?}");
+                executor.wait(until);
+                continue;
+            }
+            for (_, outcome, _) in drained {
+                let items = match outcome {
+                    Outcome::Messages(ms) => ms.into_iter().map(Outcome::Message).collect(),
+                    other => vec![other],
+                };
+                for item in items {
+                    let ended = !matches!(item, Outcome::Message(_));
+                    let Answer::Now(value) = m.parse(&mut s, "work", &a, item).unwrap() else {
+                        panic!("mapper answers now");
+                    };
+                    said.push(text(value));
+                    if ended {
+                        return said;
+                    }
+                }
+            }
+        }
+    };
+
+    let imm = "set:TypeError,append:TypeError,delete:TypeError";
+    let sse = run("stream-open-sse", "/sse", true);
+    assert_eq!(
+        sse[0],
+        format!("head 200 sid=mcp-99 dup=a, b cookie=null imm={imm}"),
+        "{sse:?}"
+    );
+    assert!(
+        sse.iter()
+            .any(|l| l == "server-open payload id=srv-id-1 hasHeaders=false"),
+        "{sse:?}"
+    );
+    assert!(sse.iter().any(|l| l == "msg next"), "{sse:?}");
+
+    let bin = run("stream-open-bytes", "/bin", true);
+    assert_eq!(
+        bin[0],
+        format!("head 200 sid=bin-7 dup=x cookie=null imm={imm}"),
+        "{bin:?}"
+    );
+    assert!(bin.iter().any(|l| l == "bytes 4"), "{bin:?}");
+
+    let err = run("stream-open-error", "/err", false);
+    assert_eq!(
+        err,
+        [format!(
+            "err Response 401 www=Bearer realm=\"mcp\" sid=err-5 cookie=null imm={imm} body=nope"
+        )]
+    );
+
+    let err_optin = run("stream-open-error-optin", "/err", true);
+    assert_eq!(
+        err_optin,
+        [format!(
+            "err Response 401 www=Bearer realm=\"mcp\" sid=err-5 cookie=null imm={imm} body=nope"
+        )]
+    );
+
+    // Direct Message::http_open with duplicate header pairs combines them via Headers.get()
+    // and strips forbidden Set-Cookie response headers.
+    let root = Root::new();
+    let mut m = root.module();
+    m.activate().unwrap();
+    let mut s = Store::new(super::storage::GRANTS, Vec::<(String, Vec<u8>)>::new());
+    let a = args("stream-open-sse", "https://example.test/sse");
+    let Answer::Later(_) = m.answer(&mut s, "work", &a).unwrap() else {
+        panic!("stream is a request");
+    };
+    let dup = exact_runner::Message::http_open(
+        200,
+        vec![
+            ("Mcp-Session-Id".into(), "dup-1".into()),
+            ("X-Dup".into(), "first".into()),
+            ("x-dup".into(), "second".into()),
+            ("Set-Cookie".into(), "sid=secret".into()),
+            ("Set-Cookie2".into(), "old=secret".into()),
+        ],
+    );
+    let Answer::Now(v) = m.parse(&mut s, "work", &a, Outcome::Message(dup)).unwrap() else {
+        panic!("mapper answers now");
+    };
+    assert_eq!(
+        text(v),
+        format!("head 200 sid=dup-1 dup=first, second cookie=null imm={imm}")
+    );
+}

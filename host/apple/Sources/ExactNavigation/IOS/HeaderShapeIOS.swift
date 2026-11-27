@@ -213,6 +213,7 @@ struct HeaderShape: Equatable {
         }
     }
     let header: NodeView
+    let family: Int?
     let heading: NodeView?
     package let title: String
     let level: Int
@@ -241,7 +242,7 @@ struct HeaderShape: Equatable {
     /// `back` names the stack's Back control, left to UIKit's back button
     /// when there is one (`backIsUIKits`): the root of a presented stack
     /// has none, so there it is an item like the others.
-    init?(route: NodeView, back: String?, backIsUIKits: Bool = true, projected: Bool = false) {
+    init?(route: NodeView, back: String?, backIsUIKits: Bool = true, projected: Bool = false, routeFamily: Bool = false) {
         // What is header-shaped is the kernel's rule, read over this route's views (`HeaderRule`, LLP 1115.001 D11).
         guard let rule = HeaderRule(route: route, back: back, backIsPlatforms: backIsUIKits, projected: projected) else { return nil }
         // Every role the header rule assigns can remain authored. In
@@ -270,6 +271,12 @@ struct HeaderShape: Equatable {
         let segments = rule.segments.flatMap { projects($0) ? $0 : nil }
         let tap = rule.tap.flatMap { projects($0) ? $0 : nil }
         header = rule.header
+        #if os(iOS)
+        let family = routeFamily ? rule.header.authoredFontFamily : nil
+        #else
+        let family: Int? = nil
+        #endif
+        self.family = family
         // A heading of only white space names nothing (accname trims it);
         // UIKit would take it as a title and show a pair of quotes
         let text = heading?.accessibleText ?? ""
@@ -280,7 +287,7 @@ struct HeaderShape: Equatable {
         // the title's to read either.
         let readouts = rule.readouts.filter(projects)
         let apart = rule.items + rule.readouts + [rule.search, rule.segments].compactMap { $0 } + authored
-        let group = heading.flatMap { HeaderTitle(header: rule.header, heading: $0, tap: tap, apart: apart, kept: authored) }
+        let group = heading.flatMap { HeaderTitle(header: rule.header, heading: $0, tap: tap, apart: apart, kept: authored, family: family) }
         #if os(tvOS)
         // tvOS's bar has no item that focus passes by undimmed: none hosted.
         let hosted: [NodeView] = []
@@ -321,7 +328,7 @@ struct HeaderShape: Equatable {
     }
 
     static func == (a: HeaderShape, b: HeaderShape) -> Bool {
-        a.header === b.header && a.authoredBack == b.authoredBack && a.title == b.title && a.level == b.level && a.leading == b.leading && a.trailing == b.trailing && a.search === b.search && a.segments === b.segments && a.group == b.group && a.authored.map(\.id) == b.authored.map(\.id) && a.hosted.map(\.id) == b.hosted.map(\.id)
+        a.header === b.header && a.family == b.family && a.authoredBack == b.authoredBack && a.title == b.title && a.level == b.level && a.leading == b.leading && a.trailing == b.trailing && a.search === b.search && a.segments === b.segments && a.group == b.group && a.authored.map(\.id) == b.authored.map(\.id) && a.hosted.map(\.id) == b.hosted.map(\.id)
     }
 }
 

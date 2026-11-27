@@ -640,6 +640,54 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     return {text: "sent"};
   }
   if (op === "stream-option-uncaught") return fetch("wss://example.test/feed", { exactStream: () => ({text: ""}), exactTimeout: 60000 });
+  // `exactStreamOpen` (LLP 1016.000 D12): refusals, bake deferral, open head and terminal Response headers.
+  if (op === "stream-open-refusals") {
+    const url = "https://example.test/events", exactStream = () => ({text: ""}), out: string[] = [];
+    const inits: [string, any][] = [
+      [url, { exactStream, exactStreamOpen: "yes" }],
+      [url, { exactStreamOpen: true }],
+      ["wss://example.test/events", { exactStream, exactStreamOpen: true }],
+      ["exact-native:", { exactStream, exactStreamOpen: true }],
+      [url, { exactStream, exactStreamOpen: true, exactLongPoll: { cursor: "since", from: "seq" } }],
+      [url, { method: "POST", body: "x", exactStream, exactStreamOpen: true, exactUploadProgress: true }],
+    ];
+    for (const [to, init] of inits) {
+      try { await fetch(to, init); out.push("sent"); } catch (e:any) { out.push(e.name + ": " + e.message); }
+    }
+    return {text: out.join("\n")};
+  }
+  if (op === "stream-open-bake-mark") {
+    try { await fetch("wss://example.test/events", { exactStream: () => ({text: ""}), exactStreamOpen: true }); }
+    catch (e:any) { return {text: e.name + ":" + e.kind + ":" + e.code + ":" + e.message}; }
+    return {text: "sent"};
+  }
+  if (op === "stream-open-uncaught") return fetch("wss://example.test/events", { exactStream: () => ({text: ""}), exactStreamOpen: true });
+  if (op === "stream-open-sse" || op === "stream-open-bytes" || op === "stream-open-error" || op === "stream-open-error-optin") {
+    const isErr = op === "stream-open-error";
+    const checkImmutable = (h: any) => {
+      const checks: string[] = [];
+      for (const fn of ["set", "append", "delete"]) {
+        try { if (fn === "delete") h.delete("x"); else h[fn]("x", "1"); checks.push(fn + ":ok"); }
+        catch (e: any) { checks.push(fn + ":" + e.name); }
+      }
+      return checks.join(",");
+    };
+    return fetch(value, {
+      ...(isErr ? {} : { exactStreamOpen: true }),
+      exactStream: (e: any) => {
+        if (e.type === "open" && e.headers !== undefined) {
+          return {text: `head ${e.status} sid=${e.headers.get("Mcp-Session-Id")} dup=${e.headers.get("x-dup")} cookie=${e.headers.get("set-cookie")} imm=${checkImmutable(e.headers)}`};
+        }
+        if (e.type === "open") return {text: `server-open ${e.data} id=${e.lastEventId} hasHeaders=${e.headers !== undefined}`};
+        if (e.type === "message") return {text: typeof e.data === "string" ? `msg ${e.data}` : `bytes ${e.data.byteLength}`};
+        if (e.type === "error") {
+          const hdr = e.headers ? `www=${e.headers.get("WWW-Authenticate")} sid=${e.headers.get("mcp-session-id")} cookie=${e.headers.get("set-cookie")} imm=${checkImmutable(e.headers)}` : "no-headers";
+          return {text: `err ${e.kind} ${e.status ?? ""} ${hdr} body=${e.data ?? ""}`};
+        }
+        return {text: e.type};
+      }
+    } as any);
+  }
   if (op === "own-uncaught") throw new TypeError("the source's own");
   // The source's own error, and an option of a fetch that is no stream, are never marked.
   if (op === "own-error") {

@@ -13,7 +13,12 @@ final class TextCursorMacTests: XCTestCase {
     /// a person made it so, and the cursor is the key window's.
     private final class Window: NSWindow {
         var key = true
+        var invalidatedCursorViews: [ObjectIdentifier] = []
         override var isKeyWindow: Bool { key }
+        override func invalidateCursorRects(for aView: NSView) {
+            invalidatedCursorViews.append(ObjectIdentifier(aView))
+            super.invalidateCursorRects(for: aView)
+        }
     }
     private var window: Window!
     private var session: ExactSession!
@@ -128,6 +133,96 @@ final class TextCursorMacTests: XCTestCase {
         NSCursor.crosshair.set()
         move(p, to: try XCTUnwrap(p.views[16]))
         XCTAssertTrue(NSCursor.current === NSCursor.crosshair)
+    }
+
+    func testPaddingContentBoxChangeRefreshesInlineLinkCursorRectWithoutParagraphOp() throws {
+        let p = fixture()
+        let paragraph = try XCTUnwrap(p.views[13])
+        let plain = try XCTUnwrap(p.views[2])
+        let run = try XCTUnwrap(p.inlineText(15))
+        let before = try XCTUnwrap(paragraph.inlineRects(run).first)
+        window.invalidatedCursorViews.removeAll()
+
+        // A padding edit shifts the content box by 40 pt without re-emitting a paragraph op.
+        p.apply(wireBatch([
+            ["op": "fieldContent", "id": 13, "rect": [40.0, 0.0, 260.0, 20.0], "padding": [0.0, 0.0, 0.0, 40.0]],
+        ]))
+        XCTAssertEqual(window.invalidatedCursorViews.filter { $0 == ObjectIdentifier(paragraph) }.count, 1,
+                       "shifting an inline link's content box invalidates cursor rects once after the batch lands")
+        let after = try XCTUnwrap(paragraph.inlineRects(run).first)
+        XCTAssertEqual(after.minX - before.minX, 40.0, accuracy: 0.5)
+        XCTAssertNil(paragraph.cursorRect(at: paragraph.convert(NSPoint(x: before.minX + 2, y: before.midY), to: nil)),
+                     "the old link position no longer takes a pointing hand")
+        XCTAssertTrue(paragraph.cursorRect(at: paragraph.convert(NSPoint(x: after.midX, y: after.midY), to: nil)) === NSCursor.pointingHand,
+                      "the shifted link position takes the pointing hand")
+
+        // A geometry-only textLeft prop edit shifts inline link geometry without a paragraph op.
+        window.invalidatedCursorViews.removeAll()
+        p.apply(wireBatch([["op": "props", "id": 13, "set": ["textLeft": "20"]]]))
+        XCTAssertEqual(window.invalidatedCursorViews.filter { $0 == ObjectIdentifier(paragraph) }.count, 1)
+        let shifted = try XCTUnwrap(paragraph.inlineRects(run).first)
+        XCTAssertEqual(shifted.minX - after.minX, 20.0, accuracy: 0.5)
+
+        // Flow and column fragment ops invalidate inline-link cursor rects; a same-width
+        // content-box origin shift with an active flow shape recomputes the translated flow layout.
+        window.invalidatedCursorViews.removeAll()
+        p.apply(wireBatch([["op": "flow", "id": 13, "shapes": [["kind": "rect", "x": 40.0, "y": 0.0, "w": 60.0, "h": 20.0]]]]))
+        XCTAssertEqual(window.invalidatedCursorViews.filter { $0 == ObjectIdentifier(paragraph) }.count, 1)
+        window.invalidatedCursorViews.removeAll()
+        p.apply(wireBatch([["op": "fieldContent", "id": 13, "rect": [60.0, 0.0, 260.0, 20.0], "padding": [0.0, 0.0, 0.0, 60.0]]]))
+        XCTAssertEqual(window.invalidatedCursorViews.filter { $0 == ObjectIdentifier(paragraph) }.count, 1)
+        window.invalidatedCursorViews.removeAll()
+        p.apply(wireBatch([["op": "fragments", "id": 13, "fragments": [[0.0, 0.0, 150.0, 20.0, 0.0, 1.0, 0.0, 0.0]]]]))
+        XCTAssertEqual(window.invalidatedCursorViews.filter { $0 == ObjectIdentifier(paragraph) }.count, 1)
+
+        // Moving the view's frame origin alone and editing non-link labels do not churn cursor rects.
+        window.invalidatedCursorViews.removeAll()
+        p.apply(wireBatch([
+            ["op": "frame", "id": 13, "x": 30, "y": 200, "w": 300, "h": 20],
+            ["op": "fieldContent", "id": 2, "rect": [20.0, 0.0, 280.0, 20.0], "padding": [0.0, 0.0, 0.0, 20.0]],
+        ]))
+        XCTAssertFalse(window.invalidatedCursorViews.contains(ObjectIdentifier(paragraph)))
+        XCTAssertFalse(window.invalidatedCursorViews.contains(ObjectIdentifier(plain)))
+
+        // Removing the last inline link still resets cursor rects so the stale pointing hand clears.
+        window.invalidatedCursorViews.removeAll()
+        p.apply(wireBatch([["op": "paragraph", "id": 13, "runs": [
+            ["id": 14, "parent": 13, "paint": true, "props": ["text": "Plain words only"], "style": ["font_size": 16.0]],
+        ]]]))
+        XCTAssertEqual(window.invalidatedCursorViews.filter { $0 == ObjectIdentifier(paragraph) }.count, 1)
+    }
+
+    func testSwitchingPositionToAbsoluteUnderUnderlineInvalidatesParagraphDecoration() throws {
+        let p = fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 20, "kind": "view", "style": ["text_decoration_line": "underline"]],
+            ["op": "create", "id": 21, "kind": "view", "style": ["position_type": "relative"]],
+            ["op": "create", "id": 22, "kind": "text", "props": ["text": "Underlined"], "style": ["position_type": "relative", "font_size": 16.0]],
+            ["op": "children", "id": 20, "ids": [21]],
+            ["op": "children", "id": 21, "ids": [22]],
+            ["op": "children", "id": 1, "ids": [2, 3, 5, 7, 9, 11, 13, 16, 20]],
+            ["op": "frame", "id": 20, "x": 0, "y": 240, "w": 200, "h": 40],
+            ["op": "frame", "id": 21, "x": 0, "y": 0, "w": 200, "h": 40],
+            ["op": "frame", "id": 22, "x": 0, "y": 0, "w": 200, "h": 20],
+        ]))
+        let label = try XCTUnwrap(p.views[22])
+        XCTAssertNotNil(label.paragraphSpec().runs.first?.underlineColor)
+
+        // Switching the paragraph to absolute without a paragraph op drops the inherited underline.
+        p.apply(wireBatch([["op": "style", "id": 22, "style": ["position_type": "absolute", "font_size": 16.0]]]))
+        XCTAssertNil(label.paragraphSpec().runs.first?.underlineColor)
+
+        // Restoring relative brings it back; switching the intermediate container to absolute or popover drops it again.
+        p.apply(wireBatch([["op": "style", "id": 22, "style": ["position_type": "relative", "font_size": 16.0]]]))
+        XCTAssertNotNil(label.paragraphSpec().runs.first?.underlineColor)
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["position_type": "absolute"]]]))
+        XCTAssertNil(label.paragraphSpec().runs.first?.underlineColor)
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["position_type": "relative"]]]))
+        XCTAssertNotNil(label.paragraphSpec().runs.first?.underlineColor)
+        p.apply(wireBatch([["op": "props", "id": 21, "set": ["popover": "auto"]]]))
+        XCTAssertNil(label.paragraphSpec().runs.first?.underlineColor)
+        p.apply(wireBatch([["op": "props", "id": 21, "clear": ["popover"]]]))
+        XCTAssertNotNil(label.paragraphSpec().runs.first?.underlineColor)
     }
 }
 #endif

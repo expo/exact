@@ -1163,6 +1163,11 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
         needs(b"fetch(u, {exactStream: m, exactIdleTimeout: 6e4})"),
         15
     );
+    // LLP 1016.000 D12's stream open response head.
+    assert_eq!(
+        needs(b"fetch(u, {exactStream: m, exactStreamOpen: true})"),
+        20
+    );
     assert_eq!(
         needs(b"fetch(u, {exactStream: m, exactProtocols: names})"),
         12

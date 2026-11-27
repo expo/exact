@@ -16,6 +16,9 @@ pub(super) fn fill_marks(
     if symbol.is_some_and(|s| s.filled) {
         out.insert("data-symbol-fill".into(), String::new());
     }
+    if symbol.is_some_and(|s| s.mirror) {
+        out.insert("data-symbol-mirror".into(), String::new());
+    }
     if let Some(s) = symbol.filter(|s| s.filled && !s.even_odd) {
         out.insert("data-symbol-nonzero".into(), String::new());
         out.insert("data-symbol-viewbox".into(), s.view_box.into());

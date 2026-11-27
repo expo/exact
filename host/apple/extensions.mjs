@@ -22,8 +22,11 @@ export const extensionModuleCache = resolve(root, 'target', 'apple-extension-mod
  * path is currently '…'"). The path is the invocation's own argument, never one read from the message
  * (LLP 1156.006.000 D14). */
 export const staleModuleCache = (args, output) => {
+  if (!/was compiled with module cache path .*but the path is currently/s.test(output)) return null;
   const at = args.indexOf('-module-cache-path');
-  return at >= 0 && args[at + 1] && /was compiled with module cache path .*but the path is currently/s.test(output) ? args[at + 1] : null;
+  if (at >= 0 && args[at + 1]) return args[at + 1];
+  const clang = args.find(a => a.startsWith('-fmodules-cache-path='));
+  return clang ? clang.slice('-fmodules-cache-path='.length) || null : null;
 };
 
 /** An extension executable's link: application-extension API only, entered at `NSExtensionMain`. A bundle with an

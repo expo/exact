@@ -425,7 +425,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
         if attribute == .parent, let parent = dialogWebArea ?? modalAccessibilityParent { return parent }
         if attribute.rawValue == "AXLanguage" {
-            let language = presenter?.documentLanguage ?? ""
+            let language = paragraphLanguage
             return language.isEmpty ? nil : language
         }
         return ariaAttribute(attribute.rawValue) ?? tableAttribute(attribute) ?? super.accessibilityAttributeValue(attribute)
@@ -809,10 +809,14 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if clear.contains("scrollTop") { pendingScrollTop = nil }
         if let raw = set["scrollTop"], let top = Double(raw), top.isFinite { pendingScrollTop = top }
         if pendingScrollTop != nil || pendingScrollLeft != nil { presenter?.pendingScrolls.insert(id) }
+        let popoverTouched = set["popover"] != nil || clear.contains("popover")
+        let wasOutOfFlow = popoverTouched ? ["absolute", "fixed"].contains(layoutPosition) : false
         var next = props
         for k in clear { next.removeValue(forKey: k) }
         for (k, v) in set { next[k] = v }
         props = next
+        if popoverTouched { popoverFlowChanged(wasOutOfFlow: wasOutOfFlow) }
+        if isParagraph, hasInlineLinkCursorRects, ["textOffset", "textLeft", "textWidth"].contains(where: { set[$0] != nil || clear.contains($0) }) { presenter?.noteInlineCursorRects(self) }
         if set["listMarker"] != nil || clear.contains("listMarker") { layoutProseMarker() }
         if set["groupedSeparator"] != nil || clear.contains("groupedSeparator") { applyGroupedSeparator() }
         if set["symbolEffectValue"] != nil || clear.contains("symbolEffectValue") || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
@@ -1128,6 +1132,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         glassFollower?.follow() // its display link runs only in a window (`GlassGeometryMac.swift`)
         presenter?.transformGeometry.changed()
         presenter?.videoVisibility?.changed()
+        // A node moved into or out of a scroller's clip view registers as it now stands (LLP 1094.000 D15)
+        if !handlers.isDisjoint(with: FileDrag.events) { syncDropTypes() }
     }
 
     package override func viewDidChangeBackingProperties() {

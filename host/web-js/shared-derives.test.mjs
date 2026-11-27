@@ -308,10 +308,8 @@ test('nested slot arms share mount code and keep each row and arm instance', asy
   for (const sites of [false, true]) {
     const traps = [];
     await pageFor(source, async (page, js) => {
-      if (!sites) {
-        expect(js.split('Only visible leaf').length - 1).toBeLessThanOrEqual(2);
-        for (let i = 0; i < layers; i++) expect(js.split(`"layer-${i}"`).length - 1).toBeLessThanOrEqual(2);
-      }
+      expect(js.split('Only visible leaf').length - 1).toBeLessThanOrEqual(2);
+      for (let i = 0; i < layers; i++) expect(js.split(`"layer-${i}"`).length - 1).toBeLessThanOrEqual(2);
       const leaf = page.getByTestId('leaf-9');
       expect(await leaf.getAttribute('aria-label')).toBe('row\0s0\0');
       const initial = await leaf.elementHandle();
@@ -385,7 +383,7 @@ component Suffix
   const reports = [];
   for (const sites of [false, true]) {
     await pageFor(source, async (page, js) => {
-      if (!sites) expect(js.split('"Row meter"')).toHaveLength(2);
+      expect(js.split('"Row meter"')).toHaveLength(2);
       expect(await page.getByLabel('Row meter').allTextContents()).toEqual([
         '(3)A[4]!', '(4)B1[5]!', '(5)C[6]!', '(6)A[7]!', '(7)B4[8]!', '(8)[9]!',
       ]);
@@ -544,7 +542,7 @@ component Card
   const traps = [];
   for (const sites of [false, true]) {
     await pageFor(source, async (page, js) => {
-      if (!sites) expect(js.split('"Shared numeric card"').length - 1).toBe(1);
+      expect(js.split('"Shared numeric card"').length - 1).toBe(1);
       const cards = page.getByLabel('Shared numeric card');
       const totals = ns => ns.map(n => `total ${n}again ${n}`);
       expect(await cards.allTextContents()).toEqual(totals([2, 6, 7, 5, 2]));
@@ -583,7 +581,7 @@ test('shared action code writes its own slot and reports the name of the failing
 `;
   for (const sites of [false, true]) {
     await pageFor(source, async (page, js) => {
-      expect(js.split('" results "').length - 1).toBe(sites ? 2 : 1);
+      expect(js.split('" results "').length - 1).toBe(1);
       await page.getByTestId('second').click();
       expect(await page.getByTestId('right').textContent()).toBe('Second results 2');
       expect(await page.getByTestId('left').textContent()).toBe('');
@@ -674,7 +672,7 @@ component Meter
   const reports = [];
   for (const sites of [false, true]) {
     await pageFor(source, async (page, js) => {
-      if (!sites) expect(js.split('"Slot meter"')).toHaveLength(2);
+      expect(js.split('"Slot meter"')).toHaveLength(2);
       expect(await page.getByLabel('Slot meter').allTextContents()).toEqual([
         'Before 2AAfter 2', 'Before 2BAgainAfter 2', 'Before 2CAfter 2',
       ]);
@@ -844,4 +842,91 @@ component Detail
     });
     expect(unmounted).toEqual(['60:X:R60', '60:Y:R60', 'R60-D60-1']);
   });
+}, 60000);
+
+test('development builds (--sites and --dev-reload) share mounts and keep per-site data-site, perf counts, and each regions', async () => {
+  const source = `shape Opt
+  id: string
+  label: string
+
+component App
+  state leftMode = "a"
+  state rightMode = "b"
+  state opts: Opt[] = [Opt(id="x", label="Alpha"), Opt(id="y", label="Beta")]
+  action flipRight
+    rightMode = rightMode == "a" ? "b" : "a"
+  view
+    column
+      button "Flip right" press=flipRight testId="flip-right"
+      Card(id="left", mode=leftMode, opts=opts)
+        text "One"
+      Card(id="right", mode=rightMode, opts=opts)
+        text "Two"
+        text "Extra"
+
+component Card
+  props
+    id: string
+    mode: string
+    opts: Opt[]
+  slot
+  state count = 0
+  action bump
+    count = count + 1
+  view
+    column testId=\`card-\${id}\` aria-label="Dev shared card"
+      text \`\${id}:\${count}\` testId=\`val-\${id}\` color=(mode == "a" ? "#111111" : "#224488")
+      children
+      button "Bump" press=bump testId=\`bump-\${id}\`
+      for opt in opts key=opt.id
+        text \`\${id}-\${opt.label}\` testId=\`opt-\${id}-\${opt.id}\`
+`;
+  await pageFor(source, async (page, js) => {
+    expect(js.split('"Dev shared card"')).toHaveLength(2);
+    expect(js.split('"Bump"')).toHaveLength(2);
+    expect(js.split('Pc(')).toHaveLength(2);
+    expect(js.split('each(')).toHaveLength(2);
+
+    const cardSites = async id => ({
+      card: Number(await page.getByTestId(`card-${id}`).getAttribute('data-site')),
+      val: Number(await page.getByTestId(`val-${id}`).getAttribute('data-site')),
+      bump: Number(await page.getByTestId(`bump-${id}`).getAttribute('data-site')),
+      optX: Number(await page.getByTestId(`opt-${id}-x`).getAttribute('data-site')),
+      optY: Number(await page.getByTestId(`opt-${id}-y`).getAttribute('data-site')),
+      carry: await page.getByTestId(`card-${id}`).getAttribute('data-carry-type'),
+    });
+    const left = await cardSites('left');
+    const right = await cardSites('right');
+
+    // Distinct plan sites across instances, including after the variable-length slot.
+    expect(left.carry).toBe('View');
+    expect(right.carry).toBe('View');
+    expect(new Set([left.card, left.val, left.bump, left.optX, right.card, right.val, right.bump, right.optX]).size).toBe(8);
+    expect(left.optX).toBe(left.optY);
+    expect(right.optX).toBe(right.optY);
+    expect(right.bump - right.card).toBe(left.bump - left.card + 1);
+
+    // Install perf.js and verify evaluations attribute to the right site for both pf bindings and lowered Pc styles.
+    await page.evaluate(async () => {
+      const { install } = await import('/perf.js');
+      install(document.getElementById('exact-root'));
+    });
+    await page.getByTestId('bump-left').click();
+    await page.getByTestId('flip-right').click();
+    expect(await page.getByTestId('val-left').textContent()).toBe('left:1');
+    expect(await page.getByTestId('val-right').textContent()).toBe('right:0');
+    expect(await page.getByTestId('val-right').evaluate(el => getComputedStyle(el).color)).toBe('rgb(17, 17, 17)');
+
+    const report = await page.evaluate(async () => {
+      const { reply } = await import('/perf.js');
+      return reply(document.getElementById('exact-root'), {});
+    });
+    const bySite = new Map(report.sites.map(s => [s.site, s]));
+    expect(bySite.get(left.val).evaluated).toBeGreaterThanOrEqual(1);
+    expect(bySite.get(right.val).evaluated).toBeGreaterThanOrEqual(1);
+    expect(bySite.get(left.card).live).toBe(1);
+    expect(bySite.get(right.card).live).toBe(1);
+    expect(bySite.get(left.optX).live).toBe(2);
+    expect(bySite.get(right.optX).live).toBe(2);
+  }, ['--sites', '--dev-reload']);
 }, 60000);

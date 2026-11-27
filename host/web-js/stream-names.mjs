@@ -5,18 +5,19 @@
 import { parseSync, Visitor } from 'rolldown/utils';
 
 const NAME = 'exactStream';
+const WORD = /(?:^|[^A-Za-z0-9_$])exactStream(?![A-Za-z0-9_$])/;
 
 /** Whether the module `id`, whose text is `code`, spells `exactStream`. */
 export function namesStream(code, id) {
   if (/\.d\.[cm]?ts$/.test(id)) return false;
-  if (code.includes(NAME)) return true;
+  if (WORD.test(code)) return true;
   if (!code.includes('\\')) return false;
-  if (id.endsWith('.json')) return JSON.stringify(JSON.parse(code)).includes(NAME);
+  if (id.endsWith('.json')) return WORD.test(JSON.stringify(JSON.parse(code)));
   let found = false;
   new Visitor({
     Identifier: node => { found ||= node.name === NAME; },
-    Literal: node => { found ||= typeof node.value === 'string' && node.value.includes(NAME); },
-    TemplateElement: node => { found ||= !!node.value.cooked?.includes(NAME); },
+    Literal: node => { found ||= typeof node.value === 'string' && WORD.test(node.value); },
+    TemplateElement: node => { found ||= !!node.value.cooked && WORD.test(node.value.cooked); },
   }).visit(parseSync(id, code).program);
   return found;
 }

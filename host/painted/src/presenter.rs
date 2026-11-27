@@ -951,6 +951,7 @@ impl<D: DataSource> Presenter<D> {
 
     fn finish_commit(&mut self) -> Option<String> {
         let error = self.service_commit();
+        self.drag_committed();
         self.size_controls();
         // This turn consumes the reports now. Only refinement left over may
         // wake another turn; waking here makes an idle list redraw forever.
@@ -1437,37 +1438,6 @@ impl<D: DataSource> Presenter<D> {
         let e = self.host.set_delivery_from_compat(json);
         let after = self.after_commit();
         e.or(after)
-    }
-
-    /// A motion frame.
-    pub fn tick(&mut self, now_ms: f64) {
-        let animating = self.arrange.is_some()
-            || self.group.is_some()
-            || self.focus.is_some()
-            || self.brush.moving()
-            || self.bars_ripple_moving()
-            || self.surface_ripple_moving()
-            || self.stage_moving();
-        let (layout, paint) = self.host.tick_effects(now_ms);
-        self.release_overdue();
-        if layout {
-            self.hatches.stale = true;
-            self.dirty = true;
-            self.clamp_scroll();
-            self.queue_collections();
-            if let Some(error) = self.refresh_transform_geometry() {
-                self.host.log(error);
-            }
-        }
-        self.tick_arrange(self.host.now());
-        self.tick_field_drag(self.host.now());
-        self.settle_wheel_snaps();
-        self.step_glides(now_ms);
-        self.step_zooms(now_ms);
-        if let Some(error) = self.deliver_scroll_ends() {
-            self.host.log(error);
-        }
-        self.dirty |= paint || animating;
     }
 
     /// The box of a node, if painted.

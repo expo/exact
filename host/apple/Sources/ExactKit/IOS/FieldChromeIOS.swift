@@ -157,6 +157,10 @@ final class FieldChromeCache: @unchecked Sendable {
 }
 
 extension TextEngine {
+    package static func inlineBarPointSize(_ traits: UITraitCollection) -> CGFloat {
+        FieldChromeCache.barItemFont(traits).pointSize
+    }
+
     // Register the platform descriptor alongside declared families. Its id is
     // picked after the plan catalog, so no Contract stack can collide with it.
     func registerControlFont(_ font: UIFont) -> UInt16 {
@@ -180,6 +184,10 @@ extension TextEngine {
     }
     package static func controlWeight(_ font: UIFont) -> Int {
         if let weight = TextEngine.cssWeight(of: font) { return weight }
+        if let os2 = CTFontCopyTable(font as CTFont, CTFontTableTag(kCTFontTableOS2), []) as Data?, os2.count >= 68 {
+            let weight = Int(os2[os2.startIndex + 4]) << 8 | Int(os2[os2.startIndex + 5])
+            if (1...1000).contains(weight) { return weight }
+        }
         let traits = font.fontDescriptor.object(forKey: .traits) as? [UIFontDescriptor.TraitKey: Any]
         let weight = traits?[.weight] as? CGFloat ?? 0
         return weight >= UIFont.Weight.bold.rawValue ? 700 : weight >= UIFont.Weight.semibold.rawValue ? 600 : 400

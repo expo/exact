@@ -22,11 +22,11 @@ struct Schema {
     enums: std::collections::BTreeMap<String, EnumDef>,
     styles: Vec<StyleRow>,
     opcodes: Vec<OpcodeRow>,
-    symbols: Vec<[String; 3]>,
+    symbols: Vec<SymbolRow>,
     #[serde(rename = "symbolAliases")]
     symbol_aliases: Vec<[String; 2]>,
     #[serde(rename = "symbolGlyphs")]
-    symbol_glyphs: Vec<(String, String, String, bool)>,
+    symbol_glyphs: Vec<SymbolGlyphRow>,
     materials: Vec<[String; 7]>,
     #[serde(rename = "buttonStyles")]
     button_styles: Vec<[String; 5]>,
@@ -181,22 +181,36 @@ fn generate(schema: &Schema, digest: u64) -> String {
     writeln!(
         w,
         "pub const SYMBOL_ROLES: &[&str] = &{:?};",
-        schema.symbols.iter().map(|row| &row[0]).collect::<Vec<_>>()
+        schema
+            .symbols
+            .iter()
+            .map(|row| &row.role)
+            .collect::<Vec<_>>()
     )
     .unwrap();
     writeln!(
         w,
-        "/// Resolve a role to its Apple name, browser path, and whether that path is\n/// filled (even-odd) rather than stroked; never accepts a platform name."
+        "/// Resolve a role to its Apple name, browser path, whether that path is\n/// filled (even-odd) rather than stroked, and whether it mirrors in RTL;\n/// never accepts a platform name."
     )
     .unwrap();
     writeln!(
         w,
-        "pub fn symbol(role: &str) -> Option<(&'static str, &'static str, bool)> {{ match role {{"
+        "pub fn symbol(role: &str) -> Option<(&'static str, &'static str, bool, bool)> {{ match role {{"
     )
     .unwrap();
-    for [role, apple, path] in &schema.symbols {
+    for SymbolRow {
+        role,
+        apple,
+        path,
+        mirror,
+    } in &schema.symbols
+    {
         let filled = role.ends_with("-fill");
-        writeln!(w, "{role:?} => Some(({apple:?}, {path:?}, {filled})),").unwrap();
+        writeln!(
+            w,
+            "{role:?} => Some(({apple:?}, {path:?}, {filled}, {mirror})),"
+        )
+        .unwrap();
     }
     writeln!(w, "_ => None, }} }}").unwrap();
     write_symbol_role(w, schema);

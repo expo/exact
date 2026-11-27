@@ -267,11 +267,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         out: String::new(),
         mount_templates: Default::default(),
         next_local_element: None,
-        repeated_nodes: if site_attrs || dev_reload {
-            Vec::new()
-        } else {
-            sites::repeated_nodes(plan, &sites)
-        },
+        repeated_nodes: sites::repeated_nodes(plan, &sites),
         classes: Vec::new(),
         looks: Vec::new(),
         press_paint: false,
@@ -969,7 +965,6 @@ impl Em<'_> {
         if let Some(id) = self.exact_id(i) {
             attrs.push(("data-exact-id".into(), id));
         }
-        attrs.extend(self.site_attrs.then(|| ("data-site".into(), i.to_string())));
         attrs.extend(
             self.dev_reload
                 .then(|| ("data-carry-type".into(), format!("{node_type:?}"))),
@@ -1017,28 +1012,18 @@ impl Em<'_> {
             }
             format!("{}", at + 1)
         };
-        let attrs_js = if attrs.is_empty() {
-            "0".to_string()
-        } else {
-            format!(
-                "{{{}}}",
-                attrs
-                    .iter()
-                    .map(|(k, v)| format!(
-                        "{}:{}",
-                        serde_json::to_string(k).unwrap(),
-                        scope.operand(serde_json::to_string(v).unwrap())
-                    ))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        };
+        let attrs_js = self.attrs_js(i, &attrs, scope);
         let text = content
             .map(|t| scope.operand(serde_json::to_string(&t).unwrap()))
             .unwrap_or("0".into());
         let status_owner = self.answers.status_owner(i);
+        // @ref LLP 1075.003 §3.7 — a tab's contents are made when it is first
+        // selected: a virtualized list's rows as well.
+        let panel = self.panels.binary_search(&exact_plan::NodesId(i)).is_ok();
+        // Keep a unique element name for dev-reload tab panels so inner `v0`
+        // declarations do not shadow the `tp(e, e => ...)` carry parameter.
         let e = match &mut self.next_local_element {
-            Some(next) if !status_owner => {
+            Some(next) if !status_owner && !(panel && self.dev_reload) => {
                 let name = format!("v{next}");
                 *next += 1;
                 name
@@ -1065,7 +1050,7 @@ impl Em<'_> {
                 }
                 // A trap belongs to this binding instance even before it has a DOM element.
                 let f = self.binding_value(i, "{}", &b, scope, true)?;
-                let f = self.counted(i, k, f);
+                let f = self.counted(i, &e, k, scope, f);
                 let read = format!("{e}{name}");
                 let memo = self.uses.rt("bindingMemo");
                 let _ = write!(self.out, "const {read}={memo}({f});");
@@ -1216,7 +1201,7 @@ impl Em<'_> {
                 let f = self
                     .bound(i, &e, &b, scope)
                     .map_err(|x| format!("node {i}: {x}"))?;
-                self.counted(i, k, f)
+                self.counted(i, &e, k, scope, f)
             };
             self.paint_binding(node_type, &b, &e, &f);
             match b.kind {
@@ -1273,7 +1258,7 @@ impl Em<'_> {
             seen.extend(raw.map(|raw| lower::Seen { b, f, raw, at, end }));
         }
         if !seen.is_empty() {
-            self.lower(&e, &class, &parts, scope, seen)?;
+            self.lower(i, &e, &class, &parts, scope, seen)?;
         }
         self.motion_node(i, &e, scope)?;
         if self.reorder_handle(i) {
@@ -1459,9 +1444,6 @@ impl Em<'_> {
             let (bind, name) = (bind.unwrap_or_default(), h.event.name());
             let _ = write!(self.out, "{on}({e},\"{name}\",{handler}{bind});");
         }
-        // @ref LLP 1075.003 §3.7 — a tab's contents are made when it is first
-        // selected: a virtualized list's rows as well.
-        let panel = self.panels.binary_search(&exact_plan::NodesId(i)).is_ok();
         if panel {
             let tp = self.uses.rt("tp");
             let _ = write!(self.out, "{tp}({e},{e}=>{{");

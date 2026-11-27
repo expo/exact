@@ -1,0 +1,170 @@
+// PushedNoticeIOSTests (#2055): a pushed route whose row above navigationScroll
+// mounts while UIKit's push animation is still running, plus a permanent flat
+// leaf above navigationScroll and a level-1 large-title variant.
+routes nav
+  tab start "/"
+    detail "/detail"
+    timed "/timed"
+    slot "/slot"
+    flat "/flat"
+    large "/large"
+  tab other "/other"
+
+fn rowNames(): string[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN".split("")
+
+component PushedNotice
+  state ready = false
+  action pick(name: string)
+    nav = select(nav, name)
+  action open(name: string)
+    ready = false
+    nav = push(nav, "/" + name)
+  action reveal
+    ready = true
+  action hide
+    ready = false
+  view
+    main testId="root" navigationKey=`${top(nav).id}` width="100%" height="100%" display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              if e.name == "start"
+                Start(route=`${e.id}`, open=open, reveal=reveal)
+              else if e.name == "detail"
+                Detail(route=`${e.id}`, ready=ready, reveal=reveal, hide=hide)
+              else if e.name == "timed"
+                TimedDetail(route=`${e.id}`)
+              else if e.name == "slot"
+                SlotDetail(route=`${e.id}`, ready=ready, reveal=reveal)
+              else if e.name == "flat"
+                FlatDetail(route=`${e.id}`)
+              else if e.name == "large"
+                LargeDetail(route=`${e.id}`, ready=ready, reveal=reveal)
+              else
+                Other(route=`${e.id}`)
+      row role="tablist" testId="tabs"
+        button role="tab" aria-controls="panel-start" aria-selected=(nav.tab == "start") press=pick("start") testId="tab-start" flex=1
+          image "symbol:list"
+          text "Start"
+        button role="tab" aria-controls="panel-other" aria-selected=(nav.tab == "other") press=pick("other") testId="tab-other" flex=1
+          image "symbol:search"
+          text "Other"
+
+component Start
+  props
+    route: string
+    open: action
+    reveal: action
+  view
+    column navigationKey=route navigationScroll="start-scroll" position="absolute" inset=0 display="flex" flex-direction="column" background-color="#ffffff" testId="route-start"
+      header
+        text "Start" role="heading" aria-level=1
+      scroll id="start-scroll" flex=1 min-height=0
+        button press=open("detail") testId="open-detail" padding=16
+          text "Open detail"
+        button press=open("timed") testId="open-timed" padding=16
+          text "Open timed"
+        button press=open("slot") testId="open-slot" padding=16
+          text "Open slot"
+        button press=open("flat") testId="open-flat" padding=16
+          text "Open flat"
+        button press=open("large") testId="open-large" padding=16
+          text "Open large"
+        button press=reveal testId="reveal-from-start" padding=16
+          text "Reveal"
+
+component Detail
+  props
+    route: string
+    ready: bool
+    reveal: action
+    hide: action
+  view
+    column navigationKey=route navigationScroll="detail-list" position="absolute" inset=0 display="flex" flex-direction="column" background-color="#ffffff" testId="route-detail"
+      header
+        text "Detail" role="heading" aria-level=2
+      if ready
+        row padding="8px 16px" flex-shrink=0 background-color="#ffd9b3" testId="notice"
+          text "A notice above the list" font-weight=600
+      list id="detail-list" testId="detail-list" virtualized=true appearance="none" flex=1 min-height=0 estimated-item-height=44
+        for r, i in rowNames() key=r
+          row padding=12 border-bottom-width=1 border-bottom-style="solid" border-bottom-color="#dddddd" testId=`detail-row-${i}`
+            text `Row ${i + 1}`
+
+component TimedDetail
+  props
+    route: string
+  state ready = false
+  task arrive when not ready
+    after(80, reveal)
+  action reveal
+    ready = true
+  view
+    column navigationKey=route navigationScroll="timed-list" position="absolute" inset=0 display="flex" flex-direction="column" background-color="#ffffff" testId="route-timed"
+      header
+        text "Timed" role="heading" aria-level=2
+      if ready
+        row padding="8px 16px" flex-shrink=0 background-color="#ffd9b3" testId="timed-notice"
+          text "Timed notice above the list" font-weight=600
+      list id="timed-list" testId="timed-list" virtualized=true appearance="none" flex=1 min-height=0 estimated-item-height=44
+        for r, i in rowNames() key=r
+          row padding=12 border-bottom-width=1 border-bottom-style="solid" border-bottom-color="#dddddd" testId=`timed-row-${i}`
+            text `Row ${i + 1}`
+
+component SlotDetail
+  props
+    route: string
+    ready: bool
+    reveal: action
+  view
+    column navigationKey=route navigationScroll="slot-list" position="absolute" inset=0 display="flex" flex-direction="column" background-color="#ffffff" testId="route-slot"
+      header
+        text "Slot" role="heading" aria-level=2
+      column flex-shrink=0
+        if ready
+          row padding="8px 16px" flex-shrink=0 background-color="#ffd9b3" testId="slot-notice"
+            text "Notice inside pre-mounted container" font-weight=600
+      list id="slot-list" testId="slot-list" virtualized=true appearance="none" flex=1 min-height=0 estimated-item-height=44
+        for r, i in rowNames() key=r
+          row padding=12 border-bottom-width=1 border-bottom-style="solid" border-bottom-color="#dddddd" testId=`slot-row-${i}`
+            text `Row ${i + 1}`
+
+component FlatDetail
+  props
+    route: string
+  view
+    column navigationKey=route navigationScroll="flat-list" position="absolute" inset=0 display="flex" flex-direction="column" background-color="#ffffff" testId="route-flat"
+      header
+        text "Flat" role="heading" aria-level=2
+      box height=24 flex-shrink=0 background-color="#ffd9b3"
+      list id="flat-list" testId="flat-list" virtualized=true appearance="none" flex=1 min-height=0 estimated-item-height=44
+        for r, i in rowNames() key=r
+          row padding=12 border-bottom-width=1 border-bottom-style="solid" border-bottom-color="#dddddd" testId=`flat-row-${i}`
+            text `Row ${i + 1}`
+
+component LargeDetail
+  props
+    route: string
+    ready: bool
+    reveal: action
+  view
+    column navigationKey=route navigationScroll="large-scroll" position="absolute" inset=0 display="flex" flex-direction="column" background-color="#ffffff" testId="route-large"
+      header
+        text "Large" role="heading" aria-level=1
+      if ready
+        row padding="8px 16px" flex-shrink=0 background-color="#ffd9b3" testId="large-notice"
+          text "Large-title notice" font-weight=600
+      scroll id="large-scroll" testId="large-scroll" flex=1 min-height=0
+        row padding=12 testId="large-row-0"
+          text "First row"
+        column height=1600
+
+component Other
+  props
+    route: string
+  view
+    column navigationKey=route position="absolute" inset=0 display="flex" flex-direction="column" background-color="#ffffff" testId="route-other"
+      header
+        text "Other" role="heading" aria-level=1
+      text "Other tab" padding=16

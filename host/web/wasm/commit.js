@@ -508,6 +508,10 @@ function apply(batch) {
               if (messages++ === 0) {
                 first();
               }
+              if (m.head) {
+                safelyFulfill(requestIncarnation, op.ticket, 11, m.status, "", encoder.encode(JSON.stringify([...m.headers])));
+                return;
+              }
               batch.push(m);
               if (m.more) {
                 return;

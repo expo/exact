@@ -43,7 +43,10 @@ function request(input, init, redirect, protocols) {
   const idle = init.exactIdleTimeout;
   if (idle !== undefined && (!Number.isInteger(idle) || idle < 1 || idle > 3600000)) throw new TypeError('exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000');
   if (idle !== undefined && (upload || init.exactLongPoll !== undefined || !(/^(wss?|https?):/i.test(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url)))) throw new TypeError('exactIdleTimeout: only a WebSocket, event or byte stream takes an idle timeout');
-  return { method, url, signal, headers: [...new Headers(init.headers ?? request?.headers ?? [])], raw, bodyFrom, credentials: init.credentials ?? request?.credentials, cache: init.cache ?? request?.cache, mode: init.mode ?? request?.mode, redirect, maxResponseBytes: independent ?? 1048576, longPoll: longPollOf(init.exactLongPoll, method, url), upload, timeoutMs, idleTimeoutMs: idle, protocols };
+  const streamOpen = init.exactStreamOpen; // LLP 1016.000 D12
+  if (streamOpen !== undefined && streamOpen !== true && streamOpen !== false) throw new TypeError('exactStreamOpen is true or false');
+  if (streamOpen && (upload || init.exactLongPoll !== undefined || (/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^https?:/i.test(url)))) throw new TypeError('exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen');
+  return { method, url, signal, headers: [...new Headers(init.headers ?? request?.headers ?? [])], raw, bodyFrom, credentials: init.credentials ?? request?.credentials, cache: init.cache ?? request?.cache, mode: init.mode ?? request?.mode, redirect, maxResponseBytes: independent ?? 1048576, longPoll: longPollOf(init.exactLongPoll, method, url), upload, streamOpen: streamOpen === true, timeoutMs, idleTimeoutMs: idle, protocols };
 }
 // `exactUploadProgress` (LLP 1016.000 D10), as js/src/binary.js `uploadOf` checks it.
 function uploadOf(init, method, url, redirect) {
@@ -234,7 +237,9 @@ export function open({ input, init, redirect, protocols, origin }, conv, grantSe
   // A long poll's reply that is no event (`exact:reply`, LLP 1016.000 D8) reaches no mapper, nor an upload's start
   // (`exact:sending`), which, as any bytes sent, says it reached the network (rt.js); its bytes sent are a `progress`
   // event, as XMLHttpRequest's.
-  const event = m => req.upload && m.event === 'exact:progress' ? { type: 'progress', ...JSON.parse(m.data), lengthComputable: true, data: '', lastEventId: '', coalesced: m.coalesced } : { type: m.event || 'message', data: m.data, lastEventId: m.id, coalesced: m.coalesced, protocol: m.protocol };
+  const event = m => m.head ? { type: 'open', status: m.status, headers: m.headers, data: '', lastEventId: '', coalesced: 0 }
+    : req.upload && m.event === 'exact:progress' ? { type: 'progress', ...JSON.parse(m.data), lengthComputable: true, data: '', lastEventId: '', coalesced: m.coalesced }
+    : { type: m.event || 'message', data: m.data, lastEventId: m.id, coalesced: m.coalesced, protocol: m.protocol };
   // Messages that arrive together (`more`, http-body.js) are mapped one by one, each after the last one's promise,
   // and their last value commits once (LLP 1016.000 D4); a failure ends them there. A mapper that answers now is
   // called in a loop, so a read of any number of events takes no stack.
@@ -254,7 +259,7 @@ export function open({ input, init, redirect, protocols, origin }, conv, grantSe
   // What waits behind a mapper that awaits, as natively (mapper_turns.rs): at most 4096 messages, or 64 MiB of
   // their data; one more ends the stream (D4: never queue without limit).
   let held = 0, heldBytes = 0, fellBehind = false;
-  const bytesOf = m => typeof m.data === 'string' ? utf8.encode(m.data).length : m.data.byteLength;
+  const bytesOf = m => m.head ? [...m.headers].reduce((n, [k, v]) => n + utf8.encode(k).length + utf8.encode(v).length, 0) : typeof m.data === 'string' ? utf8.encode(m.data).length : m.data.byteLength;
   const message = m => {
     controller.sent ||= !!req.upload;
     if (controller.dropped || fellBehind || req.longPoll && m.event === 'exact:reply' || req.upload && m.event === 'exact:sending') return;
@@ -285,7 +290,7 @@ export function open({ input, init, redirect, protocols, origin }, conv, grantSe
       const end = () => value(o.close ? { type: 'close', data: '', lastEventId: '', coalesced: 0, ...o.close } : o.kind
       ? { type: 'error', data: '', lastEventId: '', coalesced: 0, kind: KINDS[o.kind], message: said.decode(o.body), status: 0 }
       : req.upload ? { type: 'load', status: o.status, data: said.decode(o.body), lastEventId: '', coalesced: 0 }
-      : { type: 'error', data: said.decode(o.body), lastEventId: '', coalesced: 0, kind: 'Response', message: `HTTP ${o.status}`, status: o.status });
+      : { type: 'error', data: said.decode(o.body), lastEventId: '', coalesced: 0, kind: 'Response', message: `HTTP ${o.status}`, status: o.status, headers: o.headersObj ?? Response.error().headers });
       // An injected end overtakes frames waiting on an unfinished mapper.
       return controller.dropped ? end() : inOrder(end);
     })

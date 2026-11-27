@@ -200,6 +200,8 @@ pub(crate) struct Mirror {
     props: exact_kernel::SortedMap<&'static str, String>,
     /// The style the presenter last heard, one allocation per text ([`paragraph::StyleTexts`]).
     style: std::rc::Rc<str>,
+    /// The kernel inputs of the last run table sent for this paragraph.
+    paragraph: Option<Box<exact_kernel::ParagraphStamp>>,
     children: Box<[ViewId]>,
     frame: Option<(f32, f32, f32, f32)>,
     content: Option<(f32, f32)>,

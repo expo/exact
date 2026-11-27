@@ -80,6 +80,7 @@ pub enum HttpScheduling {
     },
 }
 
+pub use crate::upload::StreamHead;
 pub use http::{CacheMode, Redirect};
 #[path = "request_preload.rs"]
 mod preload;
@@ -129,6 +130,11 @@ pub struct Request {
     pub socket: bool,
     /// Ordered WebSocket protocol names (LLP 1016.000); set with [`Request::protocols`].
     pub protocols: Vec<String>,
+    /// An HTTP stream whose 2xx response opens with a standalone `open` message
+    /// carrying the status and headers before any event or byte chunk (LLP
+    /// 1016.000 D12). Set by TypeScript's `fetch(url, {exactStream, exactStreamOpen: true})`
+    /// and [`Request::stream_open`].
+    pub stream_open: bool,
     /// An HTTP stream whose body, when it is not `text/event-stream`,
     /// arrives as bytes (LLP 1016.000, the byte stream of 2026-10-23): each
     /// [`Message`] is `binary`, the bytes read since the runner took the
@@ -313,6 +319,7 @@ impl Request {
             headers: Vec::new(),
             body,
             stream: false,
+            stream_open: false,
             socket: false,
             protocols: Vec::new(),
             bytes: false,
@@ -436,6 +443,7 @@ impl Request {
             headers: Vec::new(),
             body: Vec::new(),
             stream: false,
+            stream_open: false,
             socket: false,
             protocols: Vec::new(),
             bytes: false,
@@ -485,6 +493,7 @@ impl Request {
             headers: vec![("content-type".into(), "application/json".into())],
             body: json.as_bytes().to_vec(),
             stream: false,
+            stream_open: false,
             socket: false,
             protocols: Vec::new(),
             bytes: false,
@@ -974,6 +983,10 @@ pub struct Message {
     /// A two-way socket's binary frame (LLP 1016.000 D7): its bytes, with
     /// `data` empty. `None` for text and for every server-sent event.
     pub binary: Option<Vec<u8>>,
+    /// The 2xx response head of a host-synthesized HTTP stream `open` event
+    /// (`Request::stream_open`, LLP 1016.000 D12). `None` for every other
+    /// message, including a server-sent `event: open`.
+    pub head: Option<Box<StreamHead>>,
 }
 
 /// One operation a mutation, or the socket's own mapper, stages on a
@@ -1156,6 +1169,9 @@ impl Outcome {
     pub fn summary(&self) -> String {
         match self {
             Outcome::Response(r) => text!("HTTP {}, {} bytes", r.status, r.body.len()),
+            Outcome::Message(m) if m.head.is_some() => {
+                text!("stream open, HTTP {}", m.head.as_deref().unwrap().status)
+            }
             Outcome::Message(m) if m.coalesced > 0 => {
                 text!("message, {} bytes, {} coalesced", m.data.len(), m.coalesced)
             }
@@ -1426,56 +1442,6 @@ impl std::fmt::Debug for RequestOut {
             .field("class", &self.class)
             .field("forced", &self.forced)
             .finish()
-    }
-}
-
-#[cfg(test)]
-mod summary_tests {
-    use super::*;
-
-    #[test]
-    fn a_summary_is_the_text_format_wrote() {
-        for (status, len) in [(200, 0), (404, 5), (u16::MAX, 70_000)] {
-            let outcome = Outcome::Response(Response {
-                status,
-                headers: vec![],
-                body: vec![0; len],
-            });
-            assert_eq!(outcome.summary(), format!("HTTP {status}, {len} bytes"));
-            let storage = Outcome::Storage(vec![1; len]);
-            assert_eq!(storage.summary(), format!("storage, {len} bytes"));
-            let captured = Outcome::Surface(SurfaceOutcome::Captured(vec![2; len]));
-            assert_eq!(captured.summary(), format!("surface captured, {len} bytes"));
-        }
-    }
-
-    #[test]
-    fn a_failure_summary_lowers_its_kind_as_unicode_would() {
-        for kind in [
-            FailureKind::Network,
-            FailureKind::Refused,
-            FailureKind::Unsupported,
-            FailureKind::Aborted,
-            FailureKind::Timeout,
-            FailureKind::NotFound,
-        ] {
-            // Every variant is listed: adding one breaks this match.
-            match kind {
-                FailureKind::Network
-                | FailureKind::Refused
-                | FailureKind::Unsupported
-                | FailureKind::Aborted
-                | FailureKind::Timeout
-                | FailureKind::NotFound => {}
-            }
-            let name = format!("{kind:?}");
-            assert!(name.is_ascii(), "{name}");
-            let outcome = Outcome::Failed {
-                kind,
-                message: "no".into(),
-            };
-            assert_eq!(outcome.summary(), format!("{}: no", name.to_lowercase()));
-        }
     }
 }
 

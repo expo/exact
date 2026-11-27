@@ -111,6 +111,7 @@ fn opened(
     };
     let sent = (request.upload_progress).then(|| progress(shared, ticket, abort.signal()));
     let two_way = request.socket;
+    let stream_open = request.stream_open;
     let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // A source's scope narrows the app's grants, as on the workers.
         let admitted = match request.grants.as_deref() {
@@ -183,9 +184,19 @@ fn opened(
     match opened {
         // The bindings live as long as the body they opened.
         Ok((Opened::Events(response, limit), _bindings)) => {
+            if stream_open && !deliver_http_open(shared, ticket, &response, limit, quiet.as_ref()) {
+                let mut body = response.body;
+                body.cancel();
+                return;
+            }
             read_events(shared, ticket, response, limit, abort, quiet)
         }
         Ok((Opened::Bytes(response, limit), _bindings)) => {
+            if stream_open && !deliver_http_open(shared, ticket, &response, limit, quiet.as_ref()) {
+                let mut body = response.body;
+                body.cancel();
+                return;
+            }
             bytes::read(shared, ticket, response, limit, abort, quiet)
         }
         Ok((Opened::Socket(socket, limit), _bindings)) if two_way => {
@@ -341,13 +352,14 @@ fn deliver(
     else {
         return Delivered::Gone;
     };
-    // An upload's start is never folded into another message, nor another
-    // into it (LLP 1016.000 D10): it says the upload reached the network.
-    let start =
-        |done: &Completed| matches!(&done.outcome, Outcome::Message(m) if m.upload_started());
+    // An upload's start (LLP 1016.000 D10) and an HTTP stream's open head (D12)
+    // stand on their own turn: never folded into another message, nor another into them.
+    let standalone = |m: &Message| m.upload_started() || m.is_http_open();
+    let keep_apart =
+        |done: &Completed| matches!(&done.outcome, Outcome::Message(m) if standalone(m));
     let waiting = (state.completed[lane].iter_mut())
-        .find(|done| done.ticket == ticket && done.message && !start(done))
-        .filter(|_| !message.upload_started());
+        .find(|done| done.ticket == ticket && done.message && !keep_apart(done))
+        .filter(|_| !standalone(&message));
     match waiting {
         Some(done) if reply => {
             done.elapsed_ms = elapsed_ms;
@@ -412,6 +424,44 @@ fn deliver(
     Delivered::Queued
 }
 
+/// Deliver the 2xx response head as a standalone `open` message before any
+/// body read (LLP 1016.000 D12). Does not reset `quiet` (D11). Returns false
+/// if the stream was already let go.
+fn deliver_http_open(
+    shared: &Shared,
+    ticket: u64,
+    response: &StreamingResponse,
+    limit: usize,
+    quiet: Option<&Quiet>,
+) -> bool {
+    let head = Message::http_open(response.status, response.headers.entries().to_vec());
+    match message(shared, ticket, head, limit) {
+        Delivered::Queued => true,
+        Delivered::Gone => {
+            complete(
+                shared,
+                ticket,
+                Quiet::finish(quiet, failed(FailureKind::Aborted, "the stream was let go")),
+            );
+            false
+        }
+        Delivered::Overflow => {
+            complete(
+                shared,
+                ticket,
+                Quiet::finish(
+                    quiet,
+                    failed(
+                        FailureKind::Refused,
+                        "event stream receive queue exceeds 4096 events or 1 MiB",
+                    ),
+                ),
+            );
+            false
+        }
+    }
+}
+
 /// How a socket's close reads, on every host: `the socket closed (1000)`,
 /// or with the far side's reason after a colon.
 pub fn socket_closed(code: u16, reason: &str) -> String {
@@ -450,7 +500,8 @@ fn open(
     };
     // A response with no body (Fetch's null body status, or to a `HEAD`) is
     // the one answer, as the web's, whose `response.body` is null for it.
-    let as_bytes = request.bytes && !request.method.eq_ignore_ascii_case("HEAD");
+    let has_body = !request.method.eq_ignore_ascii_case("HEAD");
+    let as_bytes = request.bytes && has_body;
     let upload = request.upload_progress;
     let timeout = request.timeout_ms.filter(|_| upload);
     let mut req = fetch_request(request, forced);
@@ -475,7 +526,9 @@ fn open(
         .stream(req, &abort.signal())
         .and_then(check_headers)
         .map_err(|e| fetch_failure(e, abort))?;
+    let bodyless = !has_body || matches!(r.status, 204 | 205);
     let events = !upload
+        && !bodyless
         && r.ok()
         && r.headers.get("content-type").is_some_and(|t| {
             t.split(';')
@@ -485,7 +538,7 @@ fn open(
     if events {
         return Ok(Opened::Events(r, limit));
     }
-    if as_bytes && !upload && r.ok() && !matches!(r.status, 204 | 205) {
+    if as_bytes && !upload && !bodyless && r.ok() {
         return Ok(Opened::Bytes(r, limit));
     }
     let (status, headers) = (r.status, r.headers.entries().to_vec());
@@ -658,6 +711,7 @@ impl EventStream {
                 coalesced: 0,
                 protocol: Box::default(),
                 binary: None,
+                head: None,
             }));
         }
         if line.starts_with(':') {

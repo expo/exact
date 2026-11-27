@@ -56,19 +56,23 @@ fn debug_from_name(w: &mut String, ty: &str, rows: &[(&str, &str)]) {
 /// its Apple spelling names the earlier row.
 fn symbol_spellings(schema: &Schema) -> std::collections::BTreeMap<String, &str> {
     let mut spellings = std::collections::BTreeMap::new();
-    for [role, _, _] in &schema.symbols {
-        spellings.insert(role.clone(), role.as_str());
+    for row in &schema.symbols {
+        spellings.insert(row.role.clone(), row.role.as_str());
     }
-    for [role, apple, _] in &schema.symbols {
-        let key = apple.replace(['.', '_'], "-");
+    for row in &schema.symbols {
+        let key = row.apple.replace(['.', '_'], "-");
         match spellings.get(&key) {
             None => {
-                spellings.insert(key, role.as_str());
+                spellings.insert(key, row.role.as_str());
             }
-            Some(prior) if prior == role => {}
+            Some(prior) if *prior == row.role => {}
             Some(prior) => assert!(
-                schema.symbols.iter().any(|row| row[0] == *prior && row[1] == *apple),
-                "schema: symbol spelling `{key}` names both `{role}` and `{prior}`"
+                schema
+                    .symbols
+                    .iter()
+                    .any(|other| other.role == *prior && other.apple == row.apple),
+                "schema: symbol spelling `{key}` names both `{}` and `{prior}`",
+                row.role
             ),
         }
     }
@@ -79,7 +83,7 @@ fn symbol_spellings(schema: &Schema) -> std::collections::BTreeMap<String, &str>
             "schema: invalid symbol alias `{alias}`"
         );
         assert!(
-            schema.symbols.iter().any(|row| row[0] == *role),
+            schema.symbols.iter().any(|row| row.role == *role),
             "schema: symbol alias `{alias}`: `{role}` is no role"
         );
         assert!(
@@ -88,6 +92,78 @@ fn symbol_spellings(schema: &Schema) -> std::collections::BTreeMap<String, &str>
         );
     }
     spellings
+}
+struct SymbolRow {
+    role: String,
+    apple: String,
+    path: String,
+    mirror: bool,
+}
+impl<'de> Deserialize<'de> for SymbolRow {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut items = Vec::<serde_json::Value>::deserialize(deserializer)?;
+        if !(3..=4).contains(&items.len()) {
+            return Err(serde::de::Error::invalid_length(
+                items.len(),
+                &"3 or 4 elements",
+            ));
+        }
+        let mirror = if items.len() == 4 {
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?
+        } else {
+            false
+        };
+        let path =
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?;
+        let apple =
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?;
+        let role =
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            role,
+            apple,
+            path,
+            mirror,
+        })
+    }
+}
+struct SymbolGlyphRow {
+    role: String,
+    platform: String,
+    path: String,
+    filled: bool,
+    mirror: bool,
+}
+impl<'de> Deserialize<'de> for SymbolGlyphRow {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut items = Vec::<serde_json::Value>::deserialize(deserializer)?;
+        if !(4..=5).contains(&items.len()) {
+            return Err(serde::de::Error::invalid_length(
+                items.len(),
+                &"4 or 5 elements",
+            ));
+        }
+        let mirror = if items.len() == 5 {
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?
+        } else {
+            false
+        };
+        let filled =
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?;
+        let path =
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?;
+        let platform =
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?;
+        let role =
+            serde_json::from_value(items.pop().unwrap()).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            role,
+            platform,
+            path,
+            filled,
+            mirror,
+        })
+    }
 }
 /// @ref LLP 1116.007 D3.1 — `symbol_role`: a role by any of its spellings, as the lowering reads
 /// a `symbol:` source.
@@ -107,11 +183,22 @@ fn write_symbol_role(w: &mut String, schema: &Schema) {
 fn write_symbol_glyphs(w: &mut String, schema: &Schema) {
     writeln!(
         w,
-        "/// A role's path on `platform` (`fluent`, `material`) and whether it is filled, where that\n/// platform draws the role in a shape of its own. Takes the role's own name only.\npub fn symbol_glyph(role: &str, platform: &str) -> Option<(&'static str, bool)> {{ match (role, platform) {{"
+        "/// A role's path on `platform` (`fluent`, `material`), whether it is filled, and whether it\n/// mirrors in RTL, where that platform draws the role in a shape of its own. Takes the role's\n/// own name only.\npub fn symbol_glyph(role: &str, platform: &str) -> Option<(&'static str, bool, bool)> {{ match (role, platform) {{"
     )
     .unwrap();
-    for (role, platform, path, filled) in &schema.symbol_glyphs {
-        writeln!(w, "({role:?}, {platform:?}) => Some(({path:?}, {filled})),").unwrap();
+    for SymbolGlyphRow {
+        role,
+        platform,
+        path,
+        filled,
+        mirror,
+    } in &schema.symbol_glyphs
+    {
+        writeln!(
+            w,
+            "({role:?}, {platform:?}) => Some(({path:?}, {filled}, {mirror})),"
+        )
+        .unwrap();
     }
     writeln!(w, "_ => None, }} }}").unwrap();
 }

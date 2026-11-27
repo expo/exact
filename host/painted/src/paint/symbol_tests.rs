@@ -185,3 +185,127 @@ fn sf_backed_icons_keep_a_square_intrinsic_box() {
         assert_eq!((node.frame.width, node.frame.height), (em, em));
     }
 }
+
+#[test]
+fn directional_symbols_mirror_in_rtl_across_sets_and_clips() {
+    let source = r##"component App
+  view
+    column width=300 height=200 background-color="#ffffff" color="#000000"
+      row direction="ltr" height=96
+        image "symbol:back" width=48 height=48 font-size=48 testId="back-ltr"
+        image "symbol:send" width=48 height=48 font-size=48 testId="send-ltr"
+        image "symbol:play" width=48 height=48 font-size=48 testId="play-ltr"
+        image "symbol:sf/chevron.backward" width=48 height=48 font-size=48 testId="sf-ltr"
+      row direction="rtl" height=96
+        image "symbol:back" width=48 height=48 font-size=48 testId="back-rtl"
+        image "symbol:send" width=48 height=48 font-size=48 testId="send-rtl"
+        image "symbol:play" width=48 height=48 font-size=48 testId="play-rtl"
+        image "symbol:sf/chevron.backward" width=48 height=48 font-size=48 testId="sf-rtl"
+        image "symbol:back" width=48 height=48 font-size=48 border-radius=8 testId="clipped-back-rtl"
+        image "symbol:send" width=48 height=48 font-size=48 border-radius=8 testId="clipped-send-rtl"
+"##;
+    let boot_dir = |set: SymbolSet| {
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (300., 200.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.brush.symbols = set;
+        p
+    };
+    let bitmap = |p: &mut Presenter<()>, test_id: &str| -> Vec<Vec<bool>> {
+        let k = p.host().kernel();
+        let id = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
+        let (x, y, w, h) = p.rect_of(id).unwrap();
+        let (x0, y0, iw, ih) = (
+            x.round() as u32,
+            y.round() as u32,
+            w.round() as u32,
+            h.round() as u32,
+        );
+        let frame = p.frame();
+        (0..ih)
+            .map(|dy| {
+                (0..iw)
+                    .map(|dx| frame.pixel(x0 + dx, y0 + dy).unwrap().demultiply().red() < 128)
+                    .collect()
+            })
+            .collect()
+    };
+    let ink_count =
+        |grid: &[Vec<bool>]| -> usize { grid.iter().flatten().filter(|&&on| on).count() };
+    let flipped = |grid: &[Vec<bool>]| -> Vec<Vec<bool>> {
+        grid.iter()
+            .map(|row| row.iter().rev().copied().collect())
+            .collect()
+    };
+    // Web set: `back` (stroked chevron `M15 5 8 12l7 7`) and `sf/chevron.backward` flip;
+    // `send` (`arrow.up`, vertical) and `play` stay fixed; rounded clip keeps positive stroke width.
+    let mut web = boot_dir(SymbolSet::Web);
+    assert!(inked(&mut web, "back-ltr", (8., 12.)) && !inked(&mut web, "back-ltr", (16., 12.)));
+    assert!(inked(&mut web, "back-rtl", (16., 12.)) && !inked(&mut web, "back-rtl", (8., 12.)));
+    assert!(inked(&mut web, "sf-rtl", (16., 12.)) && !inked(&mut web, "sf-rtl", (8., 12.)));
+    assert!(
+        inked(&mut web, "clipped-back-rtl", (16., 12.))
+            && !inked(&mut web, "clipped-back-rtl", (8., 12.)),
+        "clipped stroked RTL symbol must render with positive stroke width on the mirrored side"
+    );
+    let web_play_ltr = bitmap(&mut web, "play-ltr");
+    let web_play_rtl = bitmap(&mut web, "play-rtl");
+    assert!(ink_count(&web_play_ltr) > 0, "web play must ink pixels");
+    assert_eq!(
+        web_play_rtl, web_play_ltr,
+        "web play must not mirror in RTL"
+    );
+    let web_send_ltr = bitmap(&mut web, "send-ltr");
+    let web_send_rtl = bitmap(&mut web, "send-rtl");
+    assert!(ink_count(&web_send_ltr) > 0, "web send must ink pixels");
+    assert_eq!(
+        web_send_rtl, web_send_ltr,
+        "web send (arrow.up) must not mirror in RTL"
+    );
+    // Material set: `back` (arrow_back) and `send` (paper plane) both flip; `play` stays fixed.
+    let mut material = boot_dir(SymbolSet::Material);
+    assert!(
+        inked(&mut material, "back-ltr", (8., 8.)) && !inked(&mut material, "back-ltr", (16., 8.))
+    );
+    assert!(
+        inked(&mut material, "back-rtl", (16., 8.)) && !inked(&mut material, "back-rtl", (8., 8.))
+    );
+    let mat_send_ltr = bitmap(&mut material, "send-ltr");
+    let mat_send_rtl = bitmap(&mut material, "send-rtl");
+    assert!(
+        ink_count(&mat_send_ltr) > 0,
+        "material send must ink pixels"
+    );
+    assert_ne!(
+        mat_send_rtl, mat_send_ltr,
+        "material send must mirror in RTL"
+    );
+    assert_eq!(
+        mat_send_rtl,
+        flipped(&mat_send_ltr),
+        "material send RTL must be horizontal mirror of LTR"
+    );
+    assert!(
+        inked(&mut material, "clipped-send-rtl", (20., 6.))
+            && !inked(&mut material, "clipped-send-rtl", (4., 6.))
+            && !inked(&mut material, "clipped-send-rtl", (16., 9.)),
+        "clipped filled Material RTL symbol flips while preserving its inner cutout"
+    );
+    let mat_play_ltr = bitmap(&mut material, "play-ltr");
+    let mat_play_rtl = bitmap(&mut material, "play-rtl");
+    assert!(
+        ink_count(&mat_play_ltr) > 0,
+        "material play must ink pixels"
+    );
+    assert_eq!(
+        mat_play_rtl, mat_play_ltr,
+        "material play must not mirror in RTL"
+    );
+}

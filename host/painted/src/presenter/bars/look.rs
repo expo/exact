@@ -30,10 +30,10 @@
 //! names each one's symbol).
 use super::badge::DrawnBadge;
 pub use super::badge::{Badge, BadgePicture};
-use crate::paint::{Backend, Rect4, Shape};
+use crate::paint::{paint_symbol, Backend, Rect4, Shape};
 use crate::presenter::palette::{material, Material};
 use crate::presenter::top::look::{
-    directed_paragraph, label_x, paragraph, symbol, text_rect, Role, Type, LABEL_LARGE, STATE_LAYER,
+    directed_paragraph, label_x, paragraph, text_rect, Role, Type, LABEL_LARGE, STATE_LAYER,
 };
 use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::generated::metric;
@@ -140,6 +140,8 @@ pub struct Button {
     pub direction: Direction,
     /// Its symbol role, which makes it an icon button.
     pub symbol: Option<String>,
+    /// The symbol image's computed direction.
+    pub symbol_direction: Direction,
     /// Its constrained badge face (filled box holding a picture, text or symbol).
     pub badge: Option<Badge>,
     /// Not `disabled`.
@@ -190,6 +192,8 @@ pub struct Tab {
     pub direction: Direction,
     /// Its symbol role.
     pub symbol: Option<String>,
+    /// The symbol image's computed direction.
+    pub symbol_direction: Direction,
     /// `aria-selected`.
     pub selected: bool,
     /// Not `disabled`.
@@ -294,7 +298,7 @@ impl Target {
 pub(super) enum Item {
     Text(Rc<Paragraph>, (f32, f32), [u8; 4], ViewId, Option<Rect4>),
     Fill(Shape, [u8; 4]),
-    Symbol(String, Rect4, [u8; 4]),
+    Symbol(String, Rect4, [u8; 4], Direction),
     Badge(DrawnBadge),
 }
 
@@ -322,7 +326,7 @@ fn mirror(items: &mut [Item], targets: &mut [Target], width: f32) {
                 }
             }
             Item::Fill(shape, _) => rect(&mut shape.rect),
-            Item::Symbol(_, r, _) => rect(r),
+            Item::Symbol(_, r, _, _) => rect(r),
             Item::Badge(badge) => badge.mirror(width),
         }
     }
@@ -337,7 +341,6 @@ pub struct Layout {
     /// Width and height, points: the system's bar it reaches under included.
     pub size: (f32, f32),
     container: [u8; 4],
-    direction: Direction,
     pub(super) items: Vec<Item>,
     /// What can be touched, in order.
     pub targets: Vec<Target>,
@@ -434,14 +437,14 @@ impl Layout {
                 }
                 Item::Fill(..) | Item::Badge(..) => {}
                 // Material's shapes (D14): the Up arrow is its `back`.
-                Item::Symbol(role, rect, color) => symbol(
+                Item::Symbol(role, rect, color, direction) => paint_symbol(
                     backend,
                     role,
                     *rect,
                     *color,
                     exact_kernel::SymbolSet::Material,
                     400,
-                    self.direction == Direction::Rtl && role == "back",
+                    *direction,
                 ),
             }
         }
@@ -488,7 +491,7 @@ impl Layout {
         if top.up {
             let ink = title_ink;
             let at = (left + (ICON_BUTTON - icon) / 2.0, middle(icon), icon, icon);
-            items.push(Item::Symbol("back".into(), at, ink));
+            items.push(Item::Symbol("back".into(), at, ink, top.direction));
             targets.push(Target {
                 rect: (left, middle(ICON_BUTTON), ICON_BUTTON, ICON_BUTTON),
                 what: What::Up,
@@ -560,7 +563,7 @@ impl Layout {
                 }
                 (None, Some(role), _) => {
                     let rect = (at + (ICON_BUTTON - icon) / 2.0, middle(icon), icon, icon);
-                    items.push(Item::Symbol(role.clone(), rect, ink));
+                    items.push(Item::Symbol(role.clone(), rect, ink, b.symbol_direction));
                     (circle(at), ink)
                 }
                 (None, None, Some(p)) => {
@@ -653,7 +656,6 @@ impl Layout {
         }
         Layout {
             size: (inputs.width, y0 + h),
-            direction: top.direction,
             container,
             items,
             targets,
@@ -790,7 +792,7 @@ impl Layout {
                         items.push(Item::Fill(layer, indicator));
                     }
                     let icon = (middle - nav.icon / 2.0, padding, nav.icon, nav.icon);
-                    items.push(Item::Symbol(role.clone(), icon, ink));
+                    items.push(Item::Symbol(role.clone(), icon, ink, tab.symbol_direction));
                     if let Some(badge) = &tab.badge {
                         Self::badge(engine, badge, icon, tab.node, inputs, &mut items);
                     }
@@ -858,7 +860,6 @@ impl Layout {
         }
         Layout {
             size: (inputs.width, h + inputs.edge),
-            direction: bottom.direction,
             container,
             items,
             targets,

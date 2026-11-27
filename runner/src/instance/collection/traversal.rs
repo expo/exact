@@ -154,6 +154,10 @@ impl Tree {
         }
         find_collection(&self.children, view).map(Collection::snapshot)
     }
+    /// Whether list `view` has shown its settled first rows ([`Collection::live`]).
+    pub fn collection_live(&self, view: ViewId) -> bool {
+        self.has_collections && find_collection(&self.children, view).is_some_and(|c| c.live())
+    }
     /// `view`'s mounted rows as (wrapper, epoch) into `out` (cleared first):
     /// which rows are mounted and bound to what, without their geometry.
     pub fn collection_mounted(&self, view: ViewId, out: &mut Vec<(ViewId, u64)>) {

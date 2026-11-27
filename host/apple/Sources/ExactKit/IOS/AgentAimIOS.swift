@@ -52,7 +52,7 @@ extension Agent {
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
         #if os(iOS)
         if let bar = presenter.navigation.backButtonBar(node) {
-            guard let control = bar.drawnBackControl() else { return .failure(BarItemMissing()) }
+            guard bar.backItem != nil, let control = bar.drawnBackControl() else { return .failure(BarItemMissing()) }
             return .success((control, control.bounds))
         }
         #if EXACT_INSPECT

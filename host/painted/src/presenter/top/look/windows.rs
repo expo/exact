@@ -355,6 +355,7 @@ mod tests {
                     subtitle: None,
                     direction: exact_kernel::Direction::Ltr,
                     symbol: None,
+                    symbol_direction: exact_kernel::Direction::Ltr,
                     destructive: i == 1,
                     enabled: true,
                     cancel: i == 0,

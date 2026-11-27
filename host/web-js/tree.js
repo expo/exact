@@ -114,7 +114,7 @@ function adopt(p, tag, cls, attrs) {
       const v = rel(k, attrs[k]);
       if (NOT_DOM.test(k)) e['$' + k] = v;
       else if (k === 'autofocus') autofocusProp(e, v !== 'false');
-      else if (e.getAttribute(k) !== v) e.setAttribute(k, v);
+      else if (e.getAttribute(k) !== String(v)) e.setAttribute(k, v);
     }
     if (tag === 'a') Links?.made(e, attrs, rendered);
     if ('data-scrolldocument' in attrs) Docs.add(e);

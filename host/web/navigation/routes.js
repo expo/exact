@@ -493,7 +493,7 @@ const stamp = (index, op) => ({ exact: index, id: op.top, url: op.url, ...placeO
 /** A route's Back control, the selected route's unless named (1035.001 D1: the `id` the root's `navigationBack` names), pressable or not: the route's own, else one in no route at all (a header the routes share), as iOS resolves it (NavigationBack.control); another route's is that route's. */
 const backControl = (nav, route = selectedRoute(nav), name = nav.getAttribute("navigationBack")) => route && name !== null ? route.querySelector(`[id="${CSS.escape(name)}"]`) ?? [...nav.ownerDocument.querySelectorAll(`[id="${CSS.escape(name)}"]`)].find((control) => [null, nav].includes(control.closest("[navigationKey]"))) ?? null : undefined;
 // LLP 1116.000 D4: Back belongs to the header shadow root; bar items proxy the authored controls.
-const BACK = `<style>button{all:unset;display:inline-flex;align-items:center;gap:6px;flex:none;vertical-align:middle;margin-inline:-6px 6px;padding:4px 8px 4px 4px;border-radius:8px;cursor:pointer;white-space:nowrap;-webkit-user-select:none;user-select:none}button[hidden],span[hidden]{display:none}button:focus-visible{outline:2px solid var(--exact-accent,AccentColor);outline-offset:1px}button:active>*{opacity:var(--exact-back-press,.5)}svg{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}button:dir(rtl) svg{scale:-1 1}</style><button part="back" type="button"><svg viewBox="4 4 16 16" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg><span></span></button><slot></slot>`;
+const BACK = `<style>button{all:unset;display:inline-flex;align-items:center;gap:6px;flex:none;vertical-align:middle;margin-inline:-6px 6px;padding:4px 8px 4px 4px;border-radius:8px;cursor:pointer;white-space:nowrap;-webkit-user-select:none;user-select:none}button[hidden],span[hidden]{display:none}button:focus-visible{outline:2px solid var(--exact-accent,AccentColor);outline-offset:1px}button:active>*{opacity:var(--exact-back-press,.5)}svg{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}button[data-rtl] svg{scale:-1 1}</style><button part="back" type="button"><svg viewBox="4 4 16 16" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg><span></span></button><slot></slot>`;
 const headerOf = (route) => liveChildren(route).find((child) => child.localName === "header");
 const authored = "[data-exact-said~=\"appearance\"]";
 // a header or a node in one whose author wrote `appearance: none` (element.rs)
@@ -779,8 +779,8 @@ function readProjections(root, log) {
         live,
         over: routes.map(overPage),
         headers: BARS ? routes.map((route) => {
-          const header = headerOf(route);
-          return !!header && getComputedStyle(header).display !== "none";
+          const header = headerOf(route), style = header && getComputedStyle(header);
+          return style && style.display !== "none" ? { rtl: style.direction === "rtl" } : null;
         }) : []
       };
     });
@@ -792,9 +792,9 @@ function readProjections(root, log) {
   }
   return projections;
 }
-function appBarBack(nav, routes, index, shown, headerShown, bar) {
+function appBarBack(nav, routes, index, shown, headerFact, bar) {
   if (!bar) return;
-  const route = routes[index], { header, pushed, control, inShownHeader } = bar;
+  const headerShown = !!headerFact, route = routes[index], { header, pushed, control, inShownHeader } = bar;
   // A header iOS makes no bar of draws Back where its Back control does not show, as the settled marks leave it (iOS draws it either way)
   const items = bar.items !== undefined ? bar.items : headerShown && shown ? barItems(route, header) : null;
   const drawn = pushed && !(inShownHeader && header.contains(control.closest(authored))) && (!inShownHeader || !!items || !control.checkVisibility({ visibilityProperty: true }));
@@ -821,6 +821,7 @@ function appBarBack(nav, routes, index, shown, headerShown, bar) {
   if (!button || button.hidden) {
     return;
   }
+  button.toggleAttribute("data-rtl", headerFact ? headerFact.rtl : getComputedStyle(header).direction === "rtl");
   const words = control ? control.textContent.trim() : titleOf(routes[index - 1]), english = /^en\b/i.test(document.documentElement.lang || "en");
   const label = control ? words.length <= 14 ? words : english ? "Back" : "" : english ? "Back" : "", name = control ? control.getAttribute("aria-label") || words || "Back" : !english ? words || "Back" : words ? `Back to ${words}` : "Back";
   button.lastChild.hidden = !label;
@@ -1292,7 +1293,7 @@ export const navigation = {
         const { found, headers } = facts[stack];
         detailRows(routes, found);
         for (const index of BARS ? routes.keys() : []) {
-          bars.set(routes[index], settleBar(nav, routes, index, found.width > 0, headers[index]));
+          bars.set(routes[index], settleBar(nav, routes, index, found.width > 0, !!headers[index]));
         }
       }
     }

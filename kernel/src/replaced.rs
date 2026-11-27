@@ -314,6 +314,8 @@ pub struct SymbolPath<'a> {
     /// Its viewBox, `min-x min-y width height`: a role's is `0 0 24 24`,
     /// Material's `0 -960 960 960`.
     pub view_box: &'a str,
+    /// Whether this glyph reflects horizontally in an RTL layout direction.
+    pub mirror: bool,
 }
 
 /// Whose shapes a host that draws paths gives the roles (LLP 1115.001 D14):
@@ -343,11 +345,13 @@ pub fn symbol_path(name: &str) -> Option<SymbolPath<'_>> {
 /// token is the author's own image and draws as written.
 pub fn symbol_path_in(name: &str, set: SymbolSet) -> Option<SymbolPath<'_>> {
     if let Some(icon) = Icon::parse(name) {
+        // An author's custom SVG icon token is never mirrored automatically (LLP 1121 D10).
         return (!icon.path.is_empty()).then_some(SymbolPath {
             d: icon.path,
             filled: true,
             even_odd: icon.even_odd,
             view_box: icon.view_box,
+            mirror: false,
         });
     }
     let role = match name.strip_prefix("sf/") {
@@ -363,9 +367,9 @@ pub fn symbol_path_in(name: &str, set: SymbolSet) -> Option<SymbolPath<'_>> {
         SymbolSet::Material => Some("material"),
     };
     let glyph = platform.and_then(|p| crate::generated::symbol_glyph(role, p));
-    let (d, filled) = match glyph {
+    let (d, filled, mirror) = match glyph {
         Some(glyph) => glyph,
-        None => crate::generated::symbol(role).map(|(_, d, filled)| (d, filled))?,
+        None => crate::generated::symbol(role).map(|(_, d, filled, mirror)| (d, filled, mirror))?,
     };
     // Material's glyphs are its published paths: in its box, filled nonzero
     // as SVG fills them.
@@ -379,6 +383,7 @@ pub fn symbol_path_in(name: &str, set: SymbolSet) -> Option<SymbolPath<'_>> {
         } else {
             "0 0 24 24"
         },
+        mirror,
     })
 }
 
@@ -533,5 +538,73 @@ mod tests {
         assert_eq!(apple_symbol_name(settings.0), settings.0);
         assert_eq!(apple_symbol_name("no-such-role"), "");
         assert_eq!(symbol_path("no-such-role"), None);
+    }
+
+    #[test]
+    fn directional_symbols_carry_per_set_rtl_mirror_policy() {
+        use super::{symbol_path_in, SymbolSet};
+        let mirrors = |name, set| symbol_path_in(name, set).unwrap().mirror;
+        for role in [
+            "back",
+            "forward-chevron",
+            "forward",
+            "sign-out",
+            "open-app",
+            "list",
+            "reply",
+            "article",
+            "running",
+            "walking",
+            "speaker",
+        ] {
+            for set in [SymbolSet::Web, SymbolSet::Fluent, SymbolSet::Material] {
+                assert!(mirrors(role, set), "{role} should mirror on {set:?}");
+            }
+        }
+        for role in ["send", "share", "sort"] {
+            assert!(!mirrors(role, SymbolSet::Web), "{role} web");
+            assert!(!mirrors(role, SymbolSet::Fluent), "{role} fluent");
+            assert!(mirrors(role, SymbolSet::Material), "{role} material");
+        }
+        for role in ["document", "quote", "select-text"] {
+            assert!(mirrors(role, SymbolSet::Web), "{role} web");
+            assert!(mirrors(role, SymbolSet::Fluent), "{role} fluent");
+            assert!(!mirrors(role, SymbolSet::Material), "{role} material");
+        }
+        for role in [
+            "play",
+            "play-fill",
+            "skip-next",
+            "skip-next-fill",
+            "skip-back-15",
+            "skip-forward-15",
+            "skip-back-30",
+            "skip-forward-30",
+            "search",
+            "checkmark",
+            "refresh",
+            "history",
+            "translate",
+            "speaker-mute",
+            "location",
+            "more",
+            "star",
+        ] {
+            for set in [SymbolSet::Web, SymbolSet::Fluent, SymbolSet::Material] {
+                assert!(!mirrors(role, set), "{role} must stay fixed on {set:?}");
+            }
+        }
+        for set in [SymbolSet::Web, SymbolSet::Fluent, SymbolSet::Material] {
+            assert!(mirrors("chevron-left", set));
+            assert!(mirrors("logout", set));
+            assert!(mirrors("sf/chevron.backward", set));
+            assert!(mirrors("sf/chevron.forward", set));
+        }
+        assert!(!mirrors("sf/arrow.up", SymbolSet::Web));
+        assert!(mirrors("sf/arrow.up", SymbolSet::Material));
+        let icon = "icon|chevron.backward|0 0 24 24|M15 5 8 12l7 7|icons/back.svg";
+        for set in [SymbolSet::Web, SymbolSet::Fluent, SymbolSet::Material] {
+            assert!(!mirrors(icon, set), "icon must not mirror on {set:?}");
+        }
     }
 }

@@ -12,7 +12,7 @@
 //! non-linear above 100%, and comes with the reported type ramp (D4, S2).
 //! An alert uses the platform face unless its own family is written (LLP 1104 D4).
 use super::shape::{Entry, MenuSurface, Plan, Row};
-use crate::paint::{rgba, Backend, Ink, Rect4, Shape, SvgPaint};
+use crate::paint::{rgba, Backend, Rect4, Shape};
 use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::style::roles;
 use exact_kernel::{ColorValue, Direction, StyleProps, SymbolSet, TextAlign, ViewId, WhiteSpace};
@@ -141,7 +141,7 @@ pub struct Inputs {
 enum Item {
     Text(Rc<Paragraph>, (f32, f32), [u8; 4], ViewId),
     Rule(Rect4, [u8; 4]),
-    Symbol(String, Rect4, [u8; 4]),
+    Symbol(String, Rect4, [u8; 4], Direction),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -478,7 +478,7 @@ impl Layout {
                     backend.text(engine, paragraph, &paint, *at, ts);
                 }
                 Item::Rule(rect, color) => backend.fill(&Shape::rect(*rect), *color, ts),
-                Item::Symbol(role, rect, color) => {
+                Item::Symbol(role, rect, color, direction) => {
                     let color = self
                         .contrast
                         .filter(|_| {
@@ -492,14 +492,14 @@ impl Layout {
                                 })
                         })
                         .map_or(*color, |p| p.highlighted_text);
-                    symbol(
+                    crate::paint::paint_symbol(
                         backend,
                         role,
                         *rect,
                         color,
                         self.symbols,
                         self.symbol_weight,
-                        false,
+                        *direction,
                     );
                 }
             }
@@ -514,76 +514,6 @@ impl Layout {
             self.paint_menu_scrollbar(backend);
         }
     }
-}
-
-/// A symbol role's path in `rect`, in `set`'s shape, as the page draws one
-/// at `weight` (`paint/svg.rs`): stroked, or filled.
-pub(in crate::presenter) fn symbol(
-    backend: &mut dyn Backend,
-    role: &str,
-    rect: Rect4,
-    color: [u8; 4],
-    set: SymbolSet,
-    weight: u16,
-    mirrored: bool,
-) {
-    // A role, an icon token's form, or `sf/` a role's Apple name (LLP 1121 D10).
-    let Some(path) = exact_kernel::symbol_path_in(role, set) else {
-        return;
-    };
-    // A translucent colour once over all an icon's paths.
-    let group = path.d.contains(';') && color[3] < 255;
-    if group {
-        backend.push_opacity(f32::from(color[3]) / 255.0);
-    }
-    let paint = if group {
-        [color[0], color[1], color[2], 255]
-    } else {
-        color
-    };
-    for d in path.d.split(';') {
-        glyph_in(backend, d, path, rect, paint, weight, mirrored);
-    }
-    if group {
-        backend.pop_opacity();
-    }
-}
-
-/// A path in `rect` under its viewBox, stroked in a role's 24 units, or filled.
-fn glyph_in(
-    backend: &mut dyn Backend,
-    d: &str,
-    symbol: exact_kernel::SymbolPath<'_>,
-    rect: Rect4,
-    color: [u8; 4],
-    weight: u16,
-    mirrored: bool,
-) {
-    let [_, _, bw, _] = crate::paint::view_box(symbol.view_box);
-    let path = exact_kernel::svg::parse_d(d);
-    let weight = f32::from(weight).clamp(100., 900.);
-    let paint = SvgPaint {
-        path: &path,
-        fill: symbol.filled.then_some(Ink::Solid(color)),
-        even_odd: symbol.even_odd,
-        stroke: (!symbol.filled).then_some(Ink::Solid(color)),
-        order: [0, 1, 2],
-        width: (1.1 + (weight - 100.0) / 400.0) * bw / 24.0,
-        cap: 1,
-        join: 1,
-        miter: 4.0,
-        dash: Vec::new(),
-        phase: 0.0,
-    };
-    let ts = crate::paint::fitted(symbol.view_box, rect);
-    let ts = if mirrored {
-        Transform::from_translate(2.0 * rect.0 + rect.2, 0.0)
-            .pre_scale(-1.0, 1.0)
-            .pre_concat(ts)
-    } else {
-        ts
-    };
-    backend.svg_path(&paint, ts);
 }
 
 /// Material's basic dialog: the headline, the supporting text, and the
@@ -900,13 +830,21 @@ fn menu(
             (x, y + (tall - symbol) / 2., symbol, symbol)
         };
         if let Some(role) = lead(row) {
-            items.push(Item::Symbol(role, icon_rect(inset), tint));
+            let symbol_direction = if row.symbol.is_some() {
+                row.symbol_direction
+            } else if desktop {
+                Direction::Ltr
+            } else {
+                inputs.direction
+            };
+            items.push(Item::Symbol(role, icon_rect(inset), tint, symbol_direction));
         }
         if trailing_check(row) {
             items.push(Item::Symbol(
                 "checkmark".into(),
                 icon_rect(width - inset - symbol),
                 tint,
+                inputs.direction,
             ));
         }
         let start = inset + indent(row);
@@ -1256,6 +1194,7 @@ mod tests {
             subtitle: None,
             direction: Direction::Rtl,
             symbol: Some("checkmark".into()),
+            symbol_direction: Direction::Rtl,
             destructive: false,
             enabled: true,
             cancel: true,
@@ -1335,6 +1274,7 @@ mod tests {
                 subtitle: None,
                 direction: exact_kernel::Direction::Ltr,
                 symbol: None,
+                symbol_direction: exact_kernel::Direction::Ltr,
                 destructive: false,
                 enabled: true,
                 cancel: false,
@@ -1358,7 +1298,7 @@ mod tests {
         layout.widen(300., true);
         for item in &layout.items {
             match item {
-                Item::Symbol(_, rect, _) => assert_eq!(rect.0 + rect.2, 288.),
+                Item::Symbol(_, rect, _, _) => assert_eq!(rect.0 + rect.2, 288.),
                 Item::Text(p, at, _, node) => {
                     let bounds = text_rect(p, *at);
                     let end = if *node == 1 { 288. } else { 252. };
@@ -1423,6 +1363,7 @@ mod tests {
             subtitle: None,
             direction: exact_kernel::Direction::Ltr,
             symbol: Some("calendar".into()),
+            symbol_direction: exact_kernel::Direction::Ltr,
             destructive: false,
             enabled: true,
             cancel: true,
@@ -1493,5 +1434,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn desktop_flyout_preserves_authored_symbol_direction() {
+        let mut engine = crate::text::fixtures::engine();
+        let make = |node, symbol: Option<&str>, symbol_direction, checked| Row {
+            node,
+            title: "Action".into(),
+            menu_label: None,
+            subtitle: None,
+            direction: Direction::Rtl,
+            symbol: symbol.map(String::from),
+            symbol_direction,
+            destructive: false,
+            enabled: true,
+            cancel: false,
+            checked,
+            checkable: checked,
+            opens: None,
+        };
+        let entries = [
+            Entry::Item(make(1, Some("back"), Direction::Rtl, false)),
+            Entry::Item(make(2, Some("back"), Direction::Ltr, false)),
+            Entry::Item(make(3, None, Direction::Rtl, true)),
+        ];
+        let inputs = Inputs {
+            dark: false,
+            direction: Direction::Rtl,
+            contrast: None,
+            font_scale: 1.,
+            bold_text: false,
+            window: (400., 600.),
+            room: 600.,
+        };
+        let layout = menu(&mut engine, &entries, None, &inputs, true);
+        let symbols: Vec<_> = layout
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Symbol(role, _, _, dir) => Some((role.as_str(), *dir)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            symbols,
+            vec![
+                ("back", Direction::Rtl),
+                ("back", Direction::Ltr),
+                ("checkmark", Direction::Ltr),
+            ]
+        );
     }
 }

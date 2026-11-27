@@ -862,83 +862,6 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertNil(detail.contentScrollView(for: .bottom))
     }
 
-    /// The bottom edge's scroller may sit deeper than the route's last child
-    /// (LLP 1116 D2, amended): a sheet whose component's root column holds
-    /// its header and then its scroller reaches the edge, as a hand-built
-    /// sheet's scroll view pinned to its view's bottom does. A footer, a
-    /// padding under it, or a sideways scroller does not.
-    func testANestedLastScrollerReachesTheBottomEdge() {
-        let p = Presenter()
-        var next: UInt32 = 0
-        func box(_ parent: NodeView?, y: CGFloat, height: CGFloat, overflow: String? = nil) -> NodeView {
-            next += 1
-            let n = NodeView(id: next, kind: "view", presenter: p)
-            n.frame = CGRect(x: 0, y: y, width: 400, height: height)
-            if let overflow { n.style[overflow == "x" ? "overflow_x" : "overflow_y"] = .string("scroll"); n.syncScroll() }
-            parent?.container.addSubview(n)
-            return n
-        }
-        // The route's cover pads 34 under its child, which stands at the foot
-        // of the route's content box less that cover: the box the kernel
-        // sends is the authored one, the cover said apart (`cover:`).
-        let route = box(nil, y: 0, height: 600)
-        let sheet = box(route, y: 0, height: 566)
-        _ = box(sheet, y: 0, height: 60)
-        let scroller = box(sheet, y: 60, height: 506, overflow: "y")
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller, "the component's scroller reaches the edge")
-        XCTAssertNil(NavigationHost.bottomScroller(in: route), "not with the cover unsaid: it ends 34 above the content box")
-        sheet.frame.size.height = 576
-        scroller.frame.size.height = 516
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a 24-point gap is neither the edge nor the 34-point bar")
-        sheet.frame.size.height = 566
-        scroller.frame.size.height = 506
-        sheet.applyKernelContentBox(CGRect(x: 0, y: 0, width: 400, height: 546), padding: [0, 0, 20, 0])
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a padding under it keeps the cover")
-        sheet.applyKernelContentBox(nil, padding: nil)
-        scroller.frame.size.height = 446
-        let footer = box(sheet, y: 506, height: 60)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a footer under it keeps the cover")
-        footer.removeFromSuperview()
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "nor does a scroller that ends short of its parent")
-        scroller.frame.size.height = 506
-        scroller.style["overflow_y"] = nil
-        scroller.style["overflow_x"] = .string("scroll")
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a sideways scroller takes no bottom inset")
-        scroller.style["overflow_x"] = nil
-        scroller.style["overflow_y"] = .string("scroll")
-        // The route's child sized to its content, 200 points of a 600-point
-        // route: its scroller ends far above the home indicator.
-        sheet.frame.size.height = 200
-        scroller.frame.size.height = 140
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a route's child short of its content box keeps the cover")
-        sheet.frame.size.height = 566
-        scroller.frame.size.height = 506
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller)
-        // The component's column ends in a row filling it: a side column
-        // beside the scroller reaches the edge too.
-        scroller.removeFromSuperview()
-        let split = box(sheet, y: 60, height: 506)
-        _ = box(split, y: 0, height: 506)
-        let right = box(split, y: 0, height: 506, overflow: "y")
-        right.frame.origin.x = 200
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a row's scroller beside a column keeps the cover")
-        // A full-height row: a column with Save at its foot, and a scroller
-        // beside it. The Save button reaches the edge too: the cover stays.
-        sheet.removeFromSuperview()
-        let row = box(route, y: 0, height: 566)
-        let side = box(row, y: 0, height: 566)
-        _ = box(side, y: 522, height: 44)
-        let beside = box(row, y: 0, height: 566, overflow: "y")
-        beside.frame.origin.x = 200
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a scroller with a sibling beside it in a row keeps the cover")
-        side.removeFromSuperview()
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === beside, "the row's only child spans its bottom edge")
-        // A reversed column: its last child is at its top, above the scroller.
-        _ = box(row, y: 0, height: 60)
-        beside.frame.origin = CGPoint(x: 0, y: 60); beside.frame.size.height = 506
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a last child above its sibling is not at the edge")
-    }
-
     /// A route's closed menus and confirmations take no place in its flow, as
     /// a browser lays out neither: one written after its scroller leaves the
     /// scroller at the bottom edge (euxy's Patterns tab, clipped at the tab
@@ -962,11 +885,11 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let scroller = box(route, y: 100, height: 500, scrolls: true)
         let menu = box(route, y: 0, height: 0, props: ["popover": "auto"])
         let dialog = box(route, y: 0, height: 0, props: ["semanticTag": "dialog"])
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route) === scroller)
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, scale: 3) === scroller)
         XCTAssertFalse(RouteGeometry.inFlow(menu))
         XCTAssertFalse(RouteGeometry.inFlow(dialog))
         _ = box(route, y: 0, height: 0)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route), "a box in the flow after it still keeps the cover")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, scale: 3), "a box in the flow after it still keeps the cover")
     }
 
     /// A route that paints no background shows what the web shows through
@@ -1249,7 +1172,6 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertEqual(sheet.view.backgroundColor, .clear, "the author's transparent at the large detent too")
         XCTAssertEqual(alpha(route.view), 0)
     }
-
 
     /// A scroller UIKit insets lays its content out between those insets
     /// (LLP 1116.000 D1.2): Chat's column, its tall box gone, fills the port

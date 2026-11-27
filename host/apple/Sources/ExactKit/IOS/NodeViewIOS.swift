@@ -1070,11 +1070,14 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if clear.contains("scrollTop") { pendingScrollTop = nil }
         if let raw = set["scrollTop"], let top = Double(raw), top.isFinite { pendingScrollTop = top; askedToScroll() }
         if let raw = set["scrollZoom"], let zoom = Double(raw), zoom.isFinite, zoom > 0 { more.pendingZoom = zoom }
+        let popoverTouched = set["popover"] != nil || clear.contains("popover")
+        let wasOutOfFlow = popoverTouched ? ["absolute", "fixed"].contains(layoutPosition) : false
         // One assignment: `props` tells the presenter of each.
         var next = props
         for k in clear { next.removeValue(forKey: k) }
         for (k, v) in set { next[k] = v }
         props = next
+        if popoverTouched { popoverFlowChanged(wasOutOfFlow: wasOutOfFlow) }
         if set["listMarker"] != nil || clear.contains("listMarker") { layoutProseMarker() }
         if isParagraph, set.keys.contains(where: Self.paragraphProps.contains) || clear.contains(where: Self.paragraphProps.contains) { invalidateText() }
         #if os(iOS)

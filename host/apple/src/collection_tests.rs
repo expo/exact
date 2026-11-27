@@ -371,6 +371,32 @@ fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
 }
 
 #[test]
+fn a_commit_before_a_list_settles_rides_nothing() {
+    // The same list, a commit growing its first row before the host has
+    // reported where it shows its rows: it is still opening, so nothing rides
+    let source = SOURCE
+        .replace("action toggle", "state tall = false\n  action grow\n    tall = true\n  action toggle")
+        .replace(
+            "      if showing\n",
+            "      button press=grow testId=\"grow\"\n        text \"grow\"\n      if showing\n",
+        )
+        .replace(
+            "            text `${row}` testId=`row-${row}`",
+            "            column height=(tall and row == 0 ? 80 : 20)\n              text `${row}` testId=`row-${row}`",
+        );
+    let (mut bridge, _, _) = fixture(&source);
+    let host = bridge.host.as_ref().unwrap();
+    let kernel = host.runner().kernel();
+    let grow = kernel
+        .node_by_key(kernel.find_by_test_id("grow")[0])
+        .unwrap()
+        .id;
+    let len = bridge.dispatch(grow, 0, 0, 0.1);
+    let grown = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(!grown.contains("\"rides\""), "not yet live: {grown}");
+}
+
+#[test]
 fn collection_removal_clears_snapshot_and_recreation_rejects_old_feedback() {
     let (mut bridge, _, _) = fixture(SOURCE);
     let old = facts(&snapshot(&bridge), 16_000.);

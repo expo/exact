@@ -219,3 +219,22 @@ fn a_worker_placed_source_cannot_listen() {
         )
     );
 }
+
+#[test]
+fn exact_listen_refuses_exact_stream_open_before_binding() {
+    let mut m = Module::new(
+        HBC.to_vec(),
+        "test.listen",
+        "net.listen unix:/tmp/exact-listen-js\n",
+    );
+    m.load().expect("the fixture loads");
+    let src =
+        "component App\n  resource bad = openRefused() as shape string\n  view\n    text bad\n";
+    let plan = contract::compile(src).expect("the fixture compiles");
+    let mut r = Runner::boot(plan, m, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    assert_eq!(
+        r.resource("bad").and_then(Value::as_str),
+        Some("TypeError: exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen")
+    );
+    assert!(r.take_requests().is_empty());
+}

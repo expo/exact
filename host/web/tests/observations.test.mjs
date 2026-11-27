@@ -25,6 +25,7 @@ beforeAll(() => {
     if (path === '/motion') return new Response(MOTION, { headers: { 'content-type': 'text/html' } });
     if (path === '/handoff') return new Response(HANDOFF, { headers: { 'content-type': 'text/html' } });
     if (path === '/solve') return new Response(SOLVE, { headers: { 'content-type': 'text/html' } });
+    if (path === '/narrowing') return new Response(NARROWING, { headers: { 'content-type': 'text/html' } });
     if (path === '/placed') return new Response(PLACED, { headers: { 'content-type': 'text/html' } });
     if (path === '/clamped') return new Response(CLAMPED, { headers: { 'content-type': 'text/html' } });
     if (path === '/delayed') return new Response(DELAYED, { headers: { 'content-type': 'text/html' } });
@@ -429,6 +430,37 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`the solve takes th
     expect(r.child).toBe(7);
     // No reader, no probe put in the document
     expect(r.empty).toBe(0);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A centred block of its content's width in a 390-point page, a 20-point reader first and a later child 390 wide, which
+// holds that width for a quarter of 0.8 s and then narrows to 190: at first the block fills the page and no animation
+// moves the reader, then it narrows and moves the reader from 0 to 100, out of a 70-point left band
+const NARROWING = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box }</style>
+  <div style="width:max-content;margin:0 auto"><div id="reader" style="width:20px;height:20px;outline-offset:var(--exact-safe-area-inset-left, 0px)"></div>
+    <div id="later" style="width:390px;height:10px"></div></div>
+  <script type="module">
+    import { observe, follow } from '/observe.js';
+    const $ = (id) => document.getElementById(id), read = () => $('reader').style.getPropertyValue('--exact-safe-area-inset-left');
+    observe([$('reader')], [0, 0, 0, 70]);
+    const before = read();
+    $('later').animate([{ width: '390px' }, { width: '390px', offset: 0.25 }, { width: '190px' }], { duration: 800, fill: 'forwards' });
+    const stop = follow([$('reader')], [0, 0, 0, 70], 0);
+    await new Promise((r) => setTimeout(r, 1300));
+    stop();
+    window.result = { before, after: read(), at: $('reader').getBoundingClientRect().left };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`an animation that comes to move a reader is followed, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}narrowing`);
+    await page.waitForFunction(() => window.result, null, { timeout: 10_000 });
+    // In the band at 0, then at rest at 100, out of it
+    expect(await page.evaluate(() => window.result)).toEqual({ before: '70px', after: '0px', at: 100 });
   } finally {
     await browser.close();
   }

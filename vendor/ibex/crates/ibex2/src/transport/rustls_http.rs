@@ -973,10 +973,13 @@ impl Transport for RustlsHttpTransport {
         let mut headers = Headers::new();
         for (name, value) in response.headers() {
             let value = value.to_str().map_err(failed)?;
-            if matches!(name.as_str(), "cache-control" | "vary") {
-                headers.append(name.as_str(), value);
-            } else {
+            if matches!(
+                name.as_str(),
+                "content-type" | "content-length" | "location" | "set-cookie"
+            ) {
                 headers.set(name.as_str(), value);
+            } else {
+                headers.append(name.as_str(), value);
             }
         }
         let content_type = headers.get("content-type");

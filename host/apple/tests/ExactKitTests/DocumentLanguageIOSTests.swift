@@ -8,6 +8,39 @@ import UIKit
 
 // The suffix includes this shared test in the simulator lane.
 final class DocumentLanguageIOSTests: XCTestCase {
+    func testLanguageSwitchRehyphenatesAnUnchangedLabel() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let presenter = Presenter()
+        let word = "Donaudampfschifffahrtsgesellschaft"
+        presenter.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "text", "props": ["text": word, "markup": "markdown", "atoms": "mention"], "style": ["hyphens": "auto"]],
+            ["op": "roots", "ids": [1]],
+            ["op": "language", "lang": "en", "dir": "ltr"],
+        ]))
+        let text = try XCTUnwrap(presenter.views[1])
+        let english = text.paragraphSpec()
+        XCTAssertEqual(english.language, "en")
+        presenter.apply(wireBatch([
+            ["op": "paragraph", "id": 1, "runs": []],
+            ["op": "language", "lang": "de", "dir": "ltr"],
+        ]))
+        let german = text.paragraphSpec()
+        XCTAssertEqual(german.language, "de")
+        XCTAssertFalse(german.source.inserted.isEmpty)
+        XCTAssertNotEqual(german.source.inserted, english.source.inserted)
+
+        presenter.apply(wireBatch([
+            ["op": "style", "id": 1, "style": ["direction": "rtl", "hyphens": "auto"]],
+            ["op": "paragraph", "id": 1, "runs": []],
+            ["op": "language", "lang": "ar", "dir": "rtl"],
+        ]))
+        let arabic = text.paragraphSpec()
+        XCTAssertEqual(arabic.language, "ar")
+        XCTAssertEqual(arabic.direction, 1)
+    }
+
     func testArabicSwitchesNativeDirectionAndAccessibilityLanguage() throws {
         #if os(macOS)
         _ = NSApplication.shared

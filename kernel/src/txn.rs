@@ -681,6 +681,7 @@ pub(crate) fn continue_document(
                     }
                     let starts = defaults::before_prop(arena, slot, *prop);
                     let font = relative::before_prop(arena, slot);
+                    let was_out_of_flow = text_style::is_out_of_flow(arena, slot);
                     let old = arena.set_prop(slot, *prop, value.clone());
                     if *prop == PropId::TestId {
                         selectors.update(
@@ -702,6 +703,7 @@ pub(crate) fn continue_document(
                     let changed = (*prop, old.as_ref());
                     receipt.layout_invalidated |=
                         crate::style::top_layer::prop_changed(arena, layout, slot, changed);
+                    text_style::flow_changed(arena, slot, was_out_of_flow);
                     if matches!(
                         prop,
                         PropId::Type | PropId::AccessibilityRole | PropId::Href
@@ -735,6 +737,7 @@ pub(crate) fn continue_document(
                     let slot = live_slot(arena, op_index, *id)?;
                     let starts = defaults::before_prop(arena, slot, *prop);
                     let font = relative::before_prop(arena, slot);
+                    let was_out_of_flow = text_style::is_out_of_flow(arena, slot);
                     if let Some(old) = arena.remove_prop(slot, *prop) {
                         if *prop == PropId::TestId {
                             selectors.update(slot, old.as_str(), None);
@@ -747,6 +750,7 @@ pub(crate) fn continue_document(
                         let changed = (*prop, Some(&old));
                         receipt.layout_invalidated |=
                             crate::style::top_layer::prop_changed(arena, layout, slot, changed);
+                        text_style::flow_changed(arena, slot, was_out_of_flow);
                         if matches!(
                             prop,
                             PropId::Type | PropId::AccessibilityRole | PropId::Href | PropId::Value
@@ -791,8 +795,10 @@ pub(crate) fn continue_document(
                     let before = crate::kernel::owner::before_style(arena, slot, changed);
                     let excluded = crate::flow::is_exclusion(arena, slot);
                     let named = arena.named_text_style(slot).is_some();
+                    let was_out_of_flow = text_style::is_out_of_flow(arena, slot);
                     arena.patch_style(slot, patch);
                     arena.update_exclusion_count(slot, excluded);
+                    text_style::flow_changed(arena, slot, was_out_of_flow);
                     if changed.has(crate::StyleId::Display) {
                         receipt.display_changed.push(arena.key(slot));
                     }
@@ -819,8 +825,10 @@ pub(crate) fn continue_document(
                     let before = crate::kernel::owner::before_style(arena, slot, changed);
                     let excluded = crate::flow::is_exclusion(arena, slot);
                     let named = arena.named_text_style(slot).is_some();
+                    let was_out_of_flow = text_style::is_out_of_flow(arena, slot);
                     arena.clear_style(slot, *mask, *written);
                     arena.update_exclusion_count(slot, excluded);
+                    text_style::flow_changed(arena, slot, was_out_of_flow);
                     if changed.has(crate::StyleId::Display) {
                         receipt.display_changed.push(arena.key(slot));
                     }
@@ -1453,7 +1461,7 @@ pub(crate) fn style_changed(
     symbol_font_changed(arena, slot, mask, receipt);
     if !mask.minus(StyleMask::LAYOUT).is_empty() {
         arena.mark_export_dirty(slot, NodeFlags::PAINT_DIRTY);
-        if !mask.intersects(StyleMask::TEXT) {
+        if !mask.intersects(StyleMask::TEXT) && !text_style::only_translates(arena, slot, mask) {
             arena.revise_text(slot, false);
         }
     }

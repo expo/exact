@@ -175,6 +175,7 @@ impl Core {
             .or(r.request.body_from_refusal())
             .or(r.request.body_to_refusal())
             .or(r.request.upload_progress_refusal())
+            .or(r.request.stream_open_refusal())
             .map_or_else(
                 || {
                     reads::reservation(

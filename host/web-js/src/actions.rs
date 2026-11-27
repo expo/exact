@@ -5,7 +5,6 @@ use std::fmt::Write as _;
 impl Em<'_> {
     pub(super) fn declare_actions(&mut self, body: &mut String) -> Result<(), String> {
         let plan = self.plan;
-        let capture = !self.site_attrs && !self.dev_reload;
         let mut templates = Templates::default();
         let mut actions = String::new();
         for (i, r) in plan.actions.iter().enumerate() {
@@ -14,7 +13,7 @@ impl Em<'_> {
             let scope = Scope {
                 rows: rows.then(|| "$r".to_string()),
                 action: true,
-                capture,
+                capture: true,
                 ..Scope::default()
             };
             let mut f = code::function(
@@ -61,11 +60,7 @@ impl Em<'_> {
                 };
                 format!("{act}({f},[{}]{tail})", types.join(","))
             };
-            let expr = if capture {
-                templates.expression(expr)
-            } else {
-                expr
-            };
+            let expr = templates.expression(expr);
             write!(actions, "const a_{i}={expr};").unwrap();
         }
         let (factories, actions) = templates.render(actions, false, "$action");

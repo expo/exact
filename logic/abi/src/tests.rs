@@ -1263,4 +1263,11 @@ fn a_listener_and_a_byte_stream_are_refused_at_the_module_seam() {
         refused(bytes),
         "a byte stream cannot cross the Rust module seam yet"
     );
+    let open = Request::get("https://example.test/events")
+        .independent_http(4096)
+        .stream_open();
+    assert_eq!(
+        refused(open),
+        "exactStreamOpen cannot cross the Rust module seam"
+    );
 }

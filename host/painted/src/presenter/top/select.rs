@@ -49,6 +49,7 @@ impl<D: DataSource> Presenter<D> {
                     |option| shape::direction(&option),
                 ),
                 symbol: None,
+                symbol_direction: shape::direction(&node),
                 destructive: false,
                 enabled: !choice.disabled,
                 cancel: false,

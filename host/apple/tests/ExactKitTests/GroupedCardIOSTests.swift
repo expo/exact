@@ -5,26 +5,45 @@ import XCTest
 @testable import ExactGroupedLists
 
 final class GroupedCardIOSTests: GroupedListFixture {
-    func testTheCardPaintsItsSectionsHostStateShadow() throws {
+    @MainActor
+    func testTheCardPaintsItsSectionsHostStateShadow() async throws {
         var model = self.model()
         model.sections[0].cardView = 4
         let p = presenter { model }
         defer { window.isHidden = true }
         let section = try XCTUnwrap(p.views[2]), card = try XCTUnwrap(p.views[4])
+        let collection = try list(p).collection
         let shadow = { (y: Int) -> [[String: Any]] in [["o": [0, y], "b": 0, "s": 0, "c": [255, 0, 0, 255]]] }
         p.apply(wireBatch([
-            ["op": "style", "id": 4, "style": ["box_shadow": shadow(4)]],
             ["op": "style", "id": 2, "style": ["looks": [
                 "hover": ["box_shadow": shadow(8)], "focus_visible": ["box_shadow": shadow(12)],
             ]]],
         ]))
+        XCTAssertTrue(shadows(collection).isEmpty)
+        func afterProjection() async {
+            await withCheckedContinuation { next in
+                DispatchQueue.main.async { next.resume() }
+            }
+            collection.layoutIfNeeded()
+        }
         section.lookState(hovered: true)
+        await afterProjection()
         XCTAssertTrue(section.boxShadows.isEmpty)
-        XCTAssertEqual(card.boxShadows.first?.offset.height, 8)
+        XCTAssertEqual(shadows(collection).first?.caster.shadowOffset.height, 8)
         section.lookState(focus: true)
-        XCTAssertEqual(card.boxShadows.first?.offset.height, 12)
-        p.apply(wireBatch([["op": "props", "id": 2, "set": ["disabled": "true"], "clear": []]]))
+        await afterProjection()
+        XCTAssertEqual(shadows(collection).first?.caster.shadowOffset.height, 12)
+        section.lookState(hovered: false, focus: false)
+        await afterProjection()
+        XCTAssertTrue(shadows(collection).isEmpty)
+        p.apply(wireBatch([
+            ["op": "style", "id": 4, "style": ["box_shadow": shadow(4)]],
+            ["op": "props", "id": 2, "set": ["disabled": "true"], "clear": []],
+        ]))
+        section.lookState(hovered: true, focus: true)
+        await afterProjection()
         XCTAssertEqual(card.boxShadows.first?.offset.height, 4)
+        XCTAssertEqual(shadows(collection).first?.caster.shadowOffset.height, 4)
     }
 
     /// The collection's sublayers in the order Core Animation composites

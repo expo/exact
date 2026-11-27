@@ -662,3 +662,134 @@ fn public_arena_clone_forks_cannot_stamp_different_canonical_runs_identically() 
         Some("left ")
     );
 }
+
+#[test]
+fn position_switch_under_decorated_ancestor_updates_paint_source_even_while_translating() {
+    use exact_kernel::{PositionType, TextDecorationLine};
+    let mut k = Kernel::new(Box::new(MonospaceMeasurer::default()));
+    apply(
+        &mut k,
+        &[
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            Op::CreateView {
+                id: 2,
+                node_type: NodeType::View,
+            },
+            Op::CreateView {
+                id: 3,
+                node_type: NodeType::Text,
+            },
+            style(1, |s| {
+                s.text_decoration_line = TextDecorationLine::Underline;
+                s.mask.set(StyleId::TextDecorationLine);
+            }),
+            prop(3, PropId::Text, "hello"),
+            children(1, &[2]),
+            children(2, &[3]),
+            Op::AttachRoot { id: 1 },
+        ],
+    );
+    // Pure translation keeps the paragraph stamp intact.
+    let before = stamp(&k, 3);
+    apply(
+        &mut k,
+        &[style(3, |s| {
+            s.translate = exact_kernel::Vec2 { x: 10.0, y: 0.0 };
+            s.mask.set(StyleId::Translate);
+        })],
+    );
+    assert_eq!(before, stamp(&k, 3));
+
+    // Switching position to absolute while translating stops the inherited underline,
+    // so paint_source must advance even though metrics stay unchanged.
+    apply(
+        &mut k,
+        &[style(3, |s| {
+            s.position_type = PositionType::Absolute;
+            s.translate = exact_kernel::Vec2 { x: 20.0, y: 0.0 };
+            s.mask.set(StyleId::PositionType);
+            s.mask.set(StyleId::Translate);
+        })],
+    );
+    let after_abs_translate = stamp(&k, 3);
+    assert!(before.same_metrics(&after_abs_translate));
+    assert_ne!(
+        before.paint_source_revision(),
+        after_abs_translate.paint_source_revision()
+    );
+
+    // Switching back to relative alone (without translate) restores the underline.
+    apply(
+        &mut k,
+        &[style(3, |s| {
+            s.position_type = PositionType::Relative;
+            s.mask.set(StyleId::PositionType);
+        })],
+    );
+    let after_rel = stamp(&k, 3);
+    assert!(after_abs_translate.same_metrics(&after_rel));
+    assert_ne!(
+        after_abs_translate.paint_source_revision(),
+        after_rel.paint_source_revision()
+    );
+
+    // Switching an intermediate container between the underlined ancestor and the text
+    // also stops propagation to the descendant paragraph.
+    apply(
+        &mut k,
+        &[style(2, |s| {
+            s.position_type = PositionType::Absolute;
+            s.mask.set(StyleId::PositionType);
+        })],
+    );
+    let after_mid = stamp(&k, 3);
+    assert!(after_rel.same_metrics(&after_mid));
+    assert_ne!(
+        after_rel.paint_source_revision(),
+        after_mid.paint_source_revision()
+    );
+
+    // Restoring relative and switching static -> relative (in-flow -> in-flow) while translating
+    // keeps paint_source intact; toggling popover on the container flips out-of-flow and revises it.
+    apply(
+        &mut k,
+        &[style(2, |s| {
+            s.position_type = PositionType::Relative;
+            s.mask.set(StyleId::PositionType);
+        })],
+    );
+    let in_flow = stamp(&k, 3);
+    apply(
+        &mut k,
+        &[style(3, |s| {
+            s.position_type = PositionType::Static;
+            s.translate = exact_kernel::Vec2 { x: 30.0, y: 0.0 };
+            s.mask.set(StyleId::PositionType);
+            s.mask.set(StyleId::Translate);
+        })],
+    );
+    assert_eq!(in_flow, stamp(&k, 3));
+    apply(&mut k, &[prop(2, PropId::Popover, "auto")]);
+    let after_popover = stamp(&k, 3);
+    assert!(in_flow.same_metrics(&after_popover));
+    assert_ne!(
+        in_flow.paint_source_revision(),
+        after_popover.paint_source_revision()
+    );
+    apply(
+        &mut k,
+        &[Op::ClearProp {
+            id: 2,
+            prop: PropId::Popover,
+        }],
+    );
+    let after_clear_popover = stamp(&k, 3);
+    assert!(after_popover.same_metrics(&after_clear_popover));
+    assert_ne!(
+        after_popover.paint_source_revision(),
+        after_clear_popover.paint_source_revision()
+    );
+}

@@ -295,7 +295,7 @@ private final class InlineAccessibility: NSAccessibilityElement, InspectionOwned
         super.accessibilityAttributeNames() + [NSAccessibility.Attribute(rawValue: "AXLanguage"), .enabled]
     }
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
-        if attribute.rawValue == "AXLanguage" { return owner?.presenter?.documentLanguage }
+        if attribute.rawValue == "AXLanguage" { return owner?.paragraphLanguage }
         if attribute == .enabled, owner?.presenter?.inlineAriaUnavailable(id) == true { return false }
         return super.accessibilityAttributeValue(attribute)
     }

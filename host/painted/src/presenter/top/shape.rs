@@ -45,6 +45,8 @@ pub struct Row {
     pub direction: Direction,
     /// Its symbol role (`delete`), for a menu's leading symbol.
     pub symbol: Option<String>,
+    /// The symbol image's computed direction (from the image child, else the button).
+    pub symbol_direction: Direction,
     /// `destructive`.
     pub destructive: bool,
     /// Not `disabled`.
@@ -254,6 +256,12 @@ pub(in crate::presenter) fn row(kernel: &Kernel, node: &NodeRef<'_>, cancel: boo
             .filter_map(|id| kernel.node(id))
             .find(|child| child.node_type == NodeType::Text)
     });
+    let symbol_node = face.symbol.as_ref().and_then(|_| {
+        node.children()
+            .into_iter()
+            .filter_map(|id| kernel.node(id))
+            .find(|child| child.node_type == NodeType::Image)
+    });
     let title = face
         .title
         .or(face.label)
@@ -267,6 +275,9 @@ pub(in crate::presenter) fn row(kernel: &Kernel, node: &NodeRef<'_>, cancel: boo
             .as_ref()
             .map_or_else(|| direction(node), direction),
         symbol: face.symbol,
+        symbol_direction: symbol_node
+            .as_ref()
+            .map_or_else(|| direction(node), direction),
         destructive: node.props.bool(PropId::Destructive) == Some(true),
         enabled: node.props.bool(PropId::Disabled) != Some(true),
         cancel,

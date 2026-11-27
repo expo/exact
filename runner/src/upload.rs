@@ -36,7 +36,64 @@ fn scheme(url: &str) -> Option<&str> {
     .then_some(scheme)
 }
 
+/// The HTTP response head carried by a host-synthesized `open` message when
+/// `Request::stream_open` is set (LLP 1016.000 D12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamHead {
+    /// The 2xx HTTP status code.
+    pub status: u16,
+    /// Response header name–value pairs, as received.
+    pub headers: Vec<(String, String)>,
+}
+
 impl Request {
+    /// Request a standalone `open` message carrying the 2xx HTTP response
+    /// status and headers before any stream event or byte chunk (LLP 1016.000 D12).
+    pub fn stream_open(mut self) -> Self {
+        self.stream_open = true;
+        self
+    }
+
+    /// Why this request's [`Request::stream_open`] is refused, if it is: not an
+    /// HTTP(S) event or byte stream (no `exactStream`, a WebSocket, another
+    /// scheme, a long poll, an upload, a listener, a child process, or non-HTTP
+    /// host work). Every host checks this before any network I/O (LLP 1016.000 D12).
+    pub fn stream_open_refusal(&self) -> Option<&'static str> {
+        if !self.stream_open {
+            return None;
+        }
+        let other = self.is_native()
+            || self.is_auth()
+            || self.is_process()
+            || self.surface.is_some()
+            || self.storage.is_some()
+            || self.continuation.is_some();
+        if other {
+            return Some(
+                "exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen",
+            );
+        }
+        if !self.stream {
+            return Some(
+                "exactStreamOpen reports an HTTP stream's response head on open: give exactStream too",
+            );
+        }
+        if self.socket || self.listen.is_some() || self.long_poll.is_some() || self.upload_progress
+        {
+            return Some(
+                "exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen",
+            );
+        }
+        if scheme(&self.url)
+            .is_some_and(|s| !s.eq_ignore_ascii_case("http") && !s.eq_ignore_ascii_case("https"))
+        {
+            return Some(
+                "exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen",
+            );
+        }
+        None
+    }
+
     /// An upload whose bytes sent are delivered as it goes (the field of
     /// this name), on a stream's request: `fetch(url, {exactStream,
     /// exactUploadProgress: true})`.
@@ -76,6 +133,21 @@ impl Request {
 }
 
 impl Message {
+    /// A host-synthesized HTTP stream `open` message carrying the 2xx response
+    /// status and headers (LLP 1016.000 D12).
+    pub fn http_open(status: u16, headers: Vec<(String, String)>) -> Self {
+        Self {
+            event: "open".into(),
+            head: Some(Box::new(StreamHead { status, headers })),
+            ..Self::default()
+        }
+    }
+
+    /// Whether this is a host-synthesized HTTP stream `open` message.
+    pub fn is_http_open(&self) -> bool {
+        self.head.is_some()
+    }
+
     /// An upload's progress: `loaded` of the body's `total` bytes sent.
     pub fn upload_progress(loaded: u64, total: u64) -> Message {
         Message {
@@ -246,5 +318,89 @@ mod tests {
             ..m.clone()
         };
         assert_eq!(named.sent(), None);
+    }
+
+    /// LLP 1016.000 D12: `exactStreamOpen` is only for an HTTP(S) event or byte
+    /// stream, never a WebSocket, upload, long poll, listener, child process,
+    /// native call, auth call or non-stream request.
+    #[test]
+    fn only_an_http_event_or_byte_stream_takes_stream_open() {
+        let stream = |url: &str| {
+            let crate::Answer::Later(request) =
+                crate::Answer::stream(Request::get(url).stream_open())
+            else {
+                unreachable!()
+            };
+            request
+        };
+        for url in [
+            "https://example.test/events",
+            "HTTP://example.test/bytes",
+            "/events?at=1:2",
+        ] {
+            assert_eq!(stream(url).stream_open_refusal(), None, "{url}");
+        }
+        assert_eq!(
+            Request::get("https://example.test/").stream_open_refusal(),
+            None
+        );
+        assert!(Request::get("https://example.test/")
+            .stream_open()
+            .stream_open_refusal()
+            .unwrap()
+            .contains("give exactStream too"));
+        let only = Some("exactStreamOpen: only an HTTP event or byte stream takes exactStreamOpen");
+        assert_eq!(
+            Request::socket("https://example.test/feed")
+                .stream_open()
+                .stream_open_refusal(),
+            only
+        );
+        for url in [
+            "wss://example.test/feed",
+            "WS://example.test/feed",
+            "ftp://example.test/feed",
+            "exact-native:",
+        ] {
+            assert_eq!(stream(url).stream_open_refusal(), only, "{url}");
+        }
+        assert_eq!(
+            upload("https://example.test/up")
+                .stream_open()
+                .stream_open_refusal(),
+            only
+        );
+        assert_eq!(
+            stream("https://example.test/poll")
+                .long_poll("since", "seq")
+                .stream_open_refusal(),
+            only
+        );
+        let crate::Answer::Later(listener) = crate::Answer::stream(
+            Request::listen("unix:/tmp/probe.sock", Default::default()).stream_open(),
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(listener.stream_open_refusal(), only);
+        assert_eq!(
+            Request::process(b"{}".to_vec(), true, 4096)
+                .stream_open()
+                .stream_open_refusal(),
+            only
+        );
+        let crate::Answer::Later(auth) =
+            crate::Answer::stream(Request::auth(b"{}".to_vec()).stream_open())
+        else {
+            unreachable!()
+        };
+        assert_eq!(auth.stream_open_refusal(), only);
+
+        let open = Message::http_open(200, vec![("Mcp-Session-Id".into(), "sess-1".into())]);
+        assert!(open.is_http_open());
+        assert_eq!(open.event, "open");
+        assert_eq!(
+            crate::Outcome::Message(open).summary(),
+            "stream open, HTTP 200"
+        );
     }
 }

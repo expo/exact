@@ -28,6 +28,9 @@ impl<D: DataSource> Lists<D> for LinkedLists {
     fn collection_mounted(&self, tree: &Tree, view: ViewId, out: &mut Vec<(ViewId, u64)>) {
         tree.collection_mounted(view, out)
     }
+    fn collection_live(&self, tree: &Tree, view: ViewId) -> bool {
+        tree.collection_live(view)
+    }
     fn collection_data(&self, tree: &Tree) -> Vec<(ViewId, u64, bool)> {
         tree.collection_data()
     }

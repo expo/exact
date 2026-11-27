@@ -209,7 +209,7 @@ impl Preview {
     fn release_curve(&self) -> Transition {
         match (self.container, self.release) {
             (Some(_), Some(g)) => zoom::returning(g.from),
-            _ => bounds_spring(),
+            _ => flights::bounds_spring(),
         }
     }
 
@@ -794,7 +794,7 @@ impl<D: DataSource> Presenter<D> {
             }
             _ => {
                 let curve = (self.stage.preview.as_ref())
-                    .map_or_else(bounds_spring, Preview::release_curve);
+                    .map_or_else(flights::bounds_spring, Preview::release_curve);
                 self.host.release_flights(&curve, false)
             }
         }

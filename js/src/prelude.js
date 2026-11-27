@@ -391,7 +391,8 @@
   );
   var responses = binary.responses(blobHelpers),
     Response = responses.Response,
-    hostReply = responses.reply;
+    hostReply = responses.reply,
+    hostHeaders = responses.headers;
 
   var FetchError = binary.FetchError;
 
@@ -1122,6 +1123,15 @@
     if (listened) event = listened.event;
     else if (call.upload && (o.response || (o.message && o.message.event === "exact:progress")))
       event = binary.uploadEvent(o);
+    else if (o.message && o.message.head)
+      event = {
+        type: "open",
+        status: o.message.head.status,
+        headers: hostHeaders(o.message.head.headers),
+        data: "",
+        lastEventId: "",
+        coalesced: 0,
+      };
     else if (o.message)
       event = {
         type: o.message.event || "message",
@@ -1159,6 +1169,7 @@
         kind: "Response",
         message: "HTTP " + o.response.status,
         status: o.response.status,
+        headers: hostHeaders(o.response.headers || []),
       };
     // The socket's state as of this event (D7): `open` opens it, an end closes it. A listener's stream ends as its
     // `error`. `AddressInUse` travels as `Refused`, its message so prefixed (host/executor/src/listen.rs).

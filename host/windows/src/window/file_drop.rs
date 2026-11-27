@@ -26,7 +26,7 @@ use windows::{
             Ole::{
                 IDropTarget, IDropTarget_Impl, OleInitialize, OleUninitialize, RegisterDragDrop,
                 ReleaseStgMedium, RevokeDragDrop, CF_HDROP, CF_UNICODETEXT, DROPEFFECT,
-                DROPEFFECT_COPY, DROPEFFECT_NONE, MK_ALT,
+                DROPEFFECT_COPY, DROPEFFECT_NONE, DROPEFFECT_SCROLL, MK_ALT,
             },
             SystemServices::{MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS},
             Threading::GetCurrentProcess,
@@ -51,11 +51,19 @@ enum Drag {
     Drop(POINTL, MODIFIERKEYS_FLAGS, Dropped),
 }
 
+/// The window's answer to a drag: whether a node there takes it, and
+/// whether a scroller under it scrolls (LLP 1094.000 D15).
+#[derive(Clone, Copy, Default)]
+struct Answer {
+    takes: bool,
+    scrolls: bool,
+}
+
 #[implement(IDropTarget)]
 struct Target {
     /// Whether the drag carries files, text or a link.
     carries: Cell<bool>,
-    dispatch: Box<dyn Fn(Drag) -> bool>,
+    dispatch: Box<dyn Fn(Drag) -> Answer>,
 }
 
 /// The shell's URL format (`CFSTR_INETURLW`), which a browser's link drag
@@ -193,12 +201,22 @@ impl IDropTarget_Impl for Target_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         let effect = unsafe { effect.as_mut() }.ok_or(E_POINTER)?;
-        let accepts = self.carries.get() && (self.dispatch)(Drag::Over(*pt, keys));
-        *effect = if accepts {
-            *effect & DROPEFFECT_COPY
+        let answer = if self.carries.get() {
+            (self.dispatch)(Drag::Over(*pt, keys))
+        } else {
+            Answer::default()
+        };
+        // OLE's mark for a target that scrolls under the drag, beside its effect
+        let scroll = if answer.scrolls {
+            DROPEFFECT_SCROLL
         } else {
             DROPEFFECT_NONE
         };
+        *effect = if answer.takes {
+            *effect & DROPEFFECT_COPY
+        } else {
+            DROPEFFECT_NONE
+        } | scroll;
         Ok(())
     }
 
@@ -225,7 +243,7 @@ impl IDropTarget_Impl for Target_Impl {
                 .map(dropped)
                 .filter(|dropped| *dropped != Dropped::default())
             {
-                if (self.dispatch)(Drag::Drop(*pt, keys, dropped)) {
+                if (self.dispatch)(Drag::Drop(*pt, keys, dropped)).takes {
                     *effect = allowed;
                     return Ok(());
                 }
@@ -300,9 +318,9 @@ fn dispatch<D: DataSource>(
     drag: Drag,
     owed: &Cell<bool>,
     wake: &EventLoopProxy<Event>,
-) -> bool {
+) -> Answer {
     let Some(app) = app.upgrade() else {
-        return false;
+        return Answer::default();
     };
     let Ok(mut app) = app.try_borrow_mut() else {
         // A presenter busy in a nested modal loop takes no event: a drag that ends now owes its leave, paid at the
@@ -310,11 +328,11 @@ fn dispatch<D: DataSource>(
         if matches!(drag, Drag::Leave | Drag::Drop(..)) && !owed.replace(true) {
             let _ = wake.send_event(Event::Wake);
         }
-        return false;
+        return Answer::default();
     };
     let scale = app.scale as f32;
     let Some(p) = app.presenter.as_mut() else {
-        return false;
+        return Answer::default();
     };
     if owed.replace(false) {
         p.drag_left();
@@ -322,12 +340,12 @@ fn dispatch<D: DataSource>(
     let result = match drag {
         Drag::Leave => {
             p.drag_left();
-            false
+            Answer::default()
         }
         Drag::Over(pt, keys) | Drag::Drop(pt, keys, _) => {
             let mut pt = POINT { x: pt.x, y: pt.y };
             if !unsafe { ScreenToClient(hwnd, &mut pt) }.as_bool() {
-                return false;
+                return Answer::default();
             }
             let at = (pt.x as f32 / scale, pt.y as f32 / scale);
             let held = KeyModifiers {
@@ -339,12 +357,19 @@ fn dispatch<D: DataSource>(
                 },
             };
             match drag {
-                Drag::Drop(_, _, dropped) => p.dropped(at, held, &dropped).is_some(),
-                _ => p.drag_over(at, held).is_some(),
+                Drag::Drop(_, _, dropped) => Answer {
+                    takes: p.dropped(at, held, &dropped).is_some(),
+                    scrolls: false,
+                },
+                _ => Answer {
+                    takes: p.drag_over(at, held).is_some(),
+                    scrolls: p.drag_scrolls(),
+                },
             }
         }
     };
-    if p.dirty() {
+    // A drag held near a scroller's edge asks for frames, though nothing changed yet (LLP 1094.000 D15)
+    if p.dirty() || p.needs_animation_frame() {
         if let Some(window) = &app.window {
             window.request_redraw();
         }

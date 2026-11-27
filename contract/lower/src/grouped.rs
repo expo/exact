@@ -25,6 +25,9 @@ pub(crate) mod actions;
 mod cell;
 mod inputs;
 mod lines;
+mod list_style;
+use list_style::plain;
+pub(crate) use list_style::style;
 mod messages;
 pub(crate) use messages::folds;
 mod native;
@@ -41,9 +44,6 @@ use value::{grows, sized};
 use crate::{err, swipe_rows, tags, LowerError};
 use contract_syntax::{Attr, Expr, Node, Span, TemplatePart};
 use exact_kernel::StyleId;
-
-/// `listStyle`'s names (D2), UIKit's three list appearances.
-pub(crate) const STYLES: &[&str] = &["inset-grouped", "grouped", "plain"];
 
 /// The colours the sheet writes that are one role on every platform (LLP
 /// 1095 D2, LLP 1115 §3, LLP 1115.000 D3.1): its labels. The ones a
@@ -70,67 +70,6 @@ use crate::metrics::grouped as metric;
 use actions::{action_cell, disclosure};
 use lines::{stack_lines, stack_of_lines};
 use title::{title_button, title_face};
-
-/// The style a grouped list's attributes ask for: `None` for any other
-/// element. `appearance` must be a literal (it decides what the node is),
-/// and `listStyle` is only a grouped list's.
-pub(crate) fn style(tag: &str, attrs: &[Attr]) -> Result<Option<&'static str>, LowerError> {
-    let grouped = match attrs.iter().rev().find(|a| a.name == "appearance") {
-        Some(a) if tag == "list" => match &a.value {
-            Expr::Str(v, _) => v == "auto",
-            _ => {
-                return err(
-                    "lower-grouped-list",
-                    "a `list`'s `appearance` is a literal: `\"auto\"` makes it a grouped list. To switch, write `if` with two lists",
-                    a.span,
-                )
-            }
-        },
-        None if tag == "list" && attrs.iter().any(|a| a.name == "reorderdrop") =>
-            attrs.iter().any(|a| a.name == "listStyle" && matches!(&a.value, Expr::Str(s, _) if s == "inset-grouped")),
-        _ => false,
-    };
-    let named = attrs.iter().rev().find(|a| a.name == "listStyle");
-    if !grouped {
-        return match named {
-            Some(a) => err(
-                "lower-grouped-list",
-                "`listStyle` styles a grouped list: `list appearance=\"auto\"`",
-                a.span,
-            ),
-            None => Ok(None),
-        };
-    }
-    if let Some(a) = attrs
-        .iter()
-        .find(|a| a.name == "virtualized" && !matches!(a.value, Expr::Bool(false, _)))
-    {
-        return err(
-            "lower-grouped-list",
-            "a grouped list builds every row; write appearance=\"none\" for a virtualized list, or remove `virtualized` to keep the grouped list",
-            a.span,
-        );
-    }
-    match named.map(|a| (&a.value, a.span)) {
-        None => Ok(Some(STYLES[0])),
-        Some((Expr::Str(v, _), span)) => match STYLES.iter().find(|s| **s == v) {
-            Some(s) => Ok(Some(s)),
-            None => err(
-                "lower-grouped-list",
-                format!(
-                    "`listStyle=\"{v}\"` is not a list style; styles: {}",
-                    STYLES.join(", ")
-                ),
-                span,
-            ),
-        },
-        Some((_, span)) => err(
-            "lower-grouped-list",
-            "`listStyle` is a literal: the sheet Contract writes for the other hosts is chosen when the view compiles",
-            span,
-        ),
-    }
-}
 
 /// A sheet row's name mark: the lowering takes marked rows out before an
 /// element's classes and puts them under them (`split`), so a class, like an
@@ -221,7 +160,7 @@ fn mv(metric_name: &str, span: Span) -> Expr {
 /// The list's own sheet, before its author's rows; `listStyle` is always
 /// written, so a host finds a grouped list by its prop.
 pub(crate) fn list_rows(style: &'static str, span: Span) -> Vec<Attr> {
-    let ground = if style == "plain" {
+    let ground = if plain(style) {
         "ground-plain"
     } else {
         "ground"
@@ -458,8 +397,7 @@ fn section(
     // leaves none beside a header or a footer, whose own padding is the
     // space; the Mac's form spaces a header and a footer by the section. A
     // plain list's sections meet.
-    let plain = style == "plain";
-    let mut sheet = if plain {
+    let mut sheet = if plain(style) {
         vec![n("margin-top", 0.0, span), n("margin-bottom", 0.0, span)]
     } else {
         let top = match (head == 1, first) {
@@ -645,7 +583,7 @@ fn section(
     // Plain rows use the list's ground, as UIKit's plain cells and AppKit's table rows do.
     let mut group = vec![if cardless {
         s("background-color", "transparent", span)
-    } else if style == "plain" {
+    } else if plain(style) {
         m("background-color", "ground-plain", span)
     } else {
         m("background-color", "card-fill", span)

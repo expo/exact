@@ -80,11 +80,37 @@ impl Em<'_> {
         scope: &Scope,
     ) -> Result<String, String> {
         let f = self.f(code, scope)?;
-        if self.site_attrs || self.dev_reload || !f.starts_with("()=>{") {
+        if !f.starts_with("()=>{") {
             return Ok(f);
         }
         let call = self.mount_templates.expression(f["()=>".len()..].into());
         Ok(format!("()=>{call}"))
+    }
+
+    pub(super) fn attrs_js(&self, i: u32, attrs: &[(String, String)], scope: &Scope) -> String {
+        let mut entries: Vec<String> = attrs
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "{}:{}",
+                    serde_json::to_string(k).unwrap(),
+                    scope.operand(serde_json::to_string(v).unwrap())
+                )
+            })
+            .collect();
+        if self.site_attrs {
+            let site = if self.next_local_element.is_some() {
+                self.site_number(scope, i)
+            } else {
+                serde_json::to_string(&i.to_string()).unwrap()
+            };
+            entries.push(format!("\"data-site\":{site}"));
+        }
+        if entries.is_empty() {
+            "0".to_string()
+        } else {
+            format!("{{{}}}", entries.join(","))
+        }
     }
 
     pub(super) fn site_number(&self, scope: &Scope, n: u32) -> String {
@@ -124,7 +150,7 @@ impl Em<'_> {
         scope: &Scope,
         render: impl FnOnce(&mut Self, &Scope) -> Result<(), String>,
     ) -> Result<(), String> {
-        if status_owner && !self.site_attrs && !self.dev_reload && !dev_panel {
+        if status_owner && !dev_panel {
             let mut inner = scope.clone();
             std::rc::Rc::make_mut(&mut inner.status_owners).insert(
                 node,

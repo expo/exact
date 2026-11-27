@@ -258,8 +258,9 @@ impl Em<'_> {
                 _ => {}
             }
         }
+        let site = scope.operand(format!("\"{i}\""));
         Ok(format!(
-            "{{x:{x},ph:[{}],pw:[{}],est:{est},gap:{gap},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:\"{i}\",animations:{}}}",
+            "{{x:{x},ph:[{}],pw:[{}],est:{est},gap:{gap},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:{site},animations:{}}}",
             ph.join(","),
             pw.join(","),
             edges[0],

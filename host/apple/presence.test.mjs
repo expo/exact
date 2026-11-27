@@ -511,3 +511,56 @@ test('macSigning preflight catches missing or ambiguous signing before a bake ex
     .toThrow(/^appstore-needs-profile:/);
   expect(macSigning(plain, null, { preflight: true, current: '-', identities: twoTeams, find: none, log: () => {} }).sha1).toBe('-');
 });
+
+test('only an explicit Mac --unsigned distribution input defers HTTPS callback provisioning', () => {
+  const callbacks = ['https://auth.example/return', 'https://login.example/cb'];
+  const compat = bake(callbacks.map(cb => `auth.callback ${cb}`).join('\n'));
+  compat.reach.auth = { callbacks, associatedDomains: ['webcredentials:auth.example', 'webcredentials:login.example'] };
+  const original = structuredClone(compat);
+  const never = () => { throw new Error('unexpected credential lookup'); };
+  const options = { unsigned: true, release: true, distribution: true, current: '-', find: never, identityFor: never, identities: never };
+
+  // Preflight and post-bake succeed for zero profile needs or HTTPS callbacks only, without reading credentials.
+  expect(macSigning(app, null, { ...options, preflight: true }).sha1).toBe('-');
+  expect(macSigning(app, bake(''), options)).toEqual({ provisioning: null, widgets: null, sha1: '-' });
+  expect(macSigning(app, compat, options)).toEqual({ provisioning: null, widgets: null, sha1: '-' });
+  expect(compat).toEqual(original);
+
+  // Normal distribution with ad-hoc identity still fails with grant-needs-profile.
+  expect(() => macSigning(app, compat, { ...options, unsigned: false, find: none })).toThrow(/grant-needs-profile/);
+
+  // Incompatible signing modes and extensions are refused.
+  for (const change of [{ release: false }, { distribution: false }, { current: 'identity' }, { store: 'appstore' }, { sandboxed: true }])
+    expect(() => macSigning(app, compat, { ...options, ...change })).toThrow(/Mac --unsigned/);
+  expect(() => macSigning({ ...app, manifest: { share_target: {} } }, compat, options)).toThrow(/without extensions/);
+  expect(() => macSigning({ ...app, manifest: { widgets: [{ families: ['systemSmall'] }] } }, compat, options)).toThrow(/without extensions/);
+
+  // Every other mandatory or optional profile need is refused post-bake, naming all rejected lines at once.
+  const multi = bake(`${ceiling}\nauth.passkey auth.example`, ['com.apple.developer.aps-environment', 'com.apple.developer.applesignin', 'com.apple.developer.in-app-payments']);
+  multi.reach.auth = { callbacks, associatedDomains: ['webcredentials:auth.example'] };
+  const withLinks = { ...app, manifest: { handle_links: 'preferred', app: { origin: 'https://app.example' } } };
+  // Preflight defers profile-need refusal until post-bake so handle_links and baked grants report together.
+  expect(macSigning(withLinks, null, { ...options, preflight: true }).sha1).toBe('-');
+  expect(() => macSigning(withLinks, multi, options))
+    .toThrow(/unsigned-distribution:.*device\.push.*com\.apple\.developer\.applesignin.*com\.apple\.developer\.in-app-payments.*secret\.keep.*auth\.passkey.*handle_links/);
+});
+
+test('unsigned Mac production artifacts are isolated from signed production artifacts and receipts omit requiresResigning', async () => {
+  const { appleArtifacts, receipt, shippedReceipt } = await import('./build.mjs');
+  const sample = { name: 'notes', displayName: 'Notes', id: 'com.example.notes', dir: import.meta.dir, target: '/tmp/exact-notes-target', manifest: { host: { macos: {} } } };
+  const signed = appleArtifacts(sample, { destination: 'macos', composition: 'updating', trust: 'production' });
+  const unsigned = appleArtifacts(sample, { destination: 'macos', composition: 'updating', trust: 'production', unsigned: true });
+  expect(unsigned.namespace).not.toBe(signed.namespace);
+  expect(unsigned.capture).not.toBe(signed.capture);
+  expect(unsigned.products).not.toBe(signed.products);
+  expect(unsigned.scratch).not.toBe(signed.scratch);
+  expect(unsigned.bundle).not.toBe(signed.bundle);
+  expect(unsigned.bundle.startsWith(unsigned.namespace)).toBe(true);
+  expect(unsigned.lock).toBe(signed.lock);
+  expect(unsigned.swift).toBe(signed.swift);
+  const full = JSON.parse(receipt(sample, { compatibilityId: 'cid', build: { compat: { reach: {} } }, composition: 'updating', platform: 'macos', target: 'aarch64-apple-darwin', sdk: '/sdk', identity: 'ad-hoc', profile: null, entitlements: null, gpu: null, development: null }));
+  const shipped = JSON.parse(shippedReceipt(JSON.stringify(full)));
+  expect(full.requiresResigning).toBeUndefined();
+  expect(shipped.requiresResigning).toBeUndefined();
+  expect(shipped.build.compat).toEqual({ reach: {} });
+});

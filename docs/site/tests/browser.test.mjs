@@ -366,20 +366,18 @@ test('WebMCP navigation is a consequential write', () => withPage({}, async page
 
 test('WebMCP navigation resolves paths against the published pages', () => withPage({}, async page => {
   const call = await visitWithTools(page);
-  const inputs = ['/recipes/website/#a-deep-link', '', '/start-here', '/_components', '#a-deep-link', `${site.origin || origin}/recipes/website.md#a-deep-link`];
-  const results = [];
-  for (const path of inputs) {
-    const { outcome, value } = await call('navigate_page', { path });
-    results.push({ path, outcome, value, location: page.url().slice(origin.length) });
+  const cases = [
+    ['/recipes/website/#a-deep-link', 'ok', 'Opened /recipes/website.', '/recipes/website#a-deep-link'],
+    ['', 'ok', 'Opened /recipes/website.', '/recipes/website#a-deep-link'],
+    ['/start-here', 'ok', 'Opened /start.', '/start'],
+    ['/_components', 'failed', expect.stringContaining('No page is at /_components.'), '/start'],
+    ['#a-deep-link', 'failed', expect.stringContaining('path must start with'), '/start'],
+    [`${site.origin || origin}/recipes/website.md#a-deep-link`, 'ok', 'Opened /recipes/website.', '/recipes/website#a-deep-link'],
+  ];
+  for (const [path, outcome, value, location] of cases) {
+    expect(await call('navigate_page', { path })).toMatchObject({ outcome, value });
+    await page.waitForURL(origin + location);
   }
-  expect(results).toEqual([
-    { path: inputs[0], outcome: 'ok', value: 'Opened /recipes/website.', location: '/recipes/website#a-deep-link' },
-    { path: inputs[1], outcome: 'ok', value: 'Opened /recipes/website.', location: '/recipes/website#a-deep-link' },
-    { path: inputs[2], outcome: 'ok', value: 'Opened /start.', location: '/start' },
-    { path: inputs[3], outcome: 'failed', value: expect.stringContaining('No page is at /_components.'), location: '/start' },
-    { path: inputs[4], outcome: 'failed', value: expect.stringContaining('path must start with'), location: '/start' },
-    { path: inputs[5], outcome: 'ok', value: 'Opened /recipes/website.', location: '/recipes/website#a-deep-link' },
-  ]);
   await headingInView(page);
 }));
 
@@ -447,6 +445,43 @@ test('WebMCP navigation reports a pending current-page download that fails', () 
   } finally {
     release.resolve();
   }
+}));
+
+test('WebMCP navigation to a fragment just after the tools register ends at its heading on a slow download', () => withPage({}, async page => {
+  await page.route(websiteChunk, async route => {
+    await Bun.sleep(600);
+    await route.continue();
+  });
+  await page.addInitScript(() => {
+    Object.defineProperty(Document.prototype, 'modelContext', {
+      configurable: true,
+      value: { registerTool: tool => {
+        if (tool.name === 'navigate_page') window.navigated = new Promise(done => setTimeout(() => done(tool.execute({ path: '/recipes/website#a-deep-link' }))));
+        return Promise.resolve();
+      } },
+    });
+  });
+  await visit(page, '/start');
+  expect(await page.evaluate(() => window.navigated)).toMatchObject({ outcome: 'ok', value: 'Opened /recipes/website.' });
+  await headingInView(page);
+}));
+
+test('WebMCP navigation stays unavailable when the search dialog closes and opens again in one turn', () => withPage({}, async page => {
+  await visitWithTools(page);
+  const navigate = await page.evaluateHandle(() => window.offered.find(tool => tool.name === 'navigate_page').execute);
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByTestId('search-input').waitFor({ state: 'visible' });
+  expect(await page.evaluate(async () => {
+    const dialog = document.getElementById('search');
+    const closed = new Promise(done => dialog.addEventListener('close', done, { once: true }));
+    dialog.close();
+    document.querySelector('[data-testid="search-open"]').click();
+    await closed;
+    await new Promise(requestAnimationFrame);
+    return dialog.open;
+  })).toBe(true);
+  expect(await navigate.evaluate(execute => execute({ path: '/recipes/website' }))).toMatchObject({ outcome: 'refused', reason: 'unavailable' });
+  expect(new URL(page.url()).pathname).toBe('/start');
 }));
 
 test('WebMCP navigation is unavailable while the search dialog is modal', () => withPage({}, async page => {
