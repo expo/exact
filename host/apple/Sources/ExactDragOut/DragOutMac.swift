@@ -15,22 +15,10 @@ public enum ExactDragOut {
 
 final class DragOutHost: DragOutCapability {
     func mouseDrag(_ presenter: Presenter) -> MouseRecognizer { MouseDragOut(presenter) }
-    /// A first click's drag (D5) needs no other candidate of the chain on
-    /// the way: no node from `node` up to the source hears a pan or a swipe,
-    /// reorders, or is a transform or a height handle, any of which rule 4
-    /// may rank first. Read from the nodes, arming nothing.
+    /// A first click's drag (D5): one a press on `node` arms with no other
+    /// candidate of the chain on the way (`source(from:in:alone:)`).
     func arms(_ node: NodeView, in presenter: Presenter) -> Bool {
-        guard !ExactEnv.agentMode, let source = MouseDragOut.source(from: node, in: presenter) else { return false }
-        var at: NSView? = node
-        while let view = at {
-            if let found = view as? NodeView {
-                if !found.handlers.isDisjoint(with: ["pan", "panrelease", "swipeleft", "swiperight"])
-                    || !(found.props["reorderFor"] ?? "").isEmpty || presenter.drags.handles(found.id) { return false }
-                if found === source { return true }
-            }
-            at = view.superview
-        }
-        return false
+        !ExactEnv.agentMode && MouseDragOut.source(from: node, in: presenter, alone: true) != nil
     }
 }
 
@@ -122,8 +110,11 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
     /// The node a down on `node` drags: the innermost draggable one that
     /// carries something on the way up, found through the presenter's index,
     /// unless a node that hears `press` or edits text, or a disabled or inert
-    /// one, comes first.
-    static func source(from node: NodeView, in presenter: Presenter) -> NodeView? {
+    /// one, comes first. `alone` also asks that no node on the way, the
+    /// source included, hears a pan or a swipe, reorders, or is a transform
+    /// or a height handle, any of which rule 4 may rank first (D5's first
+    /// click); it reads the nodes and arms nothing.
+    static func source(from node: NodeView, in presenter: Presenter, alone: Bool = false) -> NodeView? {
         let draggable = presenter.carrying("draggable").filter { v in v.props["draggable"] == "true" && carried(v).contains { !($0 ?? "").isEmpty } }
         guard draggable.contains(where: { node.isDescendant(of: $0) }) else { return nil }
         let sources = Set(draggable.map(ObjectIdentifier.init))
@@ -132,6 +123,8 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         while let view = at {
             if let found = nodes[ObjectIdentifier(view)] {
                 if found.disabled || found.inert { return nil }
+                if alone, !found.handlers.isDisjoint(with: ["pan", "panrelease", "swipeleft", "swiperight"])
+                    || !(found.props["reorderFor"] ?? "").isEmpty || presenter.drags.handles(found.id) { return nil }
                 if sources.contains(ObjectIdentifier(view)) { return found }
                 if found.handlers.contains("press") || found.field != nil || found.textArea != nil { return nil }
             }
