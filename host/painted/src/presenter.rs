@@ -58,6 +58,9 @@ pub mod drag_out;
 mod drag_out_mouse_tests;
 #[cfg(test)]
 mod drag_out_tests;
+mod drag_source;
+#[cfg(test)]
+mod drag_source_tests;
 pub mod edit_menu;
 mod events;
 mod feedback;

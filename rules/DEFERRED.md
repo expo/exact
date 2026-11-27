@@ -2234,6 +2234,13 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   good for the sending app to be able to choose a name optionally if the
   host platform makes it easy"):** `names=` beside `files=` gives the name
   a destination is offered for each file, where the host takes one.
+  **Amended (LLP 1094.000 D4 and D16; James Ide, 2026-11-26: "What
+  features are expected on each host platform? Ensure we have support for
+  each of those."):** a drag that gathers several nodes, by a tap on each
+  on iOS and iPadOS; and `dragstart` and `dragend` on a draggable node, as
+  notifications after the platform began the drag and once it ended,
+  `dragend`'s `DragEvent.dropEffect` its outcome, on iOS, iPadOS, macOS, the
+  web, Android and Linux. `drag` stays out.
   **Expanded (LLP 1094.001; the waiver that covers LLP 1094.000, no take;
   James Ide, 2026-11-23: "Yes, we have a waiver"):** drags into the app:
   `drop`'s `DragEvent` carries the drag's `text` and `url` beside its

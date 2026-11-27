@@ -255,6 +255,8 @@ const PERSON_EVENTS: &[&str] = &[
     "drop",
     "dragenter",
     "dragleave",
+    "dragstart",
+    "dragend",
     "reorderdrop",
     "reordertargetchange",
     "historyswipe",

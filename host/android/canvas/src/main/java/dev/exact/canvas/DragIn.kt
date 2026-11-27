@@ -57,6 +57,12 @@ internal class DragIn(private val root: View) {
                 dragging = false
                 main.removeCallbacks(exit)
                 if (carries && !settled) Exact.dragLeft()
+                // This window's own lift ended, after the leaves it owes: its node hears `dragend` once Android's
+                // call returns, a destination having taken it or not (LLP 1094.000 D16). The event is pooled, so its
+                // result is read now.
+                val lift = own(event)
+                val taken = event.result
+                if (lift != 0) main.post { Exact.liftEnded(lift, taken) }
             }
         }
         return true
@@ -102,6 +108,9 @@ internal class DragIn(private val root: View) {
         if (carries) Exact.dragDropped(landed.first, landed.second)
     }
 
+    /** The number of this window's own lift [event] is, 0 for another window's or app's drag. */
+    private fun own(event: DragEvent): Int = (event.localState as? DragOut.Lift)?.takeIf { it.owner === root.context }?.id ?: 0
+
     /** [event]'s point, which Android gives in [from]'s own pixels, in the page view's. */
     private fun inPage(from: View, event: DragEvent): Pair<Float, Float> {
         val target = page ?: root
@@ -133,7 +142,7 @@ internal class DragIn(private val root: View) {
         val clip = event.clipData
         if (!carries || clip == null) return false
         settled = true
-        val id = Exact.dropReleased(x, y)
+        val id = Exact.dropReleased(x, y, own(event))
         if (id == 0) return false
         val items = DropItems.read(clip)
         if (items.files.isEmpty()) {
@@ -155,7 +164,7 @@ internal class DragIn(private val root: View) {
             grant = (root.context as? Activity)?.requestDragAndDropPermissions(event)
             // Another app's files are read under the drop's grant alone: one the app could read with its own rights is
             // still not given to it by a drag. The app's own drags need none.
-            if (grant == null && event.localState !== DragOut.OWN) {
+            if (grant == null && event.localState !is DragOut.Lift) {
                 said += "drop: Android granted no read permission for its files, so it delivers its text and link alone"
                 land(emptyList())
                 return true

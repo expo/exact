@@ -615,6 +615,8 @@ pub(crate) fn handler_attr(name: &str) -> bool {
             | "drop"
             | "dragenter"
             | "dragleave"
+            | "dragstart"
+            | "dragend"
             | "atompress"
             | "swiperight"
             | "swipeleft"

@@ -26,11 +26,26 @@ import kotlin.math.sqrt
  * [View.DRAG_FLAG_GLOBAL_URI_READ] lets it read the files), and once it has begun, Android's to track and end. An
  * assistive service's drag, started by the node's `ACTION_DRAG_START` with no finger down, carries
  * [View.DRAG_FLAG_ACCESSIBILITY_ACTION] and begins on the accessibility tree's own view ([Access.drag], LLP 1094.000 D9).
+ * Each drag's local state is its own [Lift]: exact2 hears that the platform began it once `startDragAndDrop` returns
+ * true, and the root, which hears every drag's end ([DragIn]), tells it when that lift ended (LLP 1094.000 D16).
  */
 internal object DragOut {
     /** A drag exact2 asked for (request kind 23): the node, its box and the finger in the view's pixels, whether an
-     * assistive service started it, its text and URL, and its files as the node names them. */
-    data class Ask(val node: Int, val box: Rect, val finger: Point, val service: Boolean, val text: String, val url: String, val files: List<Dragged>)
+     * assistive service started it, its text and URL, its files as the node names them, and the lift's number. */
+    data class Ask(val node: Int, val box: Rect, val finger: Point, val service: Boolean, val text: String, val url: String, val files: List<Dragged>, val lift: Int)
+
+    /** A drag's local state: lift [id] of [owner]'s exact2, a new one each drag. Android gives it only to the app's own
+     * windows, so a drop that carries one is the app's own, whose files the app may read without a grant ([DragIn]). */
+    class Lift(val id: Int, val owner: Any)
+
+    /** The platform began [lift]: exact2's node hears its `dragstart`, outside the platform's call. */
+    fun began(lift: Lift) = Exact.liftBegan(lift.id)
+
+    /** No drag began for [lift], journaled as [why]: exact2 lets its record go. */
+    fun refused(lift: Lift, why: String) {
+        Exact.journal(why)
+        Exact.liftEnded(lift.id, false)
+    }
 
     /** A file as the node names it ([src]: a shipped `assets/…` name or an `app:/` path) and the name a destination is
      * offered for it (LLP 1094.000 D14). */
@@ -45,7 +60,7 @@ internal object DragOut {
             val src = Requests.string(w, i).also { i = it.second }.first
             Dragged(src, Requests.string(w, i).also { i = it.second }.first)
         }
-        return Ask(w[at], box, Point(w[at + 5], w[at + 6]), w[at + 7] == 1, text, url, files)
+        return Ask(w[at], box, Point(w[at + 5], w[at + 6]), w[at + 7] == 1, text, url, files, w[i])
     }
 
     /** The touch down in the activity's window now, by when its first finger went down, while that finger is down;
@@ -80,15 +95,16 @@ internal object DragOut {
      * feedback and no drag, and so has one while the window has yet to hear an earlier drag's end ([busy]). What
      * happened is journaled when no drag began.
      */
-    fun start(activity: Activity, view: View, box: Rect, finger: Point, clip: ClipData, busy: () -> Boolean = { false }) {
+    fun start(activity: Activity, view: View, box: Rect, finger: Point, clip: ClipData, lift: Lift, busy: () -> Boolean = { false }) {
         val touch = holding
         val shown = Rect(box).apply { if (!intersect(0, 0, view.width, view.height)) setEmpty() }
         val begin = { picture: Bitmap? ->
             when {
-                touch == null || down != touch -> Exact.journal("drag: not begun: the finger held for it lifted before its shadow was drawn")
-                busy() -> Exact.journal(UNHEARD)
-                !view.startDragAndDrop(clip, Shadow(picture, shown, finger), OWN, flags(false, Build.VERSION.SDK_INT)) ->
-                    Exact.journal("drag: the platform began no drag: another drag is under way, or the view left its window")
+                touch == null || down != touch -> refused(lift, "drag: not begun: the finger held for it lifted before its shadow was drawn")
+                busy() -> refused(lift, UNHEARD)
+                !view.startDragAndDrop(clip, Shadow(picture, shown, finger), lift, flags(false, Build.VERSION.SDK_INT)) ->
+                    refused(lift, "drag: the platform began no drag: another drag is under way, or the view left its window")
+                else -> began(lift)
             }
         }
         if (shown.isEmpty || !view.isAttachedToWindow) return begin(null)
@@ -159,10 +175,6 @@ internal object DragOut {
     }
 
     private const val MOST_PIXELS = 1024.0 * 1024
-
-    /** The local state of the app's own drags: Android gives it only to the app's own windows ([DragIn] reads it), so
-     * a drop that carries it is the app's own, whose files the app may read without a grant. */
-    val OWN = Any()
 
     /** What is journaled for a drag not begun while the window has yet to hear an earlier drag's end. */
     const val UNHEARD = "drag: not begun: the window has yet to hear the end of the drag before it"

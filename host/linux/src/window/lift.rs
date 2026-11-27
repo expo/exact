@@ -127,6 +127,7 @@ impl Lifts {
             .map(|picture| Icon::of(picture, lift.hotspot));
         Some(Command::Lift {
             press,
+            lift: lift.id,
             offers,
             files,
             icon,
@@ -139,6 +140,20 @@ impl Lifts {
 pub(super) struct Files {
     staging: Arc<Staging>,
     link: String,
+}
+
+/// Which of the lifts whose own types are `owns` an offer of `types` is:
+/// none for another client's drag, or another lift's.
+fn offered<'a>(mut owns: impl Iterator<Item = &'a str>, types: &[String]) -> Option<usize> {
+    owns.position(|own| types.iter().any(|t| t == own))
+}
+
+/// A lift's own type, unique in the process and among processes: the app's
+/// own drop side knows its lift's offer by it, as `enter` names no source.
+fn own_type() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("application/x-exact-lift-{}-{next}", std::process::id())
 }
 
 /// `url` as `text/x-moz-url`: UTF-16 in the host's byte order with no byte
@@ -470,11 +485,15 @@ pub(super) struct Out {
 }
 
 /// A drag the window started, or asked for: its press, its source, its
-/// types and their bytes, its files, its icon, and whether the press's
+/// lift's number and whether the compositor began it (LLP 1094.000 D16),
+/// its types and their bytes, its files, its icon, and whether the press's
 /// gesture ended.
 struct Source {
     press: Press,
     source: WlDataSource,
+    lift: u32,
+    own: String,
+    begun: bool,
     offers: Vec<(&'static str, Arc<[u8]>)>,
     files: Option<Files>,
     icon: Option<(WlSurface, WlBuffer, Option<WpViewport>)>,
@@ -676,12 +695,13 @@ impl Listener {
     pub(super) fn lift(
         &mut self,
         press: Press,
+        lift: u32,
         offers: Vec<(&'static str, Arc<[u8]>)>,
         files: Option<Files>,
         icon: Option<Icon>,
     ) {
         let Some(seat) = self.seats.iter().find(|s| s.name == press.seat) else {
-            return;
+            return self.tell(Heard::LiftEnded { lift, taken: false });
         };
         // A drag's types are fixed as it starts, so the key goes from the first lift after a probe succeeds
         let portal = Portal::session();
@@ -699,7 +719,7 @@ impl Listener {
             .as_ref()
             .filter(|_| grabbed && self.manager.version() >= 3)
         else {
-            return;
+            return self.tell(Heard::LiftEnded { lift, taken: false });
         };
         let handle = &self.handle;
         let source = self.manager.create_data_source(handle, ());
@@ -713,6 +733,9 @@ impl Listener {
         for mime in offers.iter().map(|(mime, _)| *mime).chain(deferred) {
             source.offer(mime.to_owned());
         }
+        // Wayland's `enter` names an offer, not its source: a type of the drag's own tells the window's offer apart
+        let own = own_type();
+        source.offer(own.clone());
         // A copy alone, so a drop never moves anything of the app's
         source.set_actions(DndAction::Copy);
         let surface = icon
@@ -727,6 +750,9 @@ impl Listener {
         self.out.sources.push(Source {
             press,
             source,
+            lift,
+            own,
+            begun: false,
             offers,
             files,
             icon,
@@ -838,15 +864,54 @@ impl Listener {
             .position(|s| s.press.seat == seat && !s.ended)
         {
             self.ended(at);
-            self.out.sources.remove(at).retire();
+            self.over(at, false);
         }
     }
 
-    fn retire(&mut self, source: &WlDataSource) {
+    /// The compositor ended `source`, a destination taking it (`dnd_finished`) or not (`cancelled`).
+    fn retire(&mut self, source: &WlDataSource, taken: bool) {
         if let Some(at) = self.out.sources.iter().position(|s| s.source == *source) {
             self.ended(at);
-            self.out.sources.remove(at).retire();
+            self.over(at, taken);
         }
+    }
+
+    /// Source `at` is done: the window hears that its lift ended, taken or
+    /// not, which a lift the compositor never began ends with no event.
+    fn over(&mut self, at: usize, taken: bool) {
+        let source = self.out.sources.remove(at);
+        let lift = source.lift;
+        source.retire();
+        self.tell(Heard::LiftEnded { lift, taken });
+    }
+
+    /// The compositor shows it began `source`'s drag: one of its events but
+    /// `cancelled` came, the first the window hears of it, so its node hears
+    /// `dragstart` before the window hears the drag over it.
+    fn began(&mut self, source: &WlDataSource) {
+        if let Some(found) = self
+            .out
+            .sources
+            .iter_mut()
+            .find(|s| s.source == *source && !s.begun)
+        {
+            found.begun = true;
+            let lift = found.lift;
+            self.tell(Heard::LiftBegan(lift));
+        }
+    }
+
+    /// The window's drag device entered with an offer of `types`: one that
+    /// lists a source's own type is that source's drag, which the compositor
+    /// began. Its lift's number, which its drop names.
+    pub(super) fn entered_by(&mut self, types: &[String]) -> Option<u32> {
+        let at = offered(self.out.sources.iter().map(|s| s.own.as_str()), types)?;
+        let (source, lift) = (
+            self.out.sources[at].source.clone(),
+            self.out.sources[at].lift,
+        );
+        self.began(&source);
+        Some(lift)
     }
 }
 
@@ -1118,7 +1183,7 @@ impl Listener {
         while at < self.out.sources.len() {
             let source = &self.out.sources[at];
             if source.press.seat == seat && !source.ended {
-                self.out.sources.remove(at).retire();
+                self.over(at, false);
             } else {
                 at += 1;
             }
@@ -1135,6 +1200,9 @@ impl Dispatch<WlDataSource, ()> for Listener {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if !matches!(event, wl_data_source::Event::Cancelled) {
+            state.began(source);
+        }
         match event {
             wl_data_source::Event::Send { mime_type, fd } => {
                 let Some(from) = state.out.sources.iter().find(|s| s.source == *source) else {
@@ -1189,9 +1257,8 @@ impl Dispatch<WlDataSource, ()> for Listener {
                     state.ended(at);
                 }
             }
-            wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled => {
-                state.retire(source)
-            }
+            wl_data_source::Event::DndFinished => state.retire(source, true),
+            wl_data_source::Event::Cancelled => state.retire(source, false),
             _ => {}
         }
     }

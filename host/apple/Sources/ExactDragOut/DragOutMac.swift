@@ -29,7 +29,7 @@ final class DragOutHost: DragOutCapability {
 /// window, and AppKit's session, which follows the hardware mouse, waits on
 /// the main thread for a release that never comes (measured: the drive's
 /// `tap … drag` timed out).
-final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
+final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource, OwnDragSource {
     weak var presenter: Presenter?
     private(set) weak var armed: NodeView?
     /// The node the down landed on, from which the source is found again as
@@ -45,6 +45,17 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
     /// whether or not the node is still there.
     private weak var sessionWindow: NSWindow?
     private var origin = CGPoint.zero
+    /// The session under way, as the app's own drop side meets it, and its
+    /// source node with the point in its box where the drag began (D16).
+    private(set) var own: OwnDrag?
+    private var source: Source?
+    /// The node, its renewals as the drag began (a list renewing it for
+    /// another item, LLP 1078, ends what it hears of the drag), and the
+    /// point in its box.
+    private struct Source {
+        let node: NodeView, renewals: Int, line: String
+        init(_ node: NodeView, _ line: String) { self.node = node; renewals = node.renewals; self.line = line }
+    }
     /// Whether the down was a first click the drag takes alone, in a window
     /// that was not key: the drag then keeps the window where it was (D5).
     private(set) var fromBackground = false
@@ -153,8 +164,42 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         context == .outsideApplication ? .copy : []
     }
 
+    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) { willBegin() }
+
+    /// The node hears `dragstart` once AppKit's callback returns, or as the
+    /// app's own drop side first hears the drag (D16).
+    func willBegin() {
+        guard let armed else { return }
+        let source = Source(armed, armed.dragLine(origin))
+        self.source = source
+        own = OwnDrag { [weak self] in self?.tell(source, 69, source.line) }
+    }
+
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        didEnd(operation)
         ended(at: screenPoint)
+    }
+
+    /// The node, still mounted, hears `dragend` once AppKit's callback
+    /// returns, after the leaves the app's own drop side owes the drag: a
+    /// copy, or none for a cancelled or refused drag, and for a drop in the
+    /// app, which takes none (D5). The session's record goes first, so a
+    /// `dragend` action that drags again begins another.
+    func didEnd(_ operation: NSDragOperation) {
+        if let own, let source {
+            self.own = nil
+            self.source = nil
+            DispatchQueue.main.async { [weak self] in
+                own.ended(taken: operation.contains(.copy)) { taken in self?.tell(source, 70, source.line + "\n" + (taken ? "copy" : "none")) }
+            }
+        }
+    }
+
+    /// `source`'s node hears an event of `kind`, its point line `line`, while
+    /// it is still mounted and shows the item it lifted.
+    private func tell(_ source: Source, _ kind: UInt32, _ line: String) {
+        guard let presenter, source.node.renewals == source.renewals, presenter.views[source.node.id] === source.node else { return }
+        presenter.mouseEvent(source.node.id, kind, line)
     }
 
     /// AppKit's session took the button's release, so the node never heard

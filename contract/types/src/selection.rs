@@ -74,7 +74,7 @@ pub fn event_record(attr: &str) -> Option<&'static str> {
             Some("PointerEvent")
         }
         "wheel" => Some("WheelEvent"),
-        "drop" | "dragenter" | "dragleave" => Some("DragEvent"),
+        "drop" | "dragenter" | "dragleave" | "dragstart" | "dragend" => Some("DragEvent"),
         "atompress" => Some("AtomEvent"),
         "key" | "keycapture" | "keyup" => Some("KeyboardEvent"),
         "scroll" => Some("ScrollEvent"),
@@ -405,8 +405,11 @@ pub(super) fn declare(shapes: &mut Shapes) {
     // DOM's `DragEvent` at a `drop`, its
     // `dataTransfer.files` as the `doc:` handles the host minted for them
     // (LLP 1069.010 D1, as a picker's), then its plain text and its link
-    // (LLP 1094.001 D1), in `exact_runner::DropEvent`'s order. A `dragenter`
-    // or `dragleave` has none: the DOM keeps a drag's data until it drops.
+    // (LLP 1094.001 D1), and its `dataTransfer.dropEffect` (LLP 1094.000
+    // D16), in `exact_runner::DropEvent`'s order. A `dragenter` or
+    // `dragleave` has no data, as the DOM keeps a drag's data until it drops,
+    // and nor do the source's `dragstart` and `dragend`, whose data is the
+    // node's own.
     shapes.map.insert(
         "DragEvent".into(),
         [
@@ -415,6 +418,7 @@ pub(super) fn declare(shapes: &mut Shapes) {
             ("files".into(), Ty::List(Box::new(Ty::String))),
             ("text".into(), Ty::String),
             ("url".into(), Ty::String),
+            ("dropEffect".into(), Ty::String),
         ]
         .into_iter()
         .chain(modifiers)

@@ -116,11 +116,11 @@ export const classifications = [
     ["apple:host/apple/src/abi/exports.rs", "exact_dispatch"],
     ["painted:host/painted/src/canvas/access.rs", "CanvasHost::access CanvasHost::access_act CanvasHost::access_custom_action CanvasHost::access_off"],
     ["painted:host/painted/src/canvas/field.rs", "CanvasHost::field_action CanvasHost::field_composing CanvasHost::field_edited CanvasHost::field_focused CanvasHost::field_input CanvasHost::field_scrolled CanvasHost::field_selected"],
-    ["painted:host/painted/src/canvas/drop.rs", "CanvasHost::drag_dropped CanvasHost::drag_left CanvasHost::drag_over CanvasHost::drop_landed CanvasHost::drop_released CanvasHost::field_drop"],
+    ["painted:host/painted/src/canvas/drop.rs", "CanvasHost::drag_dropped CanvasHost::drag_left CanvasHost::drag_over CanvasHost::drop_landed CanvasHost::drop_released CanvasHost::field_drop CanvasHost::lift_began CanvasHost::lift_ended"],
     ["painted:host/painted/src/canvas/input.rs", "CanvasHost::finger CanvasHost::reader_selection CanvasHost::scroll CanvasHost::touch CanvasHost::touching"],
     ["painted:host/painted/src/canvas/jni_drop.rs",
       "Java_dev_exact_canvas_Native_dragDropped Java_dev_exact_canvas_Native_dragLeft Java_dev_exact_canvas_Native_dragOver " +
-      "Java_dev_exact_canvas_Native_dropLanded Java_dev_exact_canvas_Native_dropReleased Java_dev_exact_canvas_Native_fieldDrop"],
+      "Java_dev_exact_canvas_Native_dropLanded Java_dev_exact_canvas_Native_dropReleased Java_dev_exact_canvas_Native_fieldDrop Java_dev_exact_canvas_Native_liftBegan Java_dev_exact_canvas_Native_liftEnded"],
     ["painted:host/painted/src/canvas/jni.rs",
       "Java_dev_exact_canvas_Native_readerSelection " +
       "Java_dev_exact_canvas_Native_accessAct Java_dev_exact_canvas_Native_fieldAction Java_dev_exact_canvas_Native_fieldComposing " +
@@ -179,9 +179,10 @@ export const classifications = [
     ["painted:host/painted/src/presenter/picker.rs", "Presenter::open_document"],
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/file_drop.rs",
-      "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_dropped Presenter::drag_event Presenter::drag_flush " +
+      "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_dropped Presenter::drag_event Presenter::drag_flush Presenter::drags_gone " +
       "Presenter::drag_committed Presenter::drag_edge_at Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drag_scrolls Presenter::drop_landed Presenter::drop_landed_checked Presenter::drop_owner " +
-      "Presenter::drop_released Presenter::drop_released_behind Presenter::dropped Presenter::field_drop Presenter::landed"],
+      "Presenter::drop_released Presenter::drop_released_behind Presenter::drop_released_lift Presenter::dropped Presenter::field_drop Presenter::landed"],
+    ["painted:host/painted/src/presenter/drag_source.rs", "Presenter::lift_asked Presenter::lift_began Presenter::lift_ended Presenter::source_event"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
     ["painted:host/painted/src/presenter/replacement.rs", "Presenter::buttons_released Presenter::pointer_released Presenter::reader_touch Presenter::set_touching"],

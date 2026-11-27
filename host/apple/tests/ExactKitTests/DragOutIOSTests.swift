@@ -138,6 +138,70 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertTrue(try sources(p).dragInteraction(second, itemsForAddingTo: session, withTouchAt: CGPoint(x: 300, y: 60)).isEmpty, "off the card")
     }
 
+    /// LLP 1094.000 D16: each node that joins a drag hears `dragstart` once
+    /// UIKit's callback returns, at the point in its box where it joined,
+    /// and `dragend` with the drag's outcome; a drag offers no move, and a
+    /// node that stops being draggable keeps its interaction until its drag
+    /// ends, lifting nothing new.
+    func testTheNodesThatJoinADragHearItsStartAndEnd() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("none while the agent paints (D4)") }
+        // Each card hears its drag's start and end
+        let heardCard = { (id: Int, props: [String: Any]) in
+            self.card(id, props).map { op in op["op"] as? String == "create" && op["id"] as? Int == id ? op.merging(["handlers": ["dragstart", "dragend"]]) { $1 } : op }
+        }
+        // The first card carries a file and its text, each an item of its own, and is one source
+        let p = presenter(heardCard(10, ["draggable": "true", "dataTransferText": "Mount Fuji", "dataTransferFiles": "assets/apple/1016-thumb.jpg"])
+            + heardCard(20, ["draggable": "true", "dataTransferText": "Rainbow Mountain"])
+            + [["op": "frame", "id": 20, "x": 20.0, "y": 200.0, "w": 200.0, "h": 120.0],
+               ["op": "create", "id": 1, "kind": "view"], ["op": "children", "id": 1, "ids": [10, 20]],
+               ["op": "roots", "ids": [1]], ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0]])
+        var heard: [String] = []
+        p.onClipboard = { id, kind, line in heard.append("\(id) \(kind) \(line)") }
+        let settle = { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        let sources = try sources(p), card = try XCTUnwrap(p.views[10])
+        let first = try XCTUnwrap(drags(card).first), second = try XCTUnwrap(drags(try XCTUnwrap(p.views[20])).first)
+        let session = PointDragSession(at: CGPoint(x: 120, y: 80), in: window)
+        session.carried = sources.dragInteraction(first, itemsForBeginning: session)
+        XCTAssertEqual(session.carried.count, 2)
+        sources.dragInteraction(first, sessionWillBegin: session)
+        XCTAssertTrue(session.localContext is OwnDrag)
+        XCTAssertFalse(sources.dragInteraction(first, sessionAllowsMoveOperation: session))
+        XCTAssertEqual(heard, [], "nothing runs inside UIKit's callback")
+        settle()
+        XCTAssertEqual(heard, ["10 69 100.0,60.0"])
+        let added = sources.dragInteraction(second, itemsForAddingTo: session, withTouchAt: CGPoint(x: 30, y: 40))
+        session.carried += added
+        sources.dragInteraction(first, session: session, willAdd: added, for: second)
+        settle()
+        XCTAssertEqual(heard, ["10 69 100.0,60.0", "20 69 30.0,40.0"])
+        // The card turned undraggable mid-drag keeps its interaction for the drag's end, and lifts nothing new
+        p.apply(wireBatch([["op": "props", "id": 10, "set": ["draggable": "false"]]]))
+        XCTAssertTrue(drags(card).first === first)
+        XCTAssertTrue(sources.dragInteraction(first, itemsForBeginning: PointDragSession(at: CGPoint(x: 120, y: 80), in: window)).isEmpty)
+        sources.dragInteraction(first, session: session, didEndWith: .copy)
+        settle()
+        XCTAssertEqual(heard.suffix(2), ["10 70 100.0,60.0\ncopy", "20 70 30.0,40.0\ncopy"])
+        XCTAssertTrue(drags(card).isEmpty, "its drag over, the undraggable card's interaction comes off")
+        // A cancelled drag ends `none`; a node gone by then hears none
+        heard = []
+        let again = PointDragSession(at: CGPoint(x: 120, y: 280), in: window)
+        again.carried = sources.dragInteraction(second, itemsForBeginning: again)
+        sources.dragInteraction(second, sessionWillBegin: again)
+        settle()
+        sources.dragInteraction(second, session: again, didEndWith: .cancel)
+        settle()
+        XCTAssertEqual(heard, ["20 69 100.0,80.0", "20 70 100.0,80.0\nnone"])
+        heard = []
+        let last = PointDragSession(at: CGPoint(x: 120, y: 280), in: window)
+        last.carried = sources.dragInteraction(second, itemsForBeginning: last)
+        sources.dragInteraction(second, sessionWillBegin: last)
+        settle()
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": [10]], ["op": "destroy", "id": 21], ["op": "destroy", "id": 20]]))
+        sources.dragInteraction(second, session: last, didEndWith: .copy)
+        settle()
+        XCTAssertEqual(heard, ["20 69 100.0,80.0"])
+    }
+
     /// The lift reads what the touch lands on now, as the window routes it:
     /// the card's text lifts the card; a view put over it since the touch
     /// began, or a point off the card, lifts nothing.

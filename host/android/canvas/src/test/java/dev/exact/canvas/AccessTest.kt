@@ -196,9 +196,11 @@ class AccessTest {
         }
 
         org.robolectric.Shadows.shadowOf(manager).setEnabled(false)
-        assertFalse("no service, no drag", root.access.drag(1, clip, DragOut.flags(true, 33)))
+        assertFalse("no service, no drag", root.access.drag(1, clip, DragOut.flags(true, 33), DragOut.Lift(1, root.context)))
         org.robolectric.Shadows.shadowOf(manager).setEnabled(true)
-        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33)))
+        Acts.began.clear()
+        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33), DragOut.Lift(1, root.context)))
+        assertEquals("the lift begun is told", listOf(1), Acts.began)
         assertSame(clip, org.robolectric.shadows.ShadowWindowManagerGlobal.getLastDragClipData())
         assertFalse("the window has heard no start yet", root.dragging)
         assertTrue(cancel in actions(1) && start in actions(1))
@@ -221,12 +223,12 @@ class AccessTest {
         assertFalse("the window heard the end", root.dragging)
         assertNull("the root took no drop and offers none", root.createAccessibilityNodeInfo().actionList.firstOrNull { it.id == android.R.id.accessibilityActionDragDrop })
 
-        assertTrue(root.access.drag(2, clip, DragOut.flags(true, 33)))
+        assertTrue(root.access.drag(2, clip, DragOut.flags(true, 33), DragOut.Lift(1, root.context)))
         send(android.view.DragEvent.ACTION_DRAG_STARTED)
         send(android.view.DragEvent.ACTION_DRAG_ENDED, result = true)
         assertEquals(listOf("Ochre dunes"), said(android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_CANCELLED))
         assertTrue(start in actions(2) && cancel !in actions(2))
-        assertFalse("no node that drags stands for exact2's node 3", root.access.drag(3, clip, DragOut.flags(true, 33)))
+        assertFalse("no node that drags stands for exact2's node 3", root.access.drag(3, clip, DragOut.flags(true, 33), DragOut.Lift(1, root.context)))
 
         // While the window has heard a drag start and not its end, a Start is refused before exact2 is asked.
         Acts.asked.clear()
@@ -240,14 +242,14 @@ class AccessTest {
         // the node says the new drag was cancelled.
         send(android.view.DragEvent.ACTION_DRAG_STARTED, queued = true)
         send(android.view.DragEvent.ACTION_DRAG_ENDED, queued = true)
-        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33)))
+        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33), DragOut.Lift(1, root.context)))
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         assertFalse(cancel in actions(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
         assertTrue(cancel !in actions(1) && start in actions(1))
         assertEquals(listOf("Ochre dunes", "Ochre dunes"), said(android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_CANCELLED))
 
         // A finger down in the window takes the node's Cancel: a hosted view's drag it begins may share the hold.
-        assertTrue(root.access.drag(2, clip, DragOut.flags(true, 33)))
+        assertTrue(root.access.drag(2, clip, DragOut.flags(true, 33), DragOut.Lift(1, root.context)))
         assertTrue(cancel in actions(2))
         root.access.touched()
         assertTrue(cancel !in actions(2) && start in actions(2))
@@ -257,7 +259,7 @@ class AccessTest {
 
         // Another drag's end, heard after this one began, takes the window's hold on it and leaves the view's mark: the
         // node's Cancel reaches nothing, and goes when taken.
-        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33)))
+        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33), DragOut.Lift(1, root.context)))
         val attach = android.view.View::class.java.getDeclaredField("mAttachInfo").apply { isAccessible = true }.get(root)
         attach.javaClass.getDeclaredField("mDragToken").apply { isAccessible = true }.set(attach, null)
         assertTrue(cancel in actions(1))
@@ -308,6 +310,9 @@ class AccessTest {
                 if (target == 0) asked += id to action else targets += id to target
                 return true
             }
+            /** The lifts the platform began for a service (LLP 1094.000 D16). */
+            val began = ArrayList<Int>()
+            @JvmStatic @Implementation fun liftBegan(lift: Int) { began += lift }
         }
     }
 }

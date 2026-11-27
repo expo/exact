@@ -227,7 +227,7 @@ fn a_drop_released_behind_another_takes_its_target_first_and_hears_its_enter_aft
     p.drag_over(point, held);
     let first = p.drop_released(point, held).unwrap();
     p.drag_over(point, held);
-    let second = p.drop_released_behind(point, held).unwrap();
+    let second = p.drop_released_behind(point, held, None).unwrap();
     assert_eq!(
         log(&p),
         "enter, ",
@@ -249,7 +249,7 @@ fn a_failed_drop_leaves_before_one_released_behind_it_enters() {
     p.drag_over(point, held);
     let first = p.drop_released(point, held).unwrap();
     p.drag_over(point, held);
-    let second = p.drop_released_behind(point, held).unwrap();
+    let second = p.drop_released_behind(point, held, None).unwrap();
     assert_eq!(p.drop_landed(first, &Dropped::default()), None);
     assert_eq!(log(&p), "enter, leave, enter, ");
     assert!(p.drop_landed(second, &text("second")).is_some());

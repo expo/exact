@@ -63,6 +63,10 @@ pub(super) struct DragIn {
     /// A commit landed while the drag was over the window: the drag is
     /// found again once the painted picture shows the kernel at this epoch.
     committed: Option<u64>,
+    /// The lifts under way, heard at their source (LLP 1094.000 D16), and
+    /// the last lift's number, kept across a new plan as `last` is.
+    pub(super) lifting: Vec<super::drag_source::Lifting>,
+    pub(super) lifts: u32,
 }
 
 /// A node under the drag, and whether it heard the drag's `dragenter`: one
@@ -93,6 +97,7 @@ impl DragIn {
     pub(super) fn reset(&mut self) {
         *self = DragIn {
             last: self.last,
+            lifts: self.lifts,
             ..Default::default()
         };
     }
@@ -378,9 +383,14 @@ impl<D: DataSource> Presenter<D> {
     /// `drop_released` takes them, but its enters, and all that is queued
     /// after them, wait for those drops to land, so their actions cannot
     /// clear what this drag drew.
-    pub fn drop_released_behind(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<u32> {
+    pub fn drop_released_behind(
+        &mut self,
+        point: (f32, f32),
+        held: KeyModifiers,
+        lift: Option<u32>,
+    ) -> Option<u32> {
         self.drag_in.behind = self.drag_in.pending.iter().map(|p| p.id).max();
-        let id = self.drop_released(point, held);
+        let id = self.drop_released_lift(point, held, lift);
         self.drag_in.behind = None;
         id
     }
@@ -392,6 +402,18 @@ impl<D: DataSource> Presenter<D> {
     /// heard. All of it is decided before any handler runs. The drop's
     /// number, or None, and the drag ends, when nothing takes it.
     pub fn drop_released(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<u32> {
+        self.drop_released_lift(point, held, None)
+    }
+
+    /// [`Presenter::drop_released`] of a drag the host's drop side knows as
+    /// the app's own lift `lift` (LLP 1094.000 D16), whose end then waits
+    /// for this drop to land.
+    pub fn drop_released_lift(
+        &mut self,
+        point: (f32, f32),
+        held: KeyModifiers,
+        lift: Option<u32>,
+    ) -> Option<u32> {
         let hit = self.drag_at(point, held);
         let found = self.drop_target(hit).and_then(|t| {
             let key = self.host.kernel().node(t)?.key;
@@ -420,6 +442,7 @@ impl<D: DataSource> Presenter<D> {
                 .send(m.key, EventKind::Dragenter, (point, held), Some(id));
         }
         let target = Some(target);
+        self.lift_drops(id, lift);
         self.drag_in.pending.push(Pending {
             id,
             target,
@@ -515,11 +538,27 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         self.drag_flush();
+        self.lift_landed(id, delivered.is_some());
         if self.drag_in.over {
             self.drag_at(self.drag_in.point, self.drag_in.held);
             self.drag_flush();
         }
         delivered
+    }
+
+    /// The host's drags went away with what reported them (Linux's listener):
+    /// each drop still waiting for its items fails, with its leaves, and each
+    /// lift ends with nothing taking it (LLP 1094.000 D16).
+    pub fn drags_gone(&mut self) {
+        let pending: Vec<u32> = self.drag_in.pending.iter().map(|p| p.id).collect();
+        for drop in pending {
+            self.drop_landed(drop, &Dropped::default());
+        }
+        let held = self.modifiers();
+        let lifts: Vec<u32> = self.drag_in.lifting.iter().map(|s| s.id).collect();
+        for lift in lifts {
+            self.lift_ended(lift, false, held);
+        }
     }
 
     /// Who takes a drop that Android gives hosted field `id`'s view at
@@ -543,8 +582,8 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Views a commit renewed (LLP 1078) are new mounts: a pending drop's
-    /// target among them is not its target, and none of them heard a
-    /// drag's enter.
+    /// target among them is not its target, none of them heard a drag's
+    /// enter, and a lift's source among them hears no more of its drag.
     pub(super) fn drag_renewed(&mut self, renewed: &[ViewId]) {
         let kernel = self.host.kernel();
         let keys: Vec<NodeKey> = renewed
@@ -555,6 +594,9 @@ impl<D: DataSource> Presenter<D> {
             return;
         }
         let drag = &mut self.drag_in;
+        for source in drag.lifting.iter_mut().filter(|s| keys.contains(&s.key)) {
+            source.renewed = true;
+        }
         drag.chain.retain(|m| !keys.contains(&m.key));
         drag.outbox.retain(|s| !keys.contains(&s.key));
         for pending in &mut drag.pending {
@@ -790,6 +832,7 @@ impl<D: DataSource> Presenter<D> {
             files: Vec::new(),
             text: String::new(),
             url: String::new(),
+            drop_effect: exact_runner::DropEffect::None,
         };
         let event = match kind {
             EventKind::Dragenter => Event::Dragenter(data),
@@ -817,6 +860,7 @@ impl<D: DataSource> Presenter<D> {
             files,
             text,
             url,
+            drop_effect: exact_runner::DropEffect::Copy,
         };
         if let Some(error) = self.pointer_dispatch(
             target,

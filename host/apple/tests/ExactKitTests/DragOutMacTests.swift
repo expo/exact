@@ -315,6 +315,59 @@ final class DragOutMacTests: XCTestCase {
         XCTAssertNotNil(NSApp.nextEvent(matching: .leftMouseUp, until: Date().addingTimeInterval(2), inMode: .default, dequeue: true), "to the session's window")
     }
 
+    /// LLP 1094.000 D16: the node hears `dragstart` once AppKit's callback
+    /// returns, and `dragend` with the drag's outcome, the point the drag
+    /// began at in both; a node gone by the end hears none.
+    func testTheNodeHearsItsDragBeginAndEnd() throws {
+        if ExactEnv.agentMode { throw XCTSkip("no drag arms under the agent") }
+        let p = presenter(["draggable": "true", "dataTransferText": "a"], handlers: ["dragstart", "dragend"])
+        var heard: [String] = []
+        p.onClipboard = { id, kind, line in heard.append("\(id) \(kind) \(line)") }
+        window.makeKeyAndOrderFront(nil)
+        let card = try XCTUnwrap(p.views[10]), drag = try XCTUnwrap(p.mouseDragOut as? MouseDragOut)
+        let at = card.convert(NSPoint(x: 150, y: 20), to: nil)
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let settle = { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        for (operation, effect) in [(NSDragOperation.copy, "copy"), ([], "none")] {
+            heard = []
+            drag.arm(card, event: down)
+            drag.began(in: window)
+            drag.willBegin()
+            XCTAssertEqual(heard, [], "nothing runs inside AppKit's callback")
+            settle()
+            drag.didEnd(operation)
+            XCTAssertEqual(heard, ["10 69 150.0,20.0,"])
+            settle()
+            XCTAssertEqual(heard, ["10 69 150.0,20.0,", "10 70 150.0,20.0,\n\(effect)"])
+            drag.cancel()
+        }
+        // A row renewed for another item during the drag (LLP 1078) hears no end, nor one renewed between AppKit's end
+        // and its delivery
+        for renewedFirst in [true, false] {
+            heard = []
+            drag.arm(card, event: down)
+            drag.began(in: window)
+            drag.willBegin()
+            settle()
+            if renewedFirst { p.renew(10) }
+            drag.didEnd(.copy)
+            if !renewedFirst { p.renew(10) }
+            settle()
+            XCTAssertEqual(heard, ["10 69 150.0,20.0,"], "renewed first: \(renewedFirst)")
+            drag.cancel()
+        }
+        // A node a batch removed during the drag hears no end
+        heard = []
+        drag.arm(card, event: down)
+        drag.began(in: window)
+        drag.willBegin()
+        settle()
+        p.apply(wireBatch([["op": "destroy", "id": 12], ["op": "destroy", "id": 14], ["op": "destroy", "id": 10]]))
+        drag.didEnd(.copy)
+        settle()
+        XCTAssertEqual(heard, ["10 69 150.0,20.0,"])
+    }
+
     /// Each promise is written under the name `dataTransferNames` holds at its
     /// place, else the file's own, its type still its own extension's (LLP
     /// 1094.000 D14).

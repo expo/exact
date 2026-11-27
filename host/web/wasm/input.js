@@ -440,6 +440,17 @@ export function attach(el, id, handlers) {
       if (kind === "drop") {
         on("dragover", (e) => go("dragover", e));
       }
+    } else if (kind === "dragstart" || kind === "dragend") {
+      // A drag of the node itself, which drag-out.js tells a node so marked (LLP 1094.000 D16): the point it began at,
+      // and at its end what it did
+      el.exactDragEvents = true;
+      on(`exact${kind}`, ({ detail: d }) => {
+        if (views.get(id) !== el || retiredViews.has(el)) {
+          return;
+        }
+        const line = `${d.x},${d.y},${d.shift ? "Shift+" : ""}${d.ctrl ? "Control+" : ""}${d.alt ? "Alt+" : ""}${d.meta ? "Meta+" : ""}`;
+        send(host.wasm.exact_dispatch(id, kind === "dragstart" ? 69 : 70, writeIn(kind === "dragend" ? `${line}\n${d.effect}` : line), now()));
+      });
     } else if ((kind === "change" || kind === "cancel") && el.type === "file") {
       // a picker's files, or its dismissal (LLP 1069.002 D2, D3)
       on(kind, () => {

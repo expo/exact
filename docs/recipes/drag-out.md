@@ -29,7 +29,8 @@ link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l
   Files saves `Mount Fuji.jpg`, not `1016-thumb.jpg`. A name without the
   file's suffix gets it; an empty one keeps the file's own. The rule a name
   keeps is under `draggable` in `docs/contract-grammar.md`.
-- **No drag events yet**: `dragstart`, `drag` and `dragend` are refused.
+- **`dragstart` and `dragend`** on the node are for its own look while
+  dragged; `dragend`'s `e.dropEffect` is `"copy"` or `"none"`.
 
 ## Gestures
 

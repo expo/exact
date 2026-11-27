@@ -42,7 +42,7 @@ pub use field::{FieldSelection, InputDetails, SelectionDirection};
 mod host_kinds;
 pub use host_kinds::{HistorySwipe, ScrollDrag};
 mod pointer;
-pub use pointer::{AtomEvent, DropEvent, MouseEvent, PointerEvent, WheelEvent};
+pub use pointer::{AtomEvent, DropEffect, DropEvent, MouseEvent, PointerEvent, WheelEvent};
 mod intersect;
 mod mounted_reorder;
 mod reorder;
