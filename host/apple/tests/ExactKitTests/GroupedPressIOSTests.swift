@@ -62,6 +62,18 @@ final class GroupedPressIOSTests: GroupedListFixture {
         row.pressed = false
     }
 
+    /// A custom row with a background of its own would cover its cell's
+    /// highlight, so it dims instead, as a plain list's row does.
+    func testACustomRowWithItsOwnGroundDims() throws {
+        let p = presenter { self.model(custom: true) }
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "background_color": [255, 255, 255, 255], "written": ["background_color"]]]]))
+        let row = try XCTUnwrap(p.views[21])
+        row.pressed = true
+        XCTAssertFalse(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        XCTAssertNotNil(row.layer.animation(forKey: "pressDim"), "the row dims")
+        row.pressed = false
+    }
+
     func testViewlessNativeRowKeepsTheTitlesColorOwnership() throws {
         var face = ButtonFace()
         face.title = "Profile"
