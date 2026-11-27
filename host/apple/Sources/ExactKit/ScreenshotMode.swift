@@ -1,5 +1,5 @@
-// Screenshot mode: what a driver that captures many states needs from a development build, so each state reaches the
-// screen at once and in one frame. Set in the launch environment of an agent build (EXACT_AGENT); a production build
+// Screenshot mode: what a driver that captures many states needs from a development build: animations that end at
+// once, and a tap that settles in the same request. Set in the launch environment of an agent build (EXACT_AGENT); a production build
 // compiles none of it, so every flag reads as off there.
 //
 //   EXACT_ANIMATION_SPEED=<n>    every window's layer runs n times faster (CALayer.speed), windows UIKit adds later
