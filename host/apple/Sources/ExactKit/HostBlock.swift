@@ -61,12 +61,14 @@ package struct BlockPlacement: Equatable {
     package init(rect: CGRect, within: UInt32, contentOffset: CGPoint? = nil) { (self.rect, self.within, self.contentOffset) = (rect, within, contentOffset) }
 }
 
-/// How a host shows a route's block against its stack's top (LLP 1127 D8),
+/// How a host shows a route's block against its stack's top (LLP 1127 D5),
 /// as claim kind 23 says it: in its stack, beside the top and live (a
-/// split's list beside its detail), or under a pane over it and not live (a
-/// split's detail under the list over it, its columns under a sheet).
+/// split's list beside its detail), under a pane over it and not live (a
+/// split's detail under the list over it, its columns under a sheet), or
+/// hidden though its stack selects it (a split's detail the router keeps
+/// behind the folded list, D12), which holds no lock.
 package enum BlockShown: Float {
-    case inStack = 0, beside = 1, under = 2
+    case inStack = 0, beside = 1, under = 2, hidden = 3
 }
 
 extension Runtime {
@@ -84,7 +86,7 @@ extension Runtime {
     func blocks(_ records: Data) -> Batch { on(layout: true) { read(exact_host_covers(rt, write(records))) } }
 
     /// `shown` says how blocks show against their stacks' tops (kind 23,
-    /// LLP 1127 D8), applied once the blocks stand.
+    /// LLP 1127 D5), applied once the blocks stand.
     static func blockRecords(_ blocks: [(UInt32, HostBlock?)], placements: [(UInt32, BlockPlacement?)] = [], shows: [(UInt32, Bool)] = [],
                              shown: [(UInt32, BlockShown)] = [], barItems: [(UInt32, Bool)] = [], sideBars: [(UInt32, (CGFloat, CGFloat))] = []) -> Data {
         var bytes = Data(capacity: (blocks.count + placements.count + shows.count + shown.count + barItems.count + sideBars.count) * 36)

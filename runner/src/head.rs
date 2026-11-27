@@ -109,10 +109,11 @@ pub(crate) fn activity(
     let mut stack: Vec<_> = roots.iter().map(|&id| (id, false, false)).collect();
     while let Some((id, was_inactive, was_hidden)) = stack.pop() {
         let Some(at) = node(id) else { continue };
-        let under = kernel.host_block_shown(id) == BlockShown::Under;
+        let shown = kernel.host_block_shown(id);
+        let kept = shown == BlockShown::Hidden;
         let flags = (
-            was_inactive || under || inactive.contains(&id),
-            was_hidden || hidden.contains(&id),
+            was_inactive || shown == BlockShown::Under || kept || inactive.contains(&id),
+            was_hidden || kept || hidden.contains(&id),
         );
         result.insert(id, flags);
         if at.1.str(PropId::NavigationBack).is_some() {
@@ -213,7 +214,13 @@ fn inactive_with(kernel: &Kernel, id: ViewId, covered_shows: bool) -> bool {
     // A route its host shows under a pane over it (a split's detail under
     // the list that overlays it, a split's column under a sheet) is not
     // live, though shown (LLP 1127 D8).
-    let under = |id: ViewId| !covered_shows && kernel.host_block_shown(id) == BlockShown::Under;
+    // A route its host keeps out of sight, though its stack selects it (a split's detail behind the
+    // folded list, LLP 1127 D12), is neither live nor shown.
+    let under = |id: ViewId| match kernel.host_block_shown(id) {
+        BlockShown::Under => !covered_shows,
+        BlockShown::Hidden => true,
+        _ => false,
+    };
     if under(id) {
         return true;
     }

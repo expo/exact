@@ -367,6 +367,62 @@ fn a_detail_under_the_list_over_it_is_shown_but_not_live() {
     assert!(!r.inactive(back), "beside it again");
 }
 
+/// A split's detail the router keeps while the folded split shows its list is
+/// neither live nor shown, and holds nothing; the list beside it is live and
+/// holds (LLP 1127 D5, D12).
+#[test]
+fn a_detail_kept_behind_the_folded_list_is_hidden_and_holds_nothing() {
+    use exact_kernel::{BlockAxis, BlockShown, HostBlock};
+    let source = STACK.replace(
+        "            button press=back testId=\"back\"",
+        "            text \"Video\" testId=\"video\" wakelock=\"screen\"\n            button press=back testId=\"back\"",
+    );
+    let mut r = boot_source(&source);
+    press(&mut r, "open");
+    let (back, open, video) = (view(&r, "back"), view(&r, "open"), view(&r, "video"));
+    let detail = r.kernel().node(back).unwrap().parent.unwrap();
+    let list = r.kernel().node(open).unwrap().parent.unwrap();
+    let pane = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(500.0),
+        height: BlockAxis::Is(400.0),
+    };
+    for route in [list, detail] {
+        r.kernel_mut().set_host_block(route, Some(pane)).unwrap();
+    }
+    assert_eq!(super::holders(&r), vec![video], "the detail on top holds");
+    r.kernel_mut()
+        .set_host_block_shown(list, BlockShown::Beside);
+    r.kernel_mut()
+        .set_host_block_shown(detail, BlockShown::Hidden);
+    assert!(r.inactive(back), "the kept detail is not live");
+    assert!(!r.inactive(open), "the list is");
+    let tree = crate::head::activity(r.kernel(), &r.roots());
+    assert_eq!(
+        tree.get(&back),
+        Some(&(true, true)),
+        "the agent's tree: the detail hidden"
+    );
+    assert_eq!(
+        tree.get(&open),
+        Some(&(false, false)),
+        "the agent's tree: the list live"
+    );
+    assert!(crate::head::hidden_route(r.kernel(), back), "not shown");
+    assert_eq!(
+        super::holders(&r),
+        vec![player(&r).unwrap()],
+        "the list holds, the kept detail does not"
+    );
+    r.kernel_mut()
+        .set_host_block_shown(detail, BlockShown::InStack);
+    assert_eq!(
+        super::holders(&r),
+        vec![player(&r).unwrap(), video],
+        "beside the list again, it holds again"
+    );
+}
+
 /// A sheet over a split covers its columns first (LLP 1127 D8): the list
 /// its host shows under the sheet is not live but shown, so it holds.
 #[test]

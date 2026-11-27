@@ -135,6 +135,7 @@ impl<D: DataSource> Bridge<D> {
                         match edge(8) {
                             1.0 => exact_kernel::BlockShown::Beside,
                             2.0 => exact_kernel::BlockShown::Under,
+                            3.0 => exact_kernel::BlockShown::Hidden,
                             _ => exact_kernel::BlockShown::InStack,
                         },
                     )),

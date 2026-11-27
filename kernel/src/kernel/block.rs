@@ -132,6 +132,10 @@ pub enum BlockShown {
     /// Under a pane shown over it, not live though shown: a split's detail
     /// under the list that overlays it, and a split's columns under a sheet.
     Under,
+    /// Not shown though its stack selects it: a split's detail the router
+    /// keeps while the folded split shows its list (LLP 1127 D5, D12). Not
+    /// live, and holds no lock.
+    Hidden,
 }
 
 impl HostBlock {
