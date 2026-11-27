@@ -17,6 +17,7 @@ const pages: Page[] = JSON.parse(readFileSync(join(SITE, 'content/pages.json'), 
 const problems: string[] = [];
 const fail = (where: string, what: string) => problems.push(`${where}: ${what}`);
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const absolute = (where: string, field: string, value: unknown) => {
   if (typeof value !== 'string' || !value.startsWith(`${ORIGIN}/`)) fail(where, `${field} is ${JSON.stringify(value)}, not a URL under ${ORIGIN}/`);
 };
@@ -37,7 +38,7 @@ const RULES: Record<string, (where: string, node: Node) => void> = {
   TechArticle(where, node) {
     text(where, 'TechArticle.headline', node.headline, 110);
     text(where, 'TechArticle.description', node.description);
-    if (node.dateModified !== undefined && (typeof node.dateModified !== 'string' || !ISO_DATE.test(node.dateModified))) fail(where, `TechArticle.dateModified ${JSON.stringify(node.dateModified)} is not an ISO 8601 date`);
+    if (node.dateModified !== undefined && (typeof node.dateModified !== 'string' || !ISO_DATE_TIME.test(node.dateModified))) fail(where, `TechArticle.dateModified ${JSON.stringify(node.dateModified)} is not an ISO 8601 date and time with a timezone`);
     const part = node.isPartOf as Node | undefined;
     if (!part || part['@type'] !== 'WebSite') fail(where, 'TechArticle.isPartOf is not a WebSite');
     if (ORIGIN) absolute(where, 'TechArticle.url', node.url);
