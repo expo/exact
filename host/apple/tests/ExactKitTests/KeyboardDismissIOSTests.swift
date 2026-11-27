@@ -100,6 +100,35 @@ final class KeyboardDismissIOSTests: XCTestCase {
         XCTAssertEqual(try followed(), 0, accuracy: 0.5, "with none it waits for the finger")
     }
 
+    /// A route bar's search field is part of the keys for their dismissal
+    /// only where UIKit carries it onto them: an integrated search, out of the
+    /// navigation bar while it edits (the toolbar's on an iPhone); a stacked
+    /// one, which the bar keeps at the top, is not.
+    func testABarSearchFieldIsTheKeysOnlyWhereUIKitCarriesItOntoThem() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit places a search field only in a scene") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("integrated search is iOS 26's") }
+        for placement in [UINavigationItem.SearchBarPlacement.integrated, .stacked] {
+            let window = UIWindow(windowScene: scene)
+            window.frame = scene.coordinateSpace.bounds
+            let list = UITableViewController(style: .plain)
+            let search = UISearchController(searchResultsController: nil)
+            list.navigationItem.searchController = search
+            list.navigationItem.preferredSearchBarPlacement = placement
+            let nav = UINavigationController(rootViewController: list)
+            nav.isToolbarHidden = placement != .integrated
+            window.rootViewController = nav
+            window.makeKeyAndVisible()
+            defer { window.endEditing(true); window.isHidden = true }
+            waitFor("the list shows", cap: 5) { list.viewIfLoaded?.window != nil }
+            search.isActive = true
+            let field = search.searchBar.searchTextField
+            waitFor("the field edits", cap: 5) { field.isFirstResponder || (field.window != nil && field.becomeFirstResponder()) }
+            waitForRunLoop(seconds: 1)
+            let carried = KeyboardDrag.carriedOnKeys(field, item: list.navigationItem, bar: nav.navigationBar)
+            XCTAssertEqual(carried, placement == .integrated, "\(placement.rawValue): realized \(list.navigationItem.searchBarPlacement.rawValue)")
+        }
+    }
+
     private func waitForRunLoop(seconds: TimeInterval) {
         let until = Date().addingTimeInterval(seconds)
         while Date() < until { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
