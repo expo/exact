@@ -401,13 +401,14 @@ extension NavigationHost {
 
     /// Whether `view` is in the split's list column while the split is
     /// expanded: UIKit's sidebar, which keeps its look while UIKit hides it.
+    /// A fold or an unfold changes the look once, as UIKit asks about it.
     func showsAsSidebar(_ view: UIView) -> Bool {
         sidebar(containing: view) != nil
     }
 
     private func sidebar(containing view: UIView) -> SplitIOS? {
         func contains(_ columns: SplitIOS) -> Bool {
-            !columns.controller.isCollapsed && columns.list.stackRoutes.first?.viewIfLoaded.map(view.isDescendant(of:)) == true
+            columns.settlesExpanded && columns.list.stackRoutes.first?.viewIfLoaded.map(view.isDescendant(of:)) == true
         }
         if let split, contains(split) { return split }
         return tabSplits.values.first(where: contains)

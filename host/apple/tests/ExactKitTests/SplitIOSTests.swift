@@ -29,8 +29,15 @@ final class SplitIOSTests: XCTestCase {
     final class FoldProposals: NSObject, UISplitViewControllerDelegate {
         var split: SplitIOS?
         var collapse: UISplitViewController.Column = .secondary
+        /// Runs as UIKit asks which column to collapse to or which mode to expand to, once the split has answered
+        var asked: () -> Void = {}
         func splitViewController(_ svc: UISplitViewController, topColumnForCollapsingToProposedTopColumn proposed: UISplitViewController.Column) -> UISplitViewController.Column {
-            split?.splitViewController(svc, topColumnForCollapsingToProposedTopColumn: collapse) ?? proposed
+            defer { asked() }
+            return split?.splitViewController(svc, topColumnForCollapsingToProposedTopColumn: collapse) ?? proposed
+        }
+        func splitViewController(_ svc: UISplitViewController, displayModeForExpandingToProposedDisplayMode proposed: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
+            defer { asked() }
+            return split?.splitViewController(svc, displayModeForExpandingToProposedDisplayMode: proposed) ?? proposed
         }
         override func responds(to selector: Selector!) -> Bool { super.responds(to: selector) || split?.responds(to: selector) == true }
         override func forwardingTarget(for selector: Selector!) -> Any? { split?.responds(to: selector) == true ? split : nil }
@@ -1413,6 +1420,27 @@ extension SplitIOSTests {
     /// The inspector's column starts to slide away while the detail's pop is
     /// still under way, not after it.
     @available(iOS 26.0, *)
+    /// A fold or an unfold changes the list's sidebar look once, as UIKit asks about it: while UIKit moves the detail
+    /// between the columns, `isCollapsed` reads both ways in turn, and a batch read there flipped the look, and its rows'
+    /// chevrons, back and forth (LLP 1127 D7).
+    func testAFoldChangesTheSidebarLookOnceAsUIKitAsks() throws {
+        let session = try boot(size: CGSize(width: 951, height: 669), width: .regular)
+        let split = try split(session), fold = try XCTUnwrap(proposals), agent = Agent(session: session)
+        let host = session.presenter.navigationHost
+        let list = try XCTUnwrap(split.list.stackRoutes.first).view!
+        until("the split rests expanded") { split.settledExpanded && !agent.nativeInFlight() }
+        XCTAssertTrue(host.showsAsSidebar(list))
+        var asked: [Bool] = []
+        fold.asked = { asked.append(host.showsAsSidebar(list)) }
+        window?.traitOverrides.horizontalSizeClass = .compact
+        until("the split rests collapsed") { split.settledCollapsed && !agent.nativeInFlight() }
+        XCTAssertFalse(host.showsAsSidebar(list))
+        window?.traitOverrides.horizontalSizeClass = .regular
+        until("the split rests expanded again") { split.settledExpanded && !agent.nativeInFlight() }
+        XCTAssertTrue(host.showsAsSidebar(list))
+        XCTAssertEqual(asked, [false, true], "the look at the collapse question, then at the expansion question")
+    }
+
     /// The detail's first route counts as pushed whatever projects its stack again (LLP 1127 D7): an appearance change
     /// (the app switcher's snapshot takes the app in light and dark as it leaves the screen) projected it as a root,
     /// whose bar it hid, animated, as UIKit nested the detail in the list to collapse for the snapshot; UIKit then

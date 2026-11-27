@@ -281,6 +281,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
 
     /// Whether UIKit nests N1 in N0 now (collapsed, or collapsing).
     var settledExpanded: Bool { !controller.isCollapsed && !moving }
+    /// Whether the split is expanded once UIKit's move ends, from the moment UIKit asks about it: while UIKit moves N1
+    /// between the columns, `isCollapsed` reads both ways in turn.
+    var settlesExpanded: Bool {
+        switch move {
+        case .expanding?: true
+        case .collapsing?: false
+        case nil: !controller.isCollapsed
+        }
+    }
     var settledCollapsed: Bool { controller.isCollapsed && !moving }
     var nested: Bool { list.viewControllers.contains { $0 === detail } }
     /// Whether N1's routes are in the stack UIKit shows: in their column, or
