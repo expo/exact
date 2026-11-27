@@ -4,8 +4,8 @@
 // ending on the bottom band's inner side reaches its 34; inside an ancestor that reserves 8 of safe-area padding clear of
 // the band, a box at the reservation's inner side reaches the ancestor's padding edge (8); an ancestor that clips, one
 // with a 2-point top border and one with a transform stop reach at their padding edges (17, 35 and 27); a box under a
-// route's transparent bar, at the bar's bottom, reaches the viewport's top (91); and a box out of the document reaches
-// nothing.
+// route's transparent bar, at the bar's bottom, reaches the viewport's top (91); a box out of the document reaches
+// nothing; and `reached` writes a box's reach on it, as its surface reads it.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
@@ -23,11 +23,14 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div, header { box-sizing:
   <div class="b" style="top:20px;left:300px;height:100px;transform:translateX(0)"><div class="b" id="moved" style="top:27px;left:0"></div></div>
   <div data-navigationbar="transparent" style="left:350px"><header data-exact-clear></header><div class="b" id="barred" style="top:91px;left:0"></div></div>
   <script type="module">
-    import { reach } from '/reach.js';
+    import { reach, reached } from '/reach.js';
     const ids = ['inner', 'clear', 'into', 'foot', 'reserved', 'clipped', 'bordered', 'moved', 'barred'], gone = document.createElement('div');
     const out = reach([...ids.map((id) => document.getElementById(id)), gone], [47, 0, 34, 0]);
     const round = (v) => v.map((x) => Math.round(x * 10) / 10);
-    window.result = { ...Object.fromEntries(ids.map((id) => [id, round(out.get(document.getElementById(id)))])), gone: out.get(gone) };
+    // As written on the box, the inputs its surface reads
+    reached([document.getElementById('inner'), gone], [47, 0, 34, 0]);
+    const written = ['top', 'right', 'bottom', 'left'].map((e) => document.getElementById('inner').style.getPropertyValue('--exact-reach-' + e));
+    window.result = { ...Object.fromEntries(ids.map((id) => [id, round(out.get(document.getElementById(id)))])), gone: out.get(gone), written };
   </script>`;
 
 let server;
@@ -52,6 +55,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a box's reach is m
     expect(await page.evaluate(() => window.result)).toEqual({
       inner: [47, 0, 0, 0], clear: [0, 0, 0, 0], into: [46.8, 0, 0, 0], foot: [0, 0, 34, 0], reserved: [8, 0, 0, 0],
       clipped: [17, 0, 0, 0], bordered: [35, 0, 0, 0], moved: [27, 0, 0, 0], barred: [91, 0, 0, 0], gone: [0, 0, 0, 0],
+      written: ['47px', '0px', '0px', '0px'],
     });
   } finally {
     await browser.close();

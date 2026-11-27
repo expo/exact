@@ -76,6 +76,17 @@ function measure(boxes, band, cut = () => false) {
 }
 
 const EDGES = ["top", "right", "bottom", "left"];
+/** The registered lengths the executor writes each reaching box's reach in, edge by edge, which the emitter's surface
+ * reads: the box's paint and touches carried past its border box (D13), its layout and observations left alone. */
+export const REACH = EDGES.map((e) => `--exact-reach-${e}`);
+
+/** Write how far each of `boxes` reaches on each edge (`reach`) on the box itself (`REACH`). */
+export function reached(boxes, band = documentBand()) {
+  register(REACH);
+  for (const [el, reaches] of reach(boxes, band)) {
+    if (el.isConnected) reaches.forEach((d, e) => own(el, REACH[e], `${d}px`));
+  }
+}
 /** The registered properties the emitter writes a box's extension bounds in (`-exact-safe-area-extend-bounds`), on each
  * edge it extends on (`-exact-safe-area-extend`): `auto` or a length; `none`, unsaid, on an edge it does not. */
 export const BOUNDS = EDGES.map((e) => `--exact-safe-area-extend-bounds-${e}`);
