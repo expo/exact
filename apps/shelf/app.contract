@@ -228,11 +228,12 @@ component Shelf
   // Navigation: a tab, a location (a book's row is a link to its route; the
   // browser's Back, Forward and a deep link arrive here too), a sheet, and
   // Back (also what the platform's own Back button, edge swipe and sheet
-  // swipe-down press).
+  // swipe-down press). A book shown beside the list, or kept behind it in a
+  // narrow window, is replaced by the next one opened.
   action pick(name: string)
     nav = select(nav, name)
   action follow(url: string)
-    nav = go(nav, url)
+    nav = top(nav).name == "book" and url.startsWith("/book/") ? replace(nav, url) : go(nav, url)
   action back
     if current.name == "scan"
       endTrack()
@@ -370,7 +371,7 @@ component Shelf
     match found
       case some(o)
         if o.id != ""
-          nav = go(nav, path("book", o.id))
+          nav = top(nav).name == "book" ? replace(nav, path("book", o.id)) : go(nav, path("book", o.id))
         else
           foundUrl = o.url
           showModal("not-on-shelf")

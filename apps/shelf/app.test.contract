@@ -124,6 +124,19 @@ test "the platform's Back pops a book, dismisses the add sheet and cancels the a
   expect state current.name == "library"
   expect text "library-count" == "3 of 3 books"
 
+// A wide browser shows the list beside a book: the next book opened replaces the one shown.
+test "a book chosen beside another replaces it, so Back shows the list" on web
+  resize 1200x800
+  tap "book-seed-2"
+  clock settle
+  tap "book-seed-1"
+  clock settle
+  expect text "page-label" == "Page 304 of 304"
+  expect state current.name == "book"
+  back
+  clock settle
+  expect state current.name == "library"
+
 test "a long press offers Remove, which asks first"
   tap "book-seed-1" contextmenu
   tap "menu-remove"
