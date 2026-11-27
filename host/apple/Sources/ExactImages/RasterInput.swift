@@ -228,9 +228,12 @@ struct RasterHTTPStatus: Error, CustomStringConvertible {
 
 private final class RasterDownload: NSObject, @unchecked Sendable {
     // Encoded HTTP responses are separate from the decoded-raster ledger.
-    // Keep them across process restarts without another in-memory image cache.
+    // Keep them across process restarts without another in-memory image cache,
+    // under the app's own bundle id, as `URLCache.shared` keeps its: an app
+    // outside the sandbox shares `~/Library/Caches` with every other.
     static let responseCache = URLCache(memoryCapacity: 0, diskCapacity: 64 * 1024 * 1024,
         directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "exact", isDirectory: true)
             .appendingPathComponent("exact-raster-http", isDirectory: true))
     static var cacheUsage: [String: Int] {
         ["memoryBytes": responseCache.currentMemoryUsage, "memoryCapacity": responseCache.memoryCapacity,

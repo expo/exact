@@ -21,6 +21,19 @@ use std::time::{Duration, Instant, SystemTime};
 #[path = "disk.rs"]
 mod disk;
 
+/// The app's own disk cache directory, beside its `app:/cache`, as each app
+/// keeps its own (XDG, `%LOCALAPPDATA%\\<app>`); none until [`keep_on_disk`].
+static KEPT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Keep this process's remote images on disk for `app_id`, the first app
+/// to ask; none for an app with no storage (an agent drive with no scratch
+/// tree keeps none of the developer's).
+pub(crate) fn keep_on_disk(app_id: &str) {
+    if let Ok(Some(([_, cache, _], _))) = crate::picker::app_dirs(app_id) {
+        let _ = KEPT.set(cache.with_file_name("image-cache"));
+    }
+}
+
 /// `link` cut at its query or fragment, whatever its form.
 pub(crate) fn without_query(link: &str) -> &str {
     &link[..link.find(['?', '#']).unwrap_or(link.len())]
@@ -293,11 +306,10 @@ impl Downloads {
     pub fn process() -> &'static Arc<Downloads> {
         static DOWNLOADS: OnceLock<Arc<Downloads>> = OnceLock::new();
         DOWNLOADS.get_or_init(|| {
-            let dir = cache_base().join("exact").join("image-cache");
-            Downloads::with(
-                Policy::default(),
-                Some(disk::Disk::new(dir, disk::DISK_BYTES)),
-            )
+            let disk = KEPT
+                .get()
+                .map(|dir| disk::Disk::new(dir.clone(), disk::DISK_BYTES));
+            Downloads::with(Policy::default(), disk)
         })
     }
     /// Downloads with no disk cache, for a test's own.
@@ -869,7 +881,24 @@ fn spool_dir() -> Result<PathBuf, String> {
     if let Some((path, _)) = &*dir {
         return Ok(path.clone());
     }
-    let root = cache_base().join("exact").join("images");
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".cache"))
+                .filter(|p| p.is_absolute())
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(std::env::temp_dir);
+    #[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
+    let base = std::env::temp_dir();
+    let root = base.join("exact").join("images");
     let at = |path: &Path, e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
     std::fs::create_dir_all(&root).map_err(|e| at(&root, &e))?;
     let namespace = root.join(".namespace.lock");
@@ -894,28 +923,6 @@ fn spool_dir() -> Result<PathBuf, String> {
     drop(file);
     *dir = Some((mine.clone(), held));
     Ok(mine)
-}
-
-/// The user's cache directory ([`spool_dir`]).
-fn cache_base() -> PathBuf {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join(".cache"))
-                .filter(|p| p.is_absolute())
-        })
-        .unwrap_or_else(std::env::temp_dir);
-    #[cfg(windows)]
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(std::env::temp_dir);
-    #[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
-    let base = std::env::temp_dir();
-    base
 }
 
 fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
