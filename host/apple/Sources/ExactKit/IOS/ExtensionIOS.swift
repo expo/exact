@@ -125,6 +125,20 @@ extension NodeView {
             addSubview(made.view)
             Self.extensions.setObject(made, forKey: self)
             made.view.setPaintBehind()
+            // Made inside an animation (a fold or a column that brings the clearance the box mirrors into): placed first
+            // where the box shows now, reaching nowhere, with no animation, so that the animation grows it from the box's
+            // edges as the box moves. Placed by the animation alone it grew from a zero frame at the box's corner, the
+            // picture with it, which the mirror draws.
+            if UIView.inheritedAnimationDuration > 0, let shown = layer.presentation()?.bounds.size {
+                let outsets = made.outsets
+                made.outsets = .zero
+                UIView.performWithoutAnimation {
+                    CATransaction.begin(); CATransaction.setDisableActions(true)
+                    placeExtension(shown: shown)
+                    CATransaction.commit()
+                }
+                made.outsets = outsets
+            }
         }
         placeExtension()
     }
@@ -213,10 +227,16 @@ extension NodeView {
         return laidOutBox.inset(by: UIEdgeInsets(top: -o.top, left: -o.left, bottom: -o.bottom, right: -o.right))
     }
 
-    /// The extension's frames: the view's (`extensionFrame`), and the picture or the strip's hole at the border box.
-    func placeExtension() {
-        guard let e = boxExtension, let frame = extensionFrame else { return }
-        let box = CGRect(x: e.outsets.left, y: e.outsets.top, width: laidOutBox.width, height: laidOutBox.height)
+    /// The extension's frames: the view's (`extensionFrame`), and the picture or the strip's hole at the border box;
+    /// with `shown`, for a box of that size, as it shows before an animation moves it.
+    func placeExtension(shown: CGSize? = nil) {
+        guard let e = boxExtension, var frame = extensionFrame else { return }
+        let laid = shown.map { CGRect(origin: .zero, size: $0) } ?? laidOutBox
+        if shown != nil {
+            let o = e.outsets
+            frame = laid.inset(by: UIEdgeInsets(top: -o.top, left: -o.left, bottom: -o.bottom, right: -o.right))
+        }
+        let box = CGRect(x: e.outsets.left, y: e.outsets.top, width: laid.width, height: laid.height)
         if e.view.frame != frame {
             e.view.frame = frame
             // An ancestor that clips one axis fits its clip to what its children paint, the strip among it
@@ -224,7 +244,7 @@ extension NodeView {
         }
         e.picture?.frame = box
         (e.view as? ExtensionStrip)?.place(around: box)
-        if let mirror = e.view as? ExtensionView { placeMirror(mirror, box) }
+        if let mirror = e.view as? ExtensionView { placeMirror(mirror, box, shown: shown) }
     }
 
     /// An image's mirror (`ExtensionView`): its box at `box` drawing its picture as the image does (`applyImageLayer`),
@@ -233,14 +253,18 @@ extension NodeView {
     /// resizes the picture a cut showed between the picture and its mirror; these layers are placed in the transaction
     /// that places the image, so one animation moves them all and the mirror meets the picture at every frame. The
     /// image's own picture layer stays hidden meanwhile, so no pixel at the edge is drawn twice.
-    private func placeMirror(_ mirror: ExtensionView, _ box: CGRect) {
+    private func placeMirror(_ mirror: ExtensionView, _ box: CGRect, shown: CGSize? = nil) {
         // A layout transition's surface paints the box meanwhile, the image's own picture with it, the mirror hidden
         guard surface == nil, flightLook == nil, let image = raster?.image else { imageLayer?.isHidden = false; return }
         if imageLayer?.isHidden == false { imageLayer?.isHidden = true }
-        let inner = contentBox(), fit = style["object_fit"]?.string ?? "fill"
+        // At `shown`, the content box keeps its insets from the border box
+        let laid = contentBox(), edge = CGRect(origin: .zero, size: shown ?? bounds.size)
+        let inner = shown == nil ? laid : CGRect(x: laid.minX, y: laid.minY, width: max(0, edge.width - laid.minX - (bounds.width - laid.maxX)),
+                                                 height: max(0, edge.height - laid.minY - (bounds.height - laid.maxY)))
+        let fit = style["object_fit"]?.string ?? "fill"
         let drawn = RasterGeometry.rect(natural: image.naturalSize, content: inner, fit: fit, position: style["object_position"]?.array)
             .offsetBy(dx: -inner.minX, dy: -inner.minY)
-        let corners = cornerRadii(in: bounds).contains { $0 > 0 } ? roundedPath(in: CGRect(origin: .zero, size: bounds.size)).cgPath : nil
+        let corners = cornerRadii(in: edge).contains { $0 > 0 } ? roundedPath(in: edge).cgPath : nil
         mirror.place(box, inner: inner, drawn: drawn, pixels: ImageLink.animated?.frame(for: self) ?? image.image,
                      tint: channels("tint_color").map { TextEngine.color($0).cgColor }, corners: corners)
     }

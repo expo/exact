@@ -465,6 +465,49 @@ final class BoxExtensionIOSTests: XCTestCase {
         XCTAssertEqual(image.imageLayer?.isHidden, false, "the image draws its own picture again")
     }
 
+    /// An image's mirror made inside an animation, as a fold or a column brings the clearance it mirrors into, starts
+    /// where the picture shows and grows from its edges with the animation. Placed by the animation alone, the picture,
+    /// which the mirror draws, grew from a zero frame at the box's corner.
+    func testAMirrorMadeInsideAnAnimationGrowsFromWhereThePictureShows() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the presentation tree is the render server's, which needs a scene's window") }
+        guard #available(iOS 26, *) else { throw XCTSkip("the image's mirror is iOS 26's") }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40), format: format).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
+        }.pngData())
+        let p = Presenter(), loader = RasterLoader(), resolver = AssetResolver(root: URL(fileURLWithPath: NSTemporaryDirectory()))
+        defer { loader.shutdown() }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 300, height: 400)
+        p.viewport.frame = window.bounds; window.addSubview(p.viewport); window.makeKeyAndVisible()
+        self.window = window
+        let image = NodeView(id: 1, kind: "image", presenter: p)
+        p.views[1] = image; p.viewport.addSubview(image)
+        image.frame = CGRect(x: 40, y: 100, width: 230, height: 100)
+        image.applyStyle(["object_fit": .string("cover")])
+        image.loadGeneration = 1
+        loader.load(image, source: "data:image/png;base64," + png.base64EncodedString(), resolver: resolver)
+        waitFor("the image's raster") { image.raster != nil }
+        image.layer.displayIfNeeded()
+        XCTAssertNil(image.boxExtension, "no mirror before the animation")
+        UIView.animate(withDuration: 0.6, delay: 0, options: [.curveEaseInOut]) {
+            image.frame = CGRect(x: 120, y: 100, width: 150, height: 100)
+            image.setExtension(UIEdgeInsets(top: 0, left: 120, bottom: 0, right: 30))
+        }
+        let view = try XCTUnwrap(image.boxExtension?.view as? ExtensionView, "an image's mirror is Exact's own view")
+        func shown() -> CGRect { let pres = view.content.layer.presentation() ?? view.content.layer; return pres.convert(pres.bounds, to: nil) }
+        var seen: [CGRect] = []
+        let end = Date(timeIntervalSinceNow: 0.7)
+        while Date() < end {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.03))
+            let box = shown()
+            seen.append(box)
+            XCTAssertGreaterThan(box.width, 149, "the picture keeps a size between its two: \(box)")
+            XCTAssertGreaterThan(box.minX, 39, "and moves from where it showed, not from the corner: \(box)")
+        }
+        XCTAssertTrue(seen.contains { $0.minX > 41 && $0.minX < 119 }, "the picture was seen between its two places: \(seen)")
+    }
+
     /// A CSS animation of the background colour plays where the fill paints: on the picture while the box extends, so
     /// the mirror follows it, and on the box's own layer again after; a strip in one colour, before iOS 26, waits for it.
     func testABackgroundColourAnimationPlaysWhereTheFillPaints() throws {
