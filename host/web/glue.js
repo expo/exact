@@ -495,12 +495,18 @@ const resizeRunner = () => {
     host.wasm.exact_set_update?.(updateCode());
     host.wasm.exact_set_orientation?.(orientationCode());
     host.wasm.exact_set_screen_reader(pageFacts.screenReaderCode());
+    const size = `${innerWidth}x${innerHeight}`, resized = host.movesSize !== size;
+    host.movesSize = size;
     const batch = JSON.parse(readOut(host.wasm.exact_resize(innerWidth, innerHeight, now(), preferences() | foldBits(), told)));
     // Only a size the runner took is told: a refused one is asked again, never followed by geometry alone.
     if (!batch.error) {
-      host.toldSize = `${innerWidth}x${innerHeight}`;
+      host.toldSize = size;
     }
-    applyBatch(presence.resize(batch));
+    // @ref LLP 1063 D6 — a resize, at a size other than the one the layout moves were laid out at (boot's, until the
+    // runner runs at another), takes new boxes without animating and ends the moves under way. Another fact's batch (a
+    // preference, the fold) is applied as a commit's is: the moves under way keep running, and what the app commits in
+    // answer plays.
+    applyBatch(resized ? presence.resize(batch) : batch);
   }
 };
 // The window's `resize` comes here alone: the page's facts follow the size, never before it.

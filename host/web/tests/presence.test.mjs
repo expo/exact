@@ -83,7 +83,9 @@ const page = `<style>
   window.batch = applyBatch;
   // The clock's time, at which the animations a batch started begin (by default the time is 0 at each batch)
   window.seek = (ms, from = 0) => { clock.register(from); clock.seek(ms); };
-  window.resizePresence = batch => { window.resizeBatch = batch; mediaChanged(); };
+  // A resize, at a size other than the one the moves are laid out at, and another fact (a preference, the fold) at it
+  window.resizePresence = batch => { window.resizeBatch = batch; host.movesSize = ''; mediaChanged(); };
+  window.factPresence = batch => { window.resizeBatch = batch; host.movesSize = innerWidth + 'x' + innerHeight; mediaChanged(); };
   window.surface = () => root.querySelector('[data-exiting] > div');
   window.readPresence = () => presence.live.observation();
   window.tracking = () => presence.live.tracking();
@@ -200,6 +202,21 @@ check('resize snaps an active move and takes new boxes without a move', async ()
   expect(await evaluate('document.getAnimations().length')).toBe(0);
   expect(await evaluate('surface()')).toBeNull();
   expect(await evaluate('document.getElementById("card").offsetHeight')).toBe(200);
+});
+
+check('a fact other than the size leaves a move under way running, and the app\'s answer to it plays', async () => {
+  await fixture(`<div id="card" style="${card}"></div>`);
+  await style(card.replace('40px', '140px'));
+  await evaluate('seek(200)');
+  const moves = () => evaluate('document.getElementById("card").getAnimations().filter(a => a.id === "exact-layout-move").length');
+  expect(await moves()).toBe(1);
+  await evaluate(`factPresence({ops:[]}); seek(200)`);
+  expect(await moves()).toBe(1);
+  // The answer restarts the easing from where the card is shown, 60 high, and plays it: halfway, 130
+  await evaluate(`factPresence({ops:[{op:'style',id:'card',css:${JSON.stringify(card.replace('40px', '200px'))}}]}); seek(700, 200)`);
+  expect(await moves()).toBe(1);
+  expect(await evaluate('Math.round(document.getElementById("card").getBoundingClientRect().height)')).toBe(200);
+  expect(await evaluate('Math.round(surface().getBoundingClientRect().height)')).toBe(130);
 });
 
 check('a move adds its translate onto a zero translate added under it, and a turned and scaled box moves in its parent\'s space', async () => {

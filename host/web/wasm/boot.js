@@ -348,6 +348,9 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   if (batch.error) {
     throw new Error(batch.error);
   }
+  // @ref LLP 1063 D6 — the window's size the layout moves are laid out at, which a run of the resize runner at another
+  // size changes (glue.js `resizeRunner`)
+  host.movesSize = `${innerWidth}x${innerHeight}`;
   if (host.wasm.exact_presence?.()) {
     presence.preload();
   }

@@ -122,3 +122,22 @@ test('pre-rendered children do not authorize reports; page facts stay live while
   h.resize(420, 320); h.state.media(); h.state.pageChanged();
   expect(h.calls).toEqual([['resize', 420, 320], ['page'], ['page']]);
 });
+
+// @ref LLP 1063 D6 — a boot records the size it lays the moves out at, so the first fact after it (a preference, the
+// fold) is no resize and leaves the moves under way running, while a resize after it ends them
+test('a boot records its size for the layout moves, which a fact keeps and a resize changes', async () => {
+  const h = host(400, 300), resizes = [];
+  h.state.wasm.exact_boot = () => '{}';
+  h.state.presence = { resize: batch => { resizes.push(`${h.state.innerWidth}x${h.state.innerHeight}`); return batch; }, preload() {} };
+  // (The stand-in stops before DOM adoption, which counts the incarnation; the runner runs on a booted page)
+  await h.boot().catch(() => {});
+  expect(h.state.movesSize).toBe('400x300');
+  h.state.incarnation = 1;
+  h.state.media();
+  expect(resizes).toEqual([]);
+  h.state.innerWidth = 500;
+  h.state.media();
+  expect(resizes).toEqual(['500x300']);
+  h.state.media();
+  expect(resizes).toEqual(['500x300']);
+});
