@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import { HOST_EVENTS, PLIST_KEYS, appleMetadataProblem, hostEventKeys, modulePlist, packageEvents, packageKeys } from './plist.mjs';
 import { signsGrant } from './presence.mjs';
 import { entitlements, infoPlist, macInfoPlist, writeUsageStrings } from './build.mjs';
+import { embedInfoPlist } from './embed.mjs';
 import { buildPainted } from '../apple-painted/build.mjs';
 
 const packages = resolve(import.meta.dir, '../../packages');
@@ -23,6 +24,7 @@ test('the kinds kept out of search are an Info.plist key on iOS and the Mac, wid
   const key = /<key>ExactSearchHiddenKinds<\/key><array><string>list<\/string><string>unit<\/string><\/array>/;
   assert.match(flat(infoPlist(app)), key);
   assert.match(flat(macInfoPlist(app)), key);
+  for (const ios of [true, false]) assert.deepEqual(embedInfoPlist({ app, reach: null, usageKeys: () => ({}), ios }).ExactSearchHiddenKinds, ['list', 'unit'], 'an embedding host merges the same key');
   assert.doesNotMatch(infoPlist(app, false, { tv: true }), /ExactSearchHiddenKinds/);
   assert.doesNotMatch(infoPlist({ ...app, manifest: { intents: { entities: { task: { title: 'Task' } } } } }), /ExactSearchHiddenKinds/);
   assert.match(appleMetadataProblem('host.ios.infoPlist.ExactSearchHiddenKinds: not a known key'), /Exact writes this key itself/);

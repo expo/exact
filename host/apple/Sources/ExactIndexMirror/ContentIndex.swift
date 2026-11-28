@@ -268,6 +268,8 @@ public enum ExactContentIndex {
         save(m)
     }
 
+    static var deleteItems: ([String], @escaping (Error?) -> Void) -> Void = { index.deleteSearchableItems(withIdentifiers: $0, completionHandler: $1) }
+
     static func applyHiddenKinds() {
         var m = load()
         let applied = Set(m.hidden ?? [])
@@ -279,14 +281,17 @@ public enum ExactContentIndex {
         }
         let added = hiddenKinds.subtracting(applied).sorted()
         guard !added.isEmpty else { return }
-        index.deleteSearchableItems(withDomainIdentifiers: added) { error in
+        let keys = m.entries.filter { added.contains($0["kind"]?.string ?? "") }.map(key)
+        let removed = {
+            var m = load()
+            m.hidden = Set(m.hidden ?? []).union(added).intersection(hiddenKinds).sorted()
+            save(m)
+            ExactContentIndex.log("contentIndex: kinds kept out of search \(added) removed from Spotlight")
+        }
+        guard !keys.isEmpty else { return removed() }
+        deleteItems(keys) { error in
             if let error { return ExactContentIndex.log("contentIndex: Spotlight kept the kinds kept out of search \(added): \(error.localizedDescription)") }
-            DispatchQueue.main.async {
-                var m = load()
-                m.hidden = Set(m.hidden ?? []).union(added).intersection(hiddenKinds).sorted()
-                save(m)
-                ExactContentIndex.log("contentIndex: kinds kept out of search \(added) removed from Spotlight")
-            }
+            DispatchQueue.main.async(execute: removed)
         }
     }
 

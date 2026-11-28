@@ -158,12 +158,34 @@ final class ContentIndexTests: XCTestCase {
         XCTAssertEqual(ExactContentIndex.pendingKeys, [], "a kept entry is settled without Spotlight's answer")
     }
 
-    func testAKindBackInSearchIsToldAgainAndANewlyKeptKindIsDeletedByDomainOnce() throws {
+    func testANewlyKeptKindLosesItsOwnEntriesAndNoKindWhoseNameItStarts() {
+        XCTAssertNil(ExactContentIndex.set(kind: "place", [book("1", "Lisbon", "")]))
+        XCTAssertNil(ExactContentIndex.set(kind: "place.city", [book("2", "Porto", "")]))
+        var deleted: [[String]] = []
+        let real = ExactContentIndex.deleteItems
+        ExactContentIndex.deleteItems = { keys, done in deleted.append(keys); done(nil) }
+        ExactContentIndex.hiddenKinds = ["place"]
+        defer { ExactContentIndex.deleteItems = real; ExactContentIndex.hiddenKinds = [] }
+        ExactContentIndex.applyHiddenKinds()
+        XCTAssertEqual(deleted, [["place:1"]], "Spotlight deletes a domain with every domain under it, so the entries are named")
+        let drained = expectation(description: "main queue")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.appliedHiddenKinds, ["place"])
+        ExactContentIndex.hiddenKinds = ["place", "empty"]
+        ExactContentIndex.applyHiddenKinds()
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(deleted.count, 1, "a kind with no entry asks Spotlight nothing")
+        XCTAssertEqual(ExactContentIndex.appliedHiddenKinds, ["empty", "place"])
+    }
+
+    func testAKindBackInSearchIsToldAgainAndANewlyKeptKindIsDeletedOnce() throws {
         XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("reading", "Reading", "")]))
         ExactContentIndex.hiddenKinds = ["shelf"]
         defer { ExactContentIndex.hiddenKinds = [] }
         ExactContentIndex.applyHiddenKinds()
-        let applied = expectation(description: "Spotlight deleted the shelf domain")
+        let applied = expectation(description: "Spotlight deleted the shelf entries")
         func poll() {
             ExactContentIndex.file = ExactContentIndex.file
             if ExactContentIndex.appliedHiddenKinds == ["shelf"] { return applied.fulfill() }

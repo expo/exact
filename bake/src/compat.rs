@@ -885,7 +885,7 @@ pub(crate) fn compatibility_with_trust(
             inputs["shortcuts"] = shortcuts.clone();
         }
     }
-    if matches!(platform, "ios" | "macos") {
+    if matches!(module_platform, "ios" | "macos") {
         let hidden: Vec<&String> = (manifest.json.pointer("/intents/entities"))
             .and_then(Value::as_object)
             .into_iter()
