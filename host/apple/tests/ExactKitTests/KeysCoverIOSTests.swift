@@ -79,7 +79,17 @@ final class KeysCoverIOSTests: XCTestCase {
             let box = pop.convert(pop.bounds, to: nil)
             let point = CGPoint(x: box.maxX < sample.frame.maxX - 30 ? sample.frame.maxX - 20 : sample.frame.minX + 20, y: sample.frame.maxY - 30)
             XCTAssertFalse(box.contains(point))
-            XCTAssertEqual(try touch.ask(TouchRunner.aim(point, in: window).merging(["op": "tap"]) { _, new in new })["done"] as? Bool, true)
+            let center = NotificationCenter.default
+            let tokens = [UIScene.willDeactivateNotification, UIScene.didActivateNotification, UIWindow.didBecomeKeyNotification, UIWindow.didResignKeyNotification, UIWindow.didBecomeVisibleNotification, UIWindow.didBecomeHiddenNotification].map { name in
+                center.addObserver(forName: name, object: nil, queue: .main) { note in NSLog("%@", "KEYSTAP note \(name.rawValue) \(String(describing: note.object.map { type(of: $0) })) active=\(String(describing: window.windowScene?.activationState.rawValue)) key=\(window.isKeyWindow) alpha=\(keys.alpha) open=\(p.menus.agentOpen["card"] != nil)") }
+            }
+            defer { tokens.forEach(center.removeObserver) }
+            let hit = window.hitTest(point, with: nil)
+            NSLog("%@", "KEYSTAP before front=\(String(describing: Agent.frontRefusal(window))) hit=\(String(describing: hit.map { type(of: $0) })) inLayer=\(hit?.isDescendant(of: pop.superview ?? pop) ?? false) point=\(point) keys=\(sample.frame) keysWindow=\(keys) windows=\(scene.windows.map { "\(type(of: $0)) level \($0.windowLevel.rawValue) hidden \($0.isHidden) key \($0.isKeyWindow)" })")
+            let answer = try touch.ask(TouchRunner.aim(point, in: window).merging(["op": "tap"]) { _, new in new })
+            NSLog("%@", "KEYSTAP answer \(answer)")
+            XCTAssertEqual(answer["done"] as? Bool, true)
+            for i in 0..<10 { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25)); NSLog("%@", "KEYSTAP after \(i) active=\(String(describing: window.windowScene?.activationState.rawValue)) key=\(window.isKeyWindow) alpha=\(keys.alpha) open=\(p.menus.agentOpen["card"] != nil) first=\(field.isFirstResponder) text=\(field.text ?? "")") }
             waitFor("the popover closes", cap: 5) { p.menus.agentOpen["card"] == nil }
             XCTAssertEqual(keys.alpha, 1)
             XCTAssertEqual(field.text ?? "", "", "no key typed under the picture")
