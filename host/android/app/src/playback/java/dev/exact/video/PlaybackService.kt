@@ -10,7 +10,9 @@ import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -41,15 +43,20 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun refresh() {
-        val player = claims.lastOrNull()?.player
+        val claim = claims.lastOrNull()
+        val player = claim?.player
         if (session != null && player != null) {
             if (session?.player !== player) session?.player = player
             return
         }
         if (player == null && promoted) { finish(); return }
         // A pause can arrive before onStartCommand. Satisfy Android's foreground deadline even for that start.
-        val made = player?.let {
-            val builder = MediaSession.Builder(this, it)
+        val made = claim?.let { owner ->
+            val loader = object : BitmapLoader by owner.artwork {
+                override fun loadBitmapFromMetadata(metadata: MediaMetadata) =
+                    (claims.lastOrNull { it.player === session?.player } ?: owner).artwork.loadBitmapFromMetadata(metadata)
+            }
+            val builder = MediaSession.Builder(this, owner.player).setBitmapLoader(loader)
             packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
                 builder.setSessionActivity(PendingIntent.getActivity(this, 0, launch, PendingIntent.FLAG_IMMUTABLE))
             }
@@ -88,6 +95,8 @@ class PlaybackService : MediaSessionService() {
             .setOnlyAlertOnce(true)
             .setOngoing(true)
         if (current != null) {
+            val bitmap = current.bitmapLoader.loadBitmapFromMetadata(current.player.mediaMetadata)
+            if (bitmap != null && bitmap.isDone) runCatching { bitmap.get() }.getOrNull()?.let { builder.setLargeIcon(it) }
             val pause = PendingIntent.getService(this, 0, Intent(this, PlaybackService::class.java).setAction(PAUSE),
                 PendingIntent.FLAG_IMMUTABLE)
             builder.setContentIntent(current.sessionActivity)
@@ -145,8 +154,8 @@ class PlaybackService : MediaSessionService() {
         private var service: PlaybackService? = null
         private var starting = false
 
-        fun claim(context: Context, player: Player): Playback? {
-            val claim = Playback(player)
+        fun claim(context: Context, player: Player, artwork: BitmapLoader): Playback? {
+            val claim = Playback(player, artwork)
             claims.add(claim)
             val live = service
             if (live == null && !starting) {
@@ -181,6 +190,6 @@ class PlaybackService : MediaSessionService() {
     }
 }
 
-internal class Playback(val player: Player) : AutoCloseable {
+internal class Playback(val player: Player, val artwork: BitmapLoader) : AutoCloseable {
     override fun close() = PlaybackService.end(this)
 }

@@ -1,13 +1,16 @@
 package dev.exact.video
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Looper
 import android.view.View
 import android.widget.FrameLayout
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.ui.PlayerView
+import com.google.common.util.concurrent.SettableFuture
 import dev.exact.canvas.MediaSink
 import org.json.JSONArray
 import org.json.JSONObject
@@ -47,6 +50,33 @@ class MediaPlayerTest {
         .apply { for ((k, v) in pairs) put(k, v ?: JSONObject.NULL) }
 
     @After fun release() { made.forEach { it.release() }; shadowOf(Looper.getMainLooper()).idle() }
+
+    @Test fun changingStationsClearsTheCoverAndIgnoresLateArtwork() {
+        val loads = mutableMapOf<Uri, SettableFuture<Bitmap>>()
+        val loader = object : BitmapLoader {
+            override fun supportsMimeType(mimeType: String) = true
+            override fun decodeBitmap(data: ByteArray) = error("unexpected embedded artwork")
+            override fun loadBitmap(uri: Uri) = loads.getOrPut(uri) { SettableFuture.create() }
+        }
+        val p = MediaPlayer(RuntimeEnvironment.getApplication(), loader, null).also { made += it }
+        p.bind(Events())
+        val native = ReflectionHelpers.getField<Player>(p, "exo")
+        fun station(name: String, art: String) = p.update(props("audio" to true, "src" to name,
+            "mediaTitle" to name, "mediaArtwork" to art), 0, 0, null)
+        val first = Uri.parse("https://example.com/first.png")
+        val second = Uri.parse("https://example.com/second.png")
+        val image = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        station("First", first.toString())
+        station("Second", second.toString())
+        loads.getValue(second).set(image)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(second, native.currentMediaItem!!.mediaMetadata.artworkUri)
+        station("Third", "")
+        loads.getValue(first).set(image)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("Third", native.currentMediaItem!!.mediaMetadata.title)
+        assertEquals(null, native.currentMediaItem!!.mediaMetadata.artworkUri)
+    }
 
     @Test fun streamingPlaybackKeepsWifiAwake() {
         assertEquals(C.WAKE_MODE_NETWORK, playbackWakeMode(Uri.parse("https://example.com/radio.mp3")))

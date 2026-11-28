@@ -5361,7 +5361,7 @@ recently started playing, across every session of a process on Apple.
 | --- | --- |
 | web (both targets) | `navigator.mediaSession`: the metadata (the artwork resolved as the page resolves an asset), the handlers, the declared `playbackState` and `setPositionState`; the browser decides where it shows (Chrome's media hub, the system's Now Playing) and routes the media keys; under the driver too, in the driver's own browser |
 | macOS, iOS, tvOS | `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter`, from the video arm (AVKit's own publication is off while a claimant owns the session); under the driver nothing is assigned and `state.mediaSession.published` is `"agent"` |
-| Android | the system playback session follows audible `audio` with `audio_session: "playback"`; Contract metadata and custom actions stay in `state.mediaSession` |
+| Android | the system playback session follows audible `audio` with `audio_session: "playback"` and publishes its title, artist, album and artwork; custom actions stay in `state.mediaSession` |
 | Linux, Windows | none: the record only (`published: "none"`, no `play` or `pause`) |
 
 On iOS the lock screen and Control Center show only a non-mixable playback
