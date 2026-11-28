@@ -178,6 +178,16 @@ fn a_kind_within_another_names_a_declared_kind_and_its_row_follows_one_parent_ro
             "intents.entities.book.within makes a cycle (book, shelf, book)",
         ),
         (
+            json!([book]),
+            json!({"a":{"title":"A","within":"b"},"b":{"title":"B","within":"missing"},"book":{"title":"Book"}}),
+            "intents.entities.b.within names `missing`, which `intents.entities` does not declare; name a declared kind",
+        ),
+        (
+            json!([book]),
+            json!({"book":{"title":"Book"},"y":{"title":"Y","within":"z"},"z":{"title":"Z","within":"missing"}}),
+            "intents.entities.z.within names `missing`",
+        ),
+        (
             json!([shelf, {"name":"other","title":"Other","type":"entity","entity":"shelf"}, book]),
             kinds.clone(),
             "widgets[0].configuration has 2 `shelf` rows, and `book` is within `shelf`; keep one, so the `book` row knows which it follows",

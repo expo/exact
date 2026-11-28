@@ -415,20 +415,27 @@ fn parents(entities: &serde_json::Map<String, Value>) -> Result<(), String> {
                 "{at} names `{parent}`, which `intents.entities` does not declare; name a declared kind"
             ));
         }
+    }
+    let parent_of = |kind: &str| {
+        (entities.get(kind))
+            .and_then(|declared| declared.get("within"))
+            .and_then(Value::as_str)
+    };
+    for kind in entities.keys() {
         let mut chain = vec![kind.as_str()];
-        let mut next = Some(parent);
+        let mut next = parent_of(kind);
         while let Some(parent) = next {
             chain.push(parent);
             if parent == kind {
                 return Err(format!(
-                    "{at} makes a cycle ({}); a kind cannot be within itself",
+                    "intents.entities.{kind}.within makes a cycle ({}); a kind cannot be within itself",
                     chain.join(", ")
                 ));
             }
             if chain[..chain.len() - 1].contains(&parent) {
                 break;
             }
-            next = entities[parent].get("within").and_then(Value::as_str);
+            next = parent_of(parent);
         }
     }
     Ok(())
