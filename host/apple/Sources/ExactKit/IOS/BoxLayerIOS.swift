@@ -352,7 +352,7 @@ extension NodeView {
     package func applyBoxLayer() {
         defer { syncEllipticalClip(); applyColorRanges() }
         let progressTrack = kind == "control" && props["type"] == "progress" && props["value"] != nil
-        let authored = presenter?.segments.control(of: id) == nil && !groundIsSheets && !progressTrack ? cgColor("background_color") : nil
+        let authored = presenter?.segments.control(of: id) == nil && !groundIsSheets && !groundIsSidebar && !progressTrack ? cgColor("background_color") : nil
         let ground = authored == nil ? fieldGround : nil
         let background = authored ?? ground
         let fill = background.flatMap { $0.alpha > 0 ? $0 : nil }

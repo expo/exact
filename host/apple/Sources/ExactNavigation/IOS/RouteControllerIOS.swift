@@ -263,8 +263,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         node.movingRoute(into: view) { view.addSubview(node) }
     }
 
-    /// The backdrop's colours last written, light and dark.
-    private var backdropKey: [[Double]?]?
+    /// The backdrop's colours last written, light and dark, and whether its ground was its own.
+    private var backdropKey: (own: Bool, colours: [[Double]?])?
     /// The controller's view paints what shows behind the route: a dynamic colour resolved for the
     /// controller's current appearance, re-resolved by UIKit when it changes (a route loaded before
     /// its window has a trait collection would otherwise keep the light colour in dark mode), and
@@ -276,19 +276,24 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// (`ModalController.paintSurface`: UIKit's glass at a partial detent, LLP 1141.001 D3). What
     /// is behind the sheet is not, and dimming belongs to UIKit's presentation. A full-screen route
     /// that paints its own background is clear, as its presentation is (`NodeView.paintsOverPage`):
-    /// the route paints it once, over the page.
+    /// the route paints it once, over the page. A route a split shows as its sidebar is the same
+    /// as a sheet: the background its author wrote, else clear over UIKit's sidebar material
+    /// (`groundIsSidebar`), the background the compiler gives a route included.
     func paintBackdrop() {
         guard isViewLoaded else { return }
         let view = surface
         // The route's view takes its accent as its tint, which its backdrop in the tint is resolved by
         assign(view, \.tintColor, node.ownAccent)
-        let modal = NavigationRules.sheetLike(node.props["navigationPresentation"])
+        let modal = NavigationRules.sheetLike(node.props["navigationPresentation"]) || groundIsSidebar
         let overPage = node.paintsOverPage
-        let key = overPage ? []
+        let colours = overPage ? []
             : modal ? [ownBackdrop(dark: false), ownBackdrop(dark: true)]
             : [backdrop(dark: false), backdrop(dark: true)]
-        guard view.backgroundColor == nil || key != backdropKey else { return }
-        backdropKey = key
+        let unchanged = backdropKey.map { $0.own == modal && $0.colours == colours } ?? false
+        guard view.backgroundColor == nil || !unchanged else { return }
+        // The route's own box leaves the compiler's ground out where the sidebar is the ground
+        if backdropKey.map({ $0.own != modal }) == true { node.groundChanged() }
+        backdropKey = (modal, colours)
         if overPage { view.backgroundColor = .clear; return }
         #if os(tvOS)
         // tvOS has no system backgrounds; white stands in, as the viewport's.
@@ -304,10 +309,22 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         }
     }
 
+    /// Whether a split shows this route as its sidebar beside the detail, where UIKit's sidebar
+    /// material is the ground (`NavigationHosting.showsAsSidebar`; LLP 1127 D3).
+    private var groundIsSidebar: Bool {
+        #if os(iOS)
+        return host?.presenter.navigation.sidebarMaterial(node) == true
+        #else
+        return false
+        #endif
+    }
+
     /// The route's own background, if it paints one; in `traits`, as the view's dynamic colour
     /// resolves it, the tint by the view's (`channels(_:in:)`), which is the route's accent.
     private func ownBackdrop(dark: Bool, in traits: UITraitCollection? = nil) -> [Double]? {
         if node.groundIsSheets { return nil }
+        // A sidebar's route on the background the compiler gave it shows UIKit's material instead
+        if node.groundIsSidebar { return nil }
         return Self.painted(node, dark: dark, in: traits)
     }
     private static func painted(_ node: NodeView, dark: Bool, in traits: UITraitCollection?) -> [Double]? {

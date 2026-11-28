@@ -44,12 +44,14 @@ extension GroupedListView {
         #endif
     }
 
-    /// UIKit's ground for an authored sidebar: `secondarySystemBackground` in both appearances, as UIKit gives a
-    /// sidebar list's collection view at its first layout. The sheet's ground is the plain list's, for the hosts with no
-    /// sidebar list, so the hem past a viewport's edge takes this one too.
+    /// UIKit's ground for a sidebar list: beside the detail none, where the split's sidebar material is the ground, as a
+    /// hand-built split clears its lists there (LLP 1127 D3); elsewhere, for an authored sidebar,
+    /// `secondarySystemBackground` in both appearances, as UIKit gives a sidebar list's collection view at its first
+    /// layout. The sheet's ground is the plain list's, for the hosts with no sidebar list, so the hem past a viewport's
+    /// edge takes this one too.
     var sidebarGround: UIColor? {
         #if os(iOS)
-        authoredSidebar ? .secondarySystemBackground : nil
+        material ? .clear : authoredSidebar ? .secondarySystemBackground : nil
         #else
         nil
         #endif
@@ -65,10 +67,19 @@ extension GroupedListView {
         return row.subtitle ? .subtitleCell() : row.secondary != nil ? .valueCell() : .cell()
     }
 
+    /// Whether UIKit's sidebar material is the list's ground (`NavigationHosting.sidebarMaterial`): its look and its
+    /// selection are the sidebar's while it shows as one (`sidebar`), its ground the material's only under that style.
+    var material: Bool { host.presenter.navigation.sidebarMaterial(owner) }
+
     /// Whether the list shows as UIKit's sidebar now
     /// (`NavigationHosting.showsAsSidebar`); whether that changed since its last update. An authored sidebar keeps
     /// its layout through the change, which drops or restores only its rows' disclosure chevrons.
     func followSidebar() -> Bool {
+        // Its own box leaves the compiler's ground out on the material, and takes it back
+        if material != onMaterial {
+            onMaterial.toggle()
+            owner.groundChanged()
+        }
         let beside = host.presenter.navigation.showsAsSidebar(owner)
         guard beside != sidebar else { return false }
         sidebar = beside

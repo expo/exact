@@ -512,8 +512,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     /// 1115 §2), as it replaces the sheet's grouped ground on the other hosts (LLP 1084 D7): the list's own layer paints
     /// it in its box and UIKit's grounds are clear, so `transparent` shows what is behind the list around its cards.
     private var writesGround = false
-    /// In a split's list column beside its detail: UIKit's sidebar list (GroupedSidebarIOS.swift).
-    var sidebar = false
+    /// In a split's list column beside its detail: UIKit's sidebar list, and on its material (GroupedSidebarIOS.swift).
+    var sidebar = false, onMaterial = false
     /// The theme's roles this list last drew with (LLP 1095 D4): a new table
     /// (an update, a dev reload) configures every row and the layout again.
     private var theme = ThemeRoles.generation
@@ -566,7 +566,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     /// The list's background past the viewport's edges (`hem`), and the
     /// list's colours it was painted from.
     private var skirt: UIView?
-    private var skirtKey: [CGColor?] = []
+    private var skirtKey: (colours: [CGColor?], writes: Bool, material: Bool)?
     #endif
     /// Whether `view` is this list's background past the viewport's edges.
     func owns(skirt view: UIView) -> Bool {
@@ -806,9 +806,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         let regapped = previous.sections.map(\.spaceAbove) != next.sections.map(\.spaceAbove) || previous.spaceBelow != next.spaceBelow
         if restyled { collection.setCollectionViewLayout(layout(), animated: false) }
         #if os(iOS)
-        // The collection view's own background shows through a clear section ground and below a short list, and UIKit
-        // gives it the appearance's ground only for a layout with none of its own, so it is set here.
-        let ground: UIColor? = hostSidebar ? nil : writesGround ? .clear : platformGround
+        // The collection view's own background shows through a clear section ground and below a short list. It is written,
+        // clear over the sidebar material: for nil UIKit gives the appearance's ground, opaque after a style change in place.
+        let ground: UIColor? = material || writesGround ? .clear : platformGround
         if collection.backgroundColor != ground { collection.backgroundColor = ground }
         #endif
         // An unchanged snapshot can reset UIKit's estimated geometry and
@@ -1009,8 +1009,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             return made
         }()
         // The list's own background in each appearance, as its layer paints it: the author's, else the platform's.
-        let sides = [owner.cgColor("background_color", dark: false), owner.cgColor("background_color", dark: true)]
-        if sides != skirtKey || view.backgroundColor == nil {
+        let sides = (colours: [owner.cgColor("background_color", dark: false), owner.cgColor("background_color", dark: true)], writes: writesGround, material: material)
+        if skirtKey.map({ $0 != sides }) ?? true || view.backgroundColor == nil {
             skirtKey = sides
             view.backgroundColor = UIColor { [weak self, weak owner] traits in
                 if let self, !writesGround, let ground = sidebarGround { return ground.resolvedColor(with: traits) }

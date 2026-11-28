@@ -1174,7 +1174,7 @@ extension Presenter {
                   !sibling.bounds.isEmpty, inFront(sibling, of: at) else { return false }
             if let cover = sibling as? NodeView {
                 let progressTrack = cover.kind == "control" && cover.props["type"] == "progress" && cover.props["value"] != nil
-                let fill = (segments.control(of: cover.id) == nil && !cover.groundIsSheets && !progressTrack ? cover.cgColor("background_color") : nil) ?? cover.fieldGround
+                let fill = (segments.control(of: cover.id) == nil && !cover.groundIsSheets && !cover.groundIsSidebar && !progressTrack ? cover.cgColor("background_color") : nil) ?? cover.fieldGround
                 // Read committed style rather than `layer.backgroundColor` / `layer.cornerRadius`:
                 // `syncModal()` runs at the end of `apply(_:)`, before `NodeLayer.display()` updates the layer.
                 guard !cover.cssVisibilityHidden, cover.style["display"]?.string != "none",

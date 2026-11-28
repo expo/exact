@@ -75,6 +75,8 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private var told: Showing?
     private struct Showing: Equatable {
         let collapsed: Bool, mode: UISplitViewController.DisplayMode, nested: Bool
+        // The list column's ground follows the style, which an embedder may change in place (LLP 1127 D3)
+        let material: Bool
     }
     /// UIKit's expansion or collapse, from the question it asks the delegate
     /// until it says it is done (`moving`).
@@ -96,7 +98,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #endif
         controller.delegate = self
         #if os(iOS)
-        // The list's column is a sidebar, in UIKit's style for one, as SwiftUI's split sets it (LLP 1127 D7)
+        // The list's column is a sidebar, in UIKit's style for one, as SwiftUI's split sets it (LLP 1127 D3)
         controller.primaryBackgroundStyle = .sidebar
         #endif
         (controller as? SplitController)?.laidOut = { [weak self] in self?.laidOut() }
@@ -121,6 +123,19 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// Whether N1's routes are in the stack UIKit shows: in their column, or
     /// nested in N0. Collapsed, a pop of N1 off N0 leaves its routes in it.
     var showsDetail: Bool { moving || !controller.isCollapsed || nested }
+    /// Whether the list's column has UIKit's sidebar material (`primaryBackgroundStyle`, which tvOS has not).
+    var material: Bool {
+        #if os(iOS)
+        controller.primaryBackgroundStyle == .sidebar
+        #else
+        false
+        #endif
+    }
+    /// Paint the list column's root route's backdrop again, which follows whether the split shows it as its sidebar
+    /// (LLP 1127 D3), after UIKit or a write changed what the column holds or how the split shows it.
+    func paintSidebar() {
+        (list.stackRoutes.first as? RouteController)?.paintBackdrop()
+    }
     /// The routes N1 holds.
     var detailRoutes: [RouteController] { detail.stackRoutes.compactMap { $0 as? RouteController } }
     /// The controller whose top the person sees.
@@ -262,7 +277,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// UIKit ended without saying so ends here, its stack shown.
     private func laidOut() {
         if move != nil, !moving || (move == .collapsing && controller.isCollapsed && controller.transitionCoordinator == nil) { settle() }
-        let now = Showing(collapsed: controller.isCollapsed, mode: controller.displayMode, nested: nested)
+        let now = Showing(collapsed: controller.isCollapsed, mode: controller.displayMode, nested: nested, material: material)
         guard now != told else { return }
         told = now
         DispatchQueue.main.async { [weak self] in self?.changed() }

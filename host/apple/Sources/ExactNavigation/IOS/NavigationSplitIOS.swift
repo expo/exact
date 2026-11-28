@@ -65,7 +65,7 @@ extension NavigationHost {
         split.rule = rule
         split.changed = { [weak self, weak split] in
             guard let self, let split else { return }
-            if self.split === split { splitChanged() } else { runHeldSync() }
+            if self.split === split { splitChanged() } else { paintSidebar(split); runHeldSync() }
         }
         split.willPush = { [weak self] route, beneath in self?.prepareRoutePush(route, beneath: beneath) }
         split.baseChanged = { [weak self, weak split] base in
@@ -117,6 +117,7 @@ extension NavigationHost {
         let location = stack.count > 1 ? stack.last.flatMap { split.rule?.locations[$0.node.id] } : nil
         let relocated = location != nil && split.topLocation != nil && location != split.topLocation && stack.last === split.detailRoutes.last
         guard split.show(stack, animated: animated, relocated: relocated) else { return split.moving }
+        split.paintSidebar()
         syncSplitBack(split, splitDetail: .incoming(firstDetail))
         split.topLocation = location
         if changingRoutes { lastTransition = "idle" }
@@ -162,6 +163,7 @@ extension NavigationHost {
         prepareRoutes(Array(routes.prefix(1)), in: columns.list, splitDetail: .incoming(firstDetail))
         prepareRoutes(Array(routes.dropFirst()), in: columns.detail)
         guard columns.show(routes, animated: false) else { tabsHeld = true; return }
+        columns.paintSidebar()
         syncSplitBack(columns, splitDetail: .incoming(firstDetail))
         columns.pressedRows = columns.pressedRows.filter { id, _ in routes.contains { $0.node.id == id } }
         columns.sidebarRow = detailRow(columns, in: columns.rule, base: routes.dropFirst().first)
@@ -208,8 +210,10 @@ extension NavigationHost {
         showBar(split.list, animated: false)
         coversChanged()
         presenter.owners.publish()
-        // Beside the detail the list is UIKit's sidebar list, collapsed its authored style (LLP 1127 D7)
+        // Beside the detail the list is UIKit's sidebar list, collapsed its authored style (LLP 1127 D7),
+        // and its route paints UIKit's sidebar material as its ground or its own backdrop (LLP 1127 D3)
         presenter.groupedLists?.sync(changed: nil)
+        paintSidebar(split)
         runHeldSync()
     }
 
@@ -269,6 +273,18 @@ extension NavigationHost {
     /// expanded: UIKit's sidebar, which keeps its look while UIKit hides it.
     func showsAsSidebar(_ view: UIView) -> Bool {
         sidebar(containing: view) != nil
+    }
+
+    func sidebarMaterial(_ view: UIView) -> Bool {
+        sidebar(containing: view)?.material == true
+    }
+
+    /// Paint `split`'s list column's ground again, its route's and its lists', and what covers a modal box with it
+    /// (`syncModal`), after UIKit changed how the split shows or the column's style (LLP 1127 D3).
+    private func paintSidebar(_ split: SplitIOS) {
+        if self.split !== split { presenter.groupedLists?.sync(changed: nil) }
+        split.paintSidebar()
+        presenter.syncModal()
     }
 
     private func sidebar(containing view: UIView) -> SplitIOS? {

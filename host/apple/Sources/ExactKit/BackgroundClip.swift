@@ -50,7 +50,12 @@ extension NodeView {
     /// clip's outline.
     func paintBackground(_ ctx: CGContext, border: CGPath, color: Bool) {
         guard let clip = backgroundOutline(border) else { return }
+        // A sidebar's ground leaves the compiler's fill out, as the layer does (`applyBoxLayer`)
+        #if os(iOS)
+        let authored = groundIsSidebar ? nil : cgColor("background_color")
+        #else
         let authored = cgColor("background_color")
+        #endif
         if color, let c = authored ?? fieldGround, c.alpha > 0 {
             ctx.saveGState()
             if authored == nil, let bezel = fieldOutline() { ctx.addPath(bezel); ctx.clip() }

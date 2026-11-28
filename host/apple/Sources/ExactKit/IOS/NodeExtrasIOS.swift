@@ -673,6 +673,24 @@ extension UIColor {
     }
 }
 extension NodeView {
+    /// Whether this is the ground of a split's sidebar beside its detail, the list column's
+    /// route or a list in it, on the background the compiler gave it, its author having written
+    /// none: UIKit's sidebar material is that ground, as a hand-built split clears its lists
+    /// there (LLP 1127 D3).
+    package var groundIsSidebar: Bool {
+        #if os(iOS)
+        guard kind == "list" || props["navigationKey"] != nil, !wrote("background_color") else { return false }
+        return presenter?.navigation.sidebarMaterial(self) == true
+        #else
+        return false
+        #endif
+    }
+    /// Paint the box again, its layer and what it draws itself, after its ground changed
+    /// (`groundIsSidebar`).
+    package func groundChanged() {
+        applyBoxLayer()
+        setNeedsDisplay()
+    }
     /// Whether this is a modal route on the system background the compiler
     /// gave it (LLP 1116.009 D3), its author having said none: on iOS that
     /// ground is its sheet's surface, which the presentation paints

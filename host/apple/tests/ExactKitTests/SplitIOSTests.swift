@@ -406,6 +406,132 @@ final class SplitIOSTests: XCTestCase {
         }
     }
 
+    /// LLP 1127 D3: beside the detail, the list's route and its list paint
+    /// no ground where their author painted none (the grouped background the
+    /// compiler gives them is no author's), so UIKit's sidebar material is
+    /// their ground, as a hand-built split clears its lists there. Collapsed,
+    /// the route is a page on its grouped background again; expanded once
+    /// more, clear again.
+    func testTheSidebarsRouteShowsUIKitsSidebarMaterial() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "drawing the window to read its pixels needs the hosted app") }
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let agent = Agent(session: session)
+        let split = try split(session)
+        XCTAssertEqual(split.controller.primaryBackgroundStyle, .sidebar)
+        let root = try XCTUnwrap(split.list.stackRoutes.first as? RouteController)
+        let list = try node(session, "books")
+        let grounds = { self.grounds(root, [list]) }
+        for width in [UIUserInterfaceSizeClass.regular, .compact, .regular] {
+            split.controller.traitOverrides.horizontalSizeClass = width
+            let collapsed = width == .compact
+            until(collapsed ? "collapsed" : "expanded") { split.controller.isCollapsed == collapsed && !agent.nativeInFlight() }
+            if collapsed {
+                until("the list's route is a page on its grouped background") { grounds()[0] == 1 && grounds()[1] == 1 }
+                continue
+            }
+            until("nothing paints a ground over the sidebar") { grounds() == [0, 0, 0, 0] }
+            try assertShowsThrough(root, split)
+        }
+        // An embedder that sets another background style in place, the split expanded and no batch applied, has
+        // the route's and the list's grounds again; set back, the material. Set back, UIKit's own ground for a
+        // collection view given none was opaque in some runs, so the style changes three times
+        for style in Array(repeating: [UISplitViewController.BackgroundStyle.none, .sidebar], count: 3).joined() {
+            setStyle(split, style)
+            let expected: [CGFloat] = style == .sidebar ? [0, 0, 0, 0] : [1, 1, 1, 1]
+            waitFor("the grounds under the style \(style.rawValue)", cap: 20, facts: { "grounds \(grounds())" }) { grounds() == expected }
+        }
+    }
+
+    /// LLP 1127 D3: a list in the sidebar's route that is not its directory shows the material too, and a modal box under
+    /// the directory's ground is painted over only while that ground paints, as an embedder changes the style in place.
+    func testEveryListInTheSidebarAndAModalBoxUnderItFollowTheStyle() throws {
+        let session = try boot("SPLIT_GROUND", size: CGSize(width: 1100, height: 800), width: .regular)
+        let agent = Agent(session: session)
+        let split = try split(session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        let root = try XCTUnwrap(split.list.stackRoutes.first as? RouteController)
+        let lists = try ["books", "shelves"].map { try node(session, $0) }, under = try node(session, "under")
+        XCTAssertNotEqual(split.listNode, lists[1].id, "the shelves are no directory")
+        for style in [UISplitViewController.BackgroundStyle.sidebar, .none, .sidebar] {
+            setStyle(split, style)
+            let material = style == .sidebar
+            waitFor("the grounds and the modal box under the style \(style.rawValue)", cap: 20,
+                    facts: { "grounds \(grounds(root, lists)), modal \(under.accessibilityViewIsModal)" }) {
+                grounds(root, lists) == Array(repeating: material ? 0 : 1, count: 6) && under.accessibilityViewIsModal == material
+            }
+        }
+    }
+
+    /// LLP 1127 D3: a split in a tab not selected follows its style changed in place too, its route and its list
+    /// painting their grounds under `.none` and showing the material again under `.sidebar`, with no batch.
+    func testAnInactiveSplitsSidebarFollowsItsStyle() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit presents a selected tab in its window scene") }
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("an iPhone's tabs hold no split") }
+        let session = try boot("SPLIT_TABS", size: CGSize(width: 1100, height: 800), width: .regular)
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        let library = try split(session)
+        try tap(session, "tab-browse")
+        until("Browse is a split") { navigation.split.map { $0 !== library } == true && !agent.nativeInFlight() }
+        let browse = try split(session)
+        try tap(session, "tab-library")
+        until("Library is selected again") { navigation.split === library && !agent.nativeInFlight() }
+        let root = try XCTUnwrap(browse.list.stackRoutes.first as? RouteController), list = try node(session, "list-browse")
+        for style in [UISplitViewController.BackgroundStyle.none, .sidebar] {
+            setStyle(browse, style)
+            let expected: [CGFloat] = Array(repeating: style == .sidebar ? 0 : 1, count: 4)
+            waitFor("Browse's grounds under the style \(style.rawValue)", cap: 20, facts: { "grounds \(grounds(root, [list]))" }) { grounds(root, [list]) == expected }
+        }
+    }
+
+    /// The alpha of each ground that paints over a sidebar's material where its author wrote none: the route's
+    /// controller backdrop and its own box, then each list's own box and its collection view.
+    private func grounds(_ root: RouteController, _ lists: [NodeView]) -> [CGFloat] {
+        let traits = root.traitCollection, alpha = { (color: CGColor?) -> CGFloat in color?.alpha ?? 0 }
+        return [alpha(root.surface.backgroundColor?.resolvedColor(with: traits).cgColor), alpha(root.node.layer.backgroundColor)]
+            + lists.flatMap { list in
+                let collection = list.subviews.compactMap { $0 as? UICollectionView }.first
+                return [alpha(list.layer.backgroundColor), alpha(collection?.backgroundColor?.resolvedColor(with: traits).cgColor)]
+            }
+    }
+
+    /// Sets `split`'s list column's background style in place, with no batch, as an embedder may.
+    private func setStyle(_ split: SplitIOS, _ style: UISplitViewController.BackgroundStyle) {
+        split.controller.primaryBackgroundStyle = style
+        split.controller.view.setNeedsLayout()
+        split.controller.view.layoutIfNeeded()
+    }
+
+    /// Below the list's rows, the sidebar column shows what lies under it, through UIKit's material: its pixel
+    /// changes with a colour laid under the column, in light and in dark.
+    private func assertShowsThrough(_ root: RouteController, _ split: SplitIOS) throws {
+        let window = try XCTUnwrap(root.view.window)
+        let column = root.view.convert(root.view.bounds, to: window)
+        let secondary = try XCTUnwrap(split.controller.viewController(for: .secondary)?.view)
+        let under = UIView(frame: secondary.convert(column, from: window))
+        secondary.addSubview(under)
+        defer { under.removeFromSuperview(); window.overrideUserInterfaceStyle = .unspecified }
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            window.overrideUserInterfaceStyle = style
+            var seen: [[UInt8]] = []
+            for colour in [UIColor.systemRed, .systemBlue] {
+                under.backgroundColor = colour
+                var drawn = false
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in drawn = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+                XCTAssertTrue(drawn, "the window is drawn")
+                seen.append(pixel(image, at: CGPoint(x: column.midX, y: column.maxY - 40)))
+            }
+            XCTAssertEqual(seen.map(\.count), [3, 3])
+            XCTAssertNotEqual(seen[0], seen[1], "style \(style.rawValue): the sidebar shows what lies under it")
+        }
+    }
+
+    /// The red, green and blue of `image`'s pixel at `point`, in points.
+    private func pixel(_ image: UIImage, at point: CGPoint) -> [UInt8] {
+        guard let cg = image.cgImage, let data = cg.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return [] }
+        let i = Int(point.y * image.scale) * cg.bytesPerRow + Int(point.x * image.scale) * (cg.bitsPerPixel / 8)
+        return [bytes[i], bytes[i + 1], bytes[i + 2]]
+    }
+
     /// LLP 1127 D8: with the detail alone and nothing selected, nothing of
     /// the split is live: the list, the stack's top, shows under the empty
     /// detail and is told so.
