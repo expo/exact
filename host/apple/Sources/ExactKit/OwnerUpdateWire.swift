@@ -106,75 +106,40 @@ package struct OwnerUpdateWire: Equatable {
     /// window map, its six terms in `CGAffineTransform`'s order, the configuration's identity (`u64`) and the reserved
     /// regions after their count, each its identity, kind, frame, margins and an active byte.
     package func encode() -> Data {
-        var out = Data()
-        func u8(_ v: UInt8) { out.append(v) }
-        func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        func f32(_ v: CGFloat) { u32(Float(v).bitPattern) }
-        func edges(_ e: Edges) { [e.top, e.right, e.bottom, e.left].forEach(f32) }
-        func rect(_ r: CGRect) { [r.minX, r.minY, r.width, r.height].forEach(f32) }
-        func optional<T>(_ value: T?, _ each: (T) -> Void) {
-            u8(value == nil ? 0 : 1)
-            if let value { each(value) }
-        }
-        optional(band, edges)
-        u32(UInt32(contributions.count))
+        var w = WireOut()
+        w.optional(band) { $0.edges($1) }
+        w.u32(UInt32(contributions.count))
         for c in contributions {
-            u32(c.node)
-            u8(c.operation)
-            edges(c.effect)
+            w.u32(c.node)
+            w.u8(c.operation)
+            w.edges(c.effect)
         }
-        u32(UInt32(chain.count))
-        for entry in chain {
-            out.append(Self.encode(target: entry.target))
-            u8(entry.kinds)
+        w.targets(chain: chain, relations: relations)
+        w.optional(margins) { w, m in
+            w.edges(m.root)
+            w.edges(m.plain)
+            w.optional(m.minimum) { $0.edges($1) }
+            w.optional(m.readableWidth) { $0.f32($1) }
         }
-        u32(UInt32(relations.count))
-        for r in relations {
-            u8(r.relation)
-            out.append(Self.encode(target: r.target))
-        }
-        optional(margins) { m in
-            edges(m.root)
-            edges(m.plain)
-            optional(m.minimum, edges)
-            optional(m.readableWidth, f32)
-        }
-        switch keyboard {
-        case .unreported: u8(0)
-        case .dismissed: u8(1)
-        case .shown(let frame, let docked):
-            u8(2)
-            rect(frame)
-            u8(docked ? 1 : 0)
-        }
-        optional(segments) { fold in
-            u8(fold.cols)
-            u8(fold.rows)
-            fold.rects.forEach(rect)
+        w.keyboard(keyboard)
+        w.optional(segments) { w, fold in
+            w.u8(fold.cols)
+            w.u8(fold.rows)
+            fold.rects.forEach { w.rect($0) }
         }
         for region in barRegions {
-            optional(region) { r in [r.distance, r.start, r.end].forEach(f32) }
+            w.optional(region) { w, r in [r.distance, r.start, r.end].forEach { w.f32($0) } }
         }
-        optional(chrome) { c in
-            optional(c.verticalBarEdge) { u8(UInt8($0)) }
-            optional(c.sidebarAvailable) { u8($0 ? 1 : 0) }
-            optional(c.auxiliaryTopLeft, rect)
-            optional(c.auxiliaryTopRight, rect)
+        w.optional(chrome) { w, c in
+            w.optional(c.verticalBarEdge) { $0.u8(UInt8($1)) }
+            w.optional(c.sidebarAvailable) { $0.u8($1 ? 1 : 0) }
+            w.optional(c.auxiliaryTopLeft) { $0.rect($1) }
+            w.optional(c.auxiliaryTopRight) { $0.rect($1) }
         }
-        optional(windowMap) { m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach(f32) }
-        optional(configuration, u64)
-        optional(regions) { regions in
-            u32(UInt32(regions.count))
-            for r in regions {
-                u64(r.id)
-                u8(r.kind)
-                rect(r.frame)
-                edges(r.margins)
-                u8(r.active ? 1 : 0)
-            }
-        }
-        return out
+        w.windowMap(windowMap)
+        w.optional(configuration) { $0.u64($1) }
+        w.regions(regions)
+        return w.out
     }
 
     /// A target in the kernel's wire form: its id and generation (`u64` each), its insets after a presence byte,
@@ -192,5 +157,100 @@ package struct OwnerUpdateWire: Equatable {
         out.append(t.frame == nil ? 0 : 1)
         if let f = t.frame { f32s([f.minX, f.minY, f.width, f.height]) }
         return out
+    }
+}
+
+/// The session's update (LLP 1123 D2) in the kernel's wire form (`SessionUpdate::encode`), which `exact_host_covers`
+/// kind 29 carries: what the host reports of the session view, in the document's space, which the boxes outside every
+/// owner read.
+package struct SessionUpdateWire: Equatable {
+    package var band: OwnerUpdateWire.Edges = .zero
+    package var chain: [(target: OwnerUpdateWire.Target, kinds: UInt8)] = []
+    package var relations: [(relation: UInt8, target: OwnerUpdateWire.Target)] = []
+    package var keyboard: OwnerUpdateWire.Keyboard = .unreported
+    /// The keyboard policy (`interactive-widget`), in the kernel's `KeyboardPolicy::ALL` order; `nil` reports none.
+    package enum KeyboardPolicy: UInt8 { case resizesContent, resizesVisual, overlaysContent }
+    package var keyboardPolicy: KeyboardPolicy?
+    package var windowMap: CGAffineTransform?
+    package var configuration: UInt64?
+    package var regions: [OwnerUpdateWire.Region]?
+
+    package init() {}
+
+    package static func == (a: Self, b: Self) -> Bool {
+        a.band == b.band && a.keyboard == b.keyboard && a.keyboardPolicy == b.keyboardPolicy && a.windowMap == b.windowMap
+            && a.configuration == b.configuration && a.regions == b.regions
+            && a.chain.map(\.target) == b.chain.map(\.target) && a.chain.map(\.kinds) == b.chain.map(\.kinds)
+            && a.relations.map(\.relation) == b.relations.map(\.relation) && a.relations.map(\.target) == b.relations.map(\.target)
+    }
+
+    /// The kernel's encoding: the band, top, right, bottom, left; the targets and the keyboard as an owner update's;
+    /// the policy, a byte, 0 for none and else 1 more than its index; the window map, the configuration and the
+    /// reserved regions as an owner update's.
+    package func encode() -> Data {
+        var w = WireOut()
+        w.edges(band)
+        w.targets(chain: chain, relations: relations)
+        w.keyboard(keyboard)
+        w.u8(keyboardPolicy.map { $0.rawValue + 1 } ?? 0)
+        w.windowMap(windowMap)
+        w.optional(configuration) { $0.u64($1) }
+        w.regions(regions)
+        return w.out
+    }
+}
+
+/// The kernel's wire form's pieces that an owner's update and the session's share, little-endian, lengths as `f32`s.
+struct WireOut {
+    var out = Data()
+    mutating func u8(_ v: UInt8) { out.append(v) }
+    mutating func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
+    mutating func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
+    mutating func f32(_ v: CGFloat) { u32(Float(v).bitPattern) }
+    mutating func edges(_ e: OwnerUpdateWire.Edges) { [e.top, e.right, e.bottom, e.left].forEach { f32($0) } }
+    mutating func rect(_ r: CGRect) { [r.minX, r.minY, r.width, r.height].forEach { f32($0) } }
+    /// A presence byte, then `value` as `each` writes it.
+    mutating func optional<T>(_ value: T?, _ each: (inout WireOut, T) -> Void) {
+        u8(value == nil ? 0 : 1)
+        if let value { each(&self, value) }
+    }
+    /// The chain after its count, each its target and kinds; the relations after theirs, each its relation and target.
+    mutating func targets(chain: [(target: OwnerUpdateWire.Target, kinds: UInt8)], relations: [(relation: UInt8, target: OwnerUpdateWire.Target)]) {
+        u32(UInt32(chain.count))
+        for entry in chain {
+            out.append(OwnerUpdateWire.encode(target: entry.target))
+            u8(entry.kinds)
+        }
+        u32(UInt32(relations.count))
+        for r in relations {
+            u8(r.relation)
+            out.append(OwnerUpdateWire.encode(target: r.target))
+        }
+    }
+    /// A byte, 0 unreported, 1 dismissed or 2 shown, and a shown one's frame and a docked byte.
+    mutating func keyboard(_ keyboard: OwnerUpdateWire.Keyboard) {
+        switch keyboard {
+        case .unreported: u8(0)
+        case .dismissed: u8(1)
+        case .shown(let frame, let docked):
+            u8(2)
+            rect(frame)
+            u8(docked ? 1 : 0)
+        }
+    }
+    /// Its six terms in `CGAffineTransform`'s order, after a presence byte.
+    mutating func windowMap(_ map: CGAffineTransform?) { optional(map) { w, m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach { w.f32($0) } } }
+    /// After a presence byte and their count, each its identity, kind, frame, margins and an active byte.
+    mutating func regions(_ regions: [OwnerUpdateWire.Region]?) {
+        optional(regions) { w, regions in
+            w.u32(UInt32(regions.count))
+            for r in regions {
+                w.u64(r.id)
+                w.u8(r.kind)
+                w.rect(r.frame)
+                w.edges(r.margins)
+                w.u8(r.active ? 1 : 0)
+            }
+        }
     }
 }

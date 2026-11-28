@@ -533,7 +533,7 @@ final class ResetGateTests: XCTestCase {
         var target: ExactNativeTarget? = try ExactNativeTarget.register(name: "map", view: UIView(), in: session)
         XCTAssertNotNil(target)
         let (held, replays, _) = held(session) { target = nil }
-        XCTAssertEqual(held.filter { $0.hasPrefix("ownerReports") }, ["ownerReports(updates:registrations:)"], "\(held)")
+        XCTAssertEqual(held.filter { $0.hasPrefix("ownerReports") }, ["ownerReports(updates:registrations:session:)"], "\(held)")
         XCTAssertEqual(replays, [])
     }
     #endif
