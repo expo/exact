@@ -936,7 +936,7 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertEqual(split.presses.count, 2, "the presses wait for their batches")
         XCTAssertNil(navigation.sidebarSelection(list.owner), "the sidebar keeps the pressed row meanwhile")
         session.pending.removeAll()
-        held.forEach(session.apply)
+        held.forEach { session.apply($0) }
         until("book c is the detail") { has(session, "book-c") && split.detailRoutes.count == 1 && !agent.nativeInFlight() }
         until("the presses ended") { split.presses.isEmpty }
         until("the row whose press brought it selected, not Count's") { selected() == [rowPress] }
