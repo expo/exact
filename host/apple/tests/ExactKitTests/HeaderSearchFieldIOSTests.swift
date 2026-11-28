@@ -100,6 +100,10 @@ final class HeaderSearchFieldIOSTests: XCTestCase {
         waitFor("the route's safe area without the keys", cap: 5, facts: { "safe area \(surface.safeAreaInsets.bottom), keys were \(window.bounds.maxY - keys.minY), Exact's keyboard inset \(added())" }) {
             surface.safeAreaInsets.bottom < window.bounds.maxY - keys.minY && added() == 0
         }
+        // The bar's search names its item for the keyboard's drag only while the item holds the search's controller
+        XCTAssertTrue(barSearch.searchItem === controller.navigationItem, "the bar's search names its item")
+        controller.navigationItem.searchController = UISearchController(searchResultsController: nil)
+        XCTAssertNil(barSearch.searchItem, "nor once another controller replaces its own")
     }
 
     /// A paste UIKit resolves for an editor that no longer stands for the authored field (a bar's search retired or

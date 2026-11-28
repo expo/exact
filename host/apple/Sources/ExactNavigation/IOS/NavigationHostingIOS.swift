@@ -5,6 +5,14 @@
 import UIKit
 import ExactKit
 
+#if os(iOS)
+/// The bar's search, the field's delegate, is the field's owner as the keyboard's drag asks it (LLP 1123 D7): its item
+/// while that item still holds this search's controller, so a field left over from a replaced search names none.
+extension HeaderSearch: BarSearchOwner {
+    var searchItem: UINavigationItem? { item?.searchController === controller ? item : nil }
+}
+#endif
+
 extension RouteController: RouteSurface {
     var headerSearchEditor: UIView? {
         #if os(iOS)
