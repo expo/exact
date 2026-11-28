@@ -1061,14 +1061,14 @@ final class FrameHealthMetricsTests: XCTestCase {
         t.counts.callbacks = 60; t.counts.worked = 60; t.counts.late = 3; t.mainLongest = 61.2
         XCTAssertEqual([screen().fps, screen().frames, screen().late, screen().mainLongest, screen().changes], ["120 FPS", "60", "3", "61.2ms", "—"])
         XCTAssertTrue(pacing() == ("61.2ms", ""))
-        XCTAssertEqual([UInt64(0), 1, 241_666_667, 600_000_000].map { t.counts.heldUpNs = $0; return screen().heldUp }, ["0%", "1%", "49%", "100%"], "any hold-up shows")
+        XCTAssertEqual([UInt64(0), 1, 35_000_000, 241_666_667, 600_000_000].map { t.counts.heldUpNs = $0; return screen().heldUp }, ["0%", "1%", "7%", "49%", "100%"], "any hold-up shows")
         t.from = 9.5
         XCTAssertEqual([screen().fps, screen().heldUp], ["60 FPS", "60%"])
         XCTAssertEqual(T.window(t, nominal: 0.5, source: source), "Last 1.0s")
         XCTAssertEqual({ let e = T.figures(t, rates: none, adaptiveSync: false); return [e.fps, e.frames, e.mainLongest, e.heldUp] }(), ["—", "—", "—", "—"])
         typealias F = FrameHealthCardFace
         XCTAssertLessThanOrEqual(F.secondFigure(lead: "held up") + 3.6 + FrameHealthCardDrawing.width("of the time", F.body), F.minimumWidth - 12, "the words fit")
-        XCTAssertEqual(Set(["5s", "2.5s", "12s"].map { F.labelWidth("Longest hold-up (last \($0))", name: "Longest hold-up") }).count, 1, "the value stays put")
+        XCTAssertEqual(Set(["5s", "2.5s", "12s", "100s"].map { F.labelWidth("Longest hold-up (last \($0))", name: "Longest hold-up") }).count, 1, "the value stays put")
         // The screen's work chart has a gridline at each whole refresh at the display's highest rate, the first dotted,
         // and draws no deadline
         let area = CGRect(x: 12, y: 206, width: 296, height: 200)

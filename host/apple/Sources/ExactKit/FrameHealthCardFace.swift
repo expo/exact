@@ -67,18 +67,19 @@ enum FrameHealthCardFace {
     static let strong = FrameHealthCardDrawing.tabular(FrameHealthCardDrawing.semibold(12))
     package static let title = FrameHealthCardDrawing.semibold(15)
 
-    /// The right edge of a row's second figure, from 136 points: a count in a column as wide as "0000", or a percentage
-    /// after its leading word in one as wide as "100%".
+    /// The right edge of a row's second figure: a count in a column as wide as "0000" from 162 points, or a percentage
+    /// after its leading word, at 136 points, in one as wide as "100%".
     static func secondFigure(lead: String) -> CGFloat {
         typealias D = FrameHealthCardDrawing
-        return lead.isEmpty ? 136 + D.width("0000", strong) : 136 + D.width(lead, body) + 3.6 + D.width("100%", strong)
+        return lead.isEmpty ? 162 + D.width("0000", strong) : 136 + D.width(lead, body) + 3.6 + D.width("100%", strong)
     }
 
     /// The width the line under the figures gives its label, `name` and its window, in tabular digits: as wide as the
-    /// window can name, "last 0.0s" or "last 00s", so the value after it stays put as the window's span changes.
+    /// windows below 1,000 seconds can name, "last 0.0s" or "last 000s", so the value after it stays put as the window's
+    /// span changes.
     static func labelWidth(_ label: String, name: String) -> CGFloat {
         typealias D = FrameHealthCardDrawing
-        return ([label] + ["0.0", "00"].map { "\(name) (last \($0)s)" }).map { D.width($0, digits) }.max() ?? 0
+        return ([label] + ["0.0", "000"].map { "\(name) (last \($0)s)" }).map { D.width($0, digits) }.max() ?? 0
     }
 
     /// Every region at a card width; sizes are points.
