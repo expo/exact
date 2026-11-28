@@ -100,6 +100,22 @@ test('a fresh widget reads the same library as the app, then follows edits and i
   expect(await shows('seed-3')).toEqual({ count: 2, latest: 'Piranesi' }); // A book the library no longer has.
 });
 
+// Android and the watch offer no entity row (LLP 1126.005 D2), so a widget
+// whose rows are all entities shows a book with nothing chosen.
+test('a widget with a shelf and a book row shows a book before anybody chooses one', async () => {
+  const { call } = await shelf();
+  const progress = async (shelf: string | null, book: string | null) => (await call('widgetProgress', 1, { shelf, book }))[0].props;
+  expect(await progress(null, null)).toEqual({ title: 'Piranesi', percent: 44 }); // The book being read.
+  expect(await progress('want', null)).toEqual({ title: 'The Dispossessed', percent: 0 }); // The first on the chosen shelf.
+  expect(await progress('done', 'seed-1')).toEqual({ title: 'The Left Hand of Darkness', percent: 100 });
+  expect((await call('widgetCover', 1, { shelf: null, book: null }))[0].props).toEqual({ title: 'Piranesi', author: 'Susanna Clarke' });
+  await call('removeBook', 'seed-3');
+  expect(await progress('want', null)).toEqual({ title: 'No books on Want to Read', percent: 0 });
+  await call('removeBook', 'seed-1');
+  await call('removeBook', 'seed-2');
+  expect(await progress(null, null)).toEqual({ title: 'Add your first book', percent: 0 });
+});
+
 // Open Library's subjects carry no page count, so a discovered work's length
 // is unknown, and finishing it moves no page.
 test('a discovered work is added without a length, and finishing it moves no page', async () => {

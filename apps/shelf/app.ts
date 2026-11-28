@@ -135,6 +135,17 @@ function patchBook(storage: Storage, id: string, patch: Partial<Book>) {
 const SHELVES: Record<string, string> = { want: 'Want to Read', reading: 'Reading', done: 'Finished' };
 const statusTitle = (shelf: string) => SHELVES[shelf] ?? shelf;
 
+// A widget shows a book before anybody chooses one, and where the host offers
+// no choice (LLP 1126.005 D2): the chosen book, else the first on the chosen
+// shelf, else the one being read.
+function shownBook(books: Book[], shelf?: string | null, book?: string | null) {
+  const chosen = books.find((b) => b.id === book);
+  if (chosen) return chosen;
+  if (shelf) return books.find((b) => b.status === shelf);
+  return books.find((b) => b.status === 'reading') ?? books[0];
+}
+const noBook = (shelf?: string | null) => (shelf ? `No books on ${statusTitle(shelf)}` : 'Add your first book');
+
 const BOOK_RECORD = 'com.exact.shelf:book';
 
 /** A failed write's cause: the module's (D3 puts it after the error's name), else ours. */
@@ -159,16 +170,14 @@ const sources: Sources = {
 
   widgetProgress: async ([date, { shelf, book }], _store, storage) => {
     const { books } = await load(storage);
-    const shown = books.find((b) => b.id === book);
-    const title = shown?.title ?? (shelf ? `Choose a book on ${statusTitle(shelf)}` : 'Choose a shelf and a book');
-    return [{ date, props: { title, percent: shown?.pages ? Math.round((shown.currentPage / shown.pages) * 100) : 0 } }];
+    const shown = shownBook(books, shelf, book);
+    return [{ date, props: { title: shown?.title ?? noBook(shelf), percent: shown?.pages ? Math.round((shown.currentPage / shown.pages) * 100) : 0 } }];
   },
 
   widgetCover: async ([date, { shelf, book }], _store, storage) => {
     const { books } = await load(storage);
-    const shown = books.find((b) => b.id === book);
-    const title = shown?.title ?? (shelf ? `Choose a book on ${statusTitle(shelf)}` : 'Choose a shelf and a book');
-    return [{ date, props: { title, author: shown?.author ?? '' } }];
+    const shown = shownBook(books, shelf, book);
+    return [{ date, props: { title: shown?.title ?? noBook(shelf), author: shown?.author ?? '' } }];
   },
 
   library: async (_args, _store, storage) => {

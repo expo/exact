@@ -17,15 +17,24 @@ therefore agree and both be wrong for a while; the app now checks again every
 A timeline reload that the app asked for 31 seconds after another ran a minute
 later, and the app's answer was `ready: false` until then.
 
+Two reviews of the pull request found what the build and the one device run
+had not. Stats could not read the placements of a second widget kind, because a
+source had one answer shape for the whole app. Publishing each book's shelf as
+a field of `ContentDescription` made every publisher of every app write
+`within=none`. And on Android, where a widget has no entity rows, both new
+widgets said "Choose a shelf and a book" with no way to choose.
+
 ### Lean in
 The shelves were already the books' statuses, so publishing them as a kind and
-naming each book's shelf with `within` was two lines in `reindex`. Both new
+naming each book's shelf with the `within` option was two lines in `reindex`. Both new
 widgets listed only the chosen shelf's books, in the list and in the search, and
 Your Shelf, with no Shelf row, kept listing every book. Edit Widget cleared the
 Book row by itself when the shelf changed.
 
 Moving a chosen book to another shelf in the app turned both widgets that showed
-it to "Choose a book on Reading" without an edit.
+it to the first book on their shelf without an edit. With nothing chosen they
+show the book being read, so they have something to show on a host that offers
+no rows.
 
 `"search": false` took the shelves out of Spotlight at the next launch and put
 them back when it was removed; the books stayed in.
