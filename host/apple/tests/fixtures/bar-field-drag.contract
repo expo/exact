@@ -1,0 +1,25 @@
+// KeyboardDismissIOSTests' bar field (LLP 1123 D7): a route whose header's
+// search UIKit lays on the keys on an iPhone, over a scroller a finger
+// drags. `pad` gives the scroller a dismiss padding of its own.
+routes nav
+  start "/"
+
+component BarFieldDrag
+  state query = ""
+  state pad = 0
+  action search(v: string)
+    query = v
+  action padded()
+    pad = 300
+  view
+    main navigationKey=`${top(nav).id}` testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationScroll="list" testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+          header
+            text "Chats" role="heading" aria-level=1
+            input type="search" value=query input=search placeholder="Search" testId="search"
+          scroll id="list" testId="list" keyboardDismissMode="interactive" -exact-keyboard-dismiss-padding=pad flex=1 min-height=0
+            for i in range(60) key=i
+              text `Row ${i}` padding=16 border-bottom="1px solid -exact-separator"
+          button press=padded testId="pad" position="absolute" left=0 bottom=200
+            text "pad"

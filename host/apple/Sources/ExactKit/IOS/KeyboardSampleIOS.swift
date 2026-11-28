@@ -38,19 +38,48 @@ package final class KeyboardSampleIOS {
         return sampler
     }
 
-    /// The scrollers whose interactive drags hold this window's dismiss padding, oldest first, each with its padding in
-    /// the window's points (`hold`).
-    private var holds: [(scroll: Held, padding: CGFloat)] = []
+    /// The scrollers whose interactive drags hold this window's dismiss padding, oldest first, each with what gives its
+    /// padding in the window's points (`hold`).
+    private var holds: [(scroll: Held, padding: () -> CGFloat)] = []
     private struct Held { weak var scroll: UIScrollView? }
+    /// Whether a drag holds the padding now, holders that left the window dropped first: while one does, the keys may
+    /// be following it.
+    package func holdsNow() -> Bool {
+        prune()
+        return !holds.isEmpty
+    }
+    /// The bar's field the keys carried as this window's drags began (`KeyboardDrag.Carried`): decided by the first of
+    /// a run of overlapping drags, from the keys at rest, and kept for the others till none holds the padding, or till
+    /// the field stops editing, after which a drag's padding is its own until a new run decides again.
+    package var carried: KeyboardDrag.Carried? {
+        didSet {
+            if let ends { NotificationCenter.default.removeObserver(ends) }
+            ends = nil
+            guard let field = carried?.field else { return }
+            ends = NotificationCenter.default.addObserver(forName: UITextField.textDidEndEditingNotification, object: field, queue: .main) { [weak self] _ in
+                self?.carried = nil
+                self?.settlePadding()
+            }
+        }
+    }
+    private var ends: NSObjectProtocol?
+
+    deinit {
+        if let ends { NotificationCenter.default.removeObserver(ends) }
+    }
 
     /// `scroll`'s drag holds the window's dismiss padding (LLP 1123 D7). UIKit keeps one per window, the value of the
     /// last guide whose value changed, from any view in the window but the window itself, and reads it throughout a
-    /// drag, so Exact writes it on this one guide only: the padding of the newest drag that holds it, and 0 once none
-    /// does (§"Evidence: measured on expo/exact", "Keyboard dismissal"). A drag that holds it again keeps its place.
-    package func hold(_ padding: CGFloat, for scroll: UIScrollView) {
+    /// drag, so Exact writes it on this one guide only: the padding of the newest drag that holds it, asked of it as the
+    /// padding settles, and 0 once none does (§"Evidence: measured on expo/exact", "Keyboard dismissal"). A drag that
+    /// holds it again keeps its place.
+    package func hold(for scroll: UIScrollView, padding: @escaping () -> CGFloat) {
         if let i = holds.firstIndex(where: { $0.scroll.scroll === scroll }) { holds[i].padding = padding } else { holds.append((Held(scroll: scroll), padding)) }
         settlePadding()
     }
+
+    /// `hold` with a padding that stays as given.
+    package func hold(_ padding: CGFloat, for scroll: UIScrollView) { hold(for: scroll) { padding } }
 
     /// `scroll`'s drag ended, was cancelled or failed: it holds the padding no longer (`nil` for one already gone).
     package func release(_ scroll: UIScrollView?) {
@@ -64,11 +93,21 @@ package final class KeyboardSampleIOS {
     /// Writes the newest holder's padding, dropping holders that left the window; a write only on change, as one that
     /// leaves the guide's value as it was does nothing.
     private func settlePadding() {
-        let window = following.window
-        holds.removeAll { $0.scroll.scroll.map { $0.window !== window } ?? true }
-        let padding = holds.last?.padding ?? 0
+        prune()
+        if holds.isEmpty { carried = nil }
+        // The newest holder whose drags the keys still follow: one whose dismissal changed while it held gives way
+        let padding = holds.last(where: { $0.scroll.scroll.map(Self.interactive) ?? false })?.padding() ?? 0
         let guide = following.keyboardLayoutGuide
         if guide.keyboardDismissPadding != padding { guide.keyboardDismissPadding = padding }
+    }
+
+    private func prune() {
+        let window = following.window
+        holds.removeAll { $0.scroll.scroll.map { $0.window !== window } ?? true }
+    }
+
+    private static func interactive(_ scroll: UIScrollView) -> Bool {
+        scroll.keyboardDismissMode == .interactive || scroll.keyboardDismissMode == .interactiveWithAccessory
     }
 
     /// The keyboard now, `nil` while none shows or the sampler is out of its window.
