@@ -625,15 +625,10 @@ package final class Presenter {
             return
         }
         let responder: UIView = target.headerField ?? textEditor ?? projectedGrip ?? target
-        if selectText, textEditor == nil {
-            session?.log("selectText \"\(name)\" refused: not a text editor")
-            return
-        }
-        if selectText, responder.isFirstResponder {
-            fieldSelections.selectAll(target)
-            return
-        }
+        if selectText, textEditor == nil { session?.log("selectText \"\(name)\" refused: not a text editor"); return }
         chooseFocus(target)
+        // Focused already: select, without asking UIKit to focus it again.
+        if selectText, responder.isFirstResponder { fieldSelections.selectAll(target); return }
         guard responder.canBecomeFirstResponder else {
             session?.log("focus \"\(name)\" refused: not focusable")
             return
