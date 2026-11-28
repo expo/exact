@@ -894,6 +894,41 @@ test('a resizing box\'s stand-in paints at its translate, resolved in the box\'s
   } finally { await app.close(); }
 }, 30000);
 
+// The JS target's agent reads presence through the module's `observation`, by its own view ids: a resizing box at its
+// stand-in's shown box, and the stand-in as no view (the shared native timeline, `host/web/parity.mjs --presence`)
+test('the agent reads a resizing box at its stand-in and the stand-in as no view', async () => {
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/presence-agent-'));
+  const dist = resolve(dir, 'dist');
+  let server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Presence Agent', app: { id: 'test.presence-agent', name: 'Presence Agent' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), `component PresenceAgent
+  state wide = false
+  action grow
+    wide = not wide
+  view
+    column
+      button press=grow testId="grow"
+        text "Grow"
+      column testId="card" width=(wide ? 180 : 100) height=40 background-color="red" -exact-layout-transition="1000ms linear"
+`);
+    const build = spawnSync(process.execPath, ['host/web-js/build.mjs', 'presence-agent', '--out', dist, '--render', 'none'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8',
+    });
+    expect(build.status, build.stdout + build.stderr).toBe(0);
+    server = createServer((req, res) => serveBuildTree(dist, req, res));
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const s = await open({ host: 'web', url: `http://127.0.0.1:${server.address().port}/` });
+    try {
+      const card = (await s.tree()).nodes.find(n => n.props.testId === 'card').id;
+      await s.tap('grow');
+      await s.clock('+500');
+      const seen = (await s.state()).presence.map(({ id, w }) => [id, Math.round(w)]);
+      expect(seen).toEqual([[card, 140]]);
+    } finally { await s.close(); }
+  } finally { server?.close(); rmSync(dir, { recursive: true, force: true }); }
+}, 60000);
+
 test('a resized box accepts presses after its spring ends on either clock', async () => {
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/clip-repro-'));
   const dist = resolve(dir, 'dist');
@@ -996,6 +1031,55 @@ component App
     await app.page.evaluate(() => { exact.fold.prefer({ cols: 2, rows: 1, gap: 20 }); dispatchEvent(new Event('exact-fold')); });
     await app.page.waitForFunction(expected => document.querySelector('[data-testid="second"]').offsetTop === expected, wide);
     expect(await moving()).toBe(true);
+  } finally { await app.close(); }
+}, 30000);
+
+// LLP 1063 D6: a resize takes new boxes without animating in an app that reads no viewport fact too, which commits
+// nothing in answer to it (the JS target's presence, as the wasm host's resize batch does)
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a resize ends the moves under way of an app that reads no viewport fact`, async () => {
+  const app = await exitApp(engine, `component App
+  state shown = true
+  action drop
+    shown = not shown
+  view
+    column
+      button "Drop" press=drop testId="drop"
+      if shown
+        text "First" height=40
+      text "Second" testId="second" height=40 -exact-layout-transition="10s linear"
+`, { viewport: { width: 800, height: 600 } });
+  try {
+    const second = app.page.getByTestId('second');
+    const moving = () => second.evaluate(el => el.getAnimations().some(a => a.id === 'exact-layout-move'));
+    await app.page.getByTestId('drop').click();
+    expect(await moving()).toBe(true);
+    await app.page.setViewportSize({ width: 700, height: 600 });
+    await app.page.waitForFunction(() => innerWidth === 700);
+    await app.page.evaluate(() => new Promise(requestAnimationFrame));
+    expect(await second.evaluate(el => el.getAnimations().length)).toBe(0);
+  } finally { await app.close(); }
+}, 30000);
+
+// What an agent reads of a resizing box (presence-glue.js `observation`, which both web hosts' agents read): its
+// stand-in's shown box, and no view for the stand-in, which is marked leaving to be inert, whatever ids the host gives
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: an agent reads a resizing box at its stand-in and the stand-in as no view`, async () => {
+  const app = await exitApp(engine, `component App
+  state wide = false
+  action grow
+    wide = not wide
+  view
+    column
+      button "Grow" press=grow testId="grow"
+      column testId="card" width=(wide ? 180 : 100) height=40 background-color="red" -exact-layout-transition="1000ms linear"
+`);
+  try {
+    await app.page.getByTestId('grow').click();
+    const seen = await app.page.evaluate(() => {
+      // (Every animation, as the agent's clock seeks them: the stand-in's size plays on its margins)
+      for (const a of document.getAnimations()) { a.pause(); a.currentTime = 500; }
+      return globalThis.exact.presenceLive.observation(el => el.dataset.testid ?? 'unnamed').map(({ id, w }) => [id, Math.round(w)]);
+    });
+    expect(seen).toEqual([['card', 140]]);
   } finally { await app.close(); }
 }, 30000);
 

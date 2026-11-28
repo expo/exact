@@ -311,6 +311,10 @@ export function pr(e) {
       const x = globalThis.exact;
       Pres = x.presenceLive = x.presence(document.getElementById('exact-root'));
       Created.length = 0;
+      // @ref LLP 1063 D6 — a resize takes new boxes without animating, whether or not the app reads the viewport and
+      // so commits in answer (facts.js `viewport`, whose commit says `presenceSnap` too), as the wasm host's resize batch does
+      let size = `${innerWidth}x${innerHeight}`;
+      addEventListener('resize', () => { if (size !== (size = `${innerWidth}x${innerHeight}`)) Pres.snap(); });
       // After a commit's tree: which views declare the row now (the created
       // ones), and every tracked one that moved plays back from where it was.
       Present = () =>

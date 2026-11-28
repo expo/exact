@@ -325,8 +325,9 @@ export function install(exact, { passive = false } = {}) {
       ...((h) => { if (h?.held && h.held.node == null && h.held.el) { if (passive) return { ...h, held: { ...h.held, node: id(h.held.el) } }; h.held.node = id(h.held.el); } return h ?? {}; })(exact.heldOf?.(el)),
     };
   };
-  // presence-glue.js `observation`, by this runtime's view ids (its elements carry no `data-view`).
-  const presence = () => [...document.querySelectorAll('#exact-root [style*="--exact-layout-transition"], #exact-root [style*="--exact-exit-animation"], #exact-root [data-exiting]')].map(el => {
+  // presence-glue.js `observation`, by this runtime's view ids (its elements carry no `data-view`), once it has loaded;
+  // until then no move or stand-in has started, and each view with a presence row is where it is laid out.
+  const presence = () => exact.presenceLive?.observation(id) ?? [...document.querySelectorAll('#exact-root [style*="--exact-layout-transition"], #exact-root [style*="--exact-exit-animation"], #exact-root [data-exiting]')].map(el => {
     const r = el.getBoundingClientRect();
     return { id: id(el), x: r.x, y: r.y, w: r.width, h: r.height, opacity: Number(getComputedStyle(el).opacity), exiting: el.hasAttribute('data-exiting') };
   });

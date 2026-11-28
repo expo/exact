@@ -291,6 +291,8 @@ function createPresence(root) {
   // element -> { base, moves, surface }: each moving element's zero `translate`, its moves under way (each its
   // animation and the parts that show it on the surface), and the surface's stand-in.
   const flips = new Map();
+  // The stand-ins a surface puts beside its element (`surface`), which no observation reports
+  const stands = new WeakSet();
   const surfaces = new Set();
   // element -> its row's text and what `row` read of it
   const rows = new WeakMap();
@@ -427,6 +429,7 @@ function createPresence(root) {
   function surface(el, measured) {
     const cs = getComputedStyle(el), stand = document.createElement('div'), box = document.createElement('div');
     stand.setAttribute('data-exiting', ''); stand.setAttribute('aria-hidden', 'true'); stand.inert = true;
+    stands.add(stand);
     // (Its moves add to a zero `translate`, which WebKit paints where it places them)
     // (and horizontal, left to right, so that a box its borders hold wider than its moves would keeps its left edge)
     stand.style.cssText = 'position:absolute;width:0;height:0;margin:0;padding:0;border:0;z-index:-1;pointer-events:none;translate:0px 0px;direction:ltr;writing-mode:horizontal-tb';
@@ -572,18 +575,24 @@ function createPresence(root) {
 
   return {
     sync,
+    // End every move under way, for a resize a host brings no batch for: a resize takes new boxes without animating
+    // (LLP 1063 D6), as a batch marked `presenceSnap` does
+    snap() { for (const el of [...flips.keys()]) stop(el); },
     // Whether a view declares a layout transition: an agent's jump then
     // applies each due time's commits as their own batch (glue.js `clock`).
     tracking() { return tracked.size > 0; },
-    // Agent state reads the painted surface, including unnamed exit ghosts.
-    // The ordinary layout box still describes the content's final geometry.
-    observation() {
-      return [...root.querySelectorAll('[data-view]')].filter(el =>
-        el.style.getPropertyValue(LAYOUT) || el.style.getPropertyValue('--exact-exit-animation') || el.hasAttribute('data-exiting')
-      ).map(el => {
+    // Agent state reads the painted surface, including unnamed exit ghosts: each view a presence row names, by the
+    // host's id for it (`idOf`: the wasm host's `data-view`, the JS target's own), a resizing one at its stand-in's
+    // box. A stand-in, which is marked leaving to be inert, is no view. The ordinary layout box still describes the
+    // content's final geometry.
+    observation(idOf = el => el.hasAttribute('data-view') ? Number(el.dataset.view) : null) {
+      return [...root.querySelectorAll(`[style*="${LAYOUT}"], [style*="--exact-exit-animation"], [data-exiting]`)].filter(el =>
+        !stands.has(el) && (el.style.getPropertyValue(LAYOUT) || el.style.getPropertyValue('--exact-exit-animation') || el.hasAttribute('data-exiting'))
+      ).flatMap(el => {
+        const id = idOf(el);
+        if (id == null) return [];
         const shown = flips.get(el)?.surface?.box ?? el, r = shown.getBoundingClientRect();
-        return { id: Number(el.dataset.view), x: r.x, y: r.y, w: r.width, h: r.height,
-          opacity: Number(getComputedStyle(el).opacity), exiting: el.hasAttribute('data-exiting') };
+        return [{ id, x: r.x, y: r.y, w: r.width, h: r.height, opacity: Number(getComputedStyle(el).opacity), exiting: el.hasAttribute('data-exiting') }];
       });
     },
     // Before a batch's ops: the place of every view that declares the row or
@@ -600,7 +609,7 @@ function createPresence(root) {
       for (const el of surfaces) reveal(flips.get(el));
       for (const el of tracked) if (!el.isConnected) tracked.delete(el);
       const still = stillBatch = changesNoTree(batch);
-      if (batch.presenceSnap) { for (const el of tracked) stop(el); }
+      if (batch.presenceSnap) this.snap();
       else if (!still) {
         // Before any box is read, so that none is read in a box a move that shows nothing more still contains it in
         retire();
