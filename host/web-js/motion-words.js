@@ -93,6 +93,8 @@
     if (name === "linear") {
       // As motion/src/parse.rs's linear_stops: a position may be infinite
       // until CSS Easing 2's fixup has run, and only then is it validated.
+      // At least two stops as written: a stop with two positions is one.
+      if (args.length < 2) return 0;
       const stops = [];
       for (const arg of args) {
         const fields = trim(arg).split(/\p{White_Space}+/u);

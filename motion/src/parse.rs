@@ -319,8 +319,12 @@ pub(crate) fn easing(s: &str) -> Result<TimingFunction, ParseError> {
     ))
 }
 
-/// `linear()`'s stops, `None` when an argument is not one.
+/// `linear()`'s stops, `None` when an argument is not one, or when fewer
+/// than two are written (a stop with two positions is still one).
 fn linear_stops(args: &[String]) -> Option<Vec<LinearStop>> {
+    if args.len() < 2 {
+        return None;
+    }
     let mut stops: Vec<(Option<f64>, f64)> = Vec::new();
     for arg in args {
         let fields: Vec<&str> = arg.split_whitespace().collect();
@@ -687,6 +691,34 @@ mod tests {
             .unwrap_err()
             .to_string()
             .starts_with("`STEPS(4, Sideways)`: `steps()` takes"));
+    }
+
+    /// `linear()` takes at least two stops as written, before a stop with two
+    /// positions is split in two: WPT's `linear-timing-functions-syntax`
+    /// refuses `linear(0 0% 100%)`, which is one stop.
+    #[test]
+    fn linear_takes_two_stops_as_written() {
+        for text in [
+            "opacity 1s linear(0 0% 100%)",
+            "opacity 1s linear(0.5 25% 75%)",
+        ] {
+            assert!(
+                matches!(
+                    Transitions::parse(text),
+                    Err(ParseError::BadArguments {
+                        function: "linear",
+                        ..
+                    })
+                ),
+                "{text}: {:?}",
+                Transitions::parse(text)
+            );
+            assert!(
+                crate::Animations::parse(&text.replace("opacity", "fade")).is_err(),
+                "{text}"
+            );
+        }
+        assert!(Transitions::parse("opacity 1s linear(0 0% 50%, 1 50% 100%)").is_ok());
     }
 
     /// CSS white space (CSS Syntax 3 §4.2) separates a shorthand's words: a
