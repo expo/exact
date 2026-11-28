@@ -68,6 +68,8 @@ impl<D: DataSource> Host<D> {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct LaunchLayout {
     pub flat_nodes: bool,
+    /// Stage 5's owner layout (LLP 1123, "stage 5, the switch"), on from the first layout.
+    pub owner_layout: bool,
     pub root_font_size: Option<f32>,
     pub display_scale: Option<f32>,
     /// The scale Canvas 2D backs its bitmaps at (`exact_canvas_display`):
@@ -81,12 +83,16 @@ pub(crate) struct LaunchLayout {
 impl LaunchLayout {
     pub const NONE: Self = Self {
         flat_nodes: false,
+        owner_layout: false,
         root_font_size: None,
         display_scale: None,
         canvas_scale: None,
         insets: None,
     };
     pub fn prepare(self, kernel: &mut Kernel) -> Result<(), HostError> {
+        if self.owner_layout {
+            kernel.set_owner_layout(true);
+        }
         if let Some(size) = self.root_font_size {
             kernel
                 .set_root_font_size(size)

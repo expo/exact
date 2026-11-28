@@ -398,7 +398,7 @@ final class ListRowsIOSTests: XCTestCase {
 
     func testFlatShopRowsDoNotSyncNavigationDuringCollectionScroll() throws {
         let session = ExactApp.shared.makeSession(label: "flat-fill-navigation")
-        session.runtime.useFlatNodes(true)
+        session.runtime.setLaunchModes(flatNodes: true, ownerLayout: false)
         session.clock = 0
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 240))
         let host = UIViewController(), view = ExactView(session: session)

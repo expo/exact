@@ -1497,7 +1497,7 @@
         "host/apple/src/abi/exports.rs: exact_extension",
         "host/apple/src/abi/exports.rs: exact_field_decorations",
         "host/apple/src/abi/exports.rs: exact_fire_native_timer",
-        "host/apple/src/abi/exports.rs: exact_flat_nodes",
+        "host/apple/src/abi/exports.rs: exact_launch_modes",
         "host/apple/src/abi/exports.rs: exact_forma",
         "host/apple/src/abi/exports.rs: exact_frame",
         "host/apple/src/abi/exports.rs: exact_frame_at",

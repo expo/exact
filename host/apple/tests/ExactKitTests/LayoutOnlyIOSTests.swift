@@ -556,7 +556,7 @@ final class LayoutOnlyIOSTests: XCTestCase {
 
     private func grid(_ flat: Bool, scene: UIWindowScene, planKey: String = "EXACT_LAYOUT_ONLY_ROW_PLAN") throws -> (ExactSession, UIWindow) {
         let session = ExactApp.shared.makeSession(label: "layout-only-row")
-        session.runtime.useFlatNodes(flat)
+        session.runtime.setLaunchModes(flatNodes: flat, ownerLayout: false)
         let window = UIWindow(windowScene: scene)
         window.frame = scene.screen.bounds
         let view = ExactView(session: session), controller = UIViewController()
@@ -708,7 +708,7 @@ final class LayoutOnlyIOSTests: XCTestCase {
         let plan = try Data(contentsOf: URL(fileURLWithPath: path))
         func run(_ flat: Bool) throws -> (count: Int, median: Double) {
             let session = ExactApp.shared.makeSession(label: "grid-apply-cost")
-            session.runtime.useFlatNodes(flat)
+            session.runtime.setLaunchModes(flatNodes: flat, ownerLayout: false)
             let p = session.presenter, window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 600))
             p.viewport.frame = window.bounds
             window.addSubview(p.viewport)

@@ -401,3 +401,83 @@ fn facts(bridge: &Bridge<StorageModule>, view: u32) -> Option<exact_kernel::Keyb
         .kernel()
         .keyboard_facts(view)
 }
+
+#[test]
+fn the_launch_modes_set_the_owner_layout_for_every_boot_after_them() {
+    // Bit 1 of `exact_launch_modes` lays every boot out under stage 5's owner layout from its first layout: a
+    // scroller's own bar then lies on its scrollport, out of its content's flow, so the row after it starts at the
+    // scroller's padding, not 50 below it, in the boot's own batch, for a boot, a prepared boot and a replacement alike;
+    // bit 0 alone, or a runtime never told, leaves it off (LLP 1123, "stage 5, the switch"). Each boot installs its own
+    // plan, found by its marker, with its own padding, so the row moves at each
+    let plan = |marker: &str, padding: u32| {
+        let source = format!(
+            "component Page\n  view\n    column\n      box testId=\"{marker}\" width=390 height=844 padding-top={padding} overflow-y=\"scroll\"\n        box -exact-safe-area-bar=\"top\" height=50\n        box testId=\"row\" height=20\n"
+        );
+        contract::compile(&source).unwrap().encode()
+    };
+    let (booted, prepared, replaced) = (
+        plan("booted", 10),
+        plan("prepared", 20),
+        plan("replaced", 30),
+    );
+    // The row's top in the batch the call returned, which must carry no error, under `marker`'s plan
+    let row = |bridge: &Bridge<StorageModule>, count: u32, marker: &str| -> f64 {
+        let batch: serde_json::Value =
+            serde_json::from_slice(bridge.output_bytes(count as usize)).unwrap();
+        assert!(batch["error"].is_null(), "{batch}");
+        let kernel = bridge.host.as_ref().unwrap().runner().kernel();
+        assert_eq!(
+            kernel.find_by_test_id(marker).len(),
+            1,
+            "{marker} is the live plan"
+        );
+        let id = kernel
+            .node_by_key(kernel.find_by_test_id("row")[0])
+            .unwrap()
+            .id;
+        let ops = batch["ops"].as_array().unwrap();
+        let frame = ops.iter().find(|op| op["op"] == "frame" && op["id"] == id);
+        frame
+            .and_then(|op| op["y"].as_f64())
+            .unwrap_or_else(|| panic!("no frame for the row: {batch}"))
+    };
+    let mut seen = Vec::new();
+    for bits in [None, Some(1), Some(2), Some(3)] {
+        let mut bridge = Bridge::new();
+        if let Some(bits) = bits {
+            bridge.set_launch_modes(bits);
+        }
+        let count = bridge.boot(
+            &booted,
+            StorageModule::default(),
+            Hooks::none(),
+            390.0,
+            844.0,
+        );
+        let first = row(&bridge, count, "booted");
+        bridge.input_write(&prepared);
+        bridge.prepare_plan(
+            prepared.len(),
+            StorageModule::default(),
+            Hooks::none(),
+            390.0,
+            844.0,
+        );
+        let count = bridge.commit_plan();
+        let then = row(&bridge, count, "prepared");
+        bridge.input_write(&replaced);
+        let count = bridge.boot_plan(
+            replaced.len(),
+            StorageModule::default(),
+            Hooks::none(),
+            390.0,
+            844.0,
+        );
+        seen.push((bits, [first, then, row(&bridge, count, "replaced")]));
+    }
+    let (off, on) = ([60.0, 70.0, 80.0], [10.0, 20.0, 30.0]);
+    assert_eq!(
+        seen,
+        [(None, off), (Some(1), off), (Some(2), on), (Some(3), on)]
+    );
+}

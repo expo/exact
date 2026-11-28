@@ -12,9 +12,11 @@ use exact_runner::DataSource;
 use std::ffi::c_void;
 
 impl<D: DataSource> Bridge<D> {
-    /// Omit layout-only boxes inside quiet collection rows of subsequent boots (LLP 1171 D4).
-    pub fn set_flat_nodes(&mut self, on: bool) {
-        self.launch_layout.flat_nodes = on;
+    /// The modes of subsequent boots (`exact_launch_modes`): bit 0 omits layout-only boxes inside quiet collection
+    /// rows (LLP 1171 D4), bit 1 turns on stage 5's owner layout (`Kernel::set_owner_layout`).
+    pub fn set_launch_modes(&mut self, bits: u32) {
+        self.launch_layout.flat_nodes = bits & 1 != 0;
+        self.launch_layout.owner_layout = bits & 2 != 0;
     }
 
     /// Frame tasks at their presentation target after timer admission.

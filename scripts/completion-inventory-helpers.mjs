@@ -240,7 +240,7 @@ export function helperClassifications(group) {
   ]),
   group("UI facts", ["one-shot"], "current session's launch and presentation configuration", "UI-owned",
     "Apple ABI setters configure the current Bridge. chooses_scheme reads the plan's command use, without starting work.", [
-    ["apple:host/apple/src/abi/exports.rs", "exact_flat_nodes exact_set_launch_direction exact_set_launch_window exact_set_natural_text"],
+    ["apple:host/apple/src/abi/exports.rs", "exact_launch_modes exact_set_launch_direction exact_set_launch_window exact_set_natural_text"],
     ["runner:runner/src/uses.rs", "chooses_scheme"],
     ["web:host/web/src/abi.rs", "exact_chooses_scheme"],
   ]),

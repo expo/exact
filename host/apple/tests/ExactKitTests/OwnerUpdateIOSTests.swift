@@ -92,6 +92,27 @@ final class OwnerUpdateIOSTests: XCTestCase {
         }
     }
 
+    /// A session made with stage 5's owner layout lays out under it (LLP 1123, "stage 5, the switch"): an edge cover
+    /// on its route's root, an owner by its block, pads nothing, where in a session made without it the cover moves
+    /// the root's children down, as on main.
+    func testASessionMadeWithTheOwnerLayoutLaysOutUnderIt() throws {
+        var moved: [[UInt32]] = []
+        for on in [false, true] {
+            let session = try fixture(ownerLayout: on)
+            XCTAssertEqual(session.ownerLayout, on)
+            let (route, _) = try firstRoute(session)
+            let children = Set(route.node.subviews.compactMap { ($0 as? NodeView)?.id })
+            let batch = session.runtime.covers([(route.node.id, .edges(.init(top: 50, right: 0, bottom: 0, left: 0)))])
+            XCTAssertNil(batch.error)
+            moved.append(batch.ops.filter { $0.op == .frame && children.contains($0.id) }.map(\.id))
+            session.destroy()
+            sessions.removeAll { $0 === session }
+            window?.isHidden = true
+        }
+        XCTAssertFalse(moved[0].isEmpty, "the cover moves the root's children")
+        XCTAssertEqual(moved[1], [], "the owner's root takes no padding from its cover")
+    }
+
     func testTheKernelTakesAnEncodedUpdateAndRefusesATruncatedOne() throws {
         let session = try fixture()
         let (route, view) = try firstRoute(session)
@@ -450,11 +471,11 @@ final class OwnerUpdateIOSTests: XCTestCase {
     }
 
     /// The native fixture booted in a window of the test host's scene, 402 by 874.
-    private func fixture() throws -> ExactSession {
+    private func fixture(ownerLayout: Bool = false) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let path = try XCTUnwrap(env["EXACT_FIXTURE_PLAN"], "build.mjs --test --ios compiles EXACT_FIXTURE_PLAN")
         let plan = try Data(contentsOf: URL(fileURLWithPath: path))
-        let session = ExactApp.shared.makeSession(label: "owner-update")
+        let session = ExactApp.shared.makeSession(label: "owner-update", ownerLayout: ownerLayout)
         sessions.append(session)
         let view = ExactView(session: session)
         sessionView = view
