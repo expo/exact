@@ -132,6 +132,9 @@ pub(crate) struct Observations {
     /// Each owner's map into its window, and the document's (D6's `"window"` space).
     pub(crate) window_maps: IdMap<u32, super::window_map::WindowMap>,
     pub(crate) session_window_map: Option<super::window_map::WindowMap>,
+    /// Whether the kernel lays out as LLP 1123's stage 5 does (`Kernel::set_owner_layout`),
+    /// which a reset keeps.
+    pub(crate) owner_layout: bool,
 }
 
 impl Observations {
@@ -217,6 +220,7 @@ impl Observations {
             session_window_map: self.session_window_map,
             session_max: self.session_max,
             session_regions: self.session_regions.clone(),
+            owner_layout: self.owner_layout,
             ..Default::default()
         }
     }

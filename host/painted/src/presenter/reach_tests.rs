@@ -289,7 +289,7 @@ fn a_scrollers_own_bar_stays_on_its_scrollport_over_its_content() {
         GREY,
         "off, the bar scrolls away with the content"
     );
-    p.host.runner_mut().kernel_mut().set_scrollport_bars(true);
+    p.host.runner_mut().kernel_mut().set_owner_layout(true);
     p.scroll.insert(port, (0., 0.));
     let _ = p.after_commit();
     p.frame();

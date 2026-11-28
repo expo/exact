@@ -63,7 +63,7 @@ fn owner_with(
         }
     }
     let mut k = owner(390.0, 844.0, ops);
-    k.set_scrollport_bars(true);
+    k.set_owner_layout(true);
     k.set_owner_band(2, band, &[]).unwrap();
     if let Some((policy, top)) = keyboard {
         k.set_keyboard_policy(Some(policy));

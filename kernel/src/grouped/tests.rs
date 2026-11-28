@@ -911,7 +911,7 @@ fn a_bar_on_a_lists_scrollport_is_no_section_where_the_kernel_lays_such_bars_out
     // 12 names the list's top edge; 11 is a section
     for on in [false, true] {
         let mut k = Kernel::with_monospace();
-        k.set_scrollport_bars(on);
+        k.set_owner_layout(on);
         let mut ops = vec![];
         for (id, node_type) in [
             (10, NodeType::List),

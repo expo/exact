@@ -12,7 +12,7 @@ fn root(rows: &[(StyleId, &'static str)], ops: Vec<Op>) -> Kernel {
     let mut ops = ops;
     ops.insert(0, style(2, vec![], &all));
     let mut k = owner(390.0, 844.0, ops);
-    k.set_scrollport_bars(true);
+    k.set_owner_layout(true);
     k.set_owner_band(2, Some([47.0, 0.0, 34.0, 0.0]), &[])
         .unwrap();
     lay_out(&mut k);
@@ -767,10 +767,10 @@ fn a_scrollers_child_stays_in_its_flow_unless_the_kernel_lays_scrollport_bars_ou
     let mut k = root(&[], ops);
     let at = |k: &Kernel| (frame(k, 4).1, frame(k, 5).1);
     assert_eq!(at(&k), (47.0, 0.0));
-    k.set_scrollport_bars(false);
+    k.set_owner_layout(false);
     lay_out(&mut k);
     assert_eq!(at(&k), (0.0, 50.0));
-    k.set_scrollport_bars(true);
+    k.set_owner_layout(true);
     lay_out(&mut k);
     assert_eq!(at(&k), (47.0, 0.0));
 }
@@ -848,7 +848,7 @@ fn a_clipping_parents_bar_reserves_as_padding_as_any_boxs_does() {
 /// with `rows` and what `ops` makes. Frames are in the document's space.
 fn document(band: [f32; 4], rows: &[(StyleId, &'static str)], mut ops: Vec<Op>) -> Kernel {
     let mut k = Kernel::with_monospace();
-    k.set_scrollport_bars(true);
+    k.set_owner_layout(true);
     ops.splice(0..0, create(1..=2));
     ops.push(style(1, vec![], &[(StyleId::Height, "844")]));
     ops.push(style(2, vec![], rows));

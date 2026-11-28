@@ -44,7 +44,7 @@ fn scene_in(
         "/",
     )
     .unwrap();
-    r.kernel_mut().set_scrollport_bars(true);
+    r.kernel_mut().set_owner_layout(true);
     let root = r.roots()[0];
     r.kernel_mut()
         .compute_layout(root, Offer::definite(400.0, 600.0))

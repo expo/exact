@@ -790,6 +790,19 @@ impl Kernel {
             }
         }
         self.block_changed(slot, before);
+        // Under the owner layout an owner's root is skipped in the walk for the scroller at a
+        // covered box's bottom (`cover.rs`), so the covered box above lays its bottom out again
+        // when this box becomes an owner or stops being one, whatever its block
+        let owner_layout = self.arena.observations.owner_layout;
+        if owner_layout && was_owner != owns(&self.arena, slot) {
+            if let Some(layout) = self.layout.as_deref_mut() {
+                super::cover::chain_changed(&self.arena, layout, slot);
+            }
+            // And a content region measures again, as a cover's change makes it (`set_host_cover`)
+            if let Some(region) = &mut self.region {
+                region.intrinsic(slot);
+            }
+        }
         if hosted && !self.arena.hosted_readout(slot) {
             self.bar_text_changed(slot);
         }
@@ -994,6 +1007,9 @@ impl Kernel {
         }
         if before.is_some() == block.is_some() {
             return;
+        }
+        if self.arena.observations.bars.styled.contains(slot) {
+            self.bar_block_changed(slot);
         }
         self.targets_moved(slot);
         if let Some(region) = &mut self.region {
@@ -1385,10 +1401,14 @@ impl Kernel {
             self.layout.replace(Box::new(trial)),
             self.region.take(),
         );
-        // Derive in the copies the owner segments' readers below a box the trial starts
-        // placing, as giving it the block does
+        // Derive in the copies what giving the block derives below a box the trial starts
+        // placing: the readers of native targets and owner segments where it becomes an owner,
+        // else those of owner segments alone
         if placing {
-            self.segments_moved(slot);
+            match owns(&self.arena, slot) {
+                true => self.targets_moved(slot),
+                false => self.segments_moved(slot),
+            }
         }
         let measured = self.measure_trial(slot, node, block);
         let trial = std::mem::replace(&mut self.arena, kept.0);

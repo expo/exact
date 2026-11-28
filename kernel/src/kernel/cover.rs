@@ -266,6 +266,8 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             s.border = taffy::geometry::Rect::zero();
             s.aspect_ratio = None;
         }
+        // An owner's root's cover under the owner layout pads nothing: its content root clears
+        Some(HostCover::Edges(_)) if owner_root(arena, slot) => {}
         Some(HostCover::Edges(_)) => {
             let cleared = applied_padding(arena, slot);
             let [top, right, bottom, left] = added_padding(arena, slot);
@@ -346,6 +348,8 @@ fn scroller_insets_bottom(arena: &NodeArena, slot: u32) -> bool {
                 // A popover is out of flow, open or closed (`style::top_layer`).
                 && crate::style::top_layer::layout_position(arena, c) != crate::PositionType::Absolute
                 && !arena.cover(c).is_some_and(HostCover::replaces)
+                // An owner's root under the owner layout is laid out in its own block, out of flow
+                && !owner_root(arena, c)
         };
         let Some(&last) = arena.children(at).iter().rev().find(flowing) else {
             return false;
@@ -476,15 +480,24 @@ pub(crate) fn contributed_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
 }
 
 /// The points a cover adds to the box's padding for layout (`apply`), top,
-/// right, bottom and left: the host's sizing, not the box's CSS padding.
+/// right, bottom and left: the host's sizing, not the box's CSS padding. None
+/// on an owner's root under `Kernel::set_owner_layout`, whose band its content
+/// root clears instead (LLP 1123 D3).
 pub(crate) fn added_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
     match arena.cover(slot) {
-        Some(HostCover::Edges(edges)) => {
+        Some(HostCover::Edges(edges)) if !owner_root(arena, slot) => {
             let off = arena.style(slot).rare.safe_area;
             std::array::from_fn(|i| if off & (1 << i) != 0 { 0.0 } else { edges[i] })
         }
         _ => [0.0; 4],
     }
+}
+
+/// Whether `slot` is an owner's root under `Kernel::set_owner_layout`: laid out
+/// in its own block, out of its parent's flow, its content root clearing its
+/// band, so an edge cover pads it nothing (LLP 1123 D2, D3).
+fn owner_root(arena: &NodeArena, slot: u32) -> bool {
+    arena.observations.owner_layout && super::block::owns(arena, slot)
 }
 
 /// AppKit leaves this distance between row rectangles regardless of their content.

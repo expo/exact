@@ -191,6 +191,75 @@ fn a_box_given_a_block_gives_its_readers_its_targets() {
 }
 
 #[test]
+fn a_trial_of_a_block_measures_what_giving_it_lays_out() {
+    // 3, a dialog the host measured, in the block the kernel implies for it, holds the reader 4
+    // (10 tall), which reads its owner's report: none while 3 is no owner, so its 7-point
+    // fallback, and 3's own 30 in a block given to it, as the trial of that block measures it
+    let mut ops = create(3..=4);
+    ops.push(reads(4, Target::Kind(Kind::Owner)));
+    ops.push(Op::SetProp {
+        id: 3,
+        prop: crate::PropId::SemanticTag,
+        value: "dialog".into(),
+    });
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_targets(3, controller(2, 30.0)).unwrap();
+    assert!(k.measure_dialog(3, true));
+    lay_out(&mut k);
+    assert_eq!(top(&k, 4), 7.0);
+    let fitted = block(BlockAxis::Is(390.0), BlockAxis::AtMost(500.0));
+    let trial = k.measure_block(3, fitted).unwrap();
+    k.set_host_block(3, Some(fitted)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 4), 30.0);
+    assert_eq!(trial.used.1, 40.0);
+    assert_eq!(k.host_block_size(3).map(|s| s.1), Some(40.0));
+}
+
+#[test]
+fn a_trial_of_a_popovers_block_revises_no_text() {
+    // The popover 3 holds the paragraph 4, whose run 5 pads by its owner's top inset, the
+    // session view's 30: a popover is no owner in its block either, so a trial of that block
+    // reads what the run read, and asks the measurer for the paragraph as it stands
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut k = Kernel::new(Box::new(crate::kernel::measure_block_tests::Stamps(
+        seen.clone(),
+    )));
+    let mut ops = create([1, 3]);
+    for id in [4, 5] {
+        ops.push(Op::CreateView {
+            id,
+            node_type: NodeType::Text,
+        });
+    }
+    ops.push(Op::SetProp {
+        id: 5,
+        prop: crate::PropId::Text,
+        value: "x".into(),
+    });
+    ops.push(style(1, vec![], &[(StyleId::Height, "300")]));
+    let pad = vec![(
+        StyleId::PaddingLeft,
+        observe(Target::Kind(Kind::Owner), Edge::Top, Some(7.0)),
+    )];
+    ops.extend([style(5, pad, &[]), popover(3)]);
+    ops.extend([children(1, &[3]), children(3, &[4]), children(4, &[5])]);
+    ops.push(Op::AttachRoot { id: 1 });
+    k.apply(0, 1, &ops).unwrap();
+    k.set_session_targets(controller(2, 30.0)).unwrap();
+    lay_out(&mut k);
+    let live = k.node(4).unwrap().paragraph_stamp().unwrap();
+    seen.borrow_mut().clear();
+    let given = block(BlockAxis::Is(100.0), BlockAxis::Is(100.0));
+    for _ in 0..2 {
+        k.measure_block(3, given).unwrap();
+    }
+    let asked = std::mem::take(&mut *seen.borrow_mut());
+    assert!(asked.iter().all(|s| *s == live), "{live:?} {asked:?}");
+}
+
+#[test]
 fn a_registered_target_reads_anywhere_and_follows_its_replacement() {
     // 3 in the owner 2 and 4 outside every owner read the target
     // registered as `map`
