@@ -66,11 +66,13 @@ package enum ViewPresentation {
         while let current = responder {
             if !layout, let node = current as? NodeView { node.presenter?.navigation.finishBootOwner() }
             if !layout, let view = current as? ExactView { view.session.presenter.navigation.finishBootOwner() }
-            if let holder = current as? any BootHolding, holder.bootContent, let route = holder.routeSurface {
-                if !layout { route.node.presenter?.navigation.finishBootOwner(); return controller(for: view, fallbackToWindow: fallbackToWindow, layout: true) }
-                return route
-            }
+            // Ask only a controller for the navigation protocols, which only a controller conforms to: the first
+            // protocol cast on a class scans every loaded image's conformances, and a fold puts new UIKit views here
             if let controller = current as? UIViewController {
+                if let holder = controller as? any BootHolding, holder.bootContent, let route = holder.routeSurface {
+                    if !layout { route.node.presenter?.navigation.finishBootOwner(); return Self.controller(for: view, fallbackToWindow: fallbackToWindow, layout: true) }
+                    return route
+                }
                 if !layout, let route = controller as? any RouteSurface, route.bootSurface != nil { route.node.presenter?.navigation.finishBootOwner() }
                 return controller
             }
@@ -84,7 +86,7 @@ package enum ViewPresentation {
     package static func controllers(for view: UIView, layout: Bool = false) -> [UIViewController] {
         guard let controller = controller(for: view, layout: layout) else { return [] }
         return sequence(first: controller as UIResponder, next: { responder in
-            if let route = responder as? any RouteSurface, let surface = route.bootSurface { return surface.next }
+            if let controller = responder as? UIViewController, let route = controller as? any RouteSurface, let surface = route.bootSurface { return surface.next }
             return responder.next
         }).compactMap { $0 as? UIViewController }
     }
