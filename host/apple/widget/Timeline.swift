@@ -210,21 +210,10 @@ func footprint() -> UInt64 {
 }
 #endif
 enum ExactPlacementsFile {
-    private static let queue = DispatchQueue(label: "exact.widget-placements")
-    static func write(kind: String, records: [[String: Any]], root: URL? = WidgetContainer.root, appID: String? = WidgetContainer.appID) {
-        guard let root else { return }
-        queue.async {
-            let file = root.appendingPathComponent("widget-placements.json")
-            var all = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-            let encoded = records.compactMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }.sorted { $0.lexicographicallyPrecedes($1) }
-            let sorted = encoded.compactMap { try? JSONSerialization.jsonObject(with: $0) }
-            let before = all[kind].flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
-            all[kind] = sorted
-            guard let after = try? JSONSerialization.data(withJSONObject: sorted, options: [.sortedKeys]), after != before,
-                  let data = try? JSONSerialization.data(withJSONObject: all, options: [.sortedKeys]),
-                  (try? data.write(to: file, options: .atomic)) != nil, let appID else { return }
-            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName((appID + ".widget-placements") as CFString), nil, nil, true)
-        }
+    static func record(kind: String, parameters: [String], listed: [[String: String]?]?, asked: [String: String], started: DispatchTime) {
+        let changed = WidgetPlacementRecords.record(kind: kind, parameters: parameters, listed: listed, asked: asked, root: WidgetContainer.root, appID: WidgetContainer.appID)
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+        widgetLog.notice("placements \(kind, privacy: .public): listed=\(listed?.count ?? -1) changed=\(changed) ms=\(elapsed)")
     }
 }
 // An entity parameter's choices are the entries the app published to the App Group

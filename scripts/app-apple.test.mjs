@@ -916,7 +916,7 @@ test('widgets share the owner Keychain groups and leave the host sample outside 
   assert.doesNotMatch(host, /application-groups/);
   assert.match(host, /SIMULATORX.com.exact.test.host/);
   assert.doesNotMatch(infoPlist(app,false,{id:app.id+'.host',executable:'ExactHostIOS'}), /ExactAppGroup|ExactAppIdentifier|ExactWidgetKinds/);
-  assert.match(infoPlist(app,false,{executable:'Test'}), /ExactAppGroup[^]*<key>ExactWidgetEntities<\/key><array><string>station<\/string><\/array>/, 'the app publishes the kinds its widgets offer');
+  assert.match(infoPlist(app,false,{executable:'Test'}), /ExactAppGroup[^]*<key>ExactWidgetEntities<\/key><array><string>station<\/string><\/array>\s*<key>ExactWidgetParameters<\/key><dict>\s*<key>next-trains<\/key><array><string>station<\/string><\/array>\s*<\/dict>/, 'the app publishes the kinds its widgets offer, and knows the parameters a placement record must have');
   assert.doesNotMatch(infoPlist(app,false,{executable:'Test'}), /NSSupportsLiveActivities/);
   assert.doesNotMatch(entitlements(app,null,true,null,{simulator:true}), /aps-environment/);
 });

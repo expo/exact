@@ -33,8 +33,9 @@ const hasIntents = (entries, platform) => entries.some(entry => offeredParameter
 const widgetEntityKinds = (entries, platform) => [...new Set(entries.flatMap(entry => offeredParameters(entry, platform)).filter(p => p.type === 'entity').map(p => p.entity))].sort();
 /** The app's Info.plist key that names those kinds: `ExactContentIndex` publishes their entries for the extension. */
 export const widgetEntityKeys = (app, platform = 'ios') => {
-  const kinds = widgetEntityKinds(platformWidgetEntries(app, platform), platform);
-  return kinds.length ? { ExactWidgetEntities: kinds } : {};
+  const entries = platformWidgetEntries(app, platform), kinds = widgetEntityKinds(entries, platform);
+  const parameters = Object.fromEntries(entries.map(entry => [entry.kind, offeredParameters(entry, platform).map(p => p.name)]).filter(([, names]) => names.length));
+  return { ...(kinds.length ? { ExactWidgetEntities: kinds } : {}), ...(Object.keys(parameters).length ? { ExactWidgetParameters: parameters } : {}) };
 };
 export const activityEntries = app => app.manifest.live_activities ?? [];
 /** Whether the app has an entry of either kind: what the extension, the shared framework, the App Group and the

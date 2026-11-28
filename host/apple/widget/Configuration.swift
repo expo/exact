@@ -55,20 +55,23 @@ struct ExactIntentTimelineProvider<Intent: ExactConfigurationIntent>: AppIntentT
             }
         }
         #if !os(watchOS)
-        Self.recordPlacements(kind: kind)
+        await Self.recordPlacements(kind: kind, asked: configuration.exactConfiguration)
         #endif
         return timeline
     }
     #if !os(watchOS)
-    private static func recordPlacements(kind: String) {
-        WidgetCenter.shared.getCurrentConfigurations { result in
-            guard case .success(let infos) = result else { return }
-            let records = infos.filter { $0.kind == kind }.compactMap { $0.widgetConfigurationIntent(of: Intent.self) }.map { intent in
-                let values = intent.exactConfiguration
-                return Dictionary(uniqueKeysWithValues: Intent.exactParameters.map { ($0, values[$0].map { $0 as Any } ?? NSNull()) })
+    private static var placementsWait: DispatchTimeInterval { .milliseconds(250) }
+    private static func recordPlacements(kind: String, asked: [String: String]) async {
+        let started = DispatchTime.now()
+        let listed: [[String: String]?]? = await withCheckedContinuation { done in
+            let answer = ExactOnce<[[String: String]?]?> { done.resume(returning: $0) }
+            WidgetCenter.shared.getCurrentConfigurations { result in
+                guard case .success(let infos) = result else { return answer(nil) }
+                answer(infos.filter { $0.kind == kind }.map { $0.widgetConfigurationIntent(of: Intent.self)?.exactConfiguration })
             }
-            ExactPlacementsFile.write(kind: kind, records: records)
+            DispatchQueue.global().asyncAfter(deadline: .now() + placementsWait) { answer(nil) }
         }
+        ExactPlacementsFile.record(kind: kind, parameters: Intent.exactParameters, listed: listed, asked: asked, started: started)
     }
     #endif
     #if os(watchOS)
@@ -77,4 +80,17 @@ struct ExactIntentTimelineProvider<Intent: ExactConfigurationIntent>: AppIntentT
         Intent.exactRecommendations
     }
     #endif
+}
+
+final class ExactOnce<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var first: ((Value) -> Void)?
+    init(_ first: @escaping (Value) -> Void) { self.first = first }
+    func callAsFunction(_ value: Value) {
+        lock.lock()
+        let call = first
+        first = nil
+        lock.unlock()
+        call?(value)
+    }
 }

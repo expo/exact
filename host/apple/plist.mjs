@@ -368,7 +368,7 @@ export function appleMetadataOwners() {
     [['macos'], ['ExactShortcutItems']],
     [['ios', 'macos'], ['ExactSearchHiddenKinds']],
     [['ios'], ['NSAppClip']],
-    [['ios', 'macos'], ['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetEntities', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup', 'ExactWatchSync']],
+    [['ios', 'macos'], ['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetEntities', 'ExactWidgetParameters', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup', 'ExactWatchSync']],
     [['ios'], ['NSSupportsLiveActivities', 'NSSupportsLiveActivitiesFrequentUpdates']],
     [['macos'], ['ExactWidgetRequiresSecrets']],
     [['ios', 'macos'], ['ExactFirstFrameModules']],

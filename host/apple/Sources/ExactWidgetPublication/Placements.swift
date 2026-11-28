@@ -3,14 +3,23 @@ import ExactCore
 import os
 
 package enum WidgetPlacements {
-    private static var reloaded: [String: Int] = [:]
     static let settling: TimeInterval = 120, interval: TimeInterval = 30
     private static let log = Logger(subsystem: "dev.exact.widgets", category: "placements")
-    private static var recheck: DispatchWorkItem?
-    private static var activated = Date.distantPast
+    private static var installed = false
+    static var activated = Date.distantPast
+    static var reloaded: [String: (placed: Int, record: WidgetPlacementRecords.Record?, at: Date)] = [:]
+    static var unsettled: [String: Date] = [:]
+    private static var recheck = 0
+    static var now: () -> Date = Date.init
+    static var schedule: (TimeInterval, @escaping () -> Void) -> Void = { delay, work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+    static var parameters = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetParameters") as? [String: [String]] ?? [:]
     static var countsArtifact = Bundle.main.privateFrameworksURL?.appendingPathComponent("ExactWidgetReload.framework/ExactWidgetReload")
 
     static func install(root: URL? = WidgetContainer.root, appID: String? = WidgetContainer.appID) {
+        guard !installed else { return }
+        installed = true
         let center = NotificationCenter.default
         center.addObserver(forName: Notification.Name("exact.widgets.placed"), object: nil, queue: nil) { note in
             guard let body = note.object as? NSMutableDictionary, let kind = body["kind"] as? String,
@@ -19,7 +28,7 @@ package enum WidgetPlacements {
             DispatchQueue.main.async { answer(kind: kind, root: root, reply: reply) }
         }
         for name in ["UIApplicationDidBecomeActiveNotification", "NSApplicationDidBecomeActiveNotification"] {
-            center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { _ in activated = Date(); reloaded = [:]; changed() }
+            center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { _ in activated = now(); reloaded = [:]; changed() }
         }
         guard let appID else { return }
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
@@ -32,30 +41,42 @@ package enum WidgetPlacements {
     }
 
     package static func answer(kind: String, root: URL?, counts: ((@escaping ([String: Int]?) -> Void) -> Void)? = nil, reload: @escaping (String) -> Void = reloadKind, reply: @escaping ([String: Any]) -> Void) {
-        let file = root?.appendingPathComponent("widget-placements.json")
-        let recorded = file.flatMap { try? Data(contentsOf: $0) }
-            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [[String: Any]]] }?[kind]
-        let written = file.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.modificationDate] as? Date }
+        let record = WidgetPlacementRecords.read(root: root)[kind]
+        let written = WidgetPlacementRecords.written(root: root) ?? .distantPast
         (counts ?? placedCounts) { counts in
-            guard let counts else { return reply(["ready": false, "placements": [Any]()]) }
+            let time = now()
+            let unknown = {
+                let since = unsettled[kind] ?? time
+                unsettled[kind] = since
+                if time.timeIntervalSince(max(written, activated, since)) < settling { checkAgain() }
+                reply(["ready": false, "placements": [Any]()])
+            }
+            guard let counts else {
+                log.notice("placedWidgets \(kind, privacy: .public): WidgetKit gave the app no count")
+                return unknown()
+            }
             let placed = counts[kind] ?? 0
-            if placed == 0 { reloaded[kind] = nil; return reply(["ready": true, "placements": [Any]()]) }
-            guard let recorded, recorded.count == placed else {
-                log.notice("placedWidgets \(kind, privacy: .public): \(placed) placed, \(recorded?.count ?? 0) recorded")
-                if reloaded[kind] != placed { reloaded[kind] = placed; reload(kind) }
-                return reply(["ready": false, "placements": [Any]()])
+            guard case .placed(let placements) = WidgetPlacementRecords.answer(record, parameters: parameters[kind], placed: placed, now: time) else {
+                log.notice("placedWidgets \(kind, privacy: .public): \(placed) placed, \(record?.count ?? 0) recorded")
+                let last = reloaded[kind]
+                if last?.placed != placed || last?.record != record || time.timeIntervalSince(last?.at ?? .distantPast) >= interval {
+                    reloaded[kind] = (placed, record, time)
+                    reload(kind)
+                }
+                return unknown()
             }
             reloaded[kind] = nil
-            if Date().timeIntervalSince(max(written ?? .distantPast, activated)) < settling { checkAgain(after: interval) }
-            reply(["ready": true, "placements": recorded])
+            unsettled[kind] = nil
+            if time.timeIntervalSince(max(written, activated)) < settling { checkAgain() }
+            log.debug("placedWidgets \(kind, privacy: .public): ready, \(placed) placed, \(placements.count) records")
+            reply(["ready": true, "placements": placements.map { $0.mapValues { $0.map { $0 as Any } ?? NSNull() } }])
         }
     }
 
-    private static func checkAgain(after delay: TimeInterval) {
-        recheck?.cancel()
-        let work = DispatchWorkItem { recheck = nil; changed() }
-        recheck = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    private static func checkAgain() {
+        recheck += 1
+        let mine = recheck
+        schedule(interval) { if mine == recheck { changed() } }
     }
 
     private static func reloadKind(_ kind: String) {
