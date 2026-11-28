@@ -163,7 +163,8 @@ export function helperClassifications(group) {
   ]),
   group("navigation", ["one-shot"], "current router, visit, tab or navigation operation", "UI-owned",
     "The named public runner-crate source is the navigation API or its value/admission helper. runner/src/runner/router.rs validates visits against the live router; replacement/retirement changes that owner.", [
-    ["runner:runner/src/runner/router.rs", "launch_matches RouterChange::location routing"],
+    ["runner:runner/src/runner/router.rs", "launch_matches routing"],
+    ["runner:runner/src/runner/router_change.rs", "RouterChange::location"],
     ["runner:runner/src/runner/split.rs", "press_writes_router"],
   ]),
   group("timer fires", ["one-shot"], "session timer generation/deadline or one frame task", "UI-owned",

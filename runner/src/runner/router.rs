@@ -15,57 +15,9 @@ use exact_plan::{EventKind, Plan, SlotsId, Stdlib, TypeKind, TypesId, Value};
 use exact_route::{Destination, Entry, Router, Tab, Table};
 use std::cell::RefCell;
 
-/// The selected visit and all visit ids removed from any retained tab.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouterChange {
-    /// The selected top's visit id.
-    pub top: u64,
-    /// Its canonical location.
-    pub url: String,
-    /// Its fragment, `""` when it has none (LLP 1153 D5).
-    pub fragment: String,
-    /// Whether the host scrolls to that fragment once the route's content
-    /// has arrived: the top is a new visit with a fragment, its fragment
-    /// changed, or the router was assigned a navigation to it. A return to a
-    /// visit (Back, a tab switch) keeps its place.
-    pub scroll: bool,
-    /// That scroll's activation, counted from 1 for the router's life, `0`
-    /// with none: the third argument of the `scrollToFragment` that makes
-    /// it, so a host matches the two and takes each once.
-    pub activation: u64,
-    /// Removed ids, in the old value's tab/stack order.
-    pub removed: Vec<u64>,
-    /// Every retained visit's canonical location, in tab/stack order.
-    pub visits: Vec<(u64, String)>,
-    /// Each tab's root visit, in tab order: a tab switch from a step in one.
-    pub roots: Vec<u64>,
-    /// The selected tab's name: the top's tab.
-    pub tab: String,
-    /// What the route table resolves the top's location to (`Table::chain`).
-    pub chain: Vec<exact_route::Destination>,
-    /// The top's route pattern (`/post/:id`), which navigation metrics group
-    /// by. Empty when the table has no such route.
-    pub pattern: String,
-    /// The top's bound parameters, in the table's order.
-    pub params: Vec<(String, String)>,
-    /// Whether work that fell due (a timer, a wake) made the commit that put
-    /// the top in place, even inside an input's dispatch, where overdue work
-    /// runs before the input's own action. A host times such a navigation as
-    /// the program's, from its commit (LLP 1132 D1, "Cause").
-    pub due: bool,
-}
-
-impl RouterChange {
-    /// The top's location as a host writes it back: its url, then `#` and
-    /// its fragment when it has one.
-    pub fn location(&self) -> String {
-        if self.fragment.is_empty() {
-            self.url.clone()
-        } else {
-            format!("{}#{}", self.url, self.fragment)
-        }
-    }
-}
+#[path = "router_change.rs"]
+mod change;
+pub use change::{InputCommit, RouterChange};
 
 /// The router seam (LLP 1047 D4): what the runner and its VM ask of a plan's
 /// router. [`RouterContext`] is the one implementation, built by
@@ -100,6 +52,11 @@ pub trait Routing {
     fn take_refusals(&self) -> Vec<String>;
     /// The pending change, once.
     fn take_change(&mut self) -> Option<RouterChange>;
+    /// The visit opened as the top, or moved to another location, with that
+    /// location, once: the latest commit since the last take that changed the
+    /// router decides, read against the router committed before it in every
+    /// tab, retained visits included.
+    fn take_opened(&mut self) -> Option<(u64, String)>;
     /// The location a native host's Forward goes to, the nearest of the
     /// visits Back left (`history.rs`; LLP 1115.000 D5.5).
     fn ahead(&self) -> Option<&str>;
@@ -163,6 +120,8 @@ pub struct RouterContext {
     table: Table,
     committed: Option<Value>,
     pending: Option<RouterChange>,
+    /// What [`Routing::take_opened`] gives
+    opened: Option<(u64, String)>,
     /// The visit, fragment and activation a host scrolls to once the
     /// content settles.
     fragment: Option<(u64, String, u64)>,
@@ -291,6 +250,7 @@ impl RouterContext {
             table,
             committed: None,
             pending: None,
+            opened: None,
             fragment: None,
             activations: 0,
             ahead: Vec::new(),
@@ -912,6 +872,15 @@ impl Routing for RouterContext {
         self.navigations.borrow_mut().clear();
         if let Some(after) = self.router(&value) {
             let before = self.committed.as_ref().and_then(|v| self.router(v));
+            // Record the top as opened, or moved, when the router committed
+            // before this held no visit of its id at its location in any tab
+            if let Some(change) = &change {
+                let mut held = before.iter().flat_map(|r| &r.tabs).flat_map(|t| &t.stack);
+                let opened = held
+                    .find(|e| e.id == change.top)
+                    .is_none_or(|old| old.url != change.url);
+                self.opened = opened.then(|| (change.top, change.url.clone()));
+            }
             // A successful verb returns a fresh value, even `go` to the
             // current location. An ignored handler leaves the same object.
             let forward = std::mem::take(&mut self.forward)
@@ -991,6 +960,10 @@ impl Routing for RouterContext {
 
     fn take_change(&mut self) -> Option<RouterChange> {
         self.pending.take()
+    }
+
+    fn take_opened(&mut self) -> Option<(u64, String)> {
+        self.opened.take()
     }
 
     fn matches_pattern(&self, location: &str) -> bool {
@@ -1182,6 +1155,11 @@ impl<D: DataSource> Runner<D> {
         self.router.as_mut()?.take_change()
     }
 
+    /// What [`Routing::take_opened`] gives, for an input's own commit (`run_held`)
+    pub(super) fn take_router_opened(&mut self) -> Option<(u64, String)> {
+        self.router.as_mut()?.take_opened()
+    }
+
     /// Whether `location` names a pattern the plan's route table declares —
     /// never only its notfound fallback (LLP 1038 §7). `false` without a router.
     pub fn route_matches(&self, location: &str) -> bool {
@@ -1218,6 +1196,19 @@ impl<D: DataSource> Runner<D> {
             .flat_map(|tab| &tab.stack)
             .find(|entry| entry.id == id)
             .map(|entry| entry.url.clone())
+    }
+
+    /// The name of the tab whose stack holds visit `id`, or `None` (no router, or no such visit).
+    pub fn visit_tab(&self, id: u64) -> Option<String> {
+        let (_, router) = self.carry_router()?;
+        let mut tabs = router.tabs.into_iter();
+        tabs.find(|tab| tab.stack.iter().any(|e| e.id == id))
+            .map(|tab| tab.name)
+    }
+
+    /// The selected tab's name, or `None` (no router).
+    pub fn selected_tab(&self) -> Option<String> {
+        self.carry_router().map(|(_, router)| router.tab)
     }
 
     /// The location of the visit beneath visit `id` on the stack that holds

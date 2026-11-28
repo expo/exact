@@ -1,7 +1,7 @@
 //! The held input queue has one owner: the loop that services an input runs
 //! the work due by its arrival, a wake's expiry included, and then the input,
 //! once; an input at NaN, which no cutoff passes, is refused, not held.
-use crate::{BackgroundState, DataError, DataSource, Event, Runner, Value, WakeHow};
+use crate::{BackgroundState, DataError, DataSource, Event, InputCommit, Runner, Value, WakeHow};
 use exact_kernel::{Kernel, NodeType};
 use exact_plan::{asm::Asm, builder::PlanBuilder, EventKind, Opcode};
 use std::sync::{Arc, Mutex};
@@ -59,7 +59,7 @@ fn boot() -> Runner<Undrained> {
     .unwrap()
 }
 
-type Told = Arc<Mutex<Vec<bool>>>;
+type Told = Arc<Mutex<Vec<InputCommit>>>;
 
 fn press(r: &mut Runner<Undrained>, at: f64, told: &Told) -> crate::Advanced {
     let root = r.roots()[0];
@@ -89,7 +89,8 @@ fn a_press_past_a_wakes_deadline_runs_once_after_the_expiry() {
     let at = deadline + 1.;
     let a = press(&mut r, at, &told);
     assert!(a.error.is_none(), "{:?}", a.error);
-    assert_eq!(*told.lock().unwrap(), [true], "told once");
+    let committed = InputCommit::Committed { opened: None };
+    assert_eq!(*told.lock().unwrap(), [committed], "told once");
     assert_eq!(r.wake_deadline(), None, "the wake expired");
     let press_commit = a.receipts.last().expect("the press's commit");
     assert_eq!(press_commit.at_ms, at);
@@ -106,11 +107,17 @@ fn a_press_at_nan_is_refused_not_held() {
         a.error
     );
     assert!(a.receipts.is_empty());
-    assert_eq!(std::mem::take(&mut *told.lock().unwrap()), [false]);
+    assert_eq!(
+        std::mem::take(&mut *told.lock().unwrap()),
+        [InputCommit::Refused]
+    );
     // Nothing waits behind it
     let at = r.now_ms() + 1.;
     let a = press(&mut r, at, &told);
     assert!(a.error.is_none(), "{:?}", a.error);
-    assert_eq!(*told.lock().unwrap(), [true]);
+    assert_eq!(
+        *told.lock().unwrap(),
+        [InputCommit::Committed { opened: None }]
+    );
     assert_eq!(a.receipts.len(), 1);
 }

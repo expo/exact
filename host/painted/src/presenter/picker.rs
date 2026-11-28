@@ -368,7 +368,7 @@ impl<D: DataSource> Presenter<D> {
                     event,
                     now,
                     move |committed| {
-                        if committed {
+                        if matches!(committed, exact_runner::InputCommit::Committed { .. }) {
                             files.0.clear();
                         }
                     },

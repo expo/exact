@@ -11,6 +11,8 @@
 mod activities;
 #[path = "host_canvas.rs"]
 mod canvas;
+#[path = "host_navigation.rs"]
+mod navigation_ops;
 #[path = "host_replies.rs"]
 mod replies;
 use crate::paint::Presented;
@@ -929,6 +931,19 @@ impl<D: DataSource> Host<D> {
     /// Deliver an event at the app's clock (milliseconds). A refusal is the
     /// error; the tree is untouched (as the kernel was).
     pub fn dispatch_at(&mut self, view: ViewId, event: Event, now_ms: f64) -> Option<String> {
+        self.dispatch_at_with(view, event, now_ms, None)
+    }
+
+    /// [`Self::dispatch_at`], telling `committed` what the event's own dispatch committed
+    /// ([`exact_runner::InputCommit`]), whether a handler runs or not. A refusal here drops it uncalled,
+    /// as the runner does a held event's when it is dropped.
+    pub(crate) fn dispatch_at_with(
+        &mut self,
+        view: ViewId,
+        event: Event,
+        now_ms: f64,
+        committed: Option<Box<dyn FnOnce(exact_runner::InputCommit) + Send>>,
+    ) -> Option<String> {
         let event = self.document_value(view, event);
         let press = matches!(event, Event::Press | Event::PressWith(_));
         let refused = |host: &Self, dialog| {
@@ -949,8 +964,12 @@ impl<D: DataSource> Host<D> {
             return Some(refusal);
         }
         // At the event's time: an action's `performanceNow()` is the host's (LLP 1096 D3).
-        let a = crate::traced(c"exact dispatch", || {
-            self.runner.dispatch_at(view, event, self.now_ms)
+        let a = crate::traced(c"exact dispatch", || match committed {
+            Some(committed) => {
+                self.runner
+                    .dispatch_at_with_receipt(view, event, self.now_ms, committed)
+            }
+            None => self.runner.dispatch_at(view, event, self.now_ms),
         });
         self.commit(&a.receipts, a.error.map(|e| format!("{e:?}")))
     }
@@ -1424,39 +1443,6 @@ impl<D: DataSource> Host<D> {
         // Consume the final sample even when the seek has made motion quiescent.
         paint |= self.present();
         (error.or(layout.err()), paint)
-    }
-
-    // @ref LLP 1038 D6/D7/D11 — no batch consumer on this host. Keep the
-    // last coalesced op for inspection; navigation's agent section stays unavailable.
-    fn project_navigation(&mut self) -> bool {
-        let mut changed = false;
-        if let Some(change) = self.runner.take_router_change() {
-            self.router_op = Some(change);
-            changed = true;
-        }
-        // Only stacks and popovers matter to it: the walk keeps those, in
-        // preorder, not every node of every mounted row.
-        // None at all (most apps, most commits): no walk.
-        let kernel = self.runner.kernel();
-        let navigation = if kernel.has_prop(exact_kernel::PropId::NavigationBack)
-            || kernel.has_prop(exact_kernel::PropId::Popover)
-        {
-            kernel.preorder_where(&self.runner.roots(), |_, props| {
-                props.str(exact_kernel::PropId::NavigationBack).is_some()
-                    || props.str(exact_kernel::PropId::Popover).is_some()
-            })
-        } else {
-            Vec::new()
-        };
-        for line in self.navigation.sync(self.runner.kernel(), &navigation) {
-            self.runner.log(line);
-        }
-        changed | self.project_bars()
-    }
-
-    /// The last router op; this host has no foreign batch consumer.
-    pub fn router_op(&self) -> Option<&exact_runner::RouterChange> {
-        self.router_op.as_ref()
     }
 
     /// Hidden/inert through the route and authored inert ancestors.

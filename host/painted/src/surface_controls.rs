@@ -1066,7 +1066,7 @@ impl<D: DataSource> Presenter<D> {
     /// (`pointer` false) by a key, which keeps a surviving button focused.
     pub fn dispatch_press(&mut self, target: ViewId, now_ms: f64, pointer: bool) {
         self.disabled_blur.clear();
-        let row = self.capture_split_row(target);
+        let receipt = self.capture_split_row(target);
         // Capture ancestry before the handler can remove its button. Pointer
         // activation yields focus to commit autofocus; keyboard activation keeps
         // a surviving button focused. Never clear an editor or explicit focus.
@@ -1084,10 +1084,9 @@ impl<D: DataSource> Presenter<D> {
         });
         // With the modifiers held (gallery F20: shift-click), as a click has them.
         let press = self.press_event(pointer);
-        if let Some(e) = self.host.dispatch_at(target, press, now_ms) {
+        if let Some(e) = self.host.dispatch_at_with(target, press, now_ms, receipt) {
             eprintln!("exact: {e}");
         }
-        self.associate_split_row(row);
         let prior_autofocus = self.autofocus_from;
         if pointer && fallback.is_some() {
             self.autofocus_from = Some(target);
