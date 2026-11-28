@@ -355,7 +355,10 @@ pub(crate) fn check_component(
                 })
                 .collect();
             let result = crate::each::answer(r, &ct.resources[i]);
-            sink.keep_unit(record_source(&mut ct, &r.source, params, result, r.span));
+            let own = shapes.widget_sources.contains(&r.source);
+            sink.keep_unit(record_source(
+                &mut ct, &r.source, params, result, own, r.span,
+            ));
         }
         // @ref LLP 1048.003 D6 — a placeholder is a source call over values:
         // the build answers it once for every launch, so its arguments read
@@ -409,7 +412,10 @@ pub(crate) fn check_component(
                 .map(|arg| sink.keep(crate::source_argument(arg, &p.source, &values, shapes)))
                 .collect();
             let result = crate::each::answer(r, &ct.resources[i]);
-            sink.keep_unit(record_source(&mut ct, &p.source, params, result, p.span));
+            let own = shapes.widget_sources.contains(&p.source);
+            sink.keep_unit(record_source(
+                &mut ct, &p.source, params, result, own, p.span,
+            ));
         }
     }
     // A slot or parameter left `?` by a refusal above is not news.

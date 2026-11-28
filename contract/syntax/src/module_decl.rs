@@ -80,6 +80,15 @@ pub struct ModuleDecl {
     pub span: Span,
 }
 
+impl ModuleDecl {
+    /// The option that names the widget whose configuration a source answers
+    /// (LLP 1126.005 D4): each reader of such a source names its own shape.
+    pub fn answers_widget(&self) -> Option<String> {
+        let sub: serde_json::Value = serde_json::from_str(&self.substitute).ok()?;
+        sub["answersWidget"].as_str().map(str::to_owned)
+    }
+}
+
 /// One platform's words on a module name (LLP 1133 D2, tier 2), as the
 /// implementation that owns them declares them. Every word is optional, and
 /// one a call omits stays distinct from one it writes.

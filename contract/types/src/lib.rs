@@ -319,6 +319,9 @@ pub struct Shapes {
     /// The native modules' sends that answer nothing, by program-unique
     /// name: a statement naming one sends it (LLP 1133.004 D5).
     pub effects: std::collections::BTreeSet<String>,
+    /// The native modules' sources that answer each reader's own shape,
+    /// which the build checks against a widget (LLP 1126.005 D4).
+    pub widget_sources: std::collections::BTreeSet<String>,
     /// A candidate in an expanded component must be judged before substitution.
     pub(crate) expanded_comparison: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Where `x.length` reads a record's field (`lists::LengthReads`).
@@ -508,6 +511,7 @@ pub(crate) fn record_source(
     source: &str,
     params: Vec<Ty>,
     result: Ty,
+    own_answer: bool,
     span: Span,
 ) -> Result<(), TypeError> {
     // The runner fills each reader's own shape for the sources it answers, so
@@ -549,6 +553,7 @@ pub(crate) fn record_source(
     }
     let result = match have_result.unify(&result) {
         Some(u) => u,
+        None if own_answer => have_result.clone(),
         None => {
             return err(
                 "type-source-signature",
@@ -1138,6 +1143,10 @@ pub fn check_declarations(
     shapes.sounds = file.sounds.iter().map(|s| s.source.clone()).collect();
     shapes.effects = (file.modules.iter())
         .filter(|m| m.kind == contract_syntax::ModuleKind::Send && m.answers.is_none())
+        .map(|m| m.name.clone())
+        .collect();
+    shapes.widget_sources = (file.modules.iter())
+        .filter(|m| m.answers_widget().is_some())
         .map(|m| m.name.clone())
         .collect();
     routes::declare(file, &mut shapes)?;

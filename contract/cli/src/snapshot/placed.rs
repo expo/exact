@@ -5,10 +5,7 @@ use std::path::Path;
 
 pub(crate) fn check(file: &File, app_root: &Path) -> Result<(), Vec<CompileError>> {
     let sources: Vec<(&str, String)> = (file.modules.iter())
-        .filter_map(|m| {
-            let sub: serde_json::Value = serde_json::from_str(&m.substitute).ok()?;
-            Some((m.name.as_str(), sub["answersWidget"].as_str()?.to_owned()))
-        })
+        .filter_map(|m| Some((m.name.as_str(), m.answers_widget()?)))
         .collect();
     let resources: Vec<_> = (file.components.iter())
         .flat_map(|c| &c.resources)
