@@ -789,7 +789,8 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
         booted.0.set_updates(updates);
         booted.0.set_hatches(hatches);
         booted.0.serve_packages(packages.clone());
-        #[cfg(windows)]
+        // Menus, popovers and confirmations painted over the page in the desktop's window.
+        #[cfg(any(windows, target_os = "linux"))]
         booted.0.serve_overlays();
         #[cfg(windows)]
         booted.0.refresh_scrollbar_preferences();
