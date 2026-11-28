@@ -214,6 +214,8 @@ final class NodeExtras {
     var lentFill: CAShapeLayer?
     /// The box's extension (`setExtension`, LLP 1123 D13), while its picture is mirrored past its border box.
     var boxExtension: BoxExtension?
+    /// An image's mirror blurs (`MirrorBlurStore`), kept across its extension views while it holds its picture.
+    var mirrorBlurs: MirrorBlurStore?
     /// The extension's outsets as last asked (`setExtension`), which it keeps while the box does not allow it.
     var extensionAsked = UIEdgeInsets.zero
     /// `glassGroup`'s view and a grouped glass's slot (`GlassGroup.swift`).
@@ -320,6 +322,8 @@ extension NodeView {
         set {
             if newValue != nil || aside != nil { asideMade.raster = newValue }
             if newValue == nil, let l = imageLayer { l.removeFromSuperlayer(); imageLayer = nil }
+            // Its picture let go, its blurs go too: they hold its pixels
+            if newValue == nil { extras?.mirrorBlurs = nil }
             if isNativeButton { presenter?.controls.refreshRaster(self) }
         }
     }

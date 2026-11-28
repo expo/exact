@@ -38,8 +38,8 @@ final class ExtensionView: UIView {
     private var placed: Placement?
     /// A later `prune` is scheduled: one at a time, however often the box is placed meanwhile.
     private var pruneScheduled = false
-    /// The blurred pictures the mirrors draw: their source and how blurred each is, in its pixels.
-    private var blurred: (source: CGImage, sigmas: [CGFloat], images: [CGImage])?
+    /// What the levels draw besides the blurs: the picture, for the sharp level, and its tint
+    private var drawing: (pixels: CGImage, tint: CGColor?)?
 
     init() {
         super.init(frame: .zero)
@@ -65,7 +65,7 @@ final class ExtensionView: UIView {
     /// The box at `shown` in this view, its content box `inner` and the picture at `drawn` in it, with `pixels`, a
     /// `tint` through their alpha, and `corners` the box's clip; a mirror on each side of `shown` short of this view's
     /// edges, reaching them. Called inside the animation that moves the image, each layer takes it.
-    func place(_ shown: CGRect, inner: CGRect, drawn: CGRect, pixels: CGImage, tint: CGColor?, corners: CGPath?) {
+    func place(_ shown: CGRect, inner: CGRect, drawn: CGRect, pixels: CGImage, load: Int, blurs store: MirrorBlurStore, tint: CGColor?, corners: CGPath?) {
         content.frame = shown
         corner(content.layer, corners, shown.size)
         box.frame = inner
@@ -88,9 +88,18 @@ final class ExtensionView: UIView {
             }
         }
         guard !mirrors.isEmpty else { return }
-        let images = blurs(of: pixels, drawn: drawn)
+        drawing = (pixels, tint)
+        let perPoint = drawn.width > 0 ? CGFloat(pixels.width) / drawn.width : 1
+        store.landed = { [weak self] images in self?.showLevels(images) }
+        let images = store.images(MirrorBlurs.Key(source: pixels, load: load, sigmas: Self.levels.map { $0.sigma * perPoint }))
+        for mirror in mirrors { mirror.place(now, from: before, masks: masks, corners: corners) }
+        showLevels(images)
+    }
+
+    /// Each mirror's levels draw the picture, the sharp one, or its blurs
+    private func showLevels(_ images: [CGImage]) {
+        guard let (pixels, tint) = drawing else { return }
         for mirror in mirrors {
-            mirror.place(now, from: before, masks: masks, corners: corners)
             for level in mirror.levels {
                 for piece in level.pieces { show(level.index == 0 ? pixels : images[level.index - 1], tint: tint, in: piece.picture, owner: self) }
             }
@@ -116,33 +125,6 @@ final class ExtensionView: UIView {
         mirrors.removeAll { !$0.side.extends(placed.shown, in: bounds) }
     }
 
-    /// The picture blurred to each level, kept while its source and its scale on screen hold: a blur of a quarter more
-    /// or less than the level's, once the picture is shown at another size, is made again.
-    private func blurs(of pixels: CGImage, drawn: CGRect) -> [CGImage] {
-        let perPoint = drawn.width > 0 ? CGFloat(pixels.width) / drawn.width : 1
-        let sigmas = Self.levels.map { $0.sigma * perPoint }
-        if let kept = blurred, kept.source === pixels, zip(kept.sigmas, sigmas).allSatisfy({ abs($0 - $1) <= 0.25 * $1 }) { return kept.images }
-        let images = sigmas.map { Self.blur(pixels, sigma: $0) ?? pixels }
-        blurred = (pixels, sigmas, images)
-        return images
-    }
-
-    /// Blurs the pixels' encoded values, as UIKit's blur does: blurred in linear light, a detailed picture's mirror came
-    /// out lighter than the picture
-    private static let context = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: NSNull(), .outputColorSpace: NSNull()])
-
-    /// `image` blurred by `sigma` of its pixels, made no larger than that blur needs: at most four of its pixels to
-    /// each of the blur's sigma, which the layer draws at the picture's size.
-    static func blur(_ image: CGImage, sigma: CGFloat) -> CGImage? {
-        let scale = min(1, 4 / max(sigma, 0.001))
-        var input = CIImage(cgImage: image)
-        if scale < 1 { input = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
-        let extent = input.extent.integral
-        let output = input.clampedToExtent().applyingGaussianBlur(sigma: Double(sigma * scale)).cropped(to: extent)
-        // Tagged with the picture's own colour space, its values untouched
-        return context.createCGImage(output, from: extent, format: .RGBA8, colorSpace: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!)
-    }
-
     /// A picture's pixels, or with a tint the tint through their alpha (`RasterGeometry.draw`).
     private func show(_ pixels: CGImage, tint: CGColor?, in layer: CALayer, owner: UIView) {
         if let tint {
@@ -159,6 +141,102 @@ final class ExtensionView: UIView {
         }
     }
 
+}
+
+/// An image's mirror blurs, kept with the image while it holds its picture (`NodeExtras.mirrorBlurs`): its extension
+/// view goes whenever the box stops extending, as it does for a moment while a fold takes UIKit's columns through their
+/// sizes, and the one made when it extends again draws the blurs already made. Those made stand while the pixels are
+/// the same and each level is within a quarter of the blur asked for. The same picture shown at another size or decoded
+/// again keeps drawing its blurs, at the picture's size, while those for now are made off the main thread, as UIKit's
+/// own mirror leaves the main thread free during a fold. Only a picture with none yet, or another picture, is blurred
+/// at once, so a mirror never draws another picture's blur, nor none.
+final class MirrorBlurStore {
+    private var made: MirrorBlurs?
+    /// What was last asked for, which blurs made off the main thread are checked against as they land
+    private var wanted: MirrorBlurs.Key?
+    /// Blurs are being made off the main thread: one at a time, the latest `wanted` made when they land
+    private var making = false
+    /// Shows blurs that land: the extension view that draws them now
+    var landed: (([CGImage]) -> Void)?
+
+    func images(_ key: MirrorBlurs.Key) -> [CGImage] {
+        wanted = key
+        if let made, made.serves(key) { return made.images }
+        if let made, made.key.load == key.load { makeWanted(); return made.images }
+        let now = MirrorBlurs(key)
+        made = now
+        return now.images
+    }
+
+    /// Makes the blurs last asked for off the main thread, and shows them when they land. A call while some are being
+    /// made loses nothing: `wanted` keeps what it asked, and the landing makes it next.
+    private func makeWanted() {
+        guard !making, let job = wanted else { return }
+        making = true
+        MirrorBlurs.queue.async { [weak self] in
+            let blurs = MirrorBlurs(job)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.making = false
+                guard let now = self.wanted, let kept = self.made, !kept.serves(now) else { return }
+                // A picture blurred at once meanwhile is another picture: these are not its blurs
+                if job.load == kept.key.load {
+                    self.made = blurs
+                    self.landed?(blurs.images)
+                    if blurs.serves(now) { return }
+                }
+                self.makeWanted()
+            }
+        }
+    }
+}
+
+/// A picture's blurs, one a level, made on any thread.
+struct MirrorBlurs {
+    /// The pixels, the image's load they came from, and each level's blur in their pixels
+    struct Key { let source: CGImage, load: Int, sigmas: [CGFloat] }
+    let key: Key, images: [CGImage]
+
+    static let queue = DispatchQueue(label: "exact.mirror-blurs", qos: .userInitiated)
+
+    /// The same pixels, each level within a quarter of the blur asked for
+    func serves(_ other: Key) -> Bool {
+        key.source === other.source && key.sigmas.count == other.sigmas.count
+            && zip(key.sigmas, other.sigmas).allSatisfy { abs($0 - $1) <= 0.25 * $1 }
+    }
+
+    /// Each level from the one before, made smaller, as Gaussian blurs compose (one by `a`, then one by `b`, blur by
+    /// √(a² + b²)), so only the first reads the whole picture. Each is at most four of its pixels to its blur's sigma,
+    /// which the layer draws at the picture's size.
+    init(_ key: Key) {
+        var images: [CGImage] = [], from = key.source, fromScale: CGFloat = 1, done: CGFloat = 0
+        let space = key.source.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        for sigma in key.sigmas {
+            let scale = min(fromScale, 4 / max(sigma, 0.001))
+            let rest = max(0, sigma * sigma - done * done).squareRoot()
+            guard let image = Self.blur(from, by: rest * scale, scaledBy: scale / fromScale, space: space) else {
+                images.append(images.last ?? key.source); continue
+            }
+            images.append(image)
+            (from, fromScale, done) = (image, scale, sigma)
+        }
+        self.key = key
+        self.images = images
+    }
+
+    /// Blurs the pixels' encoded values, as UIKit's blur does: blurred in linear light, a detailed picture's mirror came
+    /// out lighter than the picture. A context is safe to share across threads.
+    private static let context = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: NSNull(), .outputColorSpace: NSNull()])
+
+    /// `image` made `scale` times its size, then blurred by `sigma` of the new pixels, tagged with the picture's own
+    /// colour space, its values untouched
+    private static func blur(_ image: CGImage, by sigma: CGFloat, scaledBy scale: CGFloat, space: CGColorSpace) -> CGImage? {
+        var input = CIImage(cgImage: image)
+        if scale < 1 { input = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
+        let extent = input.extent.integral
+        let output = input.clampedToExtent().applyingGaussianBlur(sigma: Double(sigma)).cropped(to: extent)
+        return context.createCGImage(output, from: extent, format: .RGBA8, colorSpace: space)
+    }
 }
 
 /// Where the box, its content box and its picture are placed in the extension (`ExtensionView.place`), and the

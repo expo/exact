@@ -265,7 +265,9 @@ extension NodeView {
         let drawn = RasterGeometry.rect(natural: image.naturalSize, content: inner, fit: fit, position: style["object_position"]?.array)
             .offsetBy(dx: -inner.minX, dy: -inner.minY)
         let corners = cornerRadii(in: edge).contains { $0 > 0 } ? roundedPath(in: edge).cgPath : nil
-        mirror.place(box, inner: inner, drawn: drawn, pixels: ImageLink.animated?.frame(for: self) ?? image.image,
+        let blurs = more.mirrorBlurs ?? MirrorBlurStore()
+        more.mirrorBlurs = blurs
+        mirror.place(box, inner: inner, drawn: drawn, pixels: ImageLink.animated?.frame(for: self) ?? image.image, load: loadGeneration, blurs: blurs,
                      tint: channels("tint_color").map { TextEngine.color($0).cgColor }, corners: corners)
     }
 
