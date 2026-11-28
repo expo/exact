@@ -119,6 +119,21 @@ fn each_argument_binds_its_prop_and_a_bound_draggable_follows_state() {
     assert!(uses(&plan).has(Capability::DragOut) && !uses(&still).has(Capability::DragOut));
 }
 
+/// `DataTransfer(…)` has no value of its own (D1): a component that reads a prop in two of its arguments, a
+/// collection's photos and their names, binds the prop within each argument, as each is its own binding, and
+/// its drag carries both.
+#[test]
+fn a_component_reading_a_prop_in_two_arguments_drags_both() {
+    let src = "component App\n  view\n    Pair(ids=[\"1016\", \"1017\"])\ncomponent Pair\n  props\n    ids: string[]\n  view\n    box testId=\"pair\" draggable=true dataTransfer=DataTransfer(files=ids.map((i) => `assets/${i}.jpg`), names=ids.map((i) => `Landmark ${i}`))\n      text \"Pair\"\n";
+    let r = boot_source(src, Platform::Ios, "");
+    assert_eq!(drag(&r, "pair").3, "assets/1016.jpg\nassets/1017.jpg");
+    assert_eq!(
+        held(&r, "pair", PropId::DataTransferNames).as_deref(),
+        Some("Landmark 1016.jpg\nLandmark 1017.jpg")
+    );
+    assert!(refusals(&r).is_empty(), "{:?}", refusals(&r));
+}
+
 #[test]
 fn the_runner_admits_files_by_the_grants_and_the_host_reach_and_journals_a_refusal_as_it_writes_the_prop(
 ) {
