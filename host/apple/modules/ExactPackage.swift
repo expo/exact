@@ -724,10 +724,10 @@ public final class ExactContentIndexStore {
         return answer["taken"] == nil ? "NotSupportedError" : answer["error"] as? String
     }
     /// The entries of `kind` replaced by `entries`, in their order.
-    public func set(kind: String?, entries: [[String: Any]]) -> String? {
-        change("set", ["kind": kind as Any, "entries": entries])
+    public func set(kind: String?, entries: [[String: Any]], within: Any? = nil) -> String? {
+        change("set", ["kind": kind as Any, "entries": entries, "within": within ?? NSNull()])
     }
-    public func add(_ entry: [String: Any]) -> String? { change("add", ["entry": entry]) }
+    public func add(_ entry: [String: Any], within: Any? = nil) -> String? { change("add", ["entry": entry, "within": within ?? NSNull()]) }
     public func delete(id: String) { _ = post("delete", ["id": id]) }
     /// Every entry, in the order the app set them.
     public var entries: [[String: Any]] { post("entries", [:])["entries"] as? [[String: Any]] ?? [] }

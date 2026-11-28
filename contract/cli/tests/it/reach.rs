@@ -14,7 +14,7 @@ use std::os::windows::fs::symlink_dir;
 use std::path::{Path, PathBuf};
 
 const SOURCE: &str = r#"use setAppShortcuts, clearAppShortcuts, requestPinShortcut, ShortcutItem, PinShortcutResult from "@exact/quick-actions"
-use addContentIndexEntry, deleteContentIndexEntry, setContentIndex, contentIndexEntries, ContentDescription from "@exact/search-index"
+use addContentIndexEntry, deleteContentIndexEntry, setContentIndex, contentIndexEntries, ContentDescription, ContentParents from "@exact/search-index"
 
 routes nav
   home "/"
@@ -25,9 +25,13 @@ component App
   resource entries = contentIndexEntries() as shape ContentDescription[]
   mutation done as shape PinShortcutResult
   action index(ids: string[])
-    setContentIndex(kind="book", entries=ids.map(i => ContentDescription(id=i, kind=none, title=`Bök ${i}`, description=some("Le Guin"), category=none, icons=none, url=`/book/${i}`, apple=none, within=none)))
+    setContentIndex(kind="book", entries=ids.map(i => ContentDescription(id=i, kind=none, title=`Bök ${i}`, description=some("Le Guin"), category=none, icons=none, url=`/book/${i}`, apple=none)))
   action add(i: string, url: string)
-    addContentIndexEntry(description=ContentDescription(id=i, kind=some("author"), title=i, description=none, category=none, icons=none, url=url, apple=none, within=none))
+    addContentIndexEntry(description=ContentDescription(id=i, kind=some("author"), title=i, description=none, category=none, icons=none, url=url, apple=none))
+  action place(ids: string[], of: string, parent: string)
+    setContentIndex(kind="book", entries=ids.map(i => ContentDescription(id=i, kind=none, title=i, description=none, category=none, icons=none, url=`/book/${i}`, apple=none)), within=[ContentParents(id=of, within=[parent])])
+  action addWithin(i: string, parent: string)
+    addContentIndexEntry(description=ContentDescription(id=i, kind=some("author"), title=i, description=none, category=none, icons=none, url=`/book/${i}`, apple=none), within=[parent])
   action remove(i: string)
     deleteContentIndexEntry(id=i)
   action shortcut(url: string)
@@ -151,6 +155,44 @@ fn the_index_keeps_entries_by_kind_and_tells_its_readers() {
     assert_eq!(found.len(), 2);
     assert!(r.index_entities("book", Some("guin")).len() == 2);
     assert!(r.index_entities("book", Some("tolkien")).is_empty());
+}
+
+/// The parents of an entry are an option of the call (LLP 1126.005 D2): a
+/// publisher that names none is unchanged, and a parent list for an entry
+/// the call does not hold, or with an empty id, is refused `TypeError`.
+#[test]
+fn an_entrys_parents_name_an_entry_of_the_call_and_no_empty_id() {
+    let (_app, mut r) = boot("parents");
+    act(
+        &mut r,
+        "place",
+        vec![ids(&["a", "b"]), s("a"), s("reading")],
+    );
+    act(&mut r, "addWithin", vec![s("ursula"), s("fr")]);
+    let index = extension(&r, "search-index");
+    assert_eq!(
+        index["counts"],
+        json!({ "book": 2, "author": 1 }),
+        "{}",
+        logs(&r)
+    );
+    for (of, parent) in [("a", ""), ("z", "reading"), ("", "reading")] {
+        act(&mut r, "place", vec![ids(&["c"]), s(of), s(parent)]);
+    }
+    act(&mut r, "addWithin", vec![s("octavia"), s("")]);
+    let index = extension(&r, "search-index");
+    assert_eq!(
+        index["counts"],
+        json!({ "book": 2, "author": 1 }),
+        "a refused call keeps the index"
+    );
+    let logs = logs(&r);
+    assert_eq!(
+        logs.matches("within= names entries of the call by id=")
+            .count(),
+        4,
+        "{logs}"
+    );
 }
 
 /// An entry whose url the routes do not match is refused `TypeError`, and

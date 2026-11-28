@@ -77,13 +77,13 @@ public enum ExactContentIndex {
         }
         on("set") { body in
             let entries = (body["entries"] as? [[String: Any]] ?? []).map(JSONValue.fields)
-            if let error = set(kind: body["kind"] as? String, entries) { body["error"] = error }
+            if let error = set(kind: body["kind"] as? String, entries, within: JSONValue.from(body["within"])) { body["error"] = error }
         }
         on("add") { body in
-            if let error = add(JSONValue.fields(body["entry"] as? [String: Any] ?? [:])) { body["error"] = error }
+            if let error = add(JSONValue.fields(body["entry"] as? [String: Any] ?? [:]), within: JSONValue.from(body["within"])) { body["error"] = error }
         }
         on("delete") { body in delete(id: body["id"] as? String ?? "") }
-        on("entries") { body in body["entries"] = load().entries.map(JSONValue.plainFields) }
+        on("entries") { body in body["entries"] = load().entries.map { JSONValue.plainFields($0.filter { $0.key != "within" }) } }
         on("query") { body in
             body["entries"] = query(kind: body["kind"] as? String ?? "", ids: body["ids"] as? [String], matching: body["matching"] as? String)
         }
@@ -153,9 +153,26 @@ public enum ExactContentIndex {
         return nil
     }
 
+    private static func placed(_ entries: [[String: JSONValue]], within: JSONValue) -> [[String: JSONValue]]? {
+        if within == .null { return entries }
+        guard case .array(let rows) = within else { return nil }
+        var parents: [String: JSONValue] = [:]
+        for row in rows {
+            guard case .object(let fields) = row, let id = fields["id"]?.string, case .array? = fields["within"],
+                  entries.contains(where: { $0["id"]?.string == id }) else { return nil }
+            parents[id] = fields["within"]
+        }
+        return entries.map { entry in
+            var entry = entry
+            if let list = entry["id"]?.string.flatMap({ parents[$0] }) { entry["within"] = list }
+            return entry
+        }
+    }
+
     /// The entries of `kind` replaced by `entries`, in their order: Spotlight
     /// told the difference.
-    static func set(kind: String?, _ entries: [[String: JSONValue]]) -> String? {
+    static func set(kind: String?, _ entries: [[String: JSONValue]], within: JSONValue = .null) -> String? {
+        guard let entries = placed(entries, within: within) else { return "TypeError" }
         var m = load()
         let tagged = entries.map { e -> [String: JSONValue] in var e = e; if let kind { e["kind"] = .string(kind) }; return e }
         let others = m.entries.filter { $0["kind"]?.string != kind }
@@ -169,7 +186,9 @@ public enum ExactContentIndex {
         return nil
     }
 
-    static func add(_ entry: [String: JSONValue]) -> String? {
+    static func add(_ entry: [String: JSONValue], within: JSONValue = .null) -> String? {
+        var entry = entry
+        if within != .null { entry["within"] = within }
         var m = load()
         let k = key(entry)
         var entries = m.entries.filter { key($0) != k }

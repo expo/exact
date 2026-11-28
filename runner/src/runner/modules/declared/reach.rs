@@ -27,6 +27,28 @@ use serde_json::json;
 const MOST: usize = 5_000;
 /// The most text one entry holds, in bytes of its JSON (D4).
 const TEXT: usize = 1_024;
+const PARENTS: &str =
+    "within= names entries of the call by id=, and each parent by an id that is not empty";
+
+fn parent_ids(within: &Json) -> bool {
+    within.is_null()
+        || (within.as_array()).is_some_and(|ids| {
+            ids.iter()
+                .all(|id| id.as_str().is_some_and(|id| !id.is_empty()))
+        })
+}
+
+fn parents_of(within: &Json, entries: &[Json]) -> bool {
+    within.is_null()
+        || within.as_array().is_some_and(|rows| {
+            rows.iter().all(|row| {
+                row["within"].is_array()
+                    && parent_ids(&row["within"])
+                    && row["id"].as_str().is_some_and(|id| !id.is_empty())
+                    && entries.iter().any(|e| e["id"] == row["id"])
+            })
+        })
+}
 
 #[derive(Default)]
 pub(in crate::runner) struct Reach {
@@ -64,7 +86,9 @@ impl<D: DataSource> Runner<D> {
         let kind = match op {
             "add" => {
                 let entry = args["description"].clone();
-                if let Some(why) = self.entry_refused(&entry, None) {
+                let why = (self.entry_refused(&entry, None))
+                    .or_else(|| (!parent_ids(&args["within"])).then(|| PARENTS.to_owned()));
+                if let Some(why) = why {
                     return Some(self.reach_refused(row, "TypeError", &why));
                 }
                 let kind = entry["kind"].clone();
@@ -103,6 +127,9 @@ impl<D: DataSource> Runner<D> {
                         return Some(self.reach_refused(row, "TypeError", &why));
                     }
                     entries.push(e);
+                }
+                if !parents_of(&args["within"], &entries) {
+                    return Some(self.reach_refused(row, "TypeError", PARENTS));
                 }
                 let mine = |e: &Json| e["kind"] == kind.as_str();
                 for e in &entries {

@@ -14,6 +14,10 @@ const MOST = 5_000, TEXT = 1_024;
 const canon = v => Array.isArray(v) ? `[${v.map(canon).join(",")}]` : v && typeof v === "object"
   ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canon(v[k])}`).join(",")}}` : JSON.stringify(v ?? null);
 const same = (a, b) => canon(a) === canon(b);
+const PARENTS = "within= names entries of the call by id=, and each parent by an id that is not empty";
+const parentIds = within => within == null || (Array.isArray(within) && within.every(id => typeof id === "string" && id !== ""));
+const parentsOf = (within, entries) => within == null || (Array.isArray(within) && within.every(row => Array.isArray(row?.within) && parentIds(row.within)
+  && typeof row.id === "string" && row.id !== "" && entries.some(e => e.id === row.id)));
 // Lowercased, with a Latin letter's marks dropped: the runner's `fold`.
 const fold = t => t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
@@ -45,7 +49,7 @@ export function reach({ say, announce, preferred }) {
       const added = [], updated = [], deleted = [];
       if (row.sub.index === "add") {
         const e = args.description;
-        const why = entryRefused(e, null);
+        const why = entryRefused(e, null) ?? (parentIds(args.within) ? null : PARENTS);
         if (why) return refused(row, "TypeError", why);
         kind = e.kind;
         const at = next.findIndex(o => o.id === e.id);
@@ -64,6 +68,7 @@ export function reach({ say, announce, preferred }) {
           if (why) return refused(row, "TypeError", why);
           entries.push(e);
         }
+        if (!parentsOf(args.within, entries)) return refused(row, "TypeError", PARENTS);
         const mine = o => o.kind === kind, given = o => entries.some(e => e.id === o.id);
         for (const e of entries) { const o = next.find(o => o.id === e.id); if (!o) added.push(e.id); else if (!same(o, e)) updated.push(e.id); }
         for (const o of next.filter(mine)) if (!given(o)) deleted.push(o.id);

@@ -46,7 +46,7 @@ use takePhoto, Photo from "@exact/camera"
 use nfcStatus, scan, abortScan, abortWrite, openNFCSettings, reading, readingerror, NFCStatus, NDEFScanEnd, NDEFReading, NFCTag from "@exact/nfc"
 
 use setAppShortcuts, ShortcutItem from "@exact/quick-actions"
-use setContentIndex, ContentDescription from "@exact/search-index"
+use setContentIndex, ContentDescription, ContentParents from "@exact/search-index"
 use placedWidgets from "@exact/widgets"
 use appIcon, setAppIcon, AppIconStatus from "@exact/app-icon"
 
@@ -196,9 +196,9 @@ component Shelf
     after(1, reindex)
   action reindex
     setContentIndex(kind="shelf", entries=["want", "reading", "done"].map(s => ContentDescription(id=s, kind=none, title=statusLabel(s), description=none,
-      category=none, icons=none, url="/", apple=none, within=none)))
+      category=none, icons=none, url="/", apple=none)))
     setContentIndex(kind="book", entries=lib.books.map(b => ContentDescription(id=b.id, kind=none, title=b.title, description=some(b.author),
-      category=none, icons=none, url=`/book/${b.id}`, apple=none, within=some([b.status]))))
+      category=none, icons=none, url=`/book/${b.id}`, apple=none)), within=lib.books.map(b => ContentParents(id=b.id, within=[b.status])))
     setAppShortcuts(shortcuts=inProgress.slice(0, 1).map(b => ShortcutItem(name=`Continue ${b.title}`,
       short_name=some(b.title), description=none, url=`/book/${b.id}`, icons=none, apple=none, android=none)))
   derive canScan = formats.tracks and formats.formats.includes("ean_13") and camera.available

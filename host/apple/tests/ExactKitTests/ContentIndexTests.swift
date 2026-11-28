@@ -101,6 +101,15 @@ final class ContentIndexTests: XCTestCase {
             within(book("3", "Atlas", "Anyone"), nil),
             within(book("4", "Nowhere", "Nobody"), []),
         ]))
+        let unplaced = (1...4).map { book("\($0)", "Book \($0)", "") }
+        for refused in [[["id": "9", "within": ["reading"]]], [["id": "1", "within": [""]]], [["id": "1"]], ["1"], "1"] as [Any] {
+            XCTAssertEqual(ExactContentIndex.set(kind: "book", unplaced, within: JSONValue.from(refused)), "TypeError", "\(refused)")
+        }
+        XCTAssertEqual(ExactContentIndex.add(book("5", "Alone", ""), within: JSONValue.from([""])), "TypeError")
+        XCTAssertEqual(ContentIndexEntries.published(kind: "book", within: "done", root: directory).map(\.id), ["2", "3"], "a refused call keeps the entries")
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [
+            book("1", "Piranesi", "Susanna Clarke"), book("2", "Dune", "Frank Herbert"), book("3", "Atlas", "Anyone"), book("4", "Nowhere", "Nobody"),
+        ], within: JSONValue.from([["id": "1", "within": ["reading"]], ["id": "2", "within": ["done", "want"]], ["id": "4", "within": [String]()]])), "the call names each entry's parents")
         func published(within parent: String?, matching: String? = nil) -> [String] {
             ContentIndexEntries.published(kind: "book", matching: matching, within: parent, root: directory).map(\.id)
         }
@@ -109,6 +118,9 @@ final class ContentIndexTests: XCTestCase {
         XCTAssertEqual(published(within: "want"), ["2", "3"])
         XCTAssertEqual(published(within: "done", matching: "pir"), [], "search follows the parent too")
         XCTAssertEqual(query("book"), ["1", "2", "3", "4"], "a tool's parameter lists every entry")
+        let answered = NSMutableDictionary()
+        NotificationCenter.default.post(name: Notification.Name("exact.contentIndex.entries"), object: answered)
+        XCTAssertEqual((answered["entries"] as? [[String: Any]])?.contains { $0["within"] != nil }, false, "the app reads the entries as it published them")
         XCTAssertEqual(ContentIndexEntries.published(kind: "book", ids: ["1"], within: "done", root: directory).map(\.id), ["1"], "a saved id is answered whatever the parent")
         XCTAssertNil(ContentIndexEntries.child(kind: "book", id: "1", parent: "done", root: directory), "a saved child the list places elsewhere reaches the refresh as none")
         XCTAssertEqual(ContentIndexEntries.child(kind: "book", id: "1", parent: "reading", root: directory), "1")
