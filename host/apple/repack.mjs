@@ -5,8 +5,9 @@
 //
 // With --simulator, an iOS simulator development build instead, from a previous one's (`build.mjs --ios`), each as an
 // archive of the bundle in an IPA's layout (Payload/<App>.app). The simulator reads its entitlements from the
-// executable's __TEXT,__entitlements section, which the link wrote: it refuses a base whose section is not the one this
-// app's full build links, and signs the bundle ad hoc without entitlements, as assembleIOS does for a simulator. An app
+// executable's __TEXT,__entitlements section, which the link wrote with room to spare (sections.mjs reserveEntitlements):
+// this writes the app's own there, so the base may be another app's, and refuses a base without room for them. It signs
+// the bundle ad hoc without entitlements, as assembleIOS does for a simulator. An app
 // with widgets or Live Activities builds in full there.
 //
 // The caller has established that nothing native changed since the base build: the same checkout, toolchain and flags.
@@ -54,7 +55,7 @@ import { copyWidgetFonts, hasEntries, platformWidgetEntries, widgetExtensionInfo
 import { EXTENSION_KINDS, extensionKinds, notificationService, withoutExtensions } from './extensions.mjs';
 import { appleAssetsKey, bakedAssetInputs, frameworkInfo, frameworkVersions, iosAssets, plistFile } from './assets.mjs';
 import { buildInfo } from './buildinfo.mjs';
-import { fitLinkedSections, occurrencesOutsideLinked, readLinkedSections } from './sections.mjs';
+import { ENTITLEMENTS_SECTION, fitEntitlements, fitLinkedSections, occurrencesOutsideLinked, readLinkedSections } from './sections.mjs';
 import { nativeExtras } from './native-extras.mjs';
 import { renameZipPrefix } from './zip-rename.mjs';
 import { listAssets } from '../web/serve.mjs';
@@ -248,14 +249,13 @@ export async function repack(args) {
     const appleReach = modulePlist(app, compat.reach, 'ios', graph.extensions, graph.contractSources);
     mark('reach');
     // The entitlements, as the full build writes them: a simulator's are linked into the executable (build.mjs
-    // entitledArgs), so the base's must already be this app's; a device archive's are its signature's, written here.
+    // entitledArgs) and written into its __TEXT,__entitlements below, where the base's room allows; a device archive's
+    // are its signature's, written here.
     const entitled = made.device ? entitlements({ ...app, id: app.id, widgetTV: false, widgetHost: false }, undefined, false, appleReach, { simulator: false, prefix: undefined, allows: [], distributed: false })
       : entitlements({ ...app, id: app.id, widgetTV: false, widgetHost: false }, null, true, appleReach, { simulator: true, distributed: false });
     if (!made.device) {
-      let linked;
-      try { linked = readLinkedSections(baseExecutable, { entitlements: '__entitlements' }).entitlements.toString('utf8'); }
+      try { readLinkedSections(baseExecutable, ENTITLEMENTS_SECTION); }
       catch (error) { refuse(`the base's executable has no linked simulator entitlements (${error.message})`); }
-      if (linked !== entitled) refuse('the app\'s simulator entitlements changed (its id or grants), which the executable links');
     }
     const kept = widgets ? new Set([...NATIVE_ENTRIES, 'PlugIns']) : NATIVE_ENTRIES;
     const unknown = unrebuiltEntry(readdirSync(base), baseName, kept);
@@ -293,6 +293,12 @@ export async function repack(args) {
     // The executable's identity is the compat.json just fitted (assertAppleIdentity scans the whole file for it).
     const fitted = JSON.parse(readLinkedSections(sections).compat.toString('utf8'));
     if (fitted.id !== compat.id || fitted.inputs?.app !== app.id) throw new Error('the fitted executable does not name this bake');
+    // A simulator's entitlements, this app's: another app's base (a template) linked them with room (reserveEntitlements).
+    if (!made.device) {
+      try { fitEntitlements(resolve(bundle, executable), entitled); }
+      catch (error) { if (error.code === 'EXACT_SECTION_ROOM') refuse(`the app's simulator entitlements do not fit the base's (${error.message}; a base built before they were reserved)`); throw error; }
+      if (readLinkedSections(resolve(bundle, executable), ENTITLEMENTS_SECTION).entitlements.toString('utf8') !== entitled) throw new Error('the fitted executable does not hold this app\'s entitlements');
+    }
     mark('sections');
     // Keys the native build computed and repack cannot: the module roster's first-frame modules (none on Linux).
     // (Converting the plist is a process of its own: only when the key is there at all.)

@@ -56,6 +56,7 @@ import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
 import { fitReservedPlan, repackBase, repackReceipt, reservedPlan } from './native-extras.mjs';
+import { fitEntitlements, reserveEntitlements } from './sections.mjs';
 import { shippedReceipt } from './buildinfo.mjs';
 import { appleDeadStrip, recordMinimumOS, stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, linksByPlan } from './link.mjs';
 export { appIcon, appleEmbedOnly, iosAssets, shippedReceipt, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
@@ -799,8 +800,10 @@ async function main(args, lockHeld = false) {
   const swiftc = read('xcrun', ['--sdk', sdkName, 'swiftc', '--version']).stdout ?? '';
   // Where SwiftPM puts its products, once it has been asked (below).
   const binAnswer = resolve(swiftBuildRoot, `bin-path-${createHash('sha256').update(JSON.stringify([swiftc, swiftArgs])).digest('hex').slice(0, 16)}`);
-  // The simulator's entitlements go in the executable's text section (below); the arguments name the file.
-  const entitledArgs = (scratch, p) => ios && !device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', resolve(scratch, `${p}-entitlements.plist`)] : [];
+  // The simulator's entitlements go in the executable's text section (below); the arguments name the file. A repack base
+  // links them padded to their reserved room (sections.mjs reserveEntitlements), so a repack can write another app's.
+  const entitlementsFile = (scratch, p) => resolve(scratch, `${p}-entitlements.plist${reservesPlan() ? '.reserved' : ''}`);
+  const entitledArgs = (scratch, p) => ios && !device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementsFile(scratch, p)] : [];
   // A development build whose last link in this scratch was this app's starts the product's build here, where
   // it only started ExactKit's compile: when the bake leaves the archive as it was, that build is the link,
   // and the half second SwiftPM takes to find nothing to do is spent beside Cargo, not after it. It holds the
@@ -825,7 +828,7 @@ async function main(args, lockHeld = false) {
     let was = null;
     try { was = JSON.parse(readFileSync(resolve(bin, `${sole}.linked`), 'utf8')); } catch { return null; }
     if (JSON.stringify(was.launchFrameworks) !== JSON.stringify(appleLaunchFrameworks(destination, sole)) || was.intents || (was.library ?? null) !== (library?.sha256 ?? null) || was.libDir !== expected.capture || was.lib !== crate.replace(/-/g, '_') || typeof was.link !== 'string' || !existsSync(resolve(bin, sole)) || !existsSync(resolve(expected.capture, `lib${was.lib}.a`))) return null;
-    if (ios && !device && !existsSync(resolve(expected.scratch, `${sole}-entitlements.plist`))) return null;
+    if (ios && !device && !existsSync(entitlementsFile(expected.scratch, sole))) return null;
     if (was.plan && !existsSync(resolve(expected.scratch, 'plan/app.hbc'))) return null;
     let claim;
     try { claim = claimBuildOutput(app, expected.swiftLock); } catch { return null; }
@@ -1229,6 +1232,7 @@ async function main(args, lockHeld = false) {
         const ent = resolve(linkRoot, `${p}-entitlements.plist`);
         // Written only when it differs: the early build may be reading it.
         if (!existsSync(ent) || readFileSync(ent, 'utf8') !== entitled) writeFileSync(ent, entitled);
+        if (reservesPlan()) reserveEntitlements(ent);
       }
       // swift build does not see the Rust archive (or that plist, or a linked plan) change, so the executable is
       // dropped to be linked again: 0.4 s, and it was every build's. A development build drops only one linked from
@@ -1248,6 +1252,8 @@ async function main(args, lockHeld = false) {
       const debugMap = device && args.includes('--development') ? read('strip', ['-S', executable]) : null;
       if (debugMap && debugMap.status !== 0) throw new Error(`host/apple: strip -S ${executable} failed: ${debugMap.stderr || debugMap.error?.message || debugMap.status}`);
       if (linkedPlan && !shared && reservesPlan()) fitReservedPlan(executable, linkedPlan.dir);
+      // The section's size is the plist's again, as an unreserved link gives it: the room past it is zeros.
+      if (entitled && reservesPlan()) fitEntitlements(executable, entitled);
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.

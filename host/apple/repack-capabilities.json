@@ -1,5 +1,6 @@
 {
-  "//": "What host/apple/repack.mjs can repack, for a caller that decides before running it, without running this checkout's code: widgets = an app with widgets or Live Activities repacks on its own previous build; simulator = an iOS simulator development build repacks on a previous one (--simulator).",
+  "//": "What host/apple/repack.mjs can repack, for a caller that decides before running it, without running this checkout's code: widgets = an app with widgets or Live Activities repacks on its own previous build; simulator = an iOS simulator development build repacks on a previous one (--simulator); simulatorTemplate = that simulator build's base may be another app's (a template), its entitlements written into the reserved __TEXT,__entitlements.",
   "widgets": 1,
-  "simulator": 1
+  "simulator": 1,
+  "simulatorTemplate": 1
 }

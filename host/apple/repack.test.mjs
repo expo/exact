@@ -109,6 +109,7 @@ test('a development archive is a repack base, and repack runs, only with EXACT_E
     expect(repackBase(simulator, { EXACT_EXPERIMENTAL: '1', EXACT_UPDATE_TRUST: 'production' })).toBe(false);
     // A caller reads that it may ask before running this checkout's code (repack-capabilities.json).
     expect(JSON.parse(readFileSync(new URL('./repack-capabilities.json', import.meta.url), 'utf8')).simulator).toBe(1);
+    expect(JSON.parse(readFileSync(new URL('./repack-capabilities.json', import.meta.url), 'utf8')).simulatorTemplate).toBe(1);
     // A distributed build, or one that bakes production trust, is never a base.
     expect(repackBase({ ...archive, distribution: true })).toBe(false);
     expect(repackBase(archive, { EXACT_EXPERIMENTAL: '1', EXACT_UPDATE_TRUST: 'production' })).toBe(false);
@@ -269,8 +270,8 @@ test.skipIf(process.platform !== 'darwin')('a non-widget TypeScript app repacks 
 }, 3_600_000);
 
 // A simulator development build (`build.mjs --ios`, as Payload/<App>.app) repacks with --simulator: the new bake in the
-// base's executable, its linked simulator entitlements kept, ad hoc signed without entitlements; a device repack of it,
-// and a simulator repack whose entitlements the link no longer matches, are refused.
+// base's executable, ad hoc signed without entitlements, and a device repack of it refused. Its entitlements are linked
+// with room and fitted to their size; a repack writes the app's own, so another app's base (a template) gives this id.
 test.skipIf(process.platform !== 'darwin')('a simulator build repacks onto a simulator base with --simulator', async () => {
   const { spawnSync } = await import('node:child_process');
   const { readdirSync, readFileSync } = await import('node:fs');
@@ -291,6 +292,9 @@ test.skipIf(process.platform !== 'darwin')('a simulator build repacks onto a sim
     expect(spawnSync('cp', ['-a', baseBundle, resolve(stage, 'Payload/')]).status).toBe(0);
     expect(spawnSync('zip', ['-1', '-qry', base, 'Payload'], { cwd: stage }).status).toBe(0);
     const executable = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(readFileSync(resolve(baseBundle, 'Info.plist'), 'utf8'))[1];
+    const { textSections } = await import('./sections.mjs');
+    const room = textSections(readFileSync(resolve(baseBundle, executable)).subarray(0, 65536)).find(s => s.name === '__entitlements');
+    expect(room.room).toBeGreaterThanOrEqual(65536);
     const linked = (bundle) => readLinkedSections(resolve(bundle, executable), { entitlements: '__entitlements' }).entitlements.toString('utf8');
     const baseEntitlements = linked(baseBundle), baseHbc = readFileSync(resolve(baseBundle, 'typescript/app.hbc'));
     writeFileSync(resolve(app, 'app.ts'), readFileSync(resolve(app, 'app.ts'), 'utf8').replace('Hello from ', 'Repacked from '));
@@ -305,15 +309,20 @@ test.skipIf(process.platform !== 'darwin')('a simulator build repacks onto a sim
     expect(readFileSync(resolve(bundle, 'typescript/app.hbc')).equals(baseHbc)).toBe(false);
     const plist = JSON.parse(spawnSync('plutil', ['-convert', 'json', '-o', '-', resolve(bundle, 'Info.plist')], { encoding: 'utf8' }).stdout);
     expect(plist).toMatchObject({ CFBundleSupportedPlatforms: ['iPhoneSimulator'], DTPlatformName: 'iphonesimulator' });
-    expect(linked(bundle)).toBe(baseEntitlements);
+    expect(linked(bundle)).toBe(baseEntitlements); expect(room.size).toBe(Buffer.byteLength(baseEntitlements));
     expect(JSON.parse(readLinkedSections(resolve(bundle, executable)).compat.toString('utf8')).target).toBe(JSON.parse(readLinkedSections(resolve(baseBundle, executable)).compat.toString('utf8')).target);
     expect(spawnSync('codesign', ['--verify', '--strict', bundle]).status).toBe(0);
-    // Another app id: the base's linked entitlements are another app's, so its executable cannot be this one's.
+    // Another app id, as a template base gives: the executable takes this app's entitlements, and none of the base's id.
     const manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8')), id = manifest.app.id;
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ ...manifest, app: { ...manifest.app, id: `${id}.other` } }, null, 2));
     writeFileSync(resolve(app, 'app.ts'), readFileSync(resolve(app, 'app.ts'), 'utf8').replaceAll(`'${id}'`, `'${id}.other'`));
     const other = run('host/apple/repack.mjs', ['--base', base, '--archive', resolve(dir, 'other.ipa'), '--simulator', app]);
-    expect(other.status).toBe(3);
-    expect(other.stderr).toContain('repack refused: the app\'s simulator entitlements changed');
+    expect(other.status, other.stderr.slice(-4000)).toBe(0);
+    const otherDir = resolve(dir, 'other');
+    expect(spawnSync('unzip', ['-q', resolve(dir, 'other.ipa'), '-d', otherDir]).status).toBe(0);
+    const otherBundle = resolve(otherDir, 'Payload', readdirSync(resolve(otherDir, 'Payload'))[0]);
+    expect(linked(otherBundle)).toContain(`SIMULATORX.${id}.other</string>`);
+    expect(linked(otherBundle)).not.toContain(`SIMULATORX.${id}</string>`);
+    expect(spawnSync('codesign', ['--verify', '--strict', otherBundle]).status).toBe(0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 3_600_000);

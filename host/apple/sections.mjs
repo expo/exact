@@ -11,8 +11,11 @@ import { closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, sta
 import { resolve } from 'node:path';
 
 export const LINKED_SECTIONS = { plan: '__exact_plan', compat: '__exact_compat', bytecode: '__exact_hbc' };
+/** A simulator executable's entitlements (build.mjs entitledArgs), which simulator Security reads by the section's size:
+ * a repack base links them with room, so a repack can write another app's (reserveEntitlements). */
+export const ENTITLEMENTS_SECTION = { entitlements: '__entitlements' };
 const FILES = { plan: 'app.plan', compat: 'compat.json', bytecode: 'app.hbc' };
-const MH_MAGIC_64 = 0xfeedfacf, LC_SEGMENT_64 = 0x19, LC_UUID = 0x1b, LC_CODE_SIGNATURE = 0x1d;
+const MH_MAGIC_64 = 0xfeedfacf, LC_SYMTAB = 0x2, LC_SEGMENT_64 = 0x19, LC_UUID = 0x1b, LC_CODE_SIGNATURE = 0x1d;
 
 /** The room a section is linked with: twice its bytes, and never less than twice `minimum`, in 16 KiB pages. Every
  * bake up to `minimum` gets the same room, so apps that differ only in their plans link with one layout (a repack onto
@@ -66,7 +69,7 @@ export function textSections(bytes) {
   return sections;
 }
 
-/** Each linked section's current bytes, or those of other __TEXT sections named as `sections` names them. */
+/** Each linked section's current bytes, or those of other __TEXT sections named as `sections` names them (ENTITLEMENTS_SECTION). */
 export function readLinkedSections(executable, sections = LINKED_SECTIONS) {
   // The load commands, then each section's bytes: never the whole (tens of megabytes) executable.
   const fd = openSync(executable, 'r');
@@ -84,17 +87,32 @@ export function readLinkedSections(executable, sections = LINKED_SECTIONS) {
   } finally { closeSync(fd); }
 }
 
+/** A copy of the entitlements plist at `path`, padded with zeros to its reserved room (at least 64 KiB), at
+ * `<path>.reserved`: what a simulator repack base links (fitEntitlements writes its real size after the link). Rewritten
+ * only when its bytes change, as reserveLinkedPlan's files are. Returns its path. */
+export function reserveEntitlements(path) {
+  const bytes = readFileSync(path), padded = Buffer.alloc(reservedSize(bytes.length, 32768)), out = `${path}.reserved`;
+  bytes.copy(padded);
+  try { if (readFileSync(out).equals(padded)) return out; } catch { /* none yet */ }
+  writeFileSync(`${out}.${process.pid}.tmp`, padded);
+  renameSync(`${out}.${process.pid}.tmp`, out);
+  return out;
+}
+/** Write a simulator executable's entitlements into its __TEXT,__entitlements, as fitLinkedSections fits the plan. */
+export const fitEntitlements = (executable, bytes) => fitLinkedSections(executable, { entitlements: Buffer.from(bytes) }, { sections: ENTITLEMENTS_SECTION });
+
 /** Write `contents` ({plan, compat, bytecode}: Buffers) into the executable's linked sections, in place: each section's
  * size becomes its new bytes, and the rest of its room is zeroed. Throws, changing nothing, when one does not fit.
+ * `sections` names other __TEXT sections to fit the same way, as readLinkedSections takes them.
  * The executable's code signature no longer matches; the caller signs it again. Returns each section's bytes and room. */
-export function fitLinkedSections(executable, contents, { renewUuid = false } = {}) {
+export function fitLinkedSections(executable, contents, { renewUuid = false, sections: named = LINKED_SECTIONS } = {}) {
   const fd = openSync(executable, 'r+');
   try {
     const head = Buffer.alloc(32); readSync(fd, head, 0, 32, 0);
     if (head.readUInt32LE(0) !== MH_MAGIC_64) throw new Error(`${executable} is not a thin 64-bit Mach-O`);
     const commands = Buffer.alloc(32 + head.readUInt32LE(20)); readSync(fd, commands, 0, commands.length, 0);
     const sections = textSections(commands);
-    const plan = Object.entries(LINKED_SECTIONS).map(([kind, name]) => {
+    const plan = Object.entries(named).map(([kind, name]) => {
       const s = sections.find(item => item.name === name), bytes = contents[kind];
       if (!s) throw new Error(`${executable} has no __TEXT,${name}`);
       if (!Buffer.isBuffer(bytes)) throw new Error(`no new bytes for __TEXT,${name}`);
@@ -124,16 +142,21 @@ export function fitLinkedSections(executable, contents, { renewUuid = false } = 
   } finally { closeSync(fd); }
 }
 
-/** How often `text` appears in a thin Mach-O outside its linked sections (their whole room) and its code signature:
- * the bytes a repack keeps from the base. An app's id there is compiled in, and would ship in another app's repack. */
+/** How often `text` appears in a thin Mach-O outside its linked sections (their whole room), its code signature and its
+ * symbol string table: the bytes a repack keeps from the base that the app reads. An app's id there is compiled in, and
+ * would ship in another app's repack. The string table holds symbol names and, in a simulator build, the debug map's
+ * object paths (target/clients/<key>/<app id>/...), which nothing the app runs reads. */
 export function occurrencesOutsideLinked(executable, text) {
   const bytes = readFileSync(executable), needle = Buffer.from(text, 'utf8');
   if (!needle.length) return 0;
   if (bytes.length < 32 || bytes.readUInt32LE(0) !== MH_MAGIC_64) throw new Error(`${executable} is not a thin 64-bit Mach-O`);
   const commands = bytes.subarray(0, 32 + bytes.readUInt32LE(20));
-  const skip = textSections(commands).filter(s => Object.values(LINKED_SECTIONS).includes(s.name)).map(s => [s.offset, s.offset + s.room]);
+  // The entitlements too: a simulator repack writes them again (repack.mjs --simulator).
+  const skip = textSections(commands).filter(s => [...Object.values(LINKED_SECTIONS), ...Object.values(ENTITLEMENTS_SECTION)].includes(s.name)).map(s => [s.offset, s.offset + s.room]);
   const signature = loadCommand(commands, LC_CODE_SIGNATURE);
   if (signature !== null) { const off = commands.readUInt32LE(signature + 8); skip.push([off, off + commands.readUInt32LE(signature + 12)]); }
+  const symtab = loadCommand(commands, LC_SYMTAB);
+  if (symtab !== null) { const off = commands.readUInt32LE(symtab + 16); skip.push([off, off + commands.readUInt32LE(symtab + 20)]); }
   let count = 0;
   for (let at = bytes.indexOf(needle); at !== -1; at = bytes.indexOf(needle, at + 1)) {
     if (!skip.some(([from, to]) => at >= from && at + needle.length <= to)) count++;
