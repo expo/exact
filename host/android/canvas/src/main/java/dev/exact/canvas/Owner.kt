@@ -935,12 +935,13 @@ internal object Exact {
     fun dragLeft() = dragged { Native.dragLeft() }
     fun dragDropped(x: Float, y: Float) = dragged { Native.dragDropped(x, y) }
 
-    /** The drag was released at ([x], [y]) px: the drop's number, 0 when nothing there takes it. Waited for, since
-     * Android is answered with whether the window took the drop, and published after the answer. */
-    fun dropReleased(x: Float, y: Float): Int {
-        val o = owner ?: return Native.dropReleased(x, y).also { mainThreadTurned() }
+    /** The drag, the app's own lift [lift] or another app's (0), was released at ([x], [y]) px: the drop's number, 0
+     * when nothing there takes it. Waited for, since Android is answered with whether the window took the drop, and
+     * published after the answer. */
+    fun dropReleased(x: Float, y: Float, lift: Int): Int {
+        val o = owner ?: return Native.dropReleased(x, y, lift).also { mainThreadTurned() }
         o.input()
-        return o.sync(publish = false) { Native.dropReleased(x, y) }.also { o.call {} }
+        return o.sync(publish = false) { Native.dropReleased(x, y, lift) }.also { o.call {} }
     }
 
     /** Who takes a drop Android gives field [id]'s view at ([x], [y]) px ([Native.fieldDrop]), asked once as it lands. */
@@ -948,6 +949,11 @@ internal object Exact {
 
     /** Drop [id]'s items arrived ([DropItems.json]). */
     fun dropLanded(id: Int, items: String) = dragged { Native.dropLanded(id, items) }
+
+    /** The platform began lift [lift], or it ended, taken or not ([DragOut], LLP 1094.000 D16): on exact2's thread,
+     * which sends its node `dragstart` or `dragend`. */
+    fun liftBegan(lift: Int) = dragged { Native.liftBegan(lift) }
+    fun liftEnded(lift: Int, taken: Boolean) = dragged { Native.liftEnded(lift, taken) }
 
     private fun dragged(f: () -> Unit) { val o = owner; if (o != null) o.call(f) else { f(); mainThreadTurned() } }
 

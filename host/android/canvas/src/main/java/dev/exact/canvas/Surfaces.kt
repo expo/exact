@@ -19,6 +19,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.Window
+import android.view.WindowInsets
+import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.PopupWindow
 import java.nio.IntBuffer
 
@@ -176,9 +179,12 @@ private class MenuWindow(activity: ExactActivity, private val pane: Pane) : Popu
  * The top layer's windows (LLP 1115.001 D10). A confirmation and a menu are windows of the platform's own, not a
  * layer painted in the page: an alert is a [Dialog] and a menu a [PopupWindow], the framework's classes and no
  * library. What a window gives is the system's: it stacks above the page and every view the page hosts (a text
- * field, a web view) with nothing arranged here; a dialog's scrim is the window manager's dim, which covers the
- * system bars; Back, Escape and a tap outside go to the window by the system's rules; and a window reports itself to
- * accessibility services. What is in the window is exact2's picture of the surface, replayed in a [Pane].
+ * field, a web view) with nothing arranged here; Back and Escape go to the window by the system's rules; and a
+ * window reports itself to accessibility services. An alert uses an edge-to-edge non-floating dialog window that
+ * paints its 32% scrim in a fullscreen backdrop view instead of using `FLAG_DIM_BEHIND`, because Android's
+ * `DisplayPolicy` forces light-on-dark system bar icons over dimmed areas outside a floating window's frame; with
+ * the window covering both bars, the dialog inherits the page's status and navigation bar appearance (LLP 1105 D7).
+ * What is in the window is exact2's picture of the surface, replayed in a [Pane].
  *
  * exact2 says what the top layer shows as a statement on the one channel out ([Requests], kind 7), told when it
  * changes: a surface's serial, what it is, its flags, its frame in this activity's window and its size in pixels,
@@ -187,15 +193,15 @@ private class MenuWindow(activity: ExactActivity, private val pane: Pane) : Popu
  * moved or sized again; `what` 0 closes it. What happens in the window goes back by one call ([Exact.surface]).
  * `host/painted/src/presenter/top.rs` is exact2's side.
  *
- * Their motion is the platform's. The dialog has what the platform gives its window, with nothing set here: filmed
- * on a Pixel 10 Pro XL (Android 16), it fades and settles into place over about 180 ms as the scrim fades in, and
- * leaves in about 140 ms, its scrim in about 50. The menu is given its motion here, since the platform gives none
- * to a popup it did not place: [PopupWindow]'s default animation is the drop-down's, chosen only for a popup shown
- * from an anchor view, and one placed by [PopupWindow.showAtLocation] has no window animation at all. So the menu's
- * window keeps exact2's placement and is given a window animation of its own ([PopupWindow.setAnimationStyle]),
- * which the window manager runs as it runs any window's: Material's menu, as Compose's `DropdownMenu` moves it, a
- * scale from 80% at the corner by its anchor over 120 ms with a 30 ms fade in, and a 75 ms fade out
- * (`res/anim/exact_menu_*`, `res/values/motion.xml`). The system's animation scale and "remove animations" apply.
+ * Their motion respects the system's animation scale and "remove animations". An alert uses a fade-only window
+ * animation (`res/anim/exact_alert_*`, `res/values/motion.xml`, 180 ms in / 140 ms out) so its fullscreen scrim
+ * fades cleanly without scaling inward from the screen edges. The menu is given its motion here, since the platform
+ * gives none to a popup it did not place: [PopupWindow]'s default animation is the drop-down's, chosen only for a
+ * popup shown from an anchor view, and one placed by [PopupWindow.showAtLocation] has no window animation at all.
+ * So the menu's window keeps exact2's placement and is given a window animation of its own
+ * ([PopupWindow.setAnimationStyle]), which the window manager runs as it runs any window's: Material's menu, as
+ * Compose's `DropdownMenu` moves it, a scale from 80% at the corner by its anchor over 120 ms with a 30 ms fade in,
+ * and a 75 ms fade out (`res/anim/exact_menu_*`, `res/values/motion.xml`).
  */
 internal class Surfaces(private val activity: ExactActivity, private val root: View) {
     /** Resolves `IMAGE_DEF` bitmaps for surface panes; wired to the active reader view. */
@@ -209,6 +215,8 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
     /** One surface as it shows: its window, and whether exact2 already knows it is going. */
     private class Shown(val serial: Int, val pane: Pane, val dialog: Dialog?, val popup: MenuWindow?, val cancellable: Boolean) {
         var removeBack: (() -> Unit)? = null
+        var removeBarAttach: (() -> Unit)? = null
+        var barsHidden: Boolean? = null
         var quiet = false
         var frame = IntArray(4)
     }
@@ -279,31 +287,79 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
         known?.let { pane.access?.told(it) }
         val made = when (what) {
             ALERT -> {
-                // The framework's dialog window, with the activity's own dialog theme for its dim and its motion.
-                // Nothing of the theme's is drawn: the window is clear, and the picture is the dialog.
-                val dialog = object : Dialog(activity) {
+                // Edge-to-edge non-floating framework dialog window (LLP 1115.001 D10, LLP 1105 D7):
+                // the scrim is painted inside the fullscreen window instead of using FLAG_DIM_BEHIND,
+                // so the window covers both system bars and Android's DisplayPolicy honors the page's
+                // light status/navigation bar appearance across API 29-37.
+                val dialog = object : Dialog(activity, R.style.ExactAlertDialog) {
                     @Deprecated("Called for legacy system Back")
                     override fun onBackPressed() {
                         val back = pane.legacyBack
                         if (back != null) back() else @Suppress("DEPRECATION") super.onBackPressed()
                     }
                 }
+                val outsideDismisses = flags and OUTSIDE_DISMISSES != 0
+                val backdrop = object : FrameLayout(activity) {
+                    private var outsidePress = false
+                    @SuppressLint("ClickableViewAccessibility")
+                    override fun onTouchEvent(event: MotionEvent): Boolean {
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> outsidePress = outsideDismisses
+                            MotionEvent.ACTION_UP -> {
+                                val outside = event.x < pane.left || event.x >= pane.right ||
+                                    event.y < pane.top || event.y >= pane.bottom
+                                if (outsidePress && outside) dialog.cancel()
+                                outsidePress = false
+                            }
+                            MotionEvent.ACTION_CANCEL -> outsidePress = false
+                        }
+                        return true
+                    }
+                }
+                backdrop.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                backdrop.setBackgroundColor(Color.argb(Math.round(SCRIM * 255f), 0, 0, 0))
+                // Keep the scrim fullscreen while centering the dialog pane inside the system-bar and cutout safe area.
+                backdrop.setOnApplyWindowInsetsListener { view, insets ->
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        val safe = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                        view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        val cutout = insets.displayCutout
+                        @Suppress("DEPRECATION")
+                        view.setPadding(
+                            maxOf(insets.systemWindowInsetLeft, cutout?.safeInsetLeft ?: 0),
+                            maxOf(insets.systemWindowInsetTop, cutout?.safeInsetTop ?: 0),
+                            maxOf(insets.systemWindowInsetRight, cutout?.safeInsetRight ?: 0),
+                            maxOf(insets.systemWindowInsetBottom, cutout?.safeInsetBottom ?: 0),
+                        )
+                    }
+                    insets
+                }
+                backdrop.addView(pane, FrameLayout.LayoutParams(frame[2], frame[3], Gravity.CENTER))
                 dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-                dialog.setContentView(pane, ViewGroup.LayoutParams(frame[2], frame[3]))
+                dialog.setContentView(
+                    backdrop,
+                    ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+                )
                 dialog.window?.let { window ->
                     window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
                     window.setElevation(0f)
-                    window.setLayout(frame[2], frame[3])
-                    // Material's scrim: 32% over everything behind the dialog, the system bars included.
-                    window.setDimAmount(SCRIM)
+                    window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    prepareDialogBarWindow(window)
                 }
                 // An alert has no outside unless its author wrote one (`closedby="any"`, LLP 1115.000 D13.4): exact2
                 // says which, as it does for a menu. Back and Escape cancel it where exact2 says they may.
                 dialog.setCancelable(flags and BACK_DISMISSES != 0)
-                dialog.setCanceledOnTouchOutside(flags and OUTSIDE_DISMISSES != 0)
+                dialog.setCanceledOnTouchOutside(outsideDismisses)
                 dialog.setOnCancelListener { dismissed(serial) }
                 known?.headline?.let { dialog.window?.setTitle(it) }
-                Shown(serial, pane, dialog, null, flags and BACK_DISMISSES != 0).also { dialog.show() }
+                Shown(serial, pane, dialog, null, flags and BACK_DISMISSES != 0).also { s ->
+                    // Queue bar appearance and immersive visibility before show() so registration carries them atomically.
+                    activity.bars?.let { applyDialogBars(s, it) }
+                    dialog.show()
+                    syncDialogBars(s)
+                }
             }
             MENU -> {
                 // The framework's popup window in the theme's own style; its background is not used. The window
@@ -387,17 +443,55 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
         s.pane.show(stream)
         if (frame.contentEquals(s.frame)) return
         s.frame = frame
-        s.dialog?.let { d ->
+        s.dialog?.let {
             s.pane.layoutParams = s.pane.layoutParams.apply { width = frame[2]; height = frame[3] }
-            d.window?.setLayout(frame[2], frame[3])
+            s.pane.requestLayout()
         }
         s.popup?.update(frame[0], frame[1], frame[2], frame[3])
+    }
+
+    /** Keep an open alert dialog's window aligned with the page's resolved bar appearance (LLP 1105 D7). */
+    fun barAppearance(bars: BarAppearance) {
+        val s = shown ?: return
+        applyDialogBars(s, bars)
+    }
+
+    private fun syncDialogBars(s: Shown) {
+        val window = s.dialog?.window ?: return
+        val applied = activity.bars?.let { applyDialogBars(s, it) } ?: true
+        val decor = window.decorView
+        if (!applied || !decor.isAttachedToWindow) {
+            val listener = object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {
+                    v.removeOnAttachStateChangeListener(this)
+                    s.removeBarAttach = null
+                    if (shown === s) activity.bars?.let { applyDialogBars(s, it) }
+                }
+                override fun onViewDetachedFromWindow(v: View) {}
+            }
+            decor.addOnAttachStateChangeListener(listener)
+            s.removeBarAttach = { decor.removeOnAttachStateChangeListener(listener) }
+        }
+    }
+
+    private fun applyDialogBars(s: Shown, bars: BarAppearance): Boolean {
+        val window = s.dialog?.window ?: return false
+        val hide = when {
+            s.barsHidden == null -> if (bars.hidden) true else null
+            bars.hidden != s.barsHidden -> bars.hidden
+            else -> null
+        }
+        val applied = applyBarAppearance(window, bars, hide)
+        if (applied) s.barsHidden = bars.hidden
+        return applied
     }
 
     /** exact2 says the surface closed (a row was chosen, an action closed it, it no longer shows what is there):
      * its window goes, and exact2 is told nothing of that. */
     private fun close(s: Shown) {
         s.quiet = true
+        s.removeBarAttach?.invoke()
+        s.removeBarAttach = null
         s.removeBack?.invoke()
         if (shown === s) { shown = null; covering(false) }
         s.pane.clearBitmaps()
@@ -407,7 +501,13 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
     /** The system dismissed the window by its own rules (Back, Escape, a tap outside a menu): exact2 closes the
      * surface, as its cancel closes it. */
     private fun dismissed(serial: Int) {
-        if (shown?.serial == serial) { shown?.removeBack?.invoke(); shown = null; covering(false) }
+        if (shown?.serial == serial) {
+            shown?.removeBarAttach?.invoke()
+            shown?.removeBarAttach = null
+            shown?.removeBack?.invoke()
+            shown = null
+            covering(false)
+        }
         Exact.surface(serial, DISMISSED, 0f, 0f)
     }
 

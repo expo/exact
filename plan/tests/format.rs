@@ -1114,11 +1114,13 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// every plan-reading host rebuilds for it.
 /// `EventKind::Pinch` and `EventKind::Pinchrelease` report a simultaneous touch
 /// pinch alongside scrolling (LLP 1057.001 §4.1): every plan-reading host rebuilds for them.
+/// `EventKind::Dragstart` and `EventKind::Dragend` are a drag's start and end at its
+/// source (LLP 1094.000 D16): every plan-reading host rebuilds for them.
 /// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0xda54_5c6a_8152_a548,
+        FORMAT_DIGEST, 0x57d5_86d1_9f11_1f5a,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

@@ -48,6 +48,7 @@ const generatedSwift = /^(?:forma|ExactRosterProbe|Exact(?:DataKeys|Composed)-[A
 // arbitrary arguments that happen to contain the same prefix cannot.
 function packageSearchPath(arg, flag, dir) {
   return ((flag === '-I' || flag === '-L') && arg === dir)
+    || (flag === '-I' && dirname(arg) === dir && basename(arg).startsWith('objc-'))
     || (flag === '-L' && arg === resolve(dir, 'libExactSwiftDependencies.dylib-dependencies'));
 }
 
@@ -107,8 +108,8 @@ export function normalizeArmArgs(args, files, { built, snapshot, packageDir, pac
       return withinPrefix(authored, appDir) ? ['app-source', relative(appDir, authored)] : authored;
     }
     if (!pathSensitive && generated.has(a)) return ['generated-swift', basename(a)];
-    if (packageDirs.some(dir => packageSearchPath(a, flag, dir) || a === resolve(dir, 'ExactPackage.o')))
-      return '<packages>' + a.slice(packageDir.length);
+    const matchedDir = packageDirs.find(dir => packageSearchPath(a, flag, dir) || a === resolve(dir, 'ExactPackage.o'));
+    if (matchedDir) return '<packages>' + (matchedDir.startsWith(packageDir) ? a.slice(packageDir.length) : a.slice(matchedDir.length));
     if (withinPrefix(a, swiftRootDir)) return '<swift-pkg>' + a.slice(swiftRootDir.length);
     if (!pathSensitive && SOUND_OBJECT.test(basename(a))) return ['sound-object', basename(a)];
     if (withinPrefix(a, appDir) && (flag === '-F' || flag === '-L' || (!pathSensitive && (fileSet.has(a) || flag === '-I' || flag === '-import-objc-header'))))
@@ -135,15 +136,16 @@ export function armSourceKey(args, files, options) {
 export function packageKeyArgs(args, dir, packageDir, copies, name, { root, appDir, swiftRootDir, pathSensitive = false } = {}) {
   const products = new Set(['o', 'swiftmodule', 'tbd', 'dylib'].map(ext => resolve(dir, `${name}.${ext}`)));
   products.add(resolve(dir, `adapter-${name}.swift`));
-  const objcDir = resolve(dir, `objc-${name}`);
+  const baseModule = name.replace(/_objc_\d+$/, '');
+  const objcDir = resolve(dir, `objc-${baseModule}`);
   const objcObject = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_objc_\\d+\\.o$`);
   return normalizeModuleCacheArgs(args).map((a, i) => {
     const flag = args[i - 1];
     const moduleMap = normalizeModuleMapFlag(a, { swiftRootDir, appDir, root, dir, packageDir });
     if (moduleMap) return moduleMap;
-    if (copies.has(a) && a.startsWith(packageDir + sep)) return '<dir>' + a.slice(packageDir.length);
+    if (!pathSensitive && copies.has(a) && a.startsWith(packageDir + sep)) return '<dir>' + a.slice(packageDir.length);
     if (products.has(a) || packageSearchPath(a, flag, dir)) return '<dir>' + a.slice(dir.length);
-    if (flag === '-I' && a === objcDir) return `<dir>/objc-${name}`;
+    if ((flag === '-I' || flag === '-c' || flag === '-MF') && (a === objcDir || a.startsWith(objcDir + sep))) return '<dir>' + a.slice(dir.length);
     if (dirname(a) === dir && objcObject.test(basename(a))) return `<dir>/${basename(a)}`;
     if (withinPrefix(a, swiftRootDir)) return '<swift-pkg>' + a.slice(swiftRootDir.length);
     if (!pathSensitive && withinPrefix(a, appDir) && (flag === '-I' || flag === '-c' || flag === '-import-objc-header' || a.endsWith('.swift')))

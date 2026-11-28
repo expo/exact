@@ -142,17 +142,17 @@ test('a commit that updates no tree measures no layout transition', async () => 
         const rows = [...document.querySelectorAll('[style*="--exact-layout-transition"]')];
         const tops = () => rows.map(row => rect.call(row).top);
         const still = press('same'), derived = press('more'), before = tops(), moved = press('drop');
-        const animations = rows.flatMap(row => row.getAnimations());
+        const animations = rows.flatMap(row => row.getAnimations()), moving = rows.filter(row => row.getAnimations().some(a => a.id === 'exact-layout-move')).length;
         for (const animation of animations) { animation.pause(); animation.currentTime = 0; }
         const start = tops();
         for (const animation of animations) animation.finish();
         const end = tops();
-        return { still, derived, moved, rows: rows.length, animations: animations.length,
+        return { still, derived, moved, rows: rows.length, moving,
           held: start.every((top, i) => Math.abs(top - before[i]) < 0.1), slid: end.every((top, i) => Math.abs(before[i] - top - 40) < 0.1) };
       } finally { Element.prototype.getBoundingClientRect = rect; globalThis.getComputedStyle = style; }
     });
     console.log('layout reads around a commit:', JSON.stringify({ still: observed.still, derived: observed.derived, moved: observed.moved }));
-    expect(observed).toMatchObject({ still: { rect: 0, style: 0 }, derived: { rect: 0, style: 0 }, rows: 20, animations: 20, held: true, slid: true });
+    expect(observed).toMatchObject({ still: { rect: 0, style: 0 }, derived: { rect: 0, style: 0 }, rows: 20, moving: 20, held: true, slid: true });
     expect(observed.moved.rect).toBeGreaterThan(0);
   } finally { await app.close(); }
 }, 30000);
@@ -194,11 +194,11 @@ ${each ? '' : '        case none\n          text "Absent"'}
       for (const animation of animations) { animation.pause(); animation.currentTime = 0; }
       const start = row.getBoundingClientRect().top;
       await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
-      return { same: row === document.querySelector('[data-testid="row-1"]'), css: row.style.getPropertyValue('--exact-layout-transition'), animations: animations.length, start, before, end: row.getBoundingClientRect().top };
+      return { same: row === document.querySelector('[data-testid="row-1"]'), css: row.style.getPropertyValue('--exact-layout-transition'), moves: animations.filter(a => a.id === 'exact-layout-move').length, start, before, end: row.getBoundingClientRect().top };
     });
     expect(result.same).toBe(true);
     expect(result.css).toBe('2000 0 linear');
-    expect(result.animations).toBeGreaterThan(0);
+    expect(result.moves).toBe(1);
     expect(result.start).toBeCloseTo(result.before, 1);
     expect(Math.abs(result.end - result.before)).toBeGreaterThan(1);
   } finally { await app.close(); }
@@ -245,10 +245,10 @@ test('constructed layout curves and whitespace variants animate', async () => {
       const animations = row.getAnimations();
       const css = row.style.getPropertyValue('--exact-layout-transition');
       await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
-      return { css, animations: animations.length };
+      return { css, moves: animations.filter(a => a.id === 'exact-layout-move').length };
     });
     expect(result.css).toBe('2000 0 linear');
-    expect(result.animations).toBeGreaterThan(0);
+    expect(result.moves).toBe(1);
   } finally { await app.close(); }
 }, 30000);
 
@@ -937,7 +937,9 @@ component App
 `, { viewport: { width: 800, height: 600 } });
   try {
     const second = app.page.getByTestId('second');
-    const moves = () => second.evaluate(el => el.getAnimations().length);
+    // Moving, and with nothing of a move left once a resize has taken its box at once
+    const moving = () => second.evaluate(el => el.getAnimations().some(a => a.id === 'exact-layout-move'));
+    const still = () => second.evaluate(el => el.getAnimations().length === 0);
     const top = () => second.evaluate(el => el.offsetTop);
     const resize = async (width, expected) => {
       await app.page.setViewportSize({ width, height: 600 });
@@ -945,14 +947,14 @@ component App
     };
     const wide = await top();
     await resize(500, wide + 40);
-    expect(await moves()).toBe(0);
+    expect(await still()).toBe(true);
     await app.page.getByTestId('drop').click();
-    expect(await moves()).toBe(1);
+    expect(await moving()).toBe(true);
     await resize(700, wide - 40);
-    expect(await moves()).toBe(0);
+    expect(await still()).toBe(true);
     await app.page.evaluate(() => { exact.fold.prefer({ cols: 2, rows: 1, gap: 20 }); dispatchEvent(new Event('exact-fold')); });
     await app.page.waitForFunction(expected => document.querySelector('[data-testid="second"]').offsetTop === expected, wide);
-    expect(await moves()).toBe(1);
+    expect(await moving()).toBe(true);
   } finally { await app.close(); }
 }, 30000);
 
@@ -1028,9 +1030,9 @@ test('a native button hidden during its move does not resume it when shown again
     await page.evaluate(tab => {
       document.querySelector('[data-testid="go"]').click();
     }, tab);
-    await page.waitForFunction(tab => document.querySelector(tab).getAnimations().length === 1, tab);
+    await page.waitForFunction(tab => document.querySelector(tab).getAnimations().some(a => a.id === 'exact-layout-move'), tab);
     await page.evaluate(tab => {
-      const move = globalThis.move = document.querySelector(tab).getAnimations()[0];
+      const move = globalThis.move = document.querySelector(tab).getAnimations().find(a => a.id === 'exact-layout-move');
       move.pause();
       move.currentTime = 10000;
       document.querySelector('[data-testid="toggle"]').click();

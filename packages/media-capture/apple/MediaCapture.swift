@@ -32,7 +32,7 @@
 import AVFoundation
 import ExactPackage
 import Foundation
-import MediaCaptureObjC
+internal import MediaCaptureObjC
 #if os(iOS)
 import UIKit
 #else

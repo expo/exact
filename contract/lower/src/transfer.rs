@@ -151,8 +151,27 @@ impl Lowerer<'_> {
     }
 }
 
+/// A drag's attributes: DOM's `drop` of files (studio diary R19) and the
+/// `dragenter` and `dragleave` of a drag over the node, then a drag of the
+/// node itself (@ref LLP 1094.000 D1, D16): `draggable`, what it carries,
+/// and its start and end.
+pub(crate) fn attr(name: &str) -> Option<tags::AttrTarget> {
+    use tags::AttrTarget::{DataTransfer, Handler, Prop};
+    Some(match name {
+        "drop" => Handler("drop"),
+        "dragenter" => Handler("dragenter"),
+        "dragleave" => Handler("dragleave"),
+        "draggable" => Prop(tags::p("draggable")),
+        "dataTransfer" => DataTransfer,
+        "dragstart" => Handler("dragstart"),
+        "dragend" => Handler("dragend"),
+        _ => return None,
+    })
+}
+
 /// The node's own rules: where `draggable` goes, that it carries something,
-/// that `dataTransfer` drags, and which gestures it may share a node with.
+/// that `dataTransfer` drags, that a drag's start and end are heard where it
+/// begins (LLP 1094.000 D16), and which gestures it may share a node with.
 pub(crate) fn check_node(
     tag: &str,
     parent_tag: Option<&str>,
@@ -160,6 +179,9 @@ pub(crate) fn check_node(
 ) -> Result<(), LowerError> {
     let find = |name: &str| attrs.iter().find(|a| a.name == name);
     let (draggable, data) = (find("draggable"), find("dataTransfer"));
+    let source_event = attrs
+        .iter()
+        .find(|a| matches!(a.name.as_str(), "dragstart" | "dragend"));
     if let Some(d) = draggable {
         let run = parent_tag.is_some_and(crate::prose::text_container);
         let boxed = tags::tag(tag).is_some_and(|t| {
@@ -183,7 +205,14 @@ pub(crate) fn check_node(
         }
         // `draggable=false` drags nothing, so it needs no data and claims no movement.
         if never(d) {
-            return Ok(());
+            return match source_event {
+                Some(h) => err(
+                    "lower-drag-event-source",
+                    format!("`{}` is heard where a drag begins, and this `{tag}` has `draggable=false`, so it never drags. Give `draggable` `true` or a boolean binding, or move the handler to the node that drags", h.name),
+                    h.span,
+                ),
+                None => Ok(()),
+            };
         }
         if data.is_none() {
             let what = if tag == "image" {
@@ -204,6 +233,13 @@ pub(crate) fn check_node(
                 g.span,
             );
         }
+    }
+    if let (Some(h), None) = (source_event, draggable) {
+        return err(
+            "lower-drag-event-source",
+            format!("`{}` is heard where a drag begins, on a node that declares `draggable` and its `dataTransfer`. Move the handler to the draggable node, or declare `draggable=true` and a `dataTransfer=` on this `{tag}`", h.name),
+            h.span,
+        );
     }
     match (data, draggable) {
         (Some(a), None) => err(
@@ -247,11 +283,11 @@ pub(crate) fn grouped(a: &Attr) -> LowerError {
     }
 }
 
-/// `dragstart`, `drag` and `dragend`, which this release does not hear.
+/// `drag`, which no host reports at a drag's source (LLP 1094.000 D16).
 pub(crate) fn handler_later(a: &Attr) -> LowerError {
     LowerError {
         id: "lower-handler-later",
-        message: format!("`{}` is not heard yet. Declare the data with `dataTransfer=`; a drag's start and end events come later", a.name),
+        message: format!("`{}` is not heard: Exact does not expose a drag's continuous motion at its source. Hear `dragstart` and `dragend` for its start and end", a.name),
         span: a.span,
     }
 }

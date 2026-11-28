@@ -156,7 +156,7 @@ test('relocating generated sources keeps private Swift arms only while all input
     const built = resolve(work, 'module.dylib');
     const packages = packageDir + packageSuffix;
     const args = armArgs(['swiftc', '-sdk', sdk, '-target', target, '-emit-library', flag, source, ...snapshot.copies,
-      '-I', packages, resolve(packages, 'ExactPackage.o'), '-o', built], built);
+      '-I', packages, '-I', resolve(packages, 'objc-ExactPkg_media_capture'), resolve(packages, 'ExactPackage.o'), '-o', built], built);
     const packageDirs = [packageDir, ...[true, false].flatMap(device =>
       rosterRoutes({ packageDir, device, missingSlice: () => false, platform: 'darwin' }).map(r => r.packages + '-probe'))];
     return armSourceKey(args, files, { built, snapshot, packageDir, packageDirs, linkRoot, swiftc, extra });
@@ -229,7 +229,7 @@ test('workspace relocation keeps module-cache, ObjC, root, app, sound-object, an
         'swiftc', '-sdk', '/sdk', '-target', 'arm64-apple-ios17.0',
         '-module-cache-path', modCache, `-fmodules-cache-path=${webCache}`,
         '-emit-library', '-O', seam, ...snapshot.copies,
-        '-I', pkgDir, '-I', resolve(swiftRootDir, 'bin'),
+        '-I', pkgDir, '-I', resolve(pkgDir, 'objc-ExactPkg_media_capture'), '-I', resolve(swiftRootDir, 'bin'),
         '-import-objc-header', header, soundObj,
         resolve(pkgDir, 'ExactPackage.o'), '-o', built,
       ], built);
@@ -322,7 +322,8 @@ test('workspace relocation keeps module-cache, ObjC, root, app, sound-object, an
       const constPath = args[args.indexOf('-emit-const-values-path') + 1];
       expect(constPath).toBeTruthy();
       expect(args.indexOf('-const-gather-protocols-file')).toBeGreaterThan(-1);
-      writeFileSync(constPath, JSON.stringify([{ file: srcA, mangledTypeName: 'RunIntent', typeName: 'ExactLaunchParts.RunIntent' }]));
+      const src = args.find(a => a.endsWith('User.swift'));
+      writeFileSync(constPath, JSON.stringify([{ file: src, mangledTypeName: 'RunIntent', typeName: 'ExactLaunchParts.RunIntent' }]));
     };
     const firstIntent = nativeIntentModule({
       moduleName: 'ExactAppModules', binary: bin, sources: [srcA],
@@ -337,5 +338,12 @@ test('workspace relocation keeps module-cache, ObjC, root, app, sound-object, an
     });
     expect(JSON.parse(readFileSync(secondIntent.values, 'utf8'))[0].file).toBe(srcB);
     expect(invokes).toBe(1);
+    const stampedIntent = nativeIntentModule({
+      moduleName: 'ExactAppModules', binary: bin, sources: [srcB],
+      args: ['swiftc', '-module-cache-path', '/tmp/b/cache', '-o', '/tmp/b/out.dylib', srcB],
+      stamp: 'pkg-v2', directory: intentDir, swiftc: 'swift-6', runApple: fakeRunApple,
+    });
+    expect(JSON.parse(readFileSync(stampedIntent.values, 'utf8'))[0].file).toBe(srcB);
+    expect(invokes).toBe(2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

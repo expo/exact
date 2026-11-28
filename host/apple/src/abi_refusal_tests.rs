@@ -113,6 +113,14 @@ fn invalid_press_keeps_state() {
     dispatch_refusal(0, "invalid", "invalid press modifiers");
 }
 
+/// LLP 1094.000 D16: a drag source's start (69) and end (70) reach the
+/// runner's decoder, which refuses a payload it does not read.
+#[test]
+fn invalid_drag_source_event_keeps_state() {
+    dispatch_refusal(69, "invalid", "invalid dragstart event");
+    dispatch_refusal(70, "1,2\nmove", "invalid dragend event");
+}
+
 #[test]
 fn invalid_picked_files_keeps_state() {
     dispatch_refusal(26, "invalid", "invalid picked files");

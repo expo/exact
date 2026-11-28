@@ -68,6 +68,18 @@ extension GroupedListHost {
         return nil
     }
 
+    func liftShape(of node: NodeView) -> UIBezierPath? {
+        #if os(iOS)
+        for list in lists.values {
+            // A row that paints its own press (a ground of its own) lifts whole
+            guard let row = list.rows[node.id] else { continue }
+            guard list.sidebar, GroupedListView.pressIsCells(row, node), let cell = list.cell(node.id) as? UICollectionViewListCell else { return nil }
+            return LiftTarget.backgroundShape(of: cell, insets: (cell as? GroupedCell)?.listInsets.background)
+        }
+        #endif
+        return nil
+    }
+
     func cell(carrying node: NodeView) -> UIView? {
         #if os(iOS)
         for list in lists.values {

@@ -22,7 +22,7 @@ test('asset fetches have at most eight simultaneous requests', async () => {
 });
 test('a failed cosmetic never gets a first-frame stamp or repeated state serialization', () => {
   let reads = 0;
-  const body = 'let recoveringDevice, recoveryTimer; const trapped = () => undefined; const retainTrap = error => { throw error; };\n' + source.slice(source.indexOf('function childFrames(entry)'), source.indexOf('// The live frame clock'));
+  const body = 'let recoveringDevice, recoveryTimer; const trapped = () => undefined; const retainTrap = error => { throw error; }; const supplyChildren = () => {}, placeChildren = () => {};\n' + source.slice(source.indexOf('function renderModule('), source.indexOf('// The live frame clock'));
   const gpu = {gpu_render:()=>0, gpu_agent:()=>{reads++; return JSON.stringify({world:{assets:[{name:'bad.model',state:'Failed'}]}})}};
   const render = new Function('gpu','hidden','exact','size','clockFor','messages','requestAnimationFrame',body+'return render;')(
     gpu, false, {}, ()=>({w:10,h:10,s:1}), x=>x, ()=>{}, ()=>{});
@@ -54,7 +54,7 @@ test('a final paused frame delivers submitted output once without another render
   const body = `
     let recoveringDevice, recoveryTimer, terminalDevice = false, hidden = false;
     let raf = null, frameAt = null, frameRaw = 0, frameGeneration = 0, sentPeriod = 0, liveWindow = false;
-    const trapped = () => false, retainTrap = error => { throw error; };
+    const trapped = () => false, recoveryBusy = () => Boolean(recoveringDevice || recoveryTimer), retainTrap = error => { throw error; };
     const pace = Object.assign(now => now, {period_ms:0}), clockFor = now => now;
     const size = () => ({w:10,h:10,s:1}), supplyChildren = () => {}, placeChildren = () => {};
     const assets = () => {}, finishRestore = () => {}, reportRestore = () => {};

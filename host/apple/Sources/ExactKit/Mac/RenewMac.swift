@@ -77,6 +77,8 @@ extension Presenter {
         // A drag not yet begun from inside the row would lift the next item (LLP 1094.000 D5)
         // A drag-only contact keeps its suppression until its up or a new down (`endDragOnly`)
         if let drag = mouseDragOut, !drag.engaged, let armed = drag.armed, armed.isDescendant(of: view) { drag.cancel() }
+        // A drag over the row is over the old item's node no longer (LLP 1094.000 D16)
+        FileDrag.renewed(view)
         mouseDrags.height.retire(id)
         mouseDrags.transform.retire(id)
         reorders.mouse.retire(id)
@@ -116,6 +118,7 @@ extension NodeView {
 
     /// What this view keeps beyond its props and style, as a new view has it.
     fileprivate func renew() {
+        renewals &+= 1
         holdGone()
         lookState(hovered: false, focus: false)
         if pressed { pressed = false }

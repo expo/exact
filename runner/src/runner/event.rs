@@ -310,6 +310,11 @@ pub enum Event {
     /// That drag left the view's box or was cancelled (DOM's `dragleave`,
     /// likewise); a drop sends none, as the DOM's does.
     Dragleave(super::DropEvent),
+    /// A drag of the view itself began (DOM's `dragstart`, LLP 1094.000 D16),
+    /// as the platform began it; no data, which is the view's own props.
+    Dragstart(super::DropEvent),
+    /// That drag ended (DOM's `dragend`), its `drop_effect` the outcome.
+    Dragend(super::DropEvent),
     /// A press on an inline atom (LLP 1045.000 D7).
     Atompress(super::AtomEvent),
     /// A double click, or the platform’s double tap.
@@ -592,7 +597,8 @@ impl Event {
     /// `key`'s and `keyup`'s `KeyboardEvent`, `press`'s `MouseEvent`, the pointer's and
     /// `contextmenu`'s `PointerEvent`, `scroll`'s `ScrollEvent`, the
     /// clipboard's `ClipboardEvent`, `wheel`'s `WheelEvent` and the
-    /// `DragEvent` of `drop`, `dragenter` and `dragleave`.
+    /// `DragEvent` of `drop`, `dragenter`, `dragleave`, `dragstart` and
+    /// `dragend`.
     pub fn record(&self) -> Option<Value> {
         match self {
             Event::Toggle { old_open, new_open } => Some(Value::record(vec![
@@ -626,7 +632,11 @@ impl Event {
             Event::Historyswipe(s) => Some(s.value()),
             Event::Scrolldragend(d) => Some(d.value()),
             Event::MidiMessage(m) => Some(m.value()),
-            Event::Drop(d) | Event::Dragenter(d) | Event::Dragleave(d) => Some(d.value()),
+            Event::Drop(d)
+            | Event::Dragenter(d)
+            | Event::Dragleave(d)
+            | Event::Dragstart(d)
+            | Event::Dragend(d) => Some(d.value()),
             Event::FrameNavigation(_, n) => Some(n.value()),
             Event::FrameRecord(_, v) => Some((**v).clone()),
             Event::Atompress(a) => Some(a.value()),
@@ -1087,6 +1097,8 @@ impl<D: DataSource> Runner<D> {
             Event::Drop(_) => "drop",
             Event::Dragenter(_) => "dragenter",
             Event::Dragleave(_) => "dragleave",
+            Event::Dragstart(_) => "dragstart",
+            Event::Dragend(_) => "dragend",
             Event::FrameNavigation(kind, _) | Event::FrameRecord(kind, _) => {
                 frame_navigation::name(*kind)
             }
@@ -1292,6 +1304,8 @@ impl<D: DataSource> Runner<D> {
             Event::Drop(_) => (EventKind::Drop, None, "drop"),
             Event::Dragenter(_) => (EventKind::Dragenter, None, "dragenter"),
             Event::Dragleave(_) => (EventKind::Dragleave, None, "dragleave"),
+            Event::Dragstart(_) => (EventKind::Dragstart, None, "dragstart"),
+            Event::Dragend(_) => (EventKind::Dragend, None, "dragend"),
             Event::FrameNavigation(kind, _) | Event::FrameRecord(kind, _) => {
                 (*kind, None, frame_navigation::name(*kind))
             }

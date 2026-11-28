@@ -194,8 +194,13 @@ object Native {
     /** A field took the drop at ([x], [y]) px: the nodes under the drag there hear the enters it waited for, then
      * their leave. */
     @JvmStatic external fun dragDropped(x: Float, y: Float)
-    /** The drag was released at ([x], [y]) px before its items arrive: the drop's number, 0 when nothing takes it. */
-    @JvmStatic external fun dropReleased(x: Float, y: Float): Int
+    /** The platform began lift [lift] (LLP 1094.000 D16): its node hears `dragstart`. */
+    @JvmStatic external fun liftBegan(lift: Int)
+    /** Lift [lift] ended, a destination taking it or not ([taken]): its node hears `dragend`. */
+    @JvmStatic external fun liftEnded(lift: Int, taken: Boolean)
+    /** The drag, the app's own lift [lift] or another app's (0), was released at ([x], [y]) px before its items
+     * arrive: the drop's number, 0 when nothing takes it. */
+    @JvmStatic external fun dropReleased(x: Float, y: Float, lift: Int): Int
     /** Who takes a drop Android gives field [id]'s view at ([x], [y]) px: -1 not the field (another node is painted
      * there, or the field takes no touch), else 0 the field, 1 its own node, 2 one above it. */
     @JvmStatic external fun fieldDrop(id: Int, x: Float, y: Float): Int

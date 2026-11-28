@@ -228,6 +228,14 @@ impl Event {
                     Event::Dragleave
                 })
                 .ok_or("invalid drag event"),
+            // @ref LLP 1094.000 D16 — a source's `dragstart` (69), the point
+            // line, and its `dragend` (70), the point line and the outcome.
+            69 => super::DropEvent::parse_point(payload)
+                .map(Event::Dragstart)
+                .ok_or("invalid dragstart event"),
+            70 => super::DropEvent::parse_end(payload)
+                .map(Event::Dragend)
+                .ok_or("invalid dragend event"),
             57 => Event::paste_files_payload(payload).ok_or("invalid clipboard event"),
             // @ref LLP 1020.002 D2, D5 — an iframe's guest: its event, then the record.
             58 => super::event::frame_navigation::FrameNavigation::parse(payload)
@@ -437,6 +445,8 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::{Event, HistorySwipe, ScrollDrag};
+    use crate::runner::DropEffect;
+    use exact_plan::Value;
 
     #[test]
     fn selection_rectangles_preserve_geometry_and_verbatim_text() {
@@ -517,6 +527,47 @@ mod tests {
             Event::of_host_kind(56, "0,0\ndoc:/1/a"),
             Err("invalid drag event")
         ));
+        // LLP 1094.000 D16: a source's start, the point alone, and its end with what the drag did
+        let start = Event::of_host_kind(69, "10,20,Shift+");
+        assert!(matches!(&start, Ok(Event::Dragstart(d))
+            if d.offset_x == 10.0 && d.held.shift && d.drop_effect == DropEffect::None));
+        assert_eq!(
+            start.ok().and_then(|e| e.record()),
+            Some(Value::record(vec![
+                Value::Number(10.0),
+                Value::Number(20.0),
+                Value::list(Vec::new()),
+                Value::str(""),
+                Value::str(""),
+                Value::str("none"),
+                Value::Bool(true),
+                Value::Bool(false),
+                Value::Bool(false),
+                Value::Bool(false),
+            ]))
+        );
+        // The record's sixth field is its `dropEffect`
+        let effect = |kind, payload| match Event::of_host_kind(kind, payload)
+            .ok()
+            .and_then(|e| e.record())
+        {
+            Some(Value::Record(fields)) => fields.get(5).cloned(),
+            _ => None,
+        };
+        assert_eq!(effect(70, "10,20,\ncopy"), Some(Value::str("copy")));
+        assert_eq!(effect(70, "10,20\nnone"), Some(Value::str("none")));
+        assert_eq!(
+            effect(38, "1,2\n[[],\"a\",\"\"]"),
+            Some(Value::str("copy")),
+            "a drop takes a copy"
+        );
+        for bad in ["10,20", "10,20\nmove", "10,20\ncopy\nx"] {
+            assert_eq!(
+                Event::of_host_kind(70, bad).err(),
+                Some("invalid dragend event"),
+                "{bad:?}"
+            );
+        }
         assert!(matches!(
             Event::of_host_kind(35, "3,9,0,a, b\nc"),
             Ok(Event::SelectionChange { text, start: 3.0, end: 9.0, rects }) if text == "a, b\nc" && rects.is_empty()

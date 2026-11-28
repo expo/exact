@@ -144,22 +144,36 @@ function entrance(before, root, inflight, after) {
   const release = holdRoutes(change.beneath, owner);
   style ??= document.head.appendChild(document.createElement('style'));
   style.textContent = `:root{view-transition-name:none}::view-transition-new(${id}){animation:${change.css}}`;
-  pending = Object.assign([], { after: [] });
-  inflight.n++;
-  const t = document.startViewTransition(() => {
-    owner.style.viewTransitionName = id;
+  const ownPending = (pending = Object.assign([], { after: [] }));
+  const drainPending = () => {
+    if (pending !== ownPending) return;
     const tails = pending;
     pending = null;
     try { for (const f of tails) f(); } finally { for (const f of tails) if (!f.ran) f.release(); for (const f of tails.after) f(); }
-  });
+  };
+  inflight.n++;
+  let t;
+  try {
+    t = document.startViewTransition(() => {
+      owner.style.viewTransitionName = id;
+      drainPending();
+    });
+  } catch {
+    inflight.n--;
+    release();
+    drainPending();
+    return;
+  }
   running = t;
   const clean = () => {
     if (running === t) running = null;
     if (owner.style.viewTransitionName === id) owner.style.viewTransitionName = '';
     release();
+    drainPending();
   };
   const ready = t.ready.then(() => { for (const f of after ?? []) f(); }, () => {}).finally(() => inflight.n--);
   (globalThis.exact ??= {}).viewTransition = () => ready;
+  t.updateCallbackDone.then(null, drainPending);
   t.finished.then(clean, clean);
 }
 
@@ -169,17 +183,30 @@ function crossFade(run, inflight, after) {
   if (running) { running.skipTransition(); running = null; }
   // the root takes part again: the other transitions here leave it unnamed
   if (style) style.textContent = '';
-  pending = Object.assign([run], { after: [] });
-  inflight.n++;
-  const t = document.startViewTransition(() => {
+  const ownPending = (pending = Object.assign([run], { after: [] }));
+  const drainPending = () => {
+    if (pending !== ownPending) return;
     const tails = pending;
     pending = null;
     try { for (const f of tails) f(); } finally { for (const f of tails) if (!f.ran) f.release(); for (const f of tails.after) f(); }
-  });
+  };
+  inflight.n++;
+  let t;
+  try {
+    t = document.startViewTransition(() => {
+      drainPending();
+    });
+  } catch {
+    inflight.n--;
+    drainPending();
+    return true;
+  }
   running = t;
   const ready = t.ready.then(() => { for (const f of after ?? []) f(); }, () => {}).finally(() => inflight.n--);
   (globalThis.exact ??= {}).viewTransition = () => ready;
-  const clean = () => { if (running === t) running = null; };
+  const drainFallback = () => { try { drainPending(); } catch (e) { console.error(e); } };
+  const clean = () => { if (running === t) running = null; drainFallback(); };
+  t.updateCallbackDone.then(null, drainFallback);
   t.finished.then(clean, clean);
   return true;
 }
@@ -234,15 +261,21 @@ export function commit(tail, queue, inflight, after, fade) {
   // Only the pairs move: the root and unpaired leavers are not shown.
   style ??= document.head.appendChild(document.createElement('style'));
   style.textContent = ':root{view-transition-name:none}';
-  pending = Object.assign([deferred()], { after: [] });
-  inflight.n++;
-  let paired = false, routed = false, result = true;
-  const rules = [], named = [...old.keys(), ...exits.keys()], releases = [];
-  const t = document.startViewTransition(() => {
+  const ownPending = (pending = Object.assign([deferred()], { after: [] }));
+  const drainPending = () => {
+    if (pending !== ownPending) return;
     const tails = pending;
     pending = null;
     // A tail that throws skips the rest; their presses are let go all the same (focus.js).
     try { result = tails.map(f => f())[0]; } finally { for (const f of tails) if (!f.ran) f.release(); for (const f of tails.after) f(); }
+  };
+  inflight.n++;
+  let paired = false, routed = false, result = true;
+  const rules = [], named = [...old.keys(), ...exits.keys()], releases = [];
+  let t;
+  try {
+    t = document.startViewTransition(() => {
+    drainPending();
     // A leaver is gone, or kept only as an exit ghost (its own or an
     // ancestor's): it has left. One that stayed keeps its name and moves.
     const gone = new Map(); // name → the leavers that left
@@ -288,14 +321,23 @@ export function commit(tail, queue, inflight, after, fade) {
       routed = true;
     }
     style.textContent = `:root{view-transition-name:none}${rules.join('')}`;
-  });
+    });
+  } catch {
+    inflight.n--;
+    for (const el of named) if (own.has(el.style.viewTransitionName)) el.style.viewTransitionName = '';
+    for (const release of releases) release();
+    drainPending();
+    return result;
+  }
   running = t;
+  const drainFallback = () => { try { drainPending(); } catch (e) { console.error(e); } };
   const clean = () => {
     if (running === t) running = null;
     for (const el of named) if (own.has(el.style.viewTransitionName)) el.style.viewTransitionName = '';
     for (const release of releases) release();
+    drainFallback();
   };
-  t.updateCallbackDone.then(() => { if (!paired && !routed) t.skipTransition(); }, () => {});
+  t.updateCallbackDone.then(() => { if (!paired && !routed) t.skipTransition(); }, drainFallback);
   // Its animations exist once it is ready: what runs after a commit's tree
   // (the agent's clock registers and seeks them) runs again then. The agent
   // waits for that before it moves the clock (agent.js).

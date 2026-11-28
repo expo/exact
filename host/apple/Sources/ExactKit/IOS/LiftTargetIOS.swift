@@ -24,6 +24,30 @@ package enum LiftTarget {
         return corners.contains(where: { $0.width > 0 }) ? node.roundedPath(in: node.bounds) : nil
     }
 
+    /// A list cell's ground as it shows while pressed, in the cell's
+    /// coordinates now: the background installed where it has a shape (the
+    /// press under way), else UIKit's default one in a pressed state, since
+    /// a sidebar's row at rest draws none; `insets`, the row's own background
+    /// insets where its list gave some, replace UIKit's. Nil for a ground
+    /// with no inset or radius.
+    package static func backgroundShape(of cell: UICollectionViewListCell, insets: NSDirectionalEdgeInsets? = nil) -> UIBezierPath? {
+        var pressed = cell.configurationState
+        pressed.isHighlighted = true
+        var ground = cell.backgroundConfiguration.flatMap { $0.cornerRadius > 0 ? $0 : nil } ?? cell.defaultBackgroundConfiguration().updated(for: pressed)
+        if let insets { ground.backgroundInsets = insets }
+        var inset = ground.backgroundInsets, margins = cell.directionalLayoutMargins
+        let added = ground.edgesAddingLayoutMarginsToBackgroundInsets
+        if added.contains(.top) { inset.top += margins.top }
+        if added.contains(.bottom) { inset.bottom += margins.bottom }
+        if added.contains(.leading) { inset.leading += margins.leading }
+        if added.contains(.trailing) { inset.trailing += margins.trailing }
+        guard ground.cornerRadius > 0 || inset != .zero else { return nil }
+        let rtl = cell.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let edges = UIEdgeInsets(top: inset.top, left: rtl ? inset.trailing : inset.leading,
+                                 bottom: inset.bottom, right: rtl ? inset.leading : inset.trailing)
+        return UIBezierPath(roundedRect: cell.bounds.inset(by: edges), cornerRadius: ground.cornerRadius)
+    }
+
     /// How a node its clip path shapes lifts, for its context menu and its drag alike (LLP 1021 §5.1, LLP 1094.000
     /// D4): in what the path leaves of its box, the box's shape in CSS (CSS Masking §5.1), cut to the box as it
     /// shows (its surface while layout resizes it, LLP 1063) since UIKit's visible path is a portion of the view; on

@@ -147,10 +147,17 @@ final class ScrollPumpIOSTests: XCTestCase {
         let outer = try XCTUnwrap(p.views[1]?.scrollView), inner = try XCTUnwrap(p.views[2]?.scrollView)
         let title = try XCTUnwrap(p.views[3])
         XCTAssertTrue(title.canRasterText)
+        XCTAssertTrue(p.owedText.contains(title.id))
         XCTAssertTrue(inner.bounds.contains(title.convert(title.bounds, to: inner)))
 
-        inner.contentOffset.x = 20
-        XCTAssertFalse(p.scrollPump.asksForFrames, "the outer scrollport still clips the entire row beyond its lead")
+        let frameRequests = (1...6).filter { step in
+            inner.contentOffset.x = CGFloat(step * 10)
+            return p.scrollPump.asksForFrames
+        }
+        XCTAssertEqual(inner.contentOffset.x, 60)
+        XCTAssertTrue(frameRequests.isEmpty, "movement in the inner scrollport must not queue work beyond the outer scrollport's lead")
+        waitForMainQueue("the clipped row's scroll callbacks")
+        XCTAssertFalse(p.scrollPump.asksForFrames)
         XCTAssertFalse(title.textRasterReady)
 
         outer.contentOffset.y = 400
@@ -160,6 +167,7 @@ final class ScrollPumpIOSTests: XCTestCase {
         outer.contentOffset.y = 800
         let visible = p.textScrollportRect(title)
         XCTAssertFalse(visible.isEmpty)
+        XCTAssertNotNil(title.textRasterLayer?.superlayer)
         XCTAssertTrue(title.textRasterReady && title.textRasterFrame.contains(visible), "the first visible frame has its text")
     }
 

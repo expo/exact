@@ -71,7 +71,10 @@ final class WindowDrops: NSObject, UIDropInteractionDelegate {
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
         guard let window else { return }
         let point = session.location(in: window), under = tracker(at: point)
-        under?.perform(session, at: point)
+        if let under { under.perform(session, at: point) } else {
+            // UIKit took the app's own drag where no presenter now is: it was not delivered (LLP 1094.000 D16)
+            (session.localDragSession?.localContext as? OwnDrag)?.dropped(delivered: false)
+        }
         handOff(session, to: under)
     }
 
@@ -116,6 +119,10 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     /// it: an exit from another, late after a handoff, lets nothing go.
     private var session: ObjectIdentifier?
     private var reporter: ObjectIdentifier?
+    /// The followed drag when a node of the app began it (LLP 1094.000 D16):
+    /// its source's `dragstart` goes before this tracker's first event of it,
+    /// and its `dragend` after the leaves this tracker owes it.
+    private var own: OwnDrag?
     /// The nodes the drag is over that hear `dragenter` or `dragleave`,
     /// innermost first, and its last window point. A node is kept by its id
     /// and incarnation, not its view, which the pool lends to other nodes.
@@ -153,6 +160,7 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         held = []
         session = nil
         reporter = nil
+        unfollowOwn()
     }
 
     /// The window's interaction follows the drag while a node here hears its
@@ -220,9 +228,12 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         self.session = key
         reporter = ObjectIdentifier(source)
         turn &+= 1
-        let found = nodes(at: point)
-        update(found.chain, at: point)
-        return found.target != nil && session.items.contains { DropItems.kind(of: $0.itemProvider) != .none }
+        // The answer and the records are taken before any handler runs, the source's `dragstart` among them
+        let found = nodes(at: point), chain = Self.records(found.chain, at: point)
+        let takes = found.target != nil && session.items.contains { DropItems.kind(of: $0.itemProvider) != .none }
+        followOwn(session)
+        update(records: chain, at: point)
+        return takes
     }
 
     /// The drag left `source`'s view: what is under its last point lets go on
@@ -247,20 +258,50 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     /// The drop of `session` at `point`, which this tracker follows, or takes
     /// up as the drop lands here.
     func perform(_ session: UIDropSession, at point: CGPoint) {
-        guard self.session == nil || self.session == ObjectIdentifier(session), let presenter else { return }
+        // The app's own drag ends once its drop is delivered or fails
+        let own = session.localDragSession?.localContext as? OwnDrag
+        guard self.session == nil || self.session == ObjectIdentifier(session), let presenter else {
+            own?.dropped(delivered: false)
+            return
+        }
         self.session = ObjectIdentifier(session)
-        guard let release = release(at: point) else { return }
+        guard let release = release(at: point, first: { self.followOwn(session) }) else {
+            own?.dropped(delivered: false)
+            return
+        }
+        own?.loads()
         // Every item loads before the action runs (UIKit starts each load here)
         DropItems.read(session.items.map(\.itemProvider), log: { [weak presenter] in presenter?.session?.log($0) }) { [weak self] files, text, url, folder in
+            var delivered = false
+            defer { own?.landed(delivered: delivered) }
+            own?.starting()
             guard let self else { return }
             // A node gone, lent to another, disabled, no longer hearing `drop`, or removed by a staged batch while its items loaded takes nothing
             let session = presenter.session, live = self.takes(release.target)
             // The copies become the session's only as they are delivered
             if live, let session, !files.isEmpty { PastedImages.held(folder, by: session) } else { try? FileManager.default.removeItem(at: folder) }
             let docs = live ? files.compactMap { session?.mintDocument($0) } : []
-            if !(live && self.deliver(docs, text, url, to: release.target, line: release.line)) { self.leave(release.leaves) }
+            delivered = live && self.deliver(docs, text, url, to: release.target, line: release.line)
+            if !delivered { self.leave(release.leaves) }
             self.lands(release.over)
         }
+    }
+
+    /// The followed drag is the app's own: its source's `dragstart` goes
+    /// before this tracker's first event of it (`hear`), and what this tracker
+    /// owes it when it ends is the leaves of what it is over, sent then.
+    private func followOwn(_ session: UIDropSession) {
+        guard let own = session.localDragSession?.localContext as? OwnDrag else { return }
+        guard self.own !== own else { return }
+        unfollowOwn()
+        self.own = own
+        let key = ObjectIdentifier(session)
+        own.owes({ [weak self] in if self?.session == key { self?.finish() } }, by: self)
+    }
+
+    private func unfollowOwn() {
+        own?.owes(nil, by: self)
+        own = nil
     }
 
     // MARK: A field's own text drop
@@ -381,11 +422,15 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     /// `dragleave`. Every record is taken before any is heard, since a
     /// handler may change what a view shows, and each node is checked to be
     /// the same one before it hears its own.
-    private func update(_ next: [NodeView], at point: CGPoint) {
-        let before = entered, now = next.map(Node.init)
+    private func update(_ next: [NodeView], at point: CGPoint) { update(records: Self.records(next, at: point), at: point) }
+
+    /// `update` with the nodes and their records as they were taken, before
+    /// a handler (the source's `dragstart`) could lend a view to another node.
+    private func update(records next: [(Node, String)], at point: CGPoint) {
+        let before = entered, now = next.map(\.0)
         entered = now
         last = point
-        let enters = next.filter { $0.handlers.contains("dragenter") && !before.contains(Node($0)) }.map { (Node($0), Self.line($0, point)) }
+        let enters = next.filter { node, _ in view(node)?.handlers.contains("dragenter") == true && !before.contains(node) }
         let leaves = before.filter { !now.contains($0) && held.remove($0) == nil }.compactMap { node in
             view(node).flatMap { $0.handlers.contains("dragleave") ? (node, Self.line($0, point)) : nil }
         }
@@ -401,6 +446,7 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         if !entered.isEmpty { update([], at: last) }
         session = nil
         reporter = nil
+        unfollowOwn()
     }
 
     /// A drop at `point`: the nodes under it and its target, resolved
@@ -409,11 +455,13 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     /// no target, the nodes it was over leave now; with one, they are kept
     /// for a delivery that fails, and hold a newer drag's enters until
     /// `lands`.
-    private func release(at point: CGPoint) -> (target: Node, line: String, over: [Node], leaves: [(Node, String)])? {
-        let found = nodes(at: point)
+    /// `first` runs once the records are taken and before any is heard.
+    private func release(at point: CGPoint, first: () -> Void = {}) -> (target: Node, line: String, over: [Node], leaves: [(Node, String)])? {
+        let found = nodes(at: point), chain = Self.records(found.chain, at: point)
         let target = found.target.map { (Node($0), Self.line($0, point)) }
         let leaves = found.chain.filter { $0.handlers.contains("dragleave") }.map { (Node($0), Self.line($0, point)) }
-        update(found.chain, at: point)
+        first()
+        update(records: chain, at: point)
         heardHeld(at: point)
         guard let target else {
             finish()
@@ -424,6 +472,7 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         entered = []
         session = nil
         reporter = nil
+        unfollowOwn()
         waits(over)
         return (target.0, target.1, over, leaves.filter { over.contains($0.0) })
     }
@@ -472,9 +521,14 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         return hear(node, 38, line + "\n" + String(decoding: data, as: UTF8.self))
     }
 
-    /// Node `node` hears an event of `kind`, if its view is still the one it was.
+    /// Node `node` hears an event of `kind`, if its view is still the one it
+    /// was: the app's own drag's source heard its `dragstart` first (LLP
+    /// 1094.000 D16).
     @discardableResult private func hear(_ node: Node, _ kind: UInt32, _ line: String) -> Bool {
-        view(node) != nil && presenter?.clipboard(node.id, kind, line) == true
+        guard view(node) != nil else { return false }
+        own?.starting()
+        // The start's handler may have lent the view to another node
+        return view(node) != nil && presenter?.clipboard(node.id, kind, line) == true
     }
 
     /// Whether `node` takes a drop now: the same node, enabled, not inert,
@@ -486,6 +540,11 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
 
     /// The view of `node`, while the pool has not lent it to another.
     private func view(_ node: Node) -> NodeView? { presenter?.views[node.id].flatMap { Node($0) == node ? $0 : nil } }
+
+    /// Each node and its record at window point `point`.
+    private static func records(_ nodes: [NodeView], at point: CGPoint) -> [(Node, String)] {
+        nodes.map { (Node($0), line($0, point)) }
+    }
 
     /// A `DragEvent`'s point line at a window point: from the node's content
     /// box, with no modifier keys, which a drop session does not report.

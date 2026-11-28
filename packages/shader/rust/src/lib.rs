@@ -351,7 +351,7 @@ impl Surface for Shader {
         self.state.generation
     }
 
-    fn device_lost(&mut self) {
+    fn device_lost(&mut self) -> bool {
         for picture in self
             .state
             .picture
@@ -368,6 +368,7 @@ impl Surface for Shader {
             }
         }
         self.state.generation += 1;
+        true
     }
 
     fn take_error(&mut self) -> Option<SurfaceError> {

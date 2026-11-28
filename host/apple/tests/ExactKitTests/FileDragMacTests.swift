@@ -122,13 +122,13 @@ final class FileDragMacTests: XCTestCase {
         XCTAssertEqual(heard, ["1:55", "1:56"])
         // With a drop waiting at the column, its held enter is heard before the field's drop leaves it
         heard = []
-        FileDrag.waits([try XCTUnwrap(p.views[1])])
+        FileDrag.waits([FileDrag.Shown(try XCTUnwrap(p.views[1]))])
         _ = editor.draggingEntered(text)
         XCTAssertEqual(heard, [], "held")
         XCTAssertNil(FileDrag.perform(editor, text))
         editor.draggingEnded(text)
         XCTAssertEqual(heard, ["1:55", "1:56"])
-        FileDrag.lands([try XCTUnwrap(p.views[1])])
+        FileDrag.lands([FileDrag.Shown(try XCTUnwrap(p.views[1]))])
         XCTAssertEqual(heard, ["1:55", "1:56"])
     }
 
@@ -184,20 +184,38 @@ final class FileDragMacTests: XCTestCase {
         let column = try XCTUnwrap(p.views[1]), box = try XCTUnwrap(p.views[3])
         XCTAssertEqual(column.draggingEntered(drag([file], at: middle(box))), .copy)
         FileDrag.ended(dropped: true)
-        FileDrag.waits([column])
+        FileDrag.waits([FileDrag.Shown(column)])
         _ = column.draggingEntered(drag([file], at: middle(box)))
         XCTAssertEqual(heard, ["1:55"], "the newer drag's enter waits")
-        FileDrag.lands([column])
+        FileDrag.lands([FileDrag.Shown(column)])
         XCTAssertEqual(heard, ["1:55", "1:55"])
         column.draggingExited(drag([file], at: NSPoint(x: -20, y: -20)))
         heard = []
         _ = column.draggingEntered(drag([file], at: middle(box)))
         FileDrag.ended(dropped: true)
-        FileDrag.waits([column])
+        FileDrag.waits([FileDrag.Shown(column)])
         _ = column.draggingEntered(drag([file], at: middle(box)))
         column.draggingExited(drag([file], at: NSPoint(x: -20, y: -20)))
-        FileDrag.lands([column])
+        FileDrag.lands([FileDrag.Shown(column)])
         XCTAssertEqual(heard, ["1:55"], "a newer drag that left was neither entered nor left")
+        // A drop that waits over a row a list then renews for another item (LLP 1078) no longer holds the row's
+        // enters: a newer drop over the new item waits on its own, and the old drop's landing leaves it waiting
+        heard = []
+        _ = column.draggingEntered(drag([file], at: middle(box)))
+        FileDrag.ended(dropped: true)
+        let old = [FileDrag.Shown(column)]
+        FileDrag.waits(old)
+        p.renew(1)
+        _ = column.draggingEntered(drag([file], at: middle(box)))
+        FileDrag.ended(dropped: true)
+        let newer = [FileDrag.Shown(column)]
+        FileDrag.waits(newer)
+        _ = column.draggingEntered(drag([file], at: middle(box)))
+        XCTAssertEqual(heard, ["1:55", "1:55"], "the third drag's enter waits for the second drop")
+        FileDrag.lands(old)
+        XCTAssertEqual(heard, ["1:55", "1:55"], "the old drop's landing releases nothing of the new item")
+        FileDrag.lands(newer)
+        XCTAssertEqual(heard, ["1:55", "1:55", "1:55"])
     }
 
     /// An input that is not being edited takes the drag itself (`Field`).
@@ -516,6 +534,66 @@ final class FileDragMacTests: XCTestCase {
         XCTAssertEqual(written.lastPathComponent, "image.png")
         XCTAssertEqual(try Data(contentsOf: written), converted)
     }
+
+    /// LLP 1094.000 D16: the app's own drag, which the Mac's drop side
+    /// refuses (D5), runs its source's `dragstart` before the first enter,
+    /// and at its end the leave the drop side deferred goes before the
+    /// source's `dragend`.
+    func testTheAppsOwnDragStartsBeforeItsEnterAndEndsAfterItsLeave() throws {
+        let p = presenter(column: ["dragenter", "dragleave"])
+        let column = try XCTUnwrap(p.views[1]), source = OwnSource()
+        source.own = OwnDrag { [unowned self] in heard.append("start") }
+        let info = DraggingInfo(board: drag([], at: .zero, text: "Mount Fuji").board, location: middle(try XCTUnwrap(p.views[3])), window: window,
+                                operations: [], source: source)
+        XCTAssertNil(FileDrag.moved(column, info), "the app's own drag takes no drop in the app")
+        XCTAssertEqual(heard, ["start", "1:55"])
+        // AppKit's exit at a point still in the window lets go a moment later
+        FileDrag.exited(column, info)
+        XCTAssertEqual(heard, ["start", "1:55"])
+        source.own?.ended(taken: false) { [unowned self] taken in heard.append("end \(taken)") }
+        XCTAssertEqual(heard, ["start", "1:55", "1:56", "end false"])
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(heard, ["start", "1:55", "1:56", "end false"], "the deferred exit is stale, and the start went once")
+        // A start whose handler renews the node under the drag for another item (LLP 1078): the old item's enter,
+        // taken before the handler ran, does not reach the new one
+        heard = []
+        let renewing = OwnSource()
+        renewing.own = OwnDrag { [unowned self] in heard.append("start"); p.renew(1) }
+        let next = DraggingInfo(board: info.board, location: info.location, window: window, operations: [], source: renewing)
+        XCTAssertNil(FileDrag.moved(column, next))
+        XCTAssertEqual(heard, ["start"])
+        _ = FileDrag.moved(column, next)
+        XCTAssertEqual(heard, ["start", "1:55"], "the next report finds the node as it is now")
+        FileDrag.ended()
+        // An enter a waiting drop holds sends nothing, so the start waits too, until the enter is heard
+        heard = []
+        let waiting = OwnSource()
+        waiting.own = OwnDrag { [unowned self] in heard.append("start") }
+        let held = DraggingInfo(board: info.board, location: info.location, window: window, operations: [], source: waiting)
+        let landing = [FileDrag.Shown(column)]
+        FileDrag.waits(landing)
+        _ = FileDrag.moved(column, held)
+        XCTAssertEqual(heard, [], "nothing sent, nothing started")
+        FileDrag.lands(landing)
+        XCTAssertEqual(heard, ["start", "1:55"])
+        FileDrag.ended()
+        // A held enter whose node the start's handler makes inert is heard no more, nor its leave
+        heard = []
+        let inerting = OwnSource()
+        inerting.own = OwnDrag { [unowned self] in heard.append("start"); p.apply(wireBatch([["op": "props", "id": 1, "set": ["inert": "true"]]])) }
+        let inert = DraggingInfo(board: info.board, location: info.location, window: window, operations: [], source: inerting)
+        let still = [FileDrag.Shown(column)]
+        FileDrag.waits(still)
+        _ = FileDrag.moved(column, inert)
+        FileDrag.lands(still)
+        FileDrag.ended()
+        XCTAssertEqual(heard, ["start"])
+    }
+}
+
+/// The source of a drag a node of the app began, as the drop side meets it.
+private final class OwnSource: NSObject, OwnDragSource {
+    var own: OwnDrag?
 }
 
 /// An `NSDraggingInfo` for a drag at a window point, as AppKit hands one.
@@ -523,8 +601,9 @@ private final class DraggingInfo: NSObject, NSDraggingInfo {
     let board: NSPasteboard, location: NSPoint
     weak var window: NSWindow?
     let operations: NSDragOperation
-    init(board: NSPasteboard, location: NSPoint, window: NSWindow, operations: NSDragOperation = .copy) {
-        self.board = board; self.location = location; self.window = window; self.operations = operations
+    let source: Any?
+    init(board: NSPasteboard, location: NSPoint, window: NSWindow, operations: NSDragOperation = .copy, source: Any? = nil) {
+        self.board = board; self.location = location; self.window = window; self.operations = operations; self.source = source
     }
     var draggingDestinationWindow: NSWindow? { window }
     var draggingSourceOperationMask: NSDragOperation { operations }
@@ -532,7 +611,7 @@ private final class DraggingInfo: NSObject, NSDraggingInfo {
     var draggedImageLocation: NSPoint { location }
     var draggedImage: NSImage? { nil }
     var draggingPasteboard: NSPasteboard { board }
-    var draggingSource: Any? { nil }
+    var draggingSource: Any? { source }
     var draggingSequenceNumber: Int { 1 }
     func slideDraggedImage(to screenPoint: NSPoint) {}
     var draggingFormation: NSDraggingFormation = .default

@@ -22,7 +22,8 @@ pub struct DragFile {
 
 /// What the reader drags: the node's box and the finger's point in the
 /// view's pixels, whether an assistive service started it, then its text,
-/// url and files.
+/// url and files, and the lift's number, by which the reader says when the
+/// platform began and ended it (LLP 1094.000 D16).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragOut {
     /// The node.
@@ -40,12 +41,14 @@ pub struct DragOut {
     pub url: String,
     /// Each file as the node names it, with the name it is offered under.
     pub files: Vec<DragFile>,
+    /// The lift's number.
+    pub lift: u32,
 }
 
 impl DragOut {
     /// The words the reader reads: the node, the box, the point, 1 for a
-    /// service's drag, the text, the url, then the files' count and each
-    /// file's entry and name.
+    /// service's drag, the text, the url, the files' count and each file's
+    /// entry and name, then the lift's number.
     pub(super) fn encode(&self, out: &mut Vec<i32>) {
         out.push(self.node as i32);
         out.extend(self.rect);
@@ -58,6 +61,7 @@ impl DragOut {
             requests::string(out, &file.entry);
             requests::string(out, &file.name);
         }
+        out.push(self.lift as i32);
     }
 }
 
@@ -120,7 +124,7 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             Some(_) => return false,
             None => {}
         }
-        self.ask_drag(drag, now_ms);
+        self.ask_drag(drag, (x, y), now_ms);
         true
     }
 
@@ -196,13 +200,14 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         let Some(drag) = self.drag_of(id, x, y, service) else {
             return false;
         };
-        self.ask_drag(drag, now_ms);
+        self.ask_drag(drag, (x, y), now_ms);
         true
     }
 
-    /// The reader's drag, asked: the finger is the drag's now, so nothing it
-    /// is over presses or scrolls.
-    fn ask_drag(&mut self, drag: DragOut, now_ms: f64) {
+    /// The reader's drag, held at `at`, asked: the finger is the drag's now,
+    /// so nothing it is over presses or scrolls.
+    fn ask_drag(&mut self, mut drag: DragOut, at: (f32, f32), now_ms: f64) {
+        drag.lift = self.lift_asked(drag.node, at);
         if let Err(e) = self.pointer_cancel(now_ms) {
             self.host.log(e);
         }
@@ -227,6 +232,7 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             text,
             url,
             files,
+            lift: 0,
         })
     }
 }
@@ -311,6 +317,9 @@ impl Offers {
 /// and where the press held it in that picture, in the window's logical
 /// coordinates.
 pub struct Lift {
+    /// The lift's number, by which the host says when the platform began
+    /// and ended it (LLP 1094.000 D16).
+    pub id: u32,
     /// `text`, empty for none or when not offered.
     pub text: String,
     /// `url`, empty for none or when not offered.
@@ -419,13 +428,19 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         origin: (f32, f32),
         now_ms: f64,
     ) -> bool {
-        let Some(lift) = self.mouse_lift_of(hit, source, carried, origin) else {
+        let Some(mut lift) = self.mouse_lift_of(hit, source, carried, origin) else {
             return false;
         };
+        let Some(id) = self.host.kernel().node_by_key(source).map(|node| node.id) else {
+            return false;
+        };
+        let number = self.lift_asked(id, origin);
+        lift.id = number;
         let Some(lifter) = self.lifter.as_mut() else {
             return false;
         };
         if !(lifter.lift)(lift) {
+            self.drag_in.lifting.retain(|s| s.id != number);
             return false;
         }
         if let Err(e) = self.pointer_cancel(now_ms) {
@@ -451,6 +466,7 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         let (picture, hotspot) = self.icon_of(id, origin);
         let offers = self.lifter.as_ref()?.offers;
         Some(Lift {
+            id: 0,
             text: if offers.text { text } else { String::new() },
             url: if offers.url { url } else { String::new() },
             files: if offers.files { files } else { Vec::new() },

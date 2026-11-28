@@ -235,11 +235,20 @@ fn each_refusal_names_what_to_write_instead() {
             "type-data-transfer",
             "a picture of an element is `share`'s",
         ),
-        ("drag=go", "lower-handler-later", "`drag` is not heard yet"),
+        (
+            "draggable=true dataTransfer=DataTransfer(text=\"a\") drag=go",
+            "lower-handler-later",
+            "Exact does not expose a drag's continuous motion at its source",
+        ),
         (
             "dragend=go",
-            "lower-handler-later",
-            "`dragend` is not heard yet",
+            "lower-drag-event-source",
+            "`dragend` is heard where a drag begins, on a node that declares `draggable`",
+        ),
+        (
+            "draggable=false dragstart=go",
+            "lower-drag-event-source",
+            "has `draggable=false`, so it never drags",
         ),
     ] {
         let (got, message) = refused(&node(attrs)).unwrap_or_default();
@@ -257,6 +266,19 @@ fn each_refusal_names_what_to_write_instead() {
         "{message}"
     );
     assert!(refused(&node("draggable=false")).is_none());
+    // LLP 1094.000 D16: a drag's start and end are heard where it begins, by a literal or a bound `draggable`
+    for attrs in [
+        "draggable=true dataTransfer=DataTransfer(text=\"a\") dragstart=go dragend=go",
+        "draggable=(n == 0) dataTransfer=DataTransfer(text=\"a\") dragstart=go",
+    ] {
+        assert!(refused(&node(attrs)).is_none(), "{attrs}");
+    }
+    let field = "component A\n  state n = 0\n  action go\n    n = 1\n  view\n    input draggable=true dataTransfer=DataTransfer(text=\"a\") dragstart=go\n";
+    assert_eq!(
+        refused(field).unwrap_or_default().0,
+        "lower-attr-tag",
+        "an ineligible tag is refused as before"
+    );
     // `draggable=false` drags nothing, so a gesture beside it claims nothing.
     assert!(refused(&node("draggable=false pan=moved")).is_none());
     let within = |body: &str| format!("component A\n  view\n    {body}\n");

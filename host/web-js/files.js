@@ -239,13 +239,13 @@ OnHooks.drop = (e, f) => {
     if (!allowed(e)() || !takes(e, ev)) return;
     ev.preventDefault(); ev.stopPropagation(); ev.exactTaken = true;
     const [offsetX, offsetY] = record(e, ev), held = [ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey];
-    counted(receive(ev, docs, (found, text, url) => e.isConnected && (f([offsetX, offsetY, found, text, url, ...held]), true), say));
+    counted(receive(ev, docs, (found, text, url) => e.isConnected && (f([offsetX, offsetY, found, text, url, 'copy', ...held]), true), say));
   });
 };
 // A drag's `dragenter` and `dragleave` (documents-glue.js `hearDrags`): the
 // point and no data (the DOM keeps a drag's data from a page until the drop).
 OnHooks.drag = (e, kind, f) => {
-  warm(() => x().documents.hearDrags(e, kind, allowed(e), ev => f([...record(e, ev).slice(0, 2), [], '', '', ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey])));
+  warm(() => x().documents.hearDrags(e, kind, allowed(e), ev => f([...record(e, ev).slice(0, 2), [], '', '', 'none', ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey])));
 };
 // A paste's files (`clipboardData.files`), minted in the paste's own event; none before the glue has loaded.
 OnHooks.pasteWarm = () => warm();

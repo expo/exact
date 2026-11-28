@@ -86,3 +86,73 @@ extension InvokerButton {
 package enum DragOutLink {
     package static var installed: DragOutCapability?
 }
+
+#if os(macOS)
+/// AppKit's source of a drag a node of the app began: the drop side finds
+/// the drag's `OwnDrag` through the `draggingSource` it reports.
+package protocol OwnDragSource: AnyObject {
+    var own: OwnDrag? { get }
+}
+#endif
+
+/// A drag a node of the app began, as the app's own drop side meets it
+/// (LLP 1094.000 D16): the source's `dragstart` goes before the drop side's
+/// first event of the drag, and its `dragend` after the drop side's last,
+/// each of its drops delivered or failed and every leave it owes sent. UIKit
+/// carries it as the drag session's `localContext`, AppKit as its source.
+package final class OwnDrag {
+    private var start: (() -> Void)?
+    private var end: ((Bool) -> Void)?
+    /// The drops of the drag still loading, which hold its `dragend`.
+    private var loading = 0
+    /// What each drop side that follows the drag sends when it ends, as a
+    /// leave it would send after a delay.
+    private var owed: [ObjectIdentifier: () -> Void] = [:]
+    /// Whether the app's own drop of the drag was delivered: the outcome then,
+    /// over what the platform reports, as the platform's comes before the
+    /// drop's items arrive.
+    private var delivered: Bool?
+
+    /// `start` runs on the main queue, after the platform's callback that
+    /// began the drag returns, unless the drop side runs it first.
+    package init(start: @escaping () -> Void) {
+        self.start = start
+        DispatchQueue.main.async { [weak self] in self?.starting() }
+    }
+
+    /// The source's `dragstart`, once: the drop side runs it before its own
+    /// first event of the drag, after answering the platform's question.
+    package func starting() {
+        guard let start else { return }
+        self.start = nil
+        start()
+    }
+
+    /// `side`, which follows the drag, sends `finish` when it ends, or
+    /// nothing once it calls `owes(nil, by:)`.
+    package func owes(_ finish: (() -> Void)?, by side: AnyObject) { owed[ObjectIdentifier(side)] = finish }
+
+    /// A drop of the drag loads its items until `landed`.
+    package func loads() { loading += 1 }
+
+    package func landed(delivered: Bool) {
+        self.delivered = delivered
+        loading -= 1
+        if loading == 0, let end { self.end = nil; end(delivered) }
+    }
+
+    /// The app's own drop of the drag resolved at once.
+    package func dropped(delivered: Bool) { self.delivered = delivered }
+
+    /// The platform ended the drag, a destination taking it or not
+    /// (`taken`): `end` hears the outcome once each drop side has sent what
+    /// it owes and no drop of the drag still loads. Its `dragstart` goes
+    /// first if it has not.
+    package func ended(taken: Bool, _ end: @escaping (Bool) -> Void) {
+        starting()
+        let owed = self.owed.values
+        self.owed = [:]
+        owed.forEach { $0() }
+        if loading == 0 { end(delivered ?? taken) } else { self.end = end }
+    }
+}

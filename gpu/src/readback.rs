@@ -152,6 +152,7 @@ impl Rows {
 impl Module {
     pub(crate) fn sampled_frame(&mut self, id: u32) -> Option<([u32; 3], Vec<u8>)> {
         self.settle(id);
+        self.check_device();
         let inst = self.instances.get(&id)?;
         if inst.bound && inst.surface.is_empty() {
             return Some(([1, 1, 0], vec![0; 4]));

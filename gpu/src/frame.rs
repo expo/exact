@@ -531,7 +531,7 @@ impl Module {
         // of their current picture (`presented`). A frame in a buffer is
         // presented when the reader is handed it (`Module::buffer`), once the
         // GPU has finished it, not here.
-        let first: Vec<First> = open
+        let mut first: Vec<(u32, First)> = open
             .canvases
             .iter()
             .filter(|c| c.complete && (c.texture.is_some() || c.buffer.is_some_and(|(_, p)| p)))
@@ -543,7 +543,7 @@ impl Module {
                         .then(|| i.presented.pending())
                         .flatten(),
                 };
-                (first.seen.is_some() || first.presented.is_some()).then_some(first)
+                (first.seen.is_some() || first.presented.is_some()).then_some((c.id, first))
             })
             .collect();
         // Canvases whose HUD reads `cpuSubmitMs`: only then is the submit timed.
@@ -558,28 +558,41 @@ impl Module {
             crate::performance::time(!timed.is_empty(), || gpu.queue.submit(commands)).1
         };
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-        let mut first = first;
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-        let rode = {
-            let ride = open
-                .canvases
-                .iter()
-                .all(|c| c.failed.is_none() && c.complete);
+        let (rode, submit_ms, metal_gate) = {
+            let ride = !commands.is_empty()
+                && open
+                    .canvases
+                    .iter()
+                    .all(|c| c.failed.is_none() && c.complete);
             let drawn = open.canvases.iter().filter(|c| c.texture.is_some()).count();
+            let gate = (ride && !first.is_empty()).then(|| {
+                Arc::new(std::sync::Mutex::new(MetalFirstGate {
+                    pending: std::mem::take(&mut first),
+                    scheduled: false,
+                    decided: false,
+                }))
+            });
             let before = ride
-                .then(|| ride_next_submit(&gpu.queue, std::mem::take(&mut first)))
+                .then(|| ride_next_submit(&gpu.queue, gate.clone()))
                 .flatten();
+            let metal_gate = if before.is_some() {
+                gate
+            } else {
+                if let Some(gate) = gate {
+                    first = std::mem::take(&mut gate.lock().unwrap().pending);
+                }
+                None
+            };
             let submit_ms = submit(commands);
             // Every drawable of the frame, or none: a surface that drew
             // nothing into its target is in no command buffer, and then each
             // is presented the ordinary way (one already scheduled is not
             // scheduled twice).
             let rode = before.is_some_and(|n| presented_with_submit(&gpu.queue) == Some(n + drawn));
-            (rode, submit_ms)
+            (rode, submit_ms, metal_gate)
         };
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
-        let rode = (false, submit(commands));
-        let (rode, submit_ms) = rode;
+        let (rode, submit_ms) = (false, submit(commands));
         if let Some(ms) = submit_ms {
             for id in &timed {
                 if let Some(i) = self.instances.get_mut(id) {
@@ -588,6 +601,7 @@ impl Module {
             }
         }
         let mut ok = true;
+        let mut failed_ids = Vec::new();
         for c in open.canvases {
             // Android presents a canvas that asks for its next texture on its
             // acquiring thread, just before it acquires that one. A canvas's
@@ -641,6 +655,7 @@ impl Module {
             if let Some(SurfaceError(e)) = inst.surface.take_error() {
                 self.error = e;
                 ok = false;
+                failed_ids.push(c.id);
             }
             // The next drawable, waited for while this frame is composited;
             // the presenter hears when it lands.
@@ -668,14 +683,71 @@ impl Module {
             #[cfg(target_arch = "wasm32")]
             let _ = c.request;
         }
-        // Presented the ordinary way, or not on Metal: shown as far as the
-        // module can tell.
+        let uncaptured = self.take_uncaptured();
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        if let Some(gate) = metal_gate {
+            let mut deferred = None;
+            let mut withheld = Vec::new();
+            {
+                let mut g = gate.lock().unwrap();
+                let items = std::mem::take(&mut g.pending);
+                if uncaptured {
+                    withheld.extend(items.into_iter().map(|(id, _)| id));
+                } else {
+                    let mut clean = Vec::with_capacity(items.len());
+                    for (id, item) in items {
+                        if failed_ids.contains(&id) {
+                            withheld.push(id);
+                        } else {
+                            clean.push((id, item));
+                        }
+                    }
+                    if g.scheduled {
+                        deferred = Some(clean.into_iter().map(|(_, f)| f).collect::<Vec<_>>());
+                    } else {
+                        g.pending = clean;
+                    }
+                }
+                g.decided = true;
+            }
+            for id in withheld {
+                if let Some(inst) = self.instances.get_mut(&id) {
+                    inst.invalidate();
+                }
+            }
+            if let Some(clean) = deferred.filter(|c| !c.is_empty()) {
+                shown(clean);
+            }
+        }
+        // Presented the ordinary way, or not on Metal: mark only canvases whose
+        // flush succeeded, and re-arm any canvas whose first-frame mark was withheld
+        // so an idle healthy canvas cannot stay hidden after a peer or device error.
         if !first.is_empty() {
-            shown(first);
+            if uncaptured {
+                for (id, _) in first {
+                    if let Some(inst) = self.instances.get_mut(&id) {
+                        inst.invalidate();
+                    }
+                }
+            } else {
+                let mut clean = Vec::with_capacity(first.len());
+                for (id, item) in first {
+                    if failed_ids.contains(&id) {
+                        if let Some(inst) = self.instances.get_mut(&id) {
+                            inst.invalidate();
+                        }
+                    } else {
+                        clean.push(item);
+                    }
+                }
+                if !clean.is_empty() {
+                    shown(clean);
+                }
+            }
         }
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         self.pipeline_cache.save_metal();
-        ok && !self.take_uncaptured()
+        ok && !uncaptured
     }
 
     /// Whether a canvas's first frame has been handed to the compositor: a
@@ -959,24 +1031,42 @@ fn shown(first: Vec<First>) {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+struct MetalFirstGate {
+    pending: Vec<(u32, First)>,
+    scheduled: bool,
+    decided: bool,
+}
+
 /// Ask the Metal queue to present, with its next submit, what that submit
 /// draws (the patched wgpu-hal), and to say when that command buffer has
 /// been scheduled if canvases in it draw their `first` frame; how many
-/// drawables it has presented that way so far. `None` off Metal, with
-/// `first` shown at once.
+/// drawables it has presented that way so far. `None` off Metal.
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-fn ride_next_submit(queue: &wgpu::Queue, first: Vec<First>) -> Option<usize> {
+fn ride_next_submit(
+    queue: &wgpu::Queue,
+    gate: Option<Arc<std::sync::Mutex<MetalFirstGate>>>,
+) -> Option<usize> {
     // SAFETY: a flag, a callback and a counter of the queue wgpu owns;
     // nothing is encoded.
-    let Some(q) = (unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }) else {
-        if !first.is_empty() {
-            shown(first);
-        }
-        return None;
-    };
+    let q = unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }?;
     q.present_with_next_submit(true);
-    if !first.is_empty() {
-        q.on_next_submit_scheduled(Box::new(move || shown(first)));
+    if let Some(gate) = gate {
+        q.on_next_submit_scheduled(Box::new(move || {
+            let ready = {
+                let mut g = gate.lock().unwrap();
+                g.scheduled = true;
+                g.decided.then(|| {
+                    std::mem::take(&mut g.pending)
+                        .into_iter()
+                        .map(|(_, f)| f)
+                        .collect::<Vec<_>>()
+                })
+            };
+            if let Some(first) = ready.filter(|f| !f.is_empty()) {
+                shown(first);
+            }
+        }));
     }
     Some(q.counts().presented_with_submit)
 }

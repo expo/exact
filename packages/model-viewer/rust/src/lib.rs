@@ -248,7 +248,7 @@ impl Surface for ModelViewer {
     fn device_ready(&mut self, _: wgpu::Features, limits: wgpu::Limits) {
         self.max_buffer_size = limits.max_buffer_size;
     }
-    fn device_lost(&mut self) {
+    fn device_lost(&mut self) -> bool {
         self.hotspots.device_lost();
         if let Some(model) = self.model_mut() {
             model.renderer = None;
@@ -262,6 +262,7 @@ impl Surface for ModelViewer {
                 self.assets.requests.push(name.clone());
             }
         }
+        true
     }
     fn lifecycle(&mut self, event: Lifecycle) {
         if matches!(event, Lifecycle::Hidden | Lifecycle::Interrupted) {

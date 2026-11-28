@@ -1005,9 +1005,9 @@ exact2 does the hit testing: it knows each row's box in the surface, ripples the
 
 **What a window gives, and what closes it.** Seen on a Pixel 10 Pro XL (Android 16):
 
-- The alert is its own window above the activity's (`dumpsys window`: `ty=APPLICATION fmt=TRANSPARENT`,
-  `fl=DIM_BEHIND`), with the window manager's dim behind it at Material's 32%, which also darkens the page under the
-  system bars. The menu is `ty=APPLICATION_PANEL`, `fl=WATCH_OUTSIDE_TOUCH`. Each takes the window focus.
+- The alert is its own edge-to-edge non-floating dialog window (`ExactAlertDialog`) above the activity's, painting
+  Material's 32% scrim in a fullscreen backdrop view instead of `FLAG_DIM_BEHIND` so Android's `DisplayPolicy` keeps
+  the page's status and navigation bar appearance over the scrim. The menu is `ty=APPLICATION_PANEL`, `fl=WATCH_OUTSIDE_TOUCH`. Each takes the window focus.
 - Back and Escape go to the window by the system's own routing, and the reader says it was dismissed. A tap outside
   dismisses a menu and does nothing to an alert; a tap on a page button under either presses nothing. An alert's
   cancel, Back and Escape close it and run nothing (unless its `closedby` is `none`); a row's tap closes the
@@ -1027,9 +1027,9 @@ exact2 does the hit testing: it knows each row's box in the surface, ripples the
 
 A surface the reader cannot make (no window to attach to, a kind it does not know) is answered with 9: exact2 closes it, says so in the journal, and the page is live again. exact2's half of that is held by a test; no phone has refused one.
 
-**Motion** is the platform's. The dialog has what the platform gives its window, with nothing set here. Filmed: it
-fades and settles into place over about 180 ms as its scrim fades in, complete in every frame, and leaves in about
-140 ms with its scrim gone in about 50.
+**Motion** respects the system's animation scale and "remove animations". The alert uses a fade-only window
+animation (`res/anim/exact_alert_*`, `res/values/motion.xml`, 180 ms in / 140 ms out) so its fullscreen scrim fades
+without scaling inward from the screen edges.
 
 **The menu is given its motion**, since the platform gives none to a popup it did not place (Charlie's ruling of
 2026-10-12: the window keeps Exact's placement, and Android animates it). Checked on a Pixel 10 Pro XL first:
@@ -1134,7 +1134,7 @@ The title, subtitle, Up arrow, action icons and unselected destinations use the 
 | Buttons | the header's, leading before the heading and trailing after it, 4 dp from the side: a 24 dp symbol in a 48 dp target (`onSurfaceVariant`) for a symbol button; a constrained badge face (a single filled box child holding a picture, initial text or symbol, matching Apple's `BadgeFace`) at 36 dp inside a 48 dp target with authored fill, corners, `object-fit` and fallback; else a text button (label-large, `primary`, 12 dp padding, at least 58 dp wide) | icon buttons, avatar buttons and text buttons, the same metrics |
 | Held | the ripple (above), in a 40 dp circle on an icon, a pill on a text button | the ripple, bounded by the icon button's 40 dp circle |
 
-A level-1 heading is the same small bar: Material's medium and large bars, which collapse as the content scrolls, are S3's, and so is the change of colour as a transition (it switches in one frame here; Compose animates it). The Up arrow goes Back in Back's own order (D6, `Presenter::system_back`), so it presses the route's authored Back control where there is one, which is then no item of the bar. A full-screen route (`navigationPresentation="fullscreen"`) has no Up arrow, and its Back control is the bar's leading item, where Material's full-screen dialog has a close icon. A `modal` route is a sheet and has no bar: its header stays in the sheet as written (below). A pushed route with no header of the bar's has no bar at all: Android's Back is the system's, not a bar's button. A route that says `navigationBar="none"` keeps its header in the page.
+A level-1 heading is the same small bar: Material's medium and large bars, which collapse as the content scrolls, are S3's, and so is the change of colour as a transition (it switches in one frame here; Compose animates it). The Up arrow goes Back in Back's own order (D6, `Presenter::system_back`), so it presses the route's authored Back control where there is one, which is then no item of the bar. A full-screen route (`navigationPresentation="fullscreen"`) has no Up arrow, and its Back control is the bar's leading item, where Material's full-screen dialog has a close icon. A header-shaped `modal` sheet projects the same 64 dp small bar (growing with `font_scale`) beneath its drag handle and ignores `header` `height` and `min-height` (LLP 1115.001 D11, LLP 1156.008.001 B5). A pushed route with no header of the bar's has no bar at all: Android's Back is the system's, not a bar's button. A route with `navigationBar="none"`, or a header with `appearance="none"`, keeps its header in flow for custom bar heights or chrome.
 
 **Search in a header** stays in the page, under the bar: a header that holds an `input type="search"` (or a
 `tablist`) is not taken out whole. What the bar shows of it (the heading, the buttons, and whatever else holds neither) is, and the field keeps its place in what is left of the header. Material's own answer is a search bar that opens a search view, or a search action in the bar; neither is built.

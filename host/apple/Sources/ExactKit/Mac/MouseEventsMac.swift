@@ -623,7 +623,7 @@ extension NodeView {
     }
 
     /// A `DragEvent`'s point line: from the content box, and the modifiers held.
-    func dragLine(_ windowPoint: NSPoint) -> String {
+    package func dragLine(_ windowPoint: NSPoint) -> String {
         let point = local(windowPoint), box = contentBox()
         return "\(Double(point.x - box.minX)),\(Double(point.y - box.minY)),\(KeyCodes.held(NSEvent.modifierFlags))"
     }

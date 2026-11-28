@@ -1119,8 +1119,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         } else {
             cell.configurationUpdateHandler = { [weak self] cell, state in
                 let highlights = row.pressable && !row.disabled && Self.pressIsCells(row, self?.host.presenter.views[id])
-                cell.backgroundConfiguration = highlights && (state.isHighlighted || state.isSelected)
-                    ? cell.defaultBackgroundConfiguration().updated(for: state) : .clear()
+                var ground = highlights && (state.isHighlighted || state.isSelected) ? cell.defaultBackgroundConfiguration().updated(for: state) : .clear()
+                if let insets = (cell as? GroupedCell)?.listInsets.background { ground.backgroundInsets = insets } // UIKit runs this after the cell gave them
+                cell.backgroundConfiguration = ground
             }
             cell.backgroundConfiguration = .clear()
         }

@@ -1,4 +1,7 @@
-use crate::{json, load_gpu_with_requirements, DeviceFailure, Module};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::load_gpu_with_requirements;
+use crate::{json, DeviceFailure, Module};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::Ordering;
 
 pub(crate) struct RecoveryFailure {
@@ -37,6 +40,7 @@ impl RecoveryFailure {
 
 impl Module {
     /// Recover only a lost device; presentation configuration survives every error.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn recover(&mut self) -> Result<String, RecoveryFailure> {
         let Some(instance) = self.instance.clone() else {
             return Ok("{\"status\":\"no device\",\"instances\":[]}".into());
@@ -49,7 +53,7 @@ impl Module {
         let gpu = load_gpu_with_requirements(instance, None, self.requirements)
             .await
             .map_err(RecoveryFailure::device)?;
-        self.set_gpu(gpu);
+        self.set_gpu_inner(gpu, false);
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         if let Err(error) = self.reattach_layers() {
             self.lose_device();
@@ -65,10 +69,11 @@ impl Module {
     }
 
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-    fn reattach_layers(&mut self) -> Result<(), String> {
+    pub(crate) fn reattach_layers(&mut self) -> Result<(), String> {
         let gpu = self.gpu.as_ref().ok_or("no device")?;
-        for inst in self.instances.values_mut() {
-            if self.refused.contains_key(inst.name.as_str()) {
+        let mut staged = Vec::new();
+        for (&id, inst) in &mut self.instances {
+            if self.refused.contains_key(inst.name.as_str()) || inst.presentation.is_some() {
                 continue;
             }
             let (Some(layer), Some(config)) = (inst.layer, inst.config.as_mut()) else {
@@ -86,14 +91,14 @@ impl Module {
             inst.hdr = crate::target::configure(&*inst.surface, &gpu.adapter, &caps, config);
             inst.alpha_modes = caps.alpha_modes;
             target.configure(&gpu.device, config);
-            inst.surface
-                .device_ready(gpu.device.features(), gpu.device.limits());
-            let destination = crate::ColorTarget::of(config);
-            inst.surface.color_space_granted(destination.space);
-            inst.set_color_target(destination).map_err(|e| e.0)?;
-            inst.surface
-                .prepare_assets(&gpu.device, &gpu.queue, destination.format);
+            staged.push((id, target));
+        }
+        for (id, target) in staged {
+            let inst = self.instances.get_mut(&id).unwrap();
+            let destination = crate::ColorTarget::of(inst.config.as_ref().unwrap());
             inst.presentation = Some(std::sync::Arc::new(target));
+            inst.finish_attach(gpu, destination, true)
+                .map_err(|e| e.0)?;
         }
         Ok(())
     }

@@ -18,4 +18,8 @@
         <item name="android:windowEnterAnimation">@anim/exact_menu_in_bottom_end</item>
         <item name="android:windowExitAnimation">@anim/exact_menu_out</item>
     </style>
+    <style name="ExactAlert">
+        <item name="android:windowEnterAnimation">@anim/exact_alert_in</item>
+        <item name="android:windowExitAnimation">@anim/exact_alert_out</item>
+    </style>
 </resources>

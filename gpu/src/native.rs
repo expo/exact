@@ -243,6 +243,7 @@ pub fn create_headless(name: &str) -> u32 {
 pub fn poll_input_before_draw(id: u32) {
     with(|m| {
         if let Some(i) = m.instances.get_mut(&id) {
+            i.poll_input = true;
             i.surface.poll_input_before_draw();
         }
     });

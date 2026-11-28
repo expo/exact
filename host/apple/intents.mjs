@@ -356,7 +356,7 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
 
 /** Gather constants under the shipping module's name and compiler context.
  * The binary, compiler and normalized arguments identify the cached constants. */
-export function nativeIntentModule({ moduleName, binary, sources, args, keyArgs, directory, swiftc, runApple }) {
+export function nativeIntentModule({ moduleName, binary, sources, args, keyArgs, stamp = '', directory, swiftc, runApple }) {
   const binaries = [binary].flat();
   const sourceIndex = new Map();
   for (let i = 0; i < sources.length; i++) {
@@ -368,7 +368,7 @@ export function nativeIntentModule({ moduleName, binary, sources, args, keyArgs,
     if (sourceIndex.has(a)) return ['source', sourceIndex.get(a)];
     return a;
   });
-  const hash = createHash('sha256').update(JSON.stringify([swiftc, normalized, gathered, sources.map(f => readFileSync(f, 'utf8'))]));
+  const hash = createHash('sha256').update(JSON.stringify([swiftc, normalized, gathered, stamp, sources.map(f => readFileSync(f, 'utf8'))]));
   for (const file of binaries) hash.update(readFileSync(file));
   const digest = hash.digest('hex').slice(0, 16);
   const dir = resolve(directory, digest), values = resolve(dir, `${moduleName}.swiftconstvalues`), template = resolve(dir, `${moduleName}.template.swiftconstvalues`);

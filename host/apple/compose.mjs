@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, symlinkSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
-import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { within } from '../../scripts/paths.mjs';
 import { directDependencies, swiftPackageFiles, swiftPackageInventories, swiftPackageOutputs } from '../../scripts/package-libraries.mjs';
@@ -15,6 +15,7 @@ import { packageConfig, sourceString } from '../../js/bake/src/package-config.mj
 import { machOType } from './assets.mjs';
 import { capturePrivacyManifest } from './privacy.mjs';
 const exactRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
+const resolvedSdkRoots = new Map(), resolvedToolchainRoots = new Map();
 // The Swift that composes an app's module with its packages' implementations (LLP 1133.001 D5), which
 // host/apple/build.mjs writes beside the module's sources and never commits.
 
@@ -147,7 +148,7 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
   }
   if (graph.length) assertSwiftLock(app, graph);
   const placed = new Map();
-  const productsByDirectory = new Map(), resources = [], frameworks = [];
+  const productsByDirectory = new Map(), keysByDirectory = new Map(), resources = [], frameworks = [];
   const swiftRootDir = app ? swiftRoot(app) : undefined;
   let tmpNonce = 0, cacheGen = 0, stopped = false;
   const stoppers = new Set();
@@ -191,28 +192,242 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
   const copies = new Set(packageCopies?.flat());
   const kept = async (name, args, sources, imports, dir, compile, keyOptions) => {
     const sourceTexts = sources.map(f => readFileSync(f, 'utf8'));
-    const pathSensitive = keyOptions?.pathSensitive ?? sourceTexts.some(isPathSensitive);
+    const pathSensitive = Boolean(keyOptions?.pathSensitive) || sourceTexts.some(isPathSensitive);
     const keyArgs = packageKeyArgs(args, dir, packageDir, copies, name, { root: exactRoot, appDir: app?.dir, swiftRootDir, pathSensitive });
     const key = createHash('sha256').update(JSON.stringify([name, keyArgs, sourceTexts, imports, swiftc])).digest('hex').slice(0, 20);
+    const uncached = () => ({ key: `uncached-${randomUUID()}`, cached: false });
     const entry = resolve(packagesRoot, 'packages-kept', `${name}-${key}`);
-    const outputs = d => readdirSync(d).filter(f => f.startsWith(`${name}.`));
-    if (existsSync(entry)) {
+    const outputs = d => readdirSync(d).filter(f => f.startsWith(`${name}.`) && !f.endsWith('.d'));
+    if (keyOptions?.allowCache !== false && existsSync(entry)) {
       for (const f of outputs(entry)) copyFileSync(resolve(entry, f), resolve(dir, f));
-      return key;
+      return { key, cached: true };
     }
     await compile();
+    if (keyOptions?.allowCache === false || (keyOptions?.canCache && !keyOptions.canCache())) return uncached();
     const making = `${entry}.${process.pid}.${++tmpNonce}.tmp`;
     rmSync(making, { recursive: true, force: true });
     mkdirSync(making, { recursive: true });
     for (const f of outputs(dir)) copyFileSync(resolve(dir, f), resolve(making, f));
     try { renameSync(making, entry); }
     catch { rmSync(making, { recursive: true, force: true }); }
-    return key;
+    return { key, cached: true };
   };
-  const headerStamp = headerDir => readdirSync(headerDir, { withFileTypes: true })
-    .filter(e => e.isFile() && /\.(?:h|hh|hpp|modulemap)$/.test(e.name))
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map(e => [e.name, readFileSync(resolve(headerDir, e.name), 'utf8')]);
+  const objcSkipDir = new Set(['.git', 'node_modules', 'target', '.build']);
+  const objcSkipFile = name => /\.(?:swift|md)$/i.test(name) || name === 'exact.json' || name === 'package.json' || name === '.DS_Store';
+  const sdkRootOf = (sdkName, explicitSdk) => {
+    if (explicitSdk) { try { return realpathSync(explicitSdk); } catch { return null; } }
+    if (!resolvedSdkRoots.has(sdkName)) {
+      const out = spawnSync('xcrun', ['--sdk', sdkName, '--show-sdk-path'], { encoding: 'utf8' });
+      const raw = out.status === 0 ? out.stdout.trim() : '';
+      let real = null;
+      if (raw) { try { real = realpathSync(raw); } catch {} }
+      resolvedSdkRoots.set(sdkName, real);
+    }
+    return resolvedSdkRoots.get(sdkName);
+  };
+  const toolchainRootOf = sdkName => {
+    if (!resolvedToolchainRoots.has(sdkName)) {
+      const out = spawnSync('xcrun', ['--sdk', sdkName, '--find', 'clang'], { encoding: 'utf8' });
+      const clang = out.status === 0 ? out.stdout.trim() : '';
+      let real = null;
+      if (clang) { try { real = realpathSync(resolve(dirname(clang), '..')); } catch {} }
+      resolvedToolchainRoots.set(sdkName, real);
+    }
+    return resolvedToolchainRoots.get(sdkName);
+  };
+  const isWithin = (p, root) => Boolean(root) && (p === root || p.startsWith(root + sep));
+  const tzStampOf = ms => `${process.env.TZ ?? ''}|${new Date(ms).toString()}`;
+  const tokenizeMake = str => {
+    const out = [];
+    let cur = '';
+    for (let k = 0; k < str.length; k++) {
+      const ch = str[k];
+      if (ch === '\\') {
+        let run = 1;
+        while (k + run < str.length && str[k + run] === '\\') run++;
+        const next = str[k + run];
+        if (next === ' ' || next === '#' || next === ':') {
+          cur += '\\'.repeat(Math.floor(run / 2));
+          if (run % 2 === 1) { cur += next; k += run; }
+          else k += run - 1;
+        } else {
+          cur += '\\'.repeat(run);
+          k += run - 1;
+        }
+      } else if (ch === '$' && str[k + 1] === '$') {
+        cur += '$'; k++;
+      } else if (/\s/.test(ch)) {
+        if (cur) { out.push(cur); cur = ''; }
+      } else {
+        cur += ch;
+      }
+    }
+    if (cur) out.push(cur);
+    return out;
+  };
+  const parseMakeDeps = text => {
+    const joined = text.replace(/\\\r?\n/g, ' ');
+    const rules = [];
+    for (const rawLine of joined.split(/\r?\n/)) {
+      const line = rawLine.replace(/^\s+/, '');
+      if (!line) continue;
+      let colon = -1;
+      for (let k = 0; k < line.length; k++) {
+        if (line[k] === '\\') { k++; continue; }
+        if (line[k] === ':') { colon = k; break; }
+      }
+      if (colon < 0) return null;
+      const targets = tokenizeMake(line.slice(0, colon));
+      const deps = tokenizeMake(line.slice(colon + 1));
+      if (!targets.length) return null;
+      rules.push({ targets, deps });
+    }
+    return rules.length ? rules : null;
+  };
+  const objcSnapshots = new Map();
+  const snapshotObjc = p => {
+    if (objcSnapshots.has(p.module)) return objcSnapshots.get(p.module);
+    const headerPath = resolve(p.objcModule.header);
+    const headerDir = dirname(headerPath);
+    const entries = new Map(); // logical path -> { path, real, sha256, mtimeMs, tzStamp, text }
+    const byReal = new Map(); // canonical realpath -> { sha256, mtimeMs, tzStamp, text }
+    const queue = [];
+    const addFile = filePath => {
+      const abs = resolve(filePath);
+      if (entries.has(abs)) return;
+      let st, real;
+      try { st = statSync(abs); if (!st.isFile()) return; real = realpathSync(abs); } catch { return; }
+      let content = byReal.get(real);
+      if (!content) {
+        const buf = readFileSync(real);
+        const mtimeMs = Math.floor(st.mtimeMs);
+        content = { sha256: createHash('sha256').update(buf).digest('hex'), mtimeMs, tzStamp: tzStampOf(mtimeMs), text: buf.toString('latin1') };
+        byReal.set(real, content);
+      }
+      entries.set(abs, { path: abs, real, ...content });
+      queue.push({ path: abs, text: content.text });
+    };
+    addFile(headerPath);
+    for (const src of p.objc) addFile(src);
+    // Capture local #include/#import closure (including ../Shared/*.inc, hidden files, and symlinks)
+    // without copying or mutating the authored include layout.
+    const includeRe = /^[ \t]*#[ \t]*(?:include|import|include_next)[ \t]*(?:"([^"]+)"|<([^>]+)>)/gm;
+    while (queue.length) {
+      const cur = queue.shift();
+      let m;
+      includeRe.lastIndex = 0;
+      while ((m = includeRe.exec(cur.text))) {
+        const target = m[1] ?? m[2];
+        const bases = m[1] ? [dirname(cur.path), headerDir] : [headerDir];
+        for (const base of bases) {
+          const cand = isAbsolute(target) ? target : resolve(base, target);
+          if (existsSync(cand)) { addFile(cand); break; }
+        }
+      }
+    }
+    // Also scan headerDir and source dirs (preserving logical paths for symlinks, cycle-guarded by ancestor realpath).
+    const walkedLogicalDirs = new Set();
+    const walkDir = (dir, ancestors = new Set()) => {
+      const absDir = resolve(dir);
+      if (walkedLogicalDirs.has(absDir)) return;
+      let real;
+      try { real = realpathSync(absDir); } catch { return; }
+      if (ancestors.has(real)) return;
+      walkedLogicalDirs.add(absDir);
+      const nextAncestors = new Set(ancestors);
+      nextAncestors.add(real);
+      let dirEntries;
+      try { dirEntries = readdirSync(absDir, { withFileTypes: true }); } catch { return; }
+      for (const e of dirEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+        const full = resolve(absDir, e.name);
+        let st;
+        try { st = statSync(full); } catch { continue; }
+        if (st.isDirectory()) { if (!objcSkipDir.has(e.name)) walkDir(full, nextAncestors); }
+        else if (st.isFile() && !objcSkipFile(e.name)) addFile(full);
+      }
+    };
+    walkDir(headerDir);
+    for (const src of p.objc) walkDir(dirname(src));
+    const records = [...entries.values()];
+    const splicedTexts = records.map(r => r.text.replace(/\\\r?\n/g, ''));
+    const usesHasInclude = splicedTexts.some(t => /\b__has_include(?:_next)?\b/.test(t));
+    const usesComputedInclude = splicedTexts.some(t => /^[ \t]*#[ \t]*(?:include|import|include_next)[ \t]*[^"<\s]/m.test(t));
+    const hasTokenPaste = splicedTexts.some(t => t.includes('##') || t.includes('%:%:'));
+    const pathSensitive = hasTokenPaste || splicedTexts.some(t => /\b(?:__FILE__|__FILE_NAME__|__BASE_FILE__|__builtin_FILE|assert|NSAssert|__TIMESTAMP__)\b/.test(t));
+    const usesTimestamp = hasTokenPaste || splicedTexts.some(t => /\b__TIMESTAMP__\b/.test(t));
+    const labelOf = file => {
+      if (pathSensitive) return file;
+      if (app?.dir && (file === app.dir || file.startsWith(app.dir + sep))) return `app:${relative(app.dir, file).split(sep).join('/')}`;
+      if (file === exactRoot || file.startsWith(exactRoot + sep)) return `exact:${relative(exactRoot, file).split(sep).join('/')}`;
+      return `rel:${relative(headerDir, file).split(sep).join('/')}`;
+    };
+    const rootPairs = [];
+    for (const raw of new Set([headerDir, ...p.objc.map(s => dirname(resolve(s)))])) {
+      try { rootPairs.push([raw, realpathSync(raw)]); } catch {}
+    }
+    const canonEntries = new Map();
+    for (const r of records) {
+      canonEntries.set(r.path, r.real);
+      for (const [rawRoot, realRoot] of rootPairs) {
+        if (isWithin(r.path, rawRoot)) canonEntries.set(resolve(realRoot, relative(rawRoot, r.path)), r.real);
+      }
+      const parent = dirname(r.path);
+      try {
+        if (!lstatSync(parent).isSymbolicLink()) canonEntries.set(resolve(realpathSync(parent), basename(r.path)), r.real);
+      } catch {}
+    }
+    const digest = records
+      .map(r => usesTimestamp
+        ? [labelOf(r.path), labelOf(r.real), r.sha256, r.mtimeMs, r.tzStamp]
+        : [labelOf(r.path), labelOf(r.real), r.sha256])
+      .sort(([a, ar], [b, br]) => a.localeCompare(b) || ar.localeCompare(br));
+    const snap = { headerPath, headerDir, entries, canonEntries, digest, pathSensitive, usesTimestamp, uncacheable: usesHasInclude || usesComputedInclude };
+    objcSnapshots.set(p.module, snap);
+    return snap;
+  };
+  const objcUnchanged = (snap, extraDeps = []) => {
+    for (const r of snap.entries.values()) {
+      try {
+        if (realpathSync(r.path) !== r.real) return false;
+        const st = statSync(r.path);
+        if (snap.usesTimestamp) {
+          const mtimeMs = Math.floor(st.mtimeMs);
+          if (mtimeMs !== r.mtimeMs || tzStampOf(mtimeMs) !== r.tzStamp) return false;
+        }
+        if (createHash('sha256').update(readFileSync(r.path)).digest('hex') !== r.sha256) return false;
+      } catch { return false; }
+    }
+    for (const dep of extraDeps) {
+      const abs = resolve(dep);
+      let real;
+      try { real = realpathSync(abs); } catch { return false; }
+      const known = snap.entries.get(abs)?.real ?? snap.canonEntries.get(abs);
+      if (!known || known !== real) return false;
+    }
+    return true;
+  };
+  const verifyDepfile = (depPath, expectedTarget, snap, requiredReals, allowedRoots, allowedReals = new Set()) => {
+    if (!existsSync(depPath)) return false;
+    const rules = parseMakeDeps(readFileSync(depPath, 'utf8'));
+    if (!rules || !rules.length) return false;
+    let targetReal;
+    try { targetReal = realpathSync(expectedTarget); } catch { return false; }
+    let matchedTargetWithRequired = false;
+    const localDeps = [];
+    for (const rule of rules) {
+      const targetMatched = rule.targets.some(target => { try { return realpathSync(target) === targetReal; } catch { return false; } });
+      let ruleRequired = false;
+      for (const dep of rule.deps) {
+        let real;
+        try { real = realpathSync(dep); } catch { return false; }
+        if (requiredReals.has(real)) ruleRequired = true;
+        if (allowedReals.has(real) || allowedRoots.some(root => isWithin(real, root))) continue;
+        localDeps.push(dep);
+      }
+      if (targetMatched && ruleRequired) matchedTargetWithRequired = true;
+    }
+    return matchedTargetWithRequired && objcUnchanged(snap, localDeps);
+  };
   const libraries = packages.map(p => ({ module: p.module, load: `lib${p.module}.dylib`, framework: p.module,
     built: resolve(packageDir, `${p.module}.dylib`), placed: resolve(packageDir, `${p.module}.framework`),
     privacyManifest: p.privacyManifest }));
@@ -261,55 +476,96 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
         await runner.run(retryObj); await runner.run(retryStub);
       }
     };
-    const seamKey = await kept('ExactPackage', [...seamObject, ...stub], [seam], [], dir, compileSeam);
+    const { key: seamKey } = await kept('ExactPackage', [...seamObject, ...stub], [seam], [], dir, compileSeam);
     copyFileSync(resolve(dir, 'ExactPackage.tbd'), resolve(dir, 'libexact_modules.tbd'));
+    const packageKeys = new Map();
+    const productImportRoots = [];
+    if (product?.imports) {
+      for (let k = 0; k < product.imports.length; k++) {
+        if (['-I', '-F', '-Fsystem'].includes(product.imports[k]) && product.imports[k + 1]) {
+          try { productImportRoots.push(realpathSync(product.imports[k + 1])); } catch {}
+        }
+      }
+    }
     const compilePackage = async (p, i, cp) => {
       const adapter = resolve(dir, `adapter-${p.module}.swift`);
       writeFileSync(adapter, packageAdapter(p));
       const sources = [...packageCopies[i], adapter];
       // Compile package Objective-C sources via Clang module.modulemap + -I (LLP 1156.008.001 A3).
       const objcImports = [], objcObjects = [], objcInputs = [];
+      let objcSnap = null, objcCacheable = true, objcSdkInfo = null, objcModuleMapReal = null;
       if (p.objc?.length && p.objcModule) {
         const objcDir = resolve(dir, `objc-${p.module}`);
+        rmSync(objcDir, { recursive: true, force: true });
         mkdirSync(objcDir, { recursive: true });
-        const headerPath = realpathSync(p.objcModule.header);
-        const headerDir = dirname(headerPath);
-        const headers = headerStamp(headerDir);
-        const moduleMapKey = [p.objcModule.name, basename(headerPath), headers];
-        writeFileSync(resolve(objcDir, 'module.modulemap'), `module ${p.objcModule.name} {\n  header ${JSON.stringify(headerPath)}\n  export *\n}\n`);
+        const snap = snapshotObjc(p);
+        objcSnap = snap;
+        objcCacheable = !snap.uncacheable;
+        const moduleMapPath = resolve(objcDir, 'module.modulemap');
+        writeFileSync(moduleMapPath, `module ${p.objcModule.name} {\n  header ${JSON.stringify(snap.headerPath)}\n  export *\n}\n`);
+        objcModuleMapReal = realpathSync(moduleMapPath);
         objcImports.push('-I', objcDir);
-        objcInputs.push(moduleMapKey);
+        objcInputs.push([p.objcModule.name, basename(snap.headerPath), snap.digest]);
         const [sdkName, targetFlags] = packageTargets.get(dir);
         const targetAt = targetFlags.indexOf('-target'), sdkAt = targetFlags.indexOf('-sdk');
         const clangTarget = targetAt >= 0 ? ['-target', targetFlags[targetAt + 1]] : [];
         const clangSdk = sdkAt >= 0 ? ['-isysroot', targetFlags[sdkAt + 1]] : [];
         const clangFsys = [];
         for (let k = 0; k < targetFlags.length; k++) if (targetFlags[k] === '-Fsystem') clangFsys.push('-iframework', targetFlags[k + 1]);
-        const headerAllText = headers.map(([, t]) => t).join('\n');
+        objcSdkInfo = { sdkName, explicitSdk: clangSdk[1] };
+        const clangRoots = () => [sdkRootOf(sdkName, clangSdk[1]), toolchainRootOf(sdkName), existsSync(cp) ? realpathSync(cp) : null].filter(Boolean);
         for (let j = 0; j < p.objc.length; j++) {
           const src = p.objc[j];
+          const srcReal = realpathSync(src);
           const objName = `${p.module}_objc_${j}`;
           const objPath = resolve(dir, `${objName}.o`);
+          const depPath = resolve(objcDir, `${objName}.d`);
           const clangArgs = ['--sdk', sdkName, 'clang', '-O2', '-fobjc-arc', '-fobjc-arc-exceptions', '-fmodules',
-            `-fmodules-cache-path=${cp}`, ...clangTarget, ...clangSdk, ...clangFsys, '-I', headerDir, '-c', src, '-o', objPath];
-          const objcPathSensitive = /\b(?:__FILE__|__FILE_NAME__|__builtin_FILE|assert|NSAssert)\b/.test(readFileSync(src, 'utf8') + headerAllText);
-          const objKey = await kept(objName, clangArgs, [src], [headers], dir, () => runner.run(clangArgs), { pathSensitive: objcPathSensitive });
+            `-fmodules-cache-path=${cp}`, ...clangTarget, ...clangSdk, ...clangFsys,
+            '-I', snap.headerDir, '-MD', '-MF', depPath, '-c', src, '-o', objPath];
+          const objResult = await kept(objName, clangArgs, [src], [snap.digest], dir, () => {
+            rmSync(depPath, { force: true });
+            return runner.run(clangArgs);
+          }, {
+            pathSensitive: snap.pathSensitive,
+            allowCache: !snap.uncacheable,
+            canCache: () => verifyDepfile(depPath, objPath, snap, new Set([srcReal]), clangRoots()),
+          });
+          objcCacheable &&= objResult.cached;
           objcObjects.push(objPath);
-          objcInputs.push(objKey);
+          objcInputs.push(objResult.key);
         }
       }
       const sdkImports = p.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...product.imports] : [];
-      const object = [...objectArgs(p.module, sources, dir, cp), ...objcImports, ...sdkImports, ...buildCondition];
+      const swiftDepArgs = objcSnap ? ['-emit-dependencies'] : [];
+      const swiftObjPath = resolve(dir, `${p.module}.o`);
+      const swiftObjDepPath = resolve(dir, `${p.module}.d`);
+      const object = [...objectArgs(p.module, sources, dir, cp), ...objcImports, ...sdkImports, ...swiftDepArgs, ...buildCondition];
       const pkgOs = dir === packageDir ? (ios ? tv ? 'tvos' : 'ios' : 'macos')
         : packageTargets.get(dir)[1].some(arg => arg.includes('-apple-ios')) ? 'ios' : 'macos';
       const floor = minimum && typeof minimum === 'object' ? minimum[pkgOs] : minimum;
-      const link = [...flags(dir, cp), '-emit-library', resolve(dir, `${p.module}.o`), ...objcObjects,
+      const link = [...flags(dir, cp), '-emit-library', swiftObjPath, ...objcObjects,
         '-L', dir, '-lexact_modules', ...systemFrameworks([p], pkgOs, floor),
         ...moduleLibraryLinkArgs({ wrapped, module: p.module }), ...(p.swiftPackages?.length ? product.link : []), '-o', resolve(dir, `${p.module}.dylib`)];
-      await kept(p.module, [...object, ...link], sources, [seamKey, product?.digest, ...objcInputs], dir, async () => {
+      const sourceReals = new Set(sources.map(s => realpathSync(s)));
+      const pkgResult = await kept(p.module, [...object, ...link], sources, [seamKey, product?.digest, ...objcInputs], dir, async () => {
+        rmSync(swiftObjDepPath, { force: true });
         await runner.run(object);
         await runner.run(link);
-      });
+      }, objcSnap ? {
+        pathSensitive: objcSnap.pathSensitive,
+        allowCache: objcCacheable,
+        canCache: () => {
+          const seamReals = readdirSync(dir)
+            .filter(f => f.startsWith('ExactPackage.') || f.startsWith('libexact_modules.'))
+            .map(f => { try { return realpathSync(resolve(dir, f)); } catch { return null; } })
+            .filter(Boolean);
+          const allowedReals = new Set([...sourceReals, objcModuleMapReal, ...seamReals]);
+          const roots = [sdkRootOf(objcSdkInfo.sdkName, objcSdkInfo.explicitSdk), toolchainRootOf(objcSdkInfo.sdkName), existsSync(cp) ? realpathSync(cp) : null, ...(p.swiftPackages?.length ? productImportRoots : [])].filter(Boolean);
+          return objcCacheable && verifyDepfile(swiftObjDepPath, swiftObjPath, objcSnap, sourceReals, roots, allowedReals);
+        },
+      } : undefined);
+      packageKeys.set(p.module, pkgResult.key);
       copyFileSync(resolve(dir, `${p.module}.dylib`), resolve(dir, `lib${p.module}.dylib`));
     };
     const jobs = Math.max(1, Math.min(packages.length, Number(process.env.EXACT_SWIFT_JOBS) || Math.min(availableParallelism(), 4)));
@@ -333,6 +589,7 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
     } else if (failed.length) {
       throw failed[0].err;
     }
+    keysByDirectory.set(dir, packageKeys);
     } finally { runner.release(); }
   };
   const place = dir => {
@@ -342,9 +599,17 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
     }
     return placed.get(dir);
   };
-  const imports = dir => (productsByDirectory.get(dir) ?? []).flatMap(p => p.imports);
+  const objcImports = dir => packages
+    .filter(p => p.objc?.length && p.objcModule)
+    .flatMap(p => ['-I', resolve(dir, `objc-${p.module}`)]);
+  const imports = dir => [...(productsByDirectory.get(dir) ?? []).flatMap(p => p.imports), ...objcImports(dir)];
   const link = dir => (productsByDirectory.get(dir) ?? []).flatMap(p => p.link);
-  return { graph, place, stop: stopAllPlacements, libraries, frameworks, resources, imports, link, products: dir => productsByDirectory.get(dir) ?? [] };
+  const stamp = dir => JSON.stringify([
+    ...packages.map(p => [p.module, keysByDirectory.get(dir)?.get(p.module) ?? null,
+      createHash('sha256').update(readFileSync(resolve(dir, `${p.module}.dylib`))).digest('hex')]),
+    ...(productsByDirectory.get(dir) ?? []).map(p => p.digest),
+  ]);
+  return { graph, place, stop: stopAllPlacements, libraries, frameworks, resources, imports, link, stamp, products: dir => productsByDirectory.get(dir) ?? [] };
 }
 
 const swiftPathIdentity = path => basename(path).replace(/\.git$/i, '').toLowerCase();

@@ -70,7 +70,7 @@ const WEB_HOST_GROUPS = {
   storage: ['storage-request.js', 'storage.js', 'storage-fs.js', 'storage-image.js', 'storage-sqlite.js',
     'storage-worker.js', 'sqlite3.mjs', 'sqlite3.wasm'],
   rust: ['rust-glue.js'],
-  gpu: ['gpu-glue.js', 'pace.js', 'gpu-assets.js', 'gpu-pads.js', 'gpu-tier.js', 'gpu-refusal.js'],
+  gpu: ['gpu-glue.js', 'pace.js', 'gpu-assets.js', 'gpu-pads.js', 'gpu-tier.js', 'gpu-refusal.js', 'gpu-children.js'],
   gpuModules: ['gpu-modules.js'],
   gpuJobs: ['gpu-jobs.js', 'gpu-jobs-worker.js'],
   native: ['native-glue.js'],

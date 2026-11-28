@@ -19,9 +19,12 @@
 //!   top edge, the navigation bar's at its bottom, and the window's unsafe
 //!   bands at either side of a covered page;
 //! - a route the shell shows in a sheet (a `modal` one, or one pushed
-//!   inside it, LLP 1115.001 D10) has no bar: its header stays in the page,
-//!   and it is inset by the sheet's visible drag handle at its top and the system's
-//!   bar under the sheet's foot (`presenter/stage.rs`);
+//!   inside it, LLP 1115.001 D10, LLP 1156.008.001 B5) projects a header-shaped
+//!   `header` into the sheet's own Material 3 small top app bar (64 dp floor,
+//!   growing with `font_scale`) beneath its drag handle and reserves both at
+//!   its top edge (plus the gesture bar at its foot, `presenter/stage.rs`).
+//!   `navigationBar="none"` on the route or `appearance="none"` on `header`
+//!   leaves the header in flow when an app draws or sizes its own sheet bar;
 //! - each route so inset is a content owner whose local insets are that
 //!   room, and the page's side insets, which its content reads as
 //!   `var(--exact-safe-area-inset-*)` (LLP 1123 D9).

@@ -95,27 +95,31 @@ enum DragItems {
     /// on the drags' copy queue (`DragFiles.copies`) in a folder of its own
     /// in `scratch` (`DragFiles.place`) under the name it is offered under,
     /// the descriptor closed before the file is answered. A copy that fails
-    /// takes its folder with it.
+    /// takes its folder with it. The progress returned counts the copy, which
+    /// the system hands the destination, and its cancel stops the copy (LLP
+    /// 1094.000 D17).
     static func appFile(_ entry: String, _ name: String, _ scratch: Scratch, _ journal: DragFiles.Journal, open: @escaping DragFiles.Opener = DragFiles.open) -> Load {
         { completion in
+            let progress = Progress(totalUnitCount: -1)
             DragFiles.copies.addOperation {
                 let folder = scratch.directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
                 let url = folder.appendingPathComponent(name)
                 do {
+                    if progress.isCancelled { throw POSIXError(.ECANCELED) }
                     let fd = try open(entry, journal).get()
                     let placed = Result {
                         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                        try DragFiles.place(fd, at: url)
+                        try DragFiles.place(fd, at: url, progress: progress)
                     }
                     Darwin.close(fd)
                     try placed.get()
                     completion(url, false, nil)
                 } catch {
                     try? FileManager.default.removeItem(at: folder)
-                    completion(nil, false, journal.failed(entry, error.localizedDescription))
+                    completion(nil, false, DragFiles.isCancel(error) ? DragFiles.cancelled(entry, journal) : journal.failed(entry, error.localizedDescription))
                 }
             }
-            return nil
+            return progress
         }
     }
 

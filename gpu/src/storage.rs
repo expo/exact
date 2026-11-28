@@ -3,7 +3,7 @@ use std::path::Path;
 
 impl Module {
     /// Give a canvas its session's resolved directories before its first bind.
-    /// The module neither retains paths nor creates directories.
+    /// The module retains the paths for device-loss reconstruction and creates no directories.
     pub fn storage(&mut self, id: u32, data: &Path, cache: &Path, temporary: &Path) -> bool {
         let Some(inst) = self.instances.get_mut(&id) else {
             self.error = "no such canvas".into();
@@ -17,6 +17,11 @@ impl Module {
             self.error = "storage needs three absolute directory paths".into();
             return false;
         }
+        inst.storage_dirs = Some([
+            data.to_path_buf(),
+            cache.to_path_buf(),
+            temporary.to_path_buf(),
+        ]);
         inst.surface.storage(data, cache, temporary);
         inst.drain();
         true

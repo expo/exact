@@ -194,8 +194,31 @@ pub struct DropEvent {
     pub text: String,
     /// The drag's first link that is not a file, `""` when it carries none.
     pub url: String,
+    /// HTML's `dataTransfer.dropEffect` (LLP 1094.000 D16): a drop's
+    /// operation, and at a source's `dragend` the drag's outcome.
+    pub drop_effect: DropEffect,
     /// The modifier keys held.
     pub held: super::KeyModifiers,
+}
+
+/// What a drag did, as HTML's `dropEffect` names it (LLP 1094.000 D16).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DropEffect {
+    /// Nothing took it, or it has not dropped.
+    #[default]
+    None,
+    /// A destination took a copy, the one operation Exact offers.
+    Copy,
+}
+
+impl DropEffect {
+    /// HTML's name for it.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DropEffect::None => "none",
+            DropEffect::Copy => "copy",
+        }
+    }
 }
 
 /// `n` finite numbers, then the optional modifiers, from comma-separated
@@ -259,12 +282,14 @@ impl DropEvent {
             files,
             text,
             url,
+            drop_effect: DropEffect::Copy,
             held,
         })
     }
 
-    /// A drag's `dragenter` or `dragleave`: the point line alone, no data
-    /// (the DOM keeps a drag's data from a page until the drop).
+    /// A drag's `dragenter` or `dragleave`, or a source's `dragstart`: the
+    /// point line alone, no data (the DOM keeps a drag's data from a page
+    /// until the drop, and a source's is its node's own).
     pub fn parse_point(payload: &str) -> Option<DropEvent> {
         let ([offset_x, offset_y], held) = numbers(payload)?;
         Some(DropEvent {
@@ -273,7 +298,23 @@ impl DropEvent {
             files: Vec::new(),
             text: String::new(),
             url: String::new(),
+            drop_effect: DropEffect::None,
             held,
+        })
+    }
+
+    /// A source's `dragend`: the point line, then the drag's outcome on a
+    /// line of its own, `copy` or `none`.
+    pub(crate) fn parse_end(payload: &str) -> Option<DropEvent> {
+        let (point, effect) = payload.split_once('\n')?;
+        let drop_effect = match effect {
+            "copy" => DropEffect::Copy,
+            "none" => DropEffect::None,
+            _ => return None,
+        };
+        Some(DropEvent {
+            drop_effect,
+            ..DropEvent::parse_point(point)?
         })
     }
 
@@ -285,6 +326,7 @@ impl DropEvent {
             Value::list(self.files.iter().map(|f| Value::str(f)).collect()),
             Value::str(&self.text),
             Value::str(&self.url),
+            Value::str(self.drop_effect.as_str()),
             Value::Bool(self.held.shift),
             Value::Bool(self.held.ctrl),
             Value::Bool(self.held.alt),

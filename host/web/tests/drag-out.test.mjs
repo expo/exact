@@ -1,7 +1,7 @@
 // LLP 1094.000 D6, D8: the browser's drag of a draggable node, through the page's own `drag-out.js`, pan and swipe
 // glue and drag rules, in Chromium, Firefox and WebKit under Playwright's mouse: what the drag carries, what keeps it
 // from the node, a field's down turning it off until the next down, a swipe beside it, and another script's draggable,
-// in any case, left its own drag.
+// in any case, left its own drag; and the node's drag start and end around the page's own drop (D16).
 import { afterAll, beforeAll, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { browserMissing } from '../../../scripts/agent-playwright.mjs';
@@ -37,6 +37,7 @@ ${rules}
     <div id="height2" style="height:50px;touch-action:none;background:#aaa"></div>
     <div id="clip2" style="height:60px;overflow:hidden"><div id="target2" style="width:100%;height:100%;box-sizing:border-box"><div id="handle2" style="height:100%;touch-action:none;background:#999"></div></div></div>
   </button>
+  <div id="zone" style="left:340px;top:400px;width:200px;height:100px"></div>
 </main>
 <script type="module">
   import { listen, writeDraggable } from './drag-out.js';
@@ -80,6 +81,18 @@ ${rules}
   }
   for (const el of document.querySelectorAll('[data-foreign]')) el.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', el.id + "'s own"));
   if (!new URL(location.href).searchParams.has('waiting')) listen(document);
+  // The card hears its drag's start and end, as a target that binds them marks it; a zone takes the drop, and a later
+  // window listener may cancel the start.
+  window.sourceLog = []; window.cancelNext = false;
+  const card = byId('card');
+  card.exactDragEvents = true;
+  card.addEventListener('exactdragstart', () => sourceLog.push('start'));
+  card.addEventListener('exactdragend', (e) => sourceLog.push('end ' + e.detail.effect));
+  const zone = byId('zone');
+  zone.addEventListener('dragenter', (e) => { e.preventDefault(); sourceLog.push('enter'); });
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  zone.addEventListener('drop', (e) => { e.preventDefault(); sourceLog.push('drop'); });
+  window.addEventListener('dragstart', (e) => { if (cancelNext) e.preventDefault(); });
   window.addEventListener('dragstart', (e) => drags.push({ target: e.target.id, prevented: e.defaultPrevented,
     kinds: [...e.dataTransfer.items].map((i) => i.kind), text: e.dataTransfer.getData('text/plain'),
     uris: e.dataTransfer.getData('text/uri-list') }));
@@ -211,6 +224,39 @@ for (const [engine, missing] of [['chromium', chromium().unavailable], ['firefox
       expect([went(fast), fast.begins]).toEqual([[], [3]]);
       const upright = await drag(page, '#swipe', [0, 70], { steps: 3 });
       expect([went(upright).map((d) => d.text), upright.begins]).toEqual([engine === 'firefox' ? [] : ['swipe row'], []]);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  // LLP 1094.000 D16: the node hears its drag's start before the page's own `dragenter` of it and its end after the
+  // drop, with the browser's `dropEffect`; a drag begun at a picture inside it is its own; a start a later listener
+  // cancels tells nothing.
+  need(engine, missing)(`${engine}: a draggable node hears its drag begin and end around the page's own drop`, async () => {
+    const browser = await suiteBrowser(engine);
+    try {
+      const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+      await page.goto(`http://127.0.0.1:${server.port}/`);
+      await page.waitForFunction('window.ready');
+      const run = async (from, to, cancel = false) => {
+        if (engine === 'webkit') {
+          await page.reload();
+          await page.waitForFunction('window.ready');
+        }
+        await page.evaluate((cancel) => { sourceLog.length = 0; cancelNext = cancel; }, cancel);
+        const a = await page.locator(from).boundingBox(), b = to && await page.locator(to).boundingBox();
+        await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+        await page.mouse.down();
+        // With no target, along the top, past the draggable box there, which takes no drop
+        await page.mouse.move(b ? b.x + b.width / 2 : 760, b ? b.y + b.height / 2 : 30, { steps: 20 });
+        await page.mouse.up();
+        await page.waitForTimeout(300);
+        return page.evaluate(() => [...sourceLog]);
+      };
+      expect(await run('#label', '#zone')).toEqual(['start', 'enter', 'drop', 'end copy']);
+      expect(await run('#label', null)).toEqual(['start', 'end none']);
+      expect(await run('#picture', '#zone')).toEqual(['start', 'enter', 'drop', 'end copy']);
+      expect(await run('#label', '#zone', true)).toEqual([]);
     } finally {
       await browser.close();
     }
