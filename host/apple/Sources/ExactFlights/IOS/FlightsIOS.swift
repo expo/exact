@@ -18,8 +18,9 @@ import UIKit
 import ExactCore
 import ExactKit
 
-/// A leaver held for a route change (`BuiltInFlights.holds`).
-struct Hold { let view: NodeView, to: NodeView, source: FlightSource, lines: CGRect, picture: UIView? }
+/// A leaver held for a route change (`BuiltInFlights.holds`), with its destination's id then: the list pool can rebind
+/// that view to another row before the transition starts.
+struct Hold { let view: NodeView, to: NodeView, toID: UInt32, source: FlightSource, lines: CGRect, picture: UIView? }
 
 /// Where a leaver was shown when its name moved on.
 struct FlightSource {

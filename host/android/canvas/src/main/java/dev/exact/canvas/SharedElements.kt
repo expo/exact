@@ -53,7 +53,7 @@ internal class SharedElements(
     private class Flight(val source: Long, val from: Pose, var progress: Float, var ancestorOpacity: Float,
         val route: Boolean, val content: RenderNode?, val box: RectF?, val contentBox: RectF?) {
         var shown: Pose = from
-        /** Takes a route crossing's pose off the destination: rest = posed × [0] + ([1], [2]). */
+        /** Takes a route crossing's pose off the destination: rest = (posed x × [0] + [2], posed y × [1] + [3]). */
         var unpose = floatArrayOf(1f, 1f, 0f, 0f)
     }
     private val elements = LinkedHashMap<Long, Element>()

@@ -103,6 +103,28 @@ final class RouteFlightsIOSTests: XCTestCase {
         XCTAssertTrue(crossed, "the destroyed route's held name flies home")
         XCTAssertEqual(p.flights.keys.sorted(), [2, 8])
         XCTAssertTrue(p.flights[2]?.fade?.view === held)
+        // A held destination the list pool rebinds to another row before the pop starts is no longer the pair's.
+        let landed = Date().addingTimeInterval(3)
+        while nav.transitionCoordinator != nil || !p.flights.isEmpty, Date() < landed { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        p.views[6] = arriver
+        delegate.willShow = nil
+        nav.pushViewController(detail, animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        p.holdFlights(leaving: detail.view, arriving: list.view, zoom: nil)
+        XCTAssertTrue((p.flightHost as? BuiltInFlights)?.holds[ObjectIdentifier(arriver)]?.to === leaver)
+        p.views.removeValue(forKey: 2)
+        leaver.id = 20
+        leaver.props["sharedElement"] = "row 20"
+        p.views[20] = leaver
+        crossed = false
+        delegate.willShow = { nav in
+            guard let coordinator = nav.transitionCoordinator else { return }
+            crossed = p.crossFlights(coordinator, leaving: detail.view, arriving: list.view, zoom: nil)
+        }
+        nav.popViewController(animated: true)
+        let rebound = Date().addingTimeInterval(1)
+        while !crossed, Date() < rebound { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
+        XCTAssertEqual(p.flights.keys.sorted(), [8], "the badge still flies home, and nothing flies to the rebound row")
     }
 
     func testOnlyANameEachRouteHoldsOncePairs() {

@@ -22,7 +22,7 @@ extension Presenter {
         guard !DisplayPreferences.reducedMotion, zoom == nil else { return }
         let pairs = Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
         for pair in pairs {
-            holds[ObjectIdentifier(pair.from)] = Hold(view: pair.from, to: pair.to, source: flightSource(pair.from), lines: pair.from.flightLines,
+            holds[ObjectIdentifier(pair.from)] = Hold(view: pair.from, to: pair.to, toID: pair.to.id, source: flightSource(pair.from), lines: pair.from.flightLines,
                                                       picture: pair.to.kind == "image" ? nil : Self.picture(of: pair.from))
         }
         // An unanimated pop takes its route out of the window at once and flies nothing: let its holds go.
@@ -73,7 +73,7 @@ extension Presenter {
         // hand-built screen.
         guard coordinator.isAnimated, !DisplayPreferences.reducedMotion, zoom == nil else { holds = [:]; return false }
         // A pop flies the pairs its Back commit held, taken before it ran (LLP 1013.004 D1).
-        let kept = holds.values.filter { $0.view.isDescendant(of: leaving) && views[$0.to.id] === $0.to && draws($0.to, in: arriving) }
+        let kept = holds.values.filter { $0.view.isDescendant(of: leaving) && $0.to.id == $0.toID && views[$0.toID] === $0.to && draws($0.to, in: arriving) }
         let pairs = (kept.isEmpty ? Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
                                   : kept.map { (from: $0.view, to: $0.to) }.sorted { $0.from.id < $1.from.id })
             .filter { $0.from.window != nil }
