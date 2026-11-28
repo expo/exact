@@ -1121,3 +1121,63 @@ fn a_style_block_is_no_template_but_the_web_and_linux_draw_the_file() {
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
     }
 }
+
+/// A row's disclosure is drawn as its role (LLP 1084.000 D1), so a marked
+/// `sf/chevron.right` is no use of the SF name: the blank-glyph warning comes
+/// for an unmarked use of the same source whichever is inlined first, and none
+/// comes for a marked use alone. The image's other warnings come once for its
+/// source either way.
+#[test]
+fn a_marked_chevron_leaves_the_platform_warning_to_an_unmarked_use() {
+    let warned = |name: &str, view: &str| {
+        let path = app(name, "\"ios\": {}, \"web\": {}", "", view);
+        let (plan, warnings) = contract::compile_path_all_warned(&path, false);
+        plan.unwrap_or_else(|e| panic!("{e:?}"));
+        let count = |id: &str| warnings.iter().filter(|w| w.id == id).count();
+        let level = count("lower-level-without-heading");
+        assert_eq!(level, 1, "{name}: {warnings:?}");
+        count("lower-symbol-platform")
+    };
+    let chevron = "component Chevron\n  view\n    image \"symbol:sf/chevron.right\" aria-level=2\n";
+    let row = "      list\n        row\n          text \"A\"\n          Chevron()\n";
+    let row_first = format!("component App\n  view\n    column\n{row}      Chevron()\n\n{chevron}");
+    let outside_first =
+        format!("component App\n  view\n    column\n      Chevron()\n{row}\n{chevron}");
+    let marked_only = format!("component App\n  view\n    column\n{row}\n{chevron}");
+    assert_eq!(warned("disclosure-row-first", &row_first), 1);
+    assert_eq!(warned("disclosure-outside-first", &outside_first), 1);
+    assert_eq!(warned("disclosure-marked", &marked_only), 0);
+}
+
+/// Lowering forgets the compile before's row disclosures before it can stop
+/// short: an unmarked image where the compile before marked one keeps its alias
+/// warning, though a refused font ends lowering before this view's rows are
+/// read.
+#[test]
+fn a_compile_forgets_the_disclosures_of_the_compile_before() {
+    // Each compile's refusal ids (none when it compiles) and its alias warnings
+    let aliased = |name: &str, source: &str| {
+        let path = app(name, "\"ios\": {}", "", source);
+        let (result, warnings) = contract::compile_path_all_warned(&path, false);
+        let refused: Vec<String> = result
+            .err()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        let aliases = warnings
+            .iter()
+            .filter(|w| w.id == "lower-symbol-alias")
+            .count();
+        (refused, aliases)
+    };
+    let view = |container: &str| {
+        format!("component App\n  view\n    column\n      {container}\n        row\n          image \"symbol:sf/chevron.forward\"\n")
+    };
+    assert_eq!(aliased("forget-marked", &view("list")), (vec![], 0));
+    let refused = view("column") + "\nfont \"Missing\" = \"assets/nope.ttf\"\n";
+    assert_eq!(
+        aliased("forget-unmarked", &refused),
+        (vec!["lower-font-unreadable".to_owned()], 1)
+    );
+}

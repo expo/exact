@@ -16,6 +16,7 @@ use std::{cell::Cell, rc::Rc};
 use templates::numeric_template_error;
 pub(super) use templates::{
     check_numeric_prop, fold_attr_template, fold_attr_templates, name_template_holes, number_holes,
+    template_text,
 };
 
 /// The host's names a value reads (LLP 1123 D9, D16), as a refusal lists them.

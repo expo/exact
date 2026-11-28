@@ -4,7 +4,10 @@ use std::borrow::Cow;
 
 /// A template's text once its component arguments are substituted. The caller
 /// evaluates numeric holes with the VM in the app's function and type scope.
-fn template_text(e: &Expr, constant: &impl Fn(&Expr, bool) -> Option<String>) -> Option<String> {
+pub(crate) fn template_text(
+    e: &Expr,
+    constant: &impl Fn(&Expr, bool) -> Option<String>,
+) -> Option<String> {
     let Expr::Template(parts, _) = e else {
         return None;
     };

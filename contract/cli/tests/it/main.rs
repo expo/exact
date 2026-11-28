@@ -266,6 +266,7 @@ mod return_presses;
 mod route_parts;
 mod routeless_header;
 mod routes;
+mod row_disclosure;
 mod row_lookup;
 mod rust_shapes;
 mod safe_area;

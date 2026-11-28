@@ -36,6 +36,7 @@ pub mod controls;
 pub mod dataset;
 mod decorations;
 mod disabled_look;
+mod disclosure;
 mod edits;
 mod error;
 pub mod expr;
@@ -594,6 +595,9 @@ fn lower_body(
     if theme::retained::stops_at_refusal() && !l.errors.is_empty() {
         return Err(Vec::new());
     }
+    // @ref LLP 1084.000 D1 — each row's chevron, found once the app's icons are declared; its refusals
+    // join the rest
+    l.errors.extend(disclosure::find_row_disclosures(checked));
     l.declare_decorations(file)?;
     l.declare_atoms(file)?;
     // Styles: rows only, literal only (the parser holds the second), by name.
