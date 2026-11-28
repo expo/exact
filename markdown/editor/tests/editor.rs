@@ -474,6 +474,15 @@ fn return_in_formatted_items_preserves_text_formats_and_caret() {
 }
 
 #[test]
+fn return_on_a_range_set_inside_a_delimiter_keeps_the_delimiter_whole() {
+    // `setSelectionRange` keeps a range as given, here part of a closer.
+    let mut p = Page::open("- **bold**");
+    p.e.set_selection(8, 9);
+    p.input(Input::Paragraph, "");
+    assert_eq!(p.source(), "- **bold**\n- ");
+}
+
+#[test]
 fn return_and_code_beside_a_backtick_pad_the_span_and_undo_in_one_step() {
     // Return after a literal backtick: the left half's padding is hidden
     // syntax, and the caret starts the right half's text.

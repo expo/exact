@@ -688,23 +688,29 @@ fn newline(source: &str, mut sel: B) -> Draft {
     let split = !coded && (p.kind.is_some() || p.quoted);
     if split {
         // At an inline edge, keep the whole construct on its side of the break.
-        for edge in [&mut sel.start, &mut sel.end] {
+        let keep = |mut edge: usize| {
             while let Some(c) = analysis
                 .constructs
                 .iter()
-                .find(|c| c.inner.start == *edge || c.inner.end == *edge)
+                .find(|c| c.inner.start == edge || c.inner.end == edge)
             {
-                let at = if c.inner.start == *edge {
+                let at = if c.inner.start == edge {
                     c.outer.start
                 } else {
                     c.outer.end
                 };
-                if at == *edge {
+                if at == edge {
                     break;
                 }
-                *edge = at;
+                edge = at;
             }
-        }
+            edge
+        };
+        // An edge inside a delimiter moves past the other edge: the break
+        // goes beside the whole delimiter, and the selection never inverts.
+        let start = keep(sel.start);
+        let end = keep(sel.end.max(start));
+        sel = start.min(end)..end;
     }
     let plain = |text: String| {
         if split {

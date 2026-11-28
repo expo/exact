@@ -148,8 +148,18 @@ fn return_replaces_a_selection_through_an_inline_edge() {
             "\n[|cs](https://example.com)",
         ),
         ("|- **bo|ld**", "\n**|ld**"),
+        // A selection inside a delimiter breaks beside the whole delimiter.
+        ("- *|*|bold**", "- \n- |**bold**"),
+        ("- **bold|*|*", "- **bold**\n- |"),
     ] {
         assert_eq!(run(before, Command::Newline), after, "{before}");
+    }
+    // Replacements stay forward ranges a host can apply as they are.
+    for (start, end) in [(3, 4), (8, 9)] {
+        let edit = edit("- **bold**", Range::new(start, end), Command::Newline);
+        for (range, _) in &edit.replacements {
+            assert!(range.start <= range.end, "{start}..{end}: {range:?}");
+        }
     }
 }
 
