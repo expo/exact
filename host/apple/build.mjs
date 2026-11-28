@@ -800,8 +800,7 @@ async function main(args, lockHeld = false) {
   const swiftc = read('xcrun', ['--sdk', sdkName, 'swiftc', '--version']).stdout ?? '';
   // Where SwiftPM puts its products, once it has been asked (below).
   const binAnswer = resolve(swiftBuildRoot, `bin-path-${createHash('sha256').update(JSON.stringify([swiftc, swiftArgs])).digest('hex').slice(0, 16)}`);
-  // The simulator's entitlements go in the executable's text section (below); the arguments name the file. A repack base
-  // links them padded to their reserved room (sections.mjs reserveEntitlements), so a repack can write another app's.
+  // The simulator's entitlements go in its text section (below), padded for a repack base (sections.mjs reserveEntitlements).
   const entitlementsFile = (scratch, p) => resolve(scratch, `${p}-entitlements.plist${reservesPlan() ? '.reserved' : ''}`);
   const entitledArgs = (scratch, p) => ios && !device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementsFile(scratch, p)] : [];
   // A development build whose last link in this scratch was this app's starts the product's build here, where
@@ -1231,8 +1230,7 @@ async function main(args, lockHeld = false) {
         entitled = entitlements({...app, ...owner, widgetTV: tv, widgetHost: p === 'ExactHostIOS'}, null, true, appleReach, { simulator: true, distributed: distribution });
         const ent = resolve(linkRoot, `${p}-entitlements.plist`);
         // Written only when it differs: the early build may be reading it.
-        if (!existsSync(ent) || readFileSync(ent, 'utf8') !== entitled) writeFileSync(ent, entitled);
-        if (reservesPlan()) reserveEntitlements(ent);
+        if (!existsSync(ent) || readFileSync(ent, 'utf8') !== entitled) writeFileSync(ent, entitled); if (reservesPlan()) reserveEntitlements(ent);
       }
       // swift build does not see the Rust archive (or that plist, or a linked plan) change, so the executable is
       // dropped to be linked again: 0.4 s, and it was every build's. A development build drops only one linked from
@@ -1252,8 +1250,7 @@ async function main(args, lockHeld = false) {
       const debugMap = device && args.includes('--development') ? read('strip', ['-S', executable]) : null;
       if (debugMap && debugMap.status !== 0) throw new Error(`host/apple: strip -S ${executable} failed: ${debugMap.stderr || debugMap.error?.message || debugMap.status}`);
       if (linkedPlan && !shared && reservesPlan()) fitReservedPlan(executable, linkedPlan.dir);
-      // The section's size is the plist's again, as an unreserved link gives it: the room past it is zeros.
-      if (entitled && reservesPlan()) fitEntitlements(executable, entitled);
+      if (entitled && reservesPlan()) fitEntitlements(executable, entitled); // sized as an unreserved link sizes it
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.

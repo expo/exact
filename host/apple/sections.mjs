@@ -142,10 +142,11 @@ export function fitLinkedSections(executable, contents, { renewUuid = false, sec
   } finally { closeSync(fd); }
 }
 
-/** How often `text` appears in a thin Mach-O outside its linked sections (their whole room), its code signature and its
- * symbol string table: the bytes a repack keeps from the base that the app reads. An app's id there is compiled in, and
- * would ship in another app's repack. The string table holds symbol names and, in a simulator build, the debug map's
- * object paths (target/clients/<key>/<app id>/...), which nothing the app runs reads. */
+/** How often `text` appears in a thin Mach-O outside its linked sections (their whole room), its code signature and the
+ * strings only debug symbols (stabs) name: the bytes a repack keeps from the base that the app may read. An app's id
+ * there is compiled in, and would ship in another app's repack. A simulator build's debug map names its object paths
+ * (N_OSO: target/clients/<key>/<app id>/...), which nothing the app runs reads; any other symbol's name is counted
+ * (dladdr returns a local symbol's), and so is a debug string another symbol's name shares. */
 export function occurrencesOutsideLinked(executable, text) {
   const bytes = readFileSync(executable), needle = Buffer.from(text, 'utf8');
   if (!needle.length) return 0;
@@ -155,13 +156,31 @@ export function occurrencesOutsideLinked(executable, text) {
   const skip = textSections(commands).filter(s => [...Object.values(LINKED_SECTIONS), ...Object.values(ENTITLEMENTS_SECTION)].includes(s.name)).map(s => [s.offset, s.offset + s.room]);
   const signature = loadCommand(commands, LC_CODE_SIGNATURE);
   if (signature !== null) { const off = commands.readUInt32LE(signature + 8); skip.push([off, off + commands.readUInt32LE(signature + 12)]); }
-  const symtab = loadCommand(commands, LC_SYMTAB);
-  if (symtab !== null) { const off = commands.readUInt32LE(symtab + 16); skip.push([off, off + commands.readUInt32LE(symtab + 20)]); }
+  const { debug, named } = symbolStrings(bytes, commands);
+  const within = (ranges, at) => ranges.some(([from, to]) => at >= from && at + needle.length <= to);
   let count = 0;
   for (let at = bytes.indexOf(needle); at !== -1; at = bytes.indexOf(needle, at + 1)) {
-    if (!skip.some(([from, to]) => at >= from && at + needle.length <= to)) count++;
+    if (within(skip, at)) continue;
+    if (within(debug, at) && !named.some(([from, to]) => at < to && at + needle.length > from)) continue;
+    count++;
   }
   return count;
+}
+
+/** The string table's strings (file ranges, to their NUL) that debug symbols (stabs: n_type & N_STAB) name, and those
+ * every other symbol names. */
+function symbolStrings(bytes, commands) {
+  const symtab = loadCommand(commands, LC_SYMTAB), debug = [], named = [];
+  if (symtab === null) return { debug, named };
+  const symoff = commands.readUInt32LE(symtab + 8), nsyms = commands.readUInt32LE(symtab + 12);
+  const stroff = commands.readUInt32LE(symtab + 16), strsize = commands.readUInt32LE(symtab + 20);
+  for (let i = 0; i < nsyms && symoff + i * 16 + 16 <= bytes.length; i++) {
+    const strx = bytes.readUInt32LE(symoff + i * 16), type = bytes[symoff + i * 16 + 4];
+    if (!strx || strx >= strsize) continue;
+    const from = stroff + strx, end = bytes.indexOf(0, from), to = end === -1 || end > stroff + strsize ? stroff + strsize : end;
+    (type & 0xe0 ? debug : named).push([from, to]);
+  }
+  return { debug, named };
 }
 
 /** The offset of the first load command `cmd` in a Mach-O's header bytes, or null. */

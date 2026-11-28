@@ -69,25 +69,35 @@ test('a link takes each file padded to its reserved room, rewritten only when it
   expect(readFileSync(resolve(out, 'app.plan')).subarray(0, 300_000).every(b => b === 1)).toBe(true);
 });
 
-test('an app id counts only where a repack keeps the base\'s bytes: not in the linked sections, the code signature or the string table', () => {
+test('an app id counts only where a repack keeps the base\'s bytes: not in the linked sections, the code signature or a debug map\'s paths', () => {
   const id = 'com.example.base';
   // The fixture plus an LC_CODE_SIGNATURE whose blob, after __TEXT, names the id as a real signature does, and an
-  // LC_SYMTAB whose string table names it in a debug-map object path, as a simulator build's does.
-  const base = readFileSync(macho()), blob = Buffer.from(`\0\0${id}\0`), strings = Buffer.from(`\0/t/target/clients/k/${id}/ios-simulator/a.o\0`);
-  const bytes = Buffer.concat([base, blob, strings]);
+  // LC_SYMTAB: an N_OSO stab naming an object path with the id, as a simulator build's debug map does; a local symbol
+  // `_com.example.base` (a hidden C function's assembler name, which dladdr returns at run time); and an external
+  // symbol whose name is a suffix of the N_OSO path, which the linker may share.
+  const oso = `/t/target/clients/k/${id}/a.o`, strings = Buffer.from(`\0${oso}\0_${'x'.repeat(id.length)}\0`);
+  const nlist = (strx, type) => { const n = Buffer.alloc(16); n.writeUInt32LE(strx, 0); n[4] = type; return n; };
+  const symbols = Buffer.concat([nlist(1, 0x66), nlist(oso.length + 2, 0x0e), nlist(1 + oso.indexOf(id), 0x0f)]);
+  const base = readFileSync(macho()), blob = Buffer.from(`\0\0${id}\0`), bytes = Buffer.concat([base, blob, symbols, strings]);
   const sizeofcmds = bytes.readUInt32LE(20), at = 32 + sizeofcmds;
   bytes.writeUInt32LE(0x1d, at); bytes.writeUInt32LE(16, at + 4); bytes.writeUInt32LE(base.length, at + 8); bytes.writeUInt32LE(blob.length, at + 12);
-  bytes.writeUInt32LE(0x2, at + 16); bytes.writeUInt32LE(24, at + 20); bytes.writeUInt32LE(base.length + blob.length, at + 32); bytes.writeUInt32LE(strings.length, at + 36);
-  bytes.writeUInt32LE(4, 16); bytes.writeUInt32LE(sizeofcmds + 40, 20);
+  const symtab = (nsyms) => { bytes.writeUInt32LE(0x2, at + 16); bytes.writeUInt32LE(24, at + 20); bytes.writeUInt32LE(base.length + blob.length, at + 24); bytes.writeUInt32LE(nsyms, at + 28); bytes.writeUInt32LE(base.length + blob.length + symbols.length, at + 32); bytes.writeUInt32LE(strings.length, at + 36); };
+  symtab(1); bytes.writeUInt32LE(4, 16); bytes.writeUInt32LE(sizeofcmds + 40, 20);
   const sections = textSections(bytes), put = (name, skip = 0) => { const s = sections.find(x => x.name === name); bytes.write(id, s.offset + skip, 'utf8'); };
   put('__exact_plan'); put('__exact_compat', 20); put('__exact_hbc', 40); // the id in each linked section, even in its reserve
-  const exe = resolve(temp(), 'App'); writeFileSync(exe, bytes);
-  expect(occurrencesOutsideLinked(exe, id)).toBe(0);
-  expect(occurrencesOutsideLinked(exe, 'com.example.other')).toBe(0);
+  const exe = resolve(temp(), 'App'), count = (nsyms, text = id) => { symtab(nsyms); writeFileSync(exe, bytes); return occurrencesOutsideLinked(exe, text); };
+  expect(count(1)).toBe(0);
+  expect(count(1, 'com.example.other')).toBe(0);
+  // The local symbol's name is read at run time: counted, as is a string no symbol names. A path another symbol's
+  // name shares: counted too.
+  bytes.write(id, base.length + blob.length + symbols.length + oso.length + 3, 'utf8');
+  expect(count(1)).toBe(1);
+  expect(count(2)).toBe(1);
+  expect(count(3)).toBe(2);
   // Compiled in: a literal in __text (rust_entry's `.named("<app.id>")`, 6c2c8bda22), and one in __unwind_info.
-  put('__text', 3); put('__unwind_info'); writeFileSync(exe, bytes);
-  expect(occurrencesOutsideLinked(exe, id)).toBe(2);
-  expect(occurrencesOutsideLinked(exe, '')).toBe(0);
+  put('__text', 3); put('__unwind_info');
+  expect(count(2)).toBe(3);
+  expect(count(1, '')).toBe(0);
 });
 
 // A simulator executable's entitlements (simulator Security reads them by the section's size): linked with room, then
