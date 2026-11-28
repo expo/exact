@@ -107,6 +107,8 @@ test('a development archive is a repack base, and repack runs, only with EXACT_E
     expect(repackBase(simulator)).toBe(true);
     for (const other of [{ tv: true }, { distribution: true }]) expect(repackBase({ ...simulator, ...other })).toBe(false);
     expect(repackBase(simulator, { EXACT_EXPERIMENTAL: '1', EXACT_UPDATE_TRUST: 'production' })).toBe(false);
+    // A caller reads that it may ask before running this checkout's code (repack-capabilities.json).
+    expect(JSON.parse(readFileSync(new URL('./repack-capabilities.json', import.meta.url), 'utf8')).simulator).toBe(1);
     // A distributed build, or one that bakes production trust, is never a base.
     expect(repackBase({ ...archive, distribution: true })).toBe(false);
     expect(repackBase(archive, { EXACT_EXPERIMENTAL: '1', EXACT_UPDATE_TRUST: 'production' })).toBe(false);
