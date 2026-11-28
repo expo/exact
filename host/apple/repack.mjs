@@ -57,6 +57,7 @@ import { appleAssetsKey, bakedAssetInputs, frameworkInfo, frameworkVersions, ios
 import { buildInfo } from './buildinfo.mjs';
 import { ENTITLEMENTS_SECTION, fitEntitlements, fitLinkedSections, occurrencesOutsideLinked, readLinkedSections } from './sections.mjs';
 import { nativeExtras } from './native-extras.mjs';
+import { signsGrant } from './presence.mjs';
 import { renameZipPrefix } from './zip-rename.mjs';
 import { listAssets } from '../web/serve.mjs';
 import { thinTextures } from '../../scripts/texture-families.mjs';
@@ -189,7 +190,7 @@ export async function repack(args) {
 
   // The app's build claim, as build.mjs holds it: the one writer of its bake directory (bakeOutside) until this is done.
   const release = awaitBuildOutput(app, appleArtifacts(app).lock, () => console.error(`waiting for the Apple build of ${app.name} already running`));
-  let work = null, unzipping = null;
+  let work = null, unzipping = null, staged = null;
   try {
   // The bake, as build.mjs's buildBake prepares it for a development device archive, outside Cargo.
   const sdk = tool('xcrun', ['--sdk', SDK_NAME, '--show-sdk-path']).stdout.trim();
@@ -244,9 +245,14 @@ export async function repack(args) {
     const extras = nativeExtras(app, 'ios', graph.extensions, graph.contractSources); mark('extras');
     if (baseReceipt.build.nativeExtras !== extras) refuse('the app\'s Swift module inputs changed (a package use or import, data words, or the theme of an app with Swift)');
     const basePlist = readFileSync(resolve(base, 'Info.plist'), 'utf8');
+    // The bundle its plan names, not a sibling holding that plan (build.mjs --host: ExactHostIOS.app, id <app>.host), whose
+    // own identity (its id, a simulator's entitlements) this writes over.
+    const baseBundleId = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(basePlist)?.[1].replace(/&amp;/g, '&');
+    if (baseBundleId !== baseCompat.inputs?.app) refuse(`the base bundle is ${baseBundleId ?? 'unnamed'}, not the app its plan names (${baseCompat.inputs?.app})`);
     const differs = widgets && widgetBaseRefusal({ app: app.id, digest: widgetsDigest(app, [...packaged]) }, { app: baseCompat.inputs?.app, digest: baseReceipt.build.widgets, alarm: basePlist.includes('<key>ExactAlarmCountdown</key>') });
     if (differs) refuse(differs);
-    const appleReach = modulePlist(app, compat.reach, 'ios', graph.extensions, graph.contractSources);
+    // The host events its signed grants let packages take, as the full build gives them (CKSharingSupported, ExactHostEvents).
+    const appleReach = modulePlist(app, compat.reach, 'ios', graph.extensions, graph.contractSources, (line) => signsGrant(line, compat));
     mark('reach');
     // The entitlements, as the full build writes them: a simulator's are linked into the executable (build.mjs
     // entitledArgs) and written into its __TEXT,__entitlements below, where the base's room allows; a device archive's
@@ -288,7 +294,8 @@ export async function repack(args) {
     mark('copy');
     // The sections, as the full build fits them (placeCoreFramework for an app with widgets).
     const sections = resolve(bundle, widgets ? CORE : executable);
-    try { fitLinkedSections(sections, { plan, compat: compatText, bytecode }, { renewUuid: true }); }
+    // A simulator's UUID also takes its entitlements, which it fits below: they are bytes of its executable.
+    try { fitLinkedSections(sections, { plan, compat: compatText, bytecode }, { renewUuid: true, uuidWith: made.device ? [] : [Buffer.from(entitled)] }); }
     catch (error) { if (error.code === 'EXACT_SECTION_ROOM') refuse(`${error.message} (a base built before sections were reserved, or a plan that outgrew them)`); throw error; }
     // The executable's identity is the compat.json just fitted (assertAppleIdentity scans the whole file for it).
     const fitted = JSON.parse(readLinkedSections(sections).compat.toString('utf8'));
@@ -389,7 +396,9 @@ export async function repack(args) {
     mark('sign');
     const payload = resolve(work, 'out', 'Payload');
     mkdirSync(payload, { recursive: true }); renameSync(bundle, resolve(payload, name));
-    mkdirSync(dirname(ipa), { recursive: true }); rmSync(ipa, { force: true });
+    // Written beside the archive and renamed into place once whole: the base may be the archive itself (a template
+    // repacked in place), which the copy below still reads.
+    mkdirSync(dirname(ipa), { recursive: true }); staged = `${ipa}.repack-${process.pid}`; rmSync(staged, { force: true });
     // The base IPA, patched: only the entries whose bytes changed are removed and compressed again (the frameworks,
     // most of the archive, keep the base's compressed bytes).
     // (A renamed base: its entries take this bundle's name, and its executable is compared as this app's.)
@@ -399,14 +408,15 @@ export async function repack(args) {
     mark('compare');
     const changed = [...now.keys()].filter(rel => !before.has(rel) || !before.get(rel).equals(now.get(rel)));
     const removed = [...before.keys()].filter(rel => !now.has(rel));
-    if (apps[0] === name) cpSync(resolve(baseIpa), ipa); else renameZipPrefix(resolve(baseIpa), ipa, `Payload/${apps[0]}/`, prefix);
+    if (apps[0] === name) cpSync(resolve(baseIpa), staged); else renameZipPrefix(resolve(baseIpa), staged, `Payload/${apps[0]}/`, prefix);
     mark('copy-ipa');
     // (A renamed base's executable is in the archive under its old name: that entry goes, and this one is added.)
     const drop = [...[...changed.filter(rel => before.has(rel) && !(renamedAway.length && rel === executable)), ...removed].map(rel => prefix + rel), ...renamedAway];
-    if (drop.length) tool('zip', ['-q', '-d', ipa, '-@'], { input: drop.join('\n') + '\n' });
+    if (drop.length) tool('zip', ['-q', '-d', staged, '-@'], { input: drop.join('\n') + '\n' });
     mark('zip-delete');
     if (process.env.EXACT_REPACK_DEBUG) console.log(`changed: ${changed.join(' ')}`);
-    if (changed.length) tool('zip', ['-q', '-1', '-X', '-y', ipa, '-@'], { cwd: resolve(work, 'out'), input: changed.map(rel => prefix + rel).join('\n') + '\n' });
+    if (changed.length) tool('zip', ['-q', '-1', '-X', '-y', staged, '-@'], { cwd: resolve(work, 'out'), input: changed.map(rel => prefix + rel).join('\n') + '\n' });
+    renameSync(staged, ipa); staged = null;
     mark('archive');
     console.log(`host/apple: ${ipa} (repacked from the base's native build: ${Object.entries(times).map(([step, s], i, all) => `${step} ${(s - (all[i - 1]?.[1] ?? 0)).toFixed(2)}`).join(', ')})`);
     return { times, compat: compat.id };
@@ -414,6 +424,7 @@ export async function repack(args) {
     // An unzip still running on an early failure stops before its destination goes.
     if (unzipping) { unzipping.kill(); await unzipping.exited; }
     if (work) rmSync(work, { recursive: true, force: true });
+    if (staged) rmSync(staged, { force: true });
     release();
   }
 }

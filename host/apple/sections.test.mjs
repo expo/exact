@@ -56,6 +56,11 @@ test('renewing the UUID derives it from the old one and the new sections, the sa
   fitLinkedSections(one, contents, { renewUuid: true }); fitLinkedSections(two, contents, { renewUuid: true }); fitLinkedSections(other, { ...contents, plan: Buffer.from('q') }, { renewUuid: true });
   expect(uuid(one)).toBe(uuid(two)); expect(uuid(one)).not.toBe(uuid(other)); expect(uuid(one)).not.toBe('ab'.repeat(16));
   expect(uuid(one)[12]).toBe('5'); // a name-based UUID
+  // Other bytes of the executable it is derived from too (a simulator's entitlements): they alone tell two apart.
+  const none = macho(), entitled = macho(), others = macho();
+  fitLinkedSections(none, contents, { renewUuid: true, uuidWith: [] }); fitLinkedSections(entitled, contents, { renewUuid: true, uuidWith: [Buffer.from('<plist>a</plist>')] });
+  fitLinkedSections(others, contents, { renewUuid: true, uuidWith: [Buffer.from('<plist>b</plist>')] });
+  expect(uuid(none)).toBe(uuid(one)); expect(uuid(entitled)).not.toBe(uuid(one)); expect(uuid(entitled)).not.toBe(uuid(others));
 });
 
 test('a link takes each file padded to its reserved room, rewritten only when it changes', () => {

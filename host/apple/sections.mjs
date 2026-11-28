@@ -103,9 +103,10 @@ export const fitEntitlements = (executable, bytes) => fitLinkedSections(executab
 
 /** Write `contents` ({plan, compat, bytecode}: Buffers) into the executable's linked sections, in place: each section's
  * size becomes its new bytes, and the rest of its room is zeroed. Throws, changing nothing, when one does not fit.
- * `sections` names other __TEXT sections to fit the same way, as readLinkedSections takes them.
+ * `sections` names other __TEXT sections to fit the same way, as readLinkedSections takes them; `uuidWith`, other bytes
+ * the renewed UUID is derived from too.
  * The executable's code signature no longer matches; the caller signs it again. Returns each section's bytes and room. */
-export function fitLinkedSections(executable, contents, { renewUuid = false, sections: named = LINKED_SECTIONS } = {}) {
+export function fitLinkedSections(executable, contents, { renewUuid = false, uuidWith = [], sections: named = LINKED_SECTIONS } = {}) {
   const fd = openSync(executable, 'r+');
   try {
     const head = Buffer.alloc(32); readSync(fd, head, 0, 32, 0);
@@ -133,7 +134,7 @@ export function fitLinkedSections(executable, contents, { renewUuid = false, sec
       const at = loadCommand(commands, LC_UUID);
       if (at === null) throw new Error(`${executable} has no LC_UUID`);
       const hash = createHash('sha256').update(commands.subarray(at + 8, at + 24));
-      for (const { bytes } of plan) hash.update(createHash('sha256').update(bytes).digest());
+      for (const bytes of [...plan.map(({ bytes }) => bytes), ...uuidWith]) hash.update(createHash('sha256').update(bytes).digest());
       const uuid = hash.digest().subarray(0, 16);
       uuid[6] = (uuid[6] & 0x0f) | 0x50; uuid[8] = (uuid[8] & 0x3f) | 0x80; // an RFC 4122 name-based UUID's version and variant
       writeSync(fd, uuid, 0, 16, at + 8);
