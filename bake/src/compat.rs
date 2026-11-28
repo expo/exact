@@ -888,6 +888,18 @@ pub(crate) fn compatibility_with_trust(
             inputs["shortcuts"] = shortcuts.clone();
         }
     }
+    if matches!(module_platform, "ios" | "macos") {
+        let hidden: Vec<&String> = (manifest.json.pointer("/intents/entities"))
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter(|(_, kind)| kind.get("search") == Some(&Value::Bool(false)))
+            .map(|(name, _)| name)
+            .collect();
+        if !hidden.is_empty() {
+            inputs["searchHidden"] = json!(hidden);
+        }
+    }
     let widgets = manifest.widgets()?;
     if !widgets.is_empty() {
         inputs["widgets"] = json!(widgets

@@ -33,8 +33,9 @@ const hasIntents = (entries, platform) => entries.some(entry => offeredParameter
 const widgetEntityKinds = (entries, platform) => [...new Set(entries.flatMap(entry => offeredParameters(entry, platform)).filter(p => p.type === 'entity').map(p => p.entity))].sort();
 /** The app's Info.plist key that names those kinds: `ExactContentIndex` publishes their entries for the extension. */
 export const widgetEntityKeys = (app, platform = 'ios') => {
-  const kinds = widgetEntityKinds(platformWidgetEntries(app, platform), platform);
-  return kinds.length ? { ExactWidgetEntities: kinds } : {};
+  const entries = platformWidgetEntries(app, platform), kinds = widgetEntityKinds(entries, platform);
+  const parameters = Object.fromEntries(entries.map(entry => [entry.kind, offeredParameters(entry, platform).map(p => p.name)]).filter(([, names]) => names.length));
+  return { ...(kinds.length ? { ExactWidgetEntities: kinds } : {}), ...(Object.keys(parameters).length ? { ExactWidgetParameters: parameters } : {}) };
 };
 export const activityEntries = app => app.manifest.live_activities ?? [];
 /** Whether the app has an entry of either kind: what the extension, the shared framework, the App Group and the
@@ -375,8 +376,16 @@ export function widgetBundleSource(entries, { platform = 'ios', activities = fal
   const identifier = text => Buffer.from(text, 'utf8').toString('hex');
   const intentName = entry => `Configure_${identifier(entry.kind)}`;
   const entityName = kind => `Entity_${identifier(kind)}`;
+  const entityRow = (entry, kind) => offeredParameters(entry, platform).find(p => p.type === 'entity' && p.entity === kind);
+  const parentQuery = kind => {
+    const parent = entities[kind]?.within;
+    const rows = parent ? entries.filter(entry => entityRow(entry, kind)).flatMap(entry => entityRow(entry, parent) ? [{ intent: intentName(entry), row: entityRow(entry, parent).name }] : []) : [];
+    if (!rows.length) return { declared: '', within: '' };
+    const declared = rows.map((d, i) => `@IntentParameterDependency<${d.intent}>(\\.$parameter_${d.row}) var exactParent${i}\n    `).join('');
+    return { declared, within: `, within: ${rows.map((d, i) => `exactParent${i}.flatMap { exactEntityID($0.\`parameter_${d.row}\`) }`).join(' ?? ')}` };
+  };
   // One binding to a declaration: Xcode's metadata pass reads no other form.
-  const entityTypes = widgetEntityKinds(entries, platform).map(kind => `struct ${entityName(kind)}: AppEntity, ExactConfigurationEntity {
+  const entityTypes = widgetEntityKinds(entries, platform).map(kind => { const { declared, within } = parentQuery(kind); return `struct ${entityName(kind)}: AppEntity, ExactConfigurationEntity {
     static var typeDisplayRepresentation: TypeDisplayRepresentation = ${literal(entities[kind].title)}
     static var defaultQuery = ${entityName(kind)}_Query()
     static let exactKind = ${literal(kind)}
@@ -387,11 +396,11 @@ export function widgetBundleSource(entries, { platform = 'ios', activities = fal
     var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\\(title)", subtitle: subtitle.map { "\\($0)" }) }
 }
 struct ${entityName(kind)}_Query: EntityStringQuery {
-    func entities(for identifiers: [String]) async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactChosen(identifiers) }
-    func entities(matching string: String) async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactPublished(matching: string) }
-    func suggestedEntities() async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactPublished() }
+    ${declared}func entities(for identifiers: [String]) async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactChosen(identifiers) }
+    func entities(matching string: String) async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactPublished(matching: string${within}) }
+    func suggestedEntities() async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactPublished(${within.slice(2)}) }
 }
-`).join('');
+`; }).join('');
   const intent = (configuration, name, offered) => {
     const parameters = offered.filter(p => p.type !== 'entity'), entityRows = offered.filter(p => p.type === 'entity');
     const enums = parameters.map(p => `enum ${name}_${identifier(p.name)}: String, AppEnum {
@@ -418,7 +427,9 @@ struct ${entityName(kind)}_Query: EntityStringQuery {
     });
     const fixed = `[${parameters.map(p => `${literal(p.name)}: (\`parameter_${p.name}\` ?? .${fallback(p)}).exactValue`).join(', ')}]`;
     // An entity nobody chose is left out, so the refresh and the render read `none`.
-    const ids = `[${entityRows.map(p => `${literal(p.name)}: \`parameter_${p.name}\`?.id`).join(', ')}].compactMapValues { $0 }`;
+    const parentRow = p => entityRows.find(r => r.entity === entities[p.entity]?.within);
+    const id = p => parentRow(p) ? `${entityName(p.entity)}.exactChild(\`parameter_${p.name}\`?.id, parent: \`parameter_${parentRow(p).name}\`?.id)` : `\`parameter_${p.name}\`?.id`;
+    const ids = `[${entityRows.map(p => `${literal(p.name)}: ${id(p)}`).join(', ')}].compactMapValues { $0 }`;
     const chosen = !entityRows.length ? fixed : !parameters.length ? ids : `${fixed}.merging(${ids}) { $1 }`;
     return `${enums.join('\n')}
 struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
@@ -429,6 +440,7 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
       : `@Parameter(title: ${literal(p.title)}, default: .${fallback(p)}) var \`parameter_${p.name}\`: ${name}_${identifier(p.name)}?`).join('\n    ')}
     ${platform === 'watchos' ? `static var exactRecommendations: [AppIntentRecommendation<Self>] { [\n        ${recommendations.join(',\n        ')}\n    ] }` : ''}
     var exactConfiguration: [String: String] { ${chosen} }
+    static let exactParameters = [${offered.map(p => literal(p.name)).join(', ')}]
 }
 `;
   };

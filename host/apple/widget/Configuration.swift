@@ -11,6 +11,7 @@ protocol ExactConfigurationIntent: WidgetConfigurationIntent {
     static var exactRecommendations: [AppIntentRecommendation<Self>] { get }
     #endif
     var exactConfiguration: [String: String] { get }
+    static var exactParameters: [String] { get }
 }
 
 /// An entity parameter's value (app.json `type: "entity"`): a content-index entry of
@@ -48,16 +49,48 @@ struct ExactIntentTimelineProvider<Intent: ExactConfigurationIntent>: AppIntentT
     }
     func timeline(for configuration: Intent, in context: Context) async -> Timeline<ExactWidgetEntry> {
         let chosen = Self.chosen(configuration)
-        return await withCheckedContinuation { done in
+        let timeline = await withCheckedContinuation { done in
             base.getTimeline(in: context, configuration: chosen) { timeline in
                 done.resume(returning: Timeline(entries: timeline.entries.map { Self.configured($0, chosen) }, policy: timeline.policy))
             }
         }
+        #if !os(watchOS)
+        await Self.recordPlacements(kind: kind, asked: configuration.exactConfiguration)
+        #endif
+        return timeline
     }
+    #if !os(watchOS)
+    private static var placementsWait: DispatchTimeInterval { .milliseconds(250) }
+    private static func recordPlacements(kind: String, asked: [String: String]) async {
+        let started = DispatchTime.now()
+        let listed: [[String: String]?]? = await withCheckedContinuation { done in
+            let answer = ExactOnce<[[String: String]?]?> { done.resume(returning: $0) }
+            WidgetCenter.shared.getCurrentConfigurations { result in
+                guard case .success(let infos) = result else { return answer(nil) }
+                answer(infos.filter { $0.kind == kind }.map { $0.widgetConfigurationIntent(of: Intent.self)?.exactConfiguration })
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + placementsWait) { answer(nil) }
+        }
+        ExactPlacementsFile.record(kind: kind, parameters: Intent.exactParameters, listed: listed, asked: asked, started: started)
+    }
+    #endif
     #if os(watchOS)
     // A watch face offers a configured complication only through its recommendations.
     func recommendations() -> [AppIntentRecommendation<Intent>] {
         Intent.exactRecommendations
     }
     #endif
+}
+
+final class ExactOnce<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var first: ((Value) -> Void)?
+    init(_ first: @escaping (Value) -> Void) { self.first = first }
+    func callAsFunction(_ value: Value) {
+        lock.lock()
+        let call = first
+        first = nil
+        lock.unlock()
+        call?(value)
+    }
 }

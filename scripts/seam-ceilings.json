@@ -1424,7 +1424,7 @@
       ]
     },
     "appleAbiExports": {
-      "ceiling": 318,
+      "ceiling": 319,
       "sites": [
         "host/apple/activityarm/ActivityArm.swift: exact_activity_close",
         "host/apple/activityarm/ActivityArm.swift: exact_activity_open",
@@ -1440,6 +1440,7 @@
         "host/apple/soundarm/SoundArm.swift: exact_sound_engine",
         "host/apple/soundarm/SoundArm.swift: exact_sound_op",
         "host/apple/soundarm/SoundArm.swift: exact_sound_open",
+        "host/apple/Sources/ExactWidgetPublication/WidgetPublication.swift: exact_widget_counts",
         "host/apple/Sources/ExactWidgetPublication/WidgetPublication.swift: exact_widget_reload",
         "host/apple/src/abi/answers.rs: exact_answer_ticket",
         "host/apple/src/abi/answers.rs: exact_app_roots",

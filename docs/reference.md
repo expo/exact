@@ -948,7 +948,21 @@ that kind that the app last published with `setContentIndex`
 when the sheet opens, so the list is as fresh as the app's last publication.
 Publish again when the content changes, and publish an empty list when the
 person signs out. The entries are in the system's search too, as every
-content-index entry is.
+content-index entry is, unless the kind says `"search": false`
+(LLP 1126.005 D3):
+
+```json
+"intents": {"entities": {"shelf": {"title": "Shelf", "search": false}}}
+```
+
+Such a kind's entries serve widget rows, tool parameters and
+`contentIndexEntries` as before, and the app never gives them to Core
+Spotlight. Each still needs a `url` that starts with `/`, because a tool or
+the app may open it; name the page that lists or filters by it (Shelf's
+shelves open the library). An update that adds `"search": false` removes the
+kind's entries from Spotlight once, at the next launch, and one that removes it
+gives them to Spotlight again. Android has no system search for app content, so
+nothing changes there.
 
 In the shape the field is `option<string>`: `none` until the person chooses, then
 the entry's `id`. The refresh receives the same field (`string | null` in
@@ -956,9 +970,50 @@ TypeScript) and decides what to show for `none` and for an id it does not know.
 Exact keeps a saved id when the published list no longer has it, so a list
 cleared at sign-out does not turn a chosen widget into an unchosen one.
 
+A kind may be declared `within` another, so that a row of it lists only the
+entries within the choice of a row of the other kind (LLP 1126.005 D2):
+
+```json
+"intents": {"entities": {"shelf": {"title": "Shelf"}, "book": {"title": "Book", "within": "shelf"}}},
+"widgets": [{"kind": "progress", "configuration": {"title": "Reading Progress", "parameters": [
+  {"name": "shelf", "type": "entity", "title": "Shelf", "entity": "shelf"},
+  {"name": "book", "type": "entity", "title": "Book", "entity": "book"}]}}]
+```
+
+The call that publishes the inner kind names each entry's parents with its
+`within` option, by the entry's id and the parents' ids, one or several. An
+entry the option does not name belongs to every parent, and one with an empty
+list to none. A call that leaves the option out publishes as before:
+
+```
+setContentIndex(kind="book", entries=lib.books.map(b => ContentDescription(id=b.id, kind=none, title=b.title,
+  description=some(b.author), category=none, icons=none, url=`/book/${b.id}`, apple=none)),
+  within=lib.books.map(b => ContentParents(id=b.id, within=[b.status])))
+addContentIndexEntry(description=entry, within=["reading"])
+```
+
+In a widget with both rows, the Book row's list and its search have only the
+entries within the chosen shelf; with no shelf chosen, or in a widget with no
+Shelf row, they have all. When the person chooses another shelf, Edit Widget
+clears the Book row. When the app later publishes the chosen book within
+another shelf, the refresh and the render receive `none` for the book until the
+person chooses again; a chosen id the list no longer has still passes, as above.
+The relation is the kind's, so every widget that offers both kinds gets it. The
+parent row comes first, and a widget has at most one row of the parent kind;
+the build refuses otherwise, and refuses a `within` that names an undeclared
+kind or makes a cycle. `setContentIndex` and `addContentIndexEntry` refuse a
+`within` with an empty id, and one for an entry the call does not publish
+(`TypeError`), on every host; they do not check that the parent ids exist,
+since the parent kind may be published later. `contentIndexEntries` answers
+the entries without their parents. On Apple the inner kind's
+query reads the parent row through
+[`IntentParameterDependency`](https://developer.apple.com/documentation/appintents/intentparameterdependency).
+A tool parameter of the inner kind lists every entry.
+
 Edit Widget on iOS and macOS offers the entries. watchOS and Android offer none:
 the field is `none` there, and a widget whose parameters are all entities has no
-choices on those hosts.
+choices on those hosts, so its refresh should show something with nothing
+chosen. Android keeps `within` in its mirror and does not use it.
 
 A configured widget's refresh receives the configuration too, as its second
 argument: a record with one field per parameter, in the order the injected shape
@@ -971,15 +1026,76 @@ configuration's placements in every family, and each render still reads its own
 values. On Android the argument is the defaults, as above, so a render there must
 not rely on the refresh having read its choice.
 
+The app can read the configurations of the widgets a person has placed with
+`placedWidgets` from `@exact/widgets`
+(LLP 1126.005 D4). A weather app can fetch only the cities placed widgets show:
+
+```
+use placedWidgets from "@exact/widgets"
+
+shape Placed
+  ready: bool
+  placements: Rows[]
+
+component Trains
+  resource placed = placedWidgets(kind="next-trains") as shape Placed else empty()
+```
+
+`kind` is a literal that names a widget of `app.json` with a `configuration`,
+and `placements` holds the shape that widget's component, or one it uses,
+injects as `snapshot_configuration`; the build refuses anything else, in any
+source file of the app. An app reads each of its kinds with a resource of its
+own, each with that kind's shape. Each record has the values the refresh
+receives, entity rows included, after the rule for a row within another.
+WidgetKit lists placements with the same choices once, so there is one record
+for each different configuration, not for each widget. `ready` is false while
+the app does not know the placed set: treat it as unknown and keep what the
+app did before.
+
+On iOS and macOS, the widget extension records the placements of a kind before
+it returns each timeline, from WidgetKit's
+[`getCurrentConfigurations`](https://developer.apple.com/documentation/widgetkit/widgetcenter/getcurrentconfigurations(_:))
+and [`widgetConfigurationIntent(of:)`](https://developer.apple.com/documentation/widgetkit/widgetinfo/widgetconfigurationintent(of:)),
+and pings the app. It waits at most 250 ms for WidgetKit. The app reads the
+record when it becomes active and on that ping, which a suspended app does not
+receive, and asks WidgetKit how many configurations of the kind are placed.
+With none, it answers an empty list. Otherwise `ready` is true only when the
+record:
+
+- was written for the parameters the kind has in this build, so an update that
+  changes them does not answer an old record;
+- is complete: WidgetKit answered the extension, and every placement it listed
+  was read;
+- has the count WidgetKit gives the app; and
+- waits for no configuration. A timeline is made for a configuration that is
+  placed, so when WidgetKit's list lacks the one a timeline was made for, the
+  list is old, as it is right after Edit Widget. The record waits until
+  WidgetKit lists it, for at most two minutes.
+
+When one of these fails the app answers `ready: false`, reloads the kind's
+timelines so the extension records again, and while it is active asks again
+every 30 seconds, reloading again while the same record stays, until two
+minutes after it became active, the record changed or the answer became
+unknown. A removed widget runs no timeline, and WidgetKit keeps listing it, and
+the configuration an Edit Widget sheet replaced, for up to about a minute (seen
+on iOS 27.2), to the app and the extension alike. So for that long a ready
+answer can still hold a configuration that is gone; it does not go without one
+that is placed once the extension has made that widget's timeline. After a
+mismatch the answer stays `ready: false` until WidgetKit runs the reloaded
+timeline, which it may delay by a minute. Other hosts have no implementation,
+and the resource keeps its `else`.
+
 The configuration, labels included, is generated Swift and so a binary
 compatibility input; Live Activities have none. Keep kind, parameter and value
 identifiers stable across updates; changing a title does not change a choice.
 A removed or renamed parameter is ignored, and a missing or removed value uses
 that parameter's current default. Other valid choices are retained. Reordering
 entries, parameters or values does not reassign a saved choice. The refresh
-receives a saved choice by the same rules. Not supported: choices computed when
-Edit Widget opens, entities that are not content-index entries, an image for an
-entry, and a parameter whose choices depend on another's.
+receives a saved choice by the same rules. A kind's `within` is generated Swift
+too; adding it keeps saved choices. Not supported: choices computed when Edit
+Widget opens, entities that are not content-index entries, an image for an
+entry, a parameter whose choices depend on a fixed `enum` row, and a default
+entry for an entity row.
 
 `component` and the `props` shape are declared or imported by `app.contract`;
 every component prop must match a field of that shape. `preview` supplies all

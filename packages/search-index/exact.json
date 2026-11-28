@@ -13,6 +13,10 @@
       "url": "string",
       "apple": "option<AppleContentDescription>"
     },
+    "ContentParents": {
+      "id": "string",
+      "within": "string[]"
+    },
     "ContentIcon": {
       "src": "string",
       "sizes": "option<string>",
@@ -27,7 +31,7 @@
   "names": [
     {
       "send": "addContentIndexEntry",
-      "options": { "description": "ContentDescription" },
+      "options": { "description": "ContentDescription", "within": "option<string[]>" },
       "answers": null,
       "substitute": { "index": "add" }
     },
@@ -39,7 +43,7 @@
     },
     {
       "send": "setContentIndex",
-      "options": { "kind": "string", "entries": "ContentDescription[]" },
+      "options": { "kind": "string", "entries": "ContentDescription[]", "within": "option<ContentParents[]>" },
       "answers": null,
       "substitute": { "index": "set" }
     },

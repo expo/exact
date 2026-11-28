@@ -200,6 +200,7 @@ mod module_seam;
 mod module_view_typed;
 mod module_views;
 mod module_wakes;
+mod module_widgets;
 mod modules;
 mod motion;
 mod motion_feel;

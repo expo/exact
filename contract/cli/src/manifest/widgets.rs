@@ -61,13 +61,19 @@ impl Configuration {
                     "values": values.iter().map(|(value, title)| serde_json::json!({"value": value, "title": title})).collect::<Vec<_>>(),
                     "default": default,
                 }),
-                Choices::Entity { kind, title } => serde_json::json!({
-                    "name": p.name,
-                    "type": "entity",
-                    "title": p.title,
-                    "entity": kind,
-                    "entityTitle": title,
-                }),
+                Choices::Entity { kind, title, within } => {
+                    let mut row = serde_json::json!({
+                        "name": p.name,
+                        "type": "entity",
+                        "title": p.title,
+                        "entity": kind,
+                        "entityTitle": title,
+                    });
+                    if let Some(parent) = within {
+                        row["within"] = parent.clone().into();
+                    }
+                    row
+                }
             }).collect::<Vec<_>>(),
         })
     }
@@ -101,6 +107,8 @@ pub enum Choices {
         kind: String,
         /// That kind's title: the generated entity type's name in the sheet.
         title: String,
+        /// The kind this kind is within, whose row this row follows.
+        within: Option<String>,
     },
 }
 
@@ -109,13 +117,16 @@ use exact_plan::entry_identifier;
 impl Manifest {
     /// Read widget entries, refusing malformed declarations.
     pub fn widgets(&self) -> Result<Vec<Widget>, String> {
+        let entities = (self.json.get("intents"))
+            .and_then(|intents| intents.get("entities"))
+            .and_then(Value::as_object);
+        if let Some(entities) = entities {
+            parents(entities)?;
+        }
         let Some(value) = self.json.get("widgets") else {
             return Ok(Vec::new());
         };
         let rows = value.as_array().ok_or("widgets must be an array")?;
-        let entities = (self.json.get("intents"))
-            .and_then(|intents| intents.get("entities"))
-            .and_then(Value::as_object);
         let mut kinds = HashSet::new();
         rows.iter()
             .enumerate()
@@ -382,11 +393,74 @@ fn configuration(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    followed(&parameters, at)?;
     Ok(Configuration {
         title,
         description,
         parameters,
     })
+}
+
+fn parents(entities: &serde_json::Map<String, Value>) -> Result<(), String> {
+    for (kind, declared) in entities {
+        let Some(within) = declared.get("within") else {
+            continue;
+        };
+        let at = format!("intents.entities.{kind}.within");
+        let parent = within.as_str().filter(|p| !p.is_empty()).ok_or_else(|| {
+            format!("{at} must be the name of another kind of `intents.entities`")
+        })?;
+        if !entities.contains_key(parent) {
+            return Err(format!(
+                "{at} names `{parent}`, which `intents.entities` does not declare; name a declared kind"
+            ));
+        }
+    }
+    let parent_of = |kind: &str| {
+        (entities.get(kind))
+            .and_then(|declared| declared.get("within"))
+            .and_then(Value::as_str)
+    };
+    for kind in entities.keys() {
+        let mut chain = vec![kind.as_str()];
+        let mut next = parent_of(kind);
+        while let Some(parent) = next {
+            chain.push(parent);
+            if parent == kind {
+                return Err(format!(
+                    "intents.entities.{kind}.within makes a cycle ({}); a kind cannot be within itself",
+                    chain.join(", ")
+                ));
+            }
+            if chain[..chain.len() - 1].contains(&parent) {
+                break;
+            }
+            next = parent_of(parent);
+        }
+    }
+    Ok(())
+}
+
+fn followed(parameters: &[Parameter], at: &str) -> Result<(), String> {
+    for (j, child) in parameters.iter().enumerate() {
+        let Choices::Entity {
+            kind,
+            within: Some(parent),
+            ..
+        } = &child.choices
+        else {
+            continue;
+        };
+        let rows: Vec<_> = (parameters.iter().enumerate())
+            .filter(|(_, p)| matches!(&p.choices, Choices::Entity { kind, .. } if kind == parent))
+            .collect();
+        match rows.as_slice() {
+            [_, _, ..] => return Err(format!("{at} has {} `{parent}` rows, and `{kind}` is within `{parent}`; keep one, so the `{}` row knows which it follows", rows.len(), child.name)),
+            [(i, row)] if *i > j => return Err(format!("{at}.parameters[{i}] (`{}`) comes after `{}`, which is within it; put it first", row.name, child.name)),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// An entity parameter's kind, which `intents.entities` declares with the title
@@ -413,5 +487,9 @@ fn entity_choices(
     Ok(Choices::Entity {
         kind: kind.to_owned(),
         title,
+        within: declared
+            .get("within")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }

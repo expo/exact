@@ -82,6 +82,52 @@ final class ContentIndexTests: XCTestCase {
         XCTAssertEqual(published("book"), [], "an index the app clears clears the list")
     }
 
+    func testAWidgetRowWithinAParentListsTheEntriesWithinItsChoice() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        ExactContentIndex.widgetKinds = ["book", "shelf"]
+        ExactContentIndex.widgetRoot = directory
+        defer { ExactContentIndex.widgetKinds = []; ExactContentIndex.widgetRoot = nil }
+        func within(_ entry: [String: JSONValue], _ parents: Any?) -> [String: JSONValue] {
+            var entry = entry
+            entry["within"] = JSONValue.from(parents)
+            return entry
+        }
+        for refused in [["reading", ""], ["reading", 7], "reading"] as [Any] {
+            XCTAssertEqual(ExactContentIndex.set(kind: "book", [within(book("1", "Piranesi", "Susanna Clarke"), refused)]), "TypeError", "\(refused)")
+        }
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [
+            within(book("1", "Piranesi", "Susanna Clarke"), ["reading"]),
+            within(book("2", "Dune", "Frank Herbert"), ["done", "want"]),
+            within(book("3", "Atlas", "Anyone"), nil),
+            within(book("4", "Nowhere", "Nobody"), []),
+        ]))
+        let unplaced = (1...4).map { book("\($0)", "Book \($0)", "") }
+        for refused in [[["id": "9", "within": ["reading"]]], [["id": "1", "within": [""]]], [["id": "1"]], ["1"], "1"] as [Any] {
+            XCTAssertEqual(ExactContentIndex.set(kind: "book", unplaced, within: JSONValue.from(refused)), "TypeError", "\(refused)")
+        }
+        XCTAssertEqual(ExactContentIndex.add(book("5", "Alone", ""), within: JSONValue.from([""])), "TypeError")
+        XCTAssertEqual(ContentIndexEntries.published(kind: "book", within: "done", root: directory).map(\.id), ["2", "3"], "a refused call keeps the entries")
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [
+            book("1", "Piranesi", "Susanna Clarke"), book("2", "Dune", "Frank Herbert"), book("3", "Atlas", "Anyone"), book("4", "Nowhere", "Nobody"),
+        ], within: JSONValue.from([["id": "1", "within": ["reading"]], ["id": "2", "within": ["done", "want"]], ["id": "4", "within": [String]()]])), "the call names each entry's parents")
+        func published(within parent: String?, matching: String? = nil) -> [String] {
+            ContentIndexEntries.published(kind: "book", matching: matching, within: parent, root: directory).map(\.id)
+        }
+        XCTAssertEqual(published(within: nil), ["1", "2", "3", "4"], "no parent chosen: every entry")
+        XCTAssertEqual(published(within: "reading"), ["1", "3"], "an entry with no parents belongs to every one")
+        XCTAssertEqual(published(within: "want"), ["2", "3"])
+        XCTAssertEqual(published(within: "done", matching: "pir"), [], "search follows the parent too")
+        XCTAssertEqual(query("book"), ["1", "2", "3", "4"], "a tool's parameter lists every entry")
+        let answered = NSMutableDictionary()
+        NotificationCenter.default.post(name: Notification.Name("exact.contentIndex.entries"), object: answered)
+        XCTAssertEqual((answered["entries"] as? [[String: Any]])?.contains { $0["within"] != nil }, false, "the app reads the entries as it published them")
+        XCTAssertEqual(ContentIndexEntries.published(kind: "book", ids: ["1"], within: "done", root: directory).map(\.id), ["1"], "a saved id is answered whatever the parent")
+        XCTAssertNil(ContentIndexEntries.child(kind: "book", id: "1", parent: "done", root: directory), "a saved child the list places elsewhere reaches the refresh as none")
+        XCTAssertEqual(ContentIndexEntries.child(kind: "book", id: "1", parent: "reading", root: directory), "1")
+        XCTAssertEqual(ContentIndexEntries.child(kind: "book", id: "1", parent: nil, root: directory), "1")
+        XCTAssertEqual(ContentIndexEntries.child(kind: "book", id: "9", parent: "done", root: directory), "9", "an id the list lacks passes")
+    }
+
     func testSetReplacesOneKindAndKeepsTheOthers() {
         XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke")]))
         XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("s", "Reading", "")]))
@@ -110,6 +156,63 @@ final class ContentIndexTests: XCTestCase {
         ExactContentIndex.acknowledge(["book:1"], stamp: second)
         ExactContentIndex.file = ExactContentIndex.file
         XCTAssertEqual(ExactContentIndex.pendingKeys, [])
+    }
+
+    func testAKindKeptOutOfSearchIsAnsweredButNeverWaitsOnSpotlight() {
+        ExactContentIndex.hiddenKinds = ["shelf"]
+        defer { ExactContentIndex.hiddenKinds = [] }
+        XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("reading", "Reading", "")]))
+        XCTAssertEqual(query("shelf"), ["reading"], "widget rows and tool parameters still read it")
+        let drained = expectation(description: "main queue")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.pendingKeys, [], "a kept entry is settled without Spotlight's answer")
+    }
+
+    func testANewlyKeptKindLosesItsOwnEntriesAndNoKindWhoseNameItStarts() {
+        XCTAssertNil(ExactContentIndex.set(kind: "place", [book("1", "Lisbon", "")]))
+        XCTAssertNil(ExactContentIndex.set(kind: "place.city", [book("2", "Porto", "")]))
+        var deleted: [[String]] = []
+        let real = ExactContentIndex.deleteItems
+        ExactContentIndex.deleteItems = { keys, done in deleted.append(keys); done(nil) }
+        ExactContentIndex.hiddenKinds = ["place"]
+        defer { ExactContentIndex.deleteItems = real; ExactContentIndex.hiddenKinds = [] }
+        ExactContentIndex.applyHiddenKinds()
+        XCTAssertEqual(deleted, [["place:1"]], "Spotlight deletes a domain with every domain under it, so the entries are named")
+        let drained = expectation(description: "main queue")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.appliedHiddenKinds, ["place"])
+        ExactContentIndex.hiddenKinds = ["place", "empty"]
+        ExactContentIndex.applyHiddenKinds()
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(deleted.count, 1, "a kind with no entry asks Spotlight nothing")
+        XCTAssertEqual(ExactContentIndex.appliedHiddenKinds, ["empty", "place"])
+    }
+
+    func testAKindBackInSearchIsToldAgainAndANewlyKeptKindIsDeletedOnce() throws {
+        XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("reading", "Reading", "")]))
+        ExactContentIndex.hiddenKinds = ["shelf"]
+        defer { ExactContentIndex.hiddenKinds = [] }
+        ExactContentIndex.applyHiddenKinds()
+        let applied = expectation(description: "Spotlight deleted the shelf entries")
+        func poll() {
+            ExactContentIndex.file = ExactContentIndex.file
+            if ExactContentIndex.appliedHiddenKinds == ["shelf"] { return applied.fulfill() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: poll)
+        }
+        poll()
+        wait(for: [applied], timeout: 20)
+        let stamp = ExactContentIndex.stamps["shelf:reading"]
+        ExactContentIndex.applyHiddenKinds()
+        XCTAssertEqual(ExactContentIndex.stamps["shelf:reading"], stamp, "an applied set is not applied again")
+        ExactContentIndex.hiddenKinds = []
+        ExactContentIndex.applyHiddenKinds()
+        XCTAssertNotEqual(ExactContentIndex.stamps["shelf:reading"], stamp, "a kind back in search is told again")
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.appliedHiddenKinds, [])
     }
 
     /// A change the mirror could not write is not told to Spotlight.

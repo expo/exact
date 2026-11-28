@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import { HOST_EVENTS, PLIST_KEYS, appleMetadataProblem, hostEventKeys, modulePlist, packageEvents, packageKeys } from './plist.mjs';
 import { signsGrant } from './presence.mjs';
 import { entitlements, infoPlist, macInfoPlist, writeUsageStrings } from './build.mjs';
+import { embedInfoPlist } from './embed.mjs';
 import { buildPainted } from '../apple-painted/build.mjs';
 
 const packages = resolve(import.meta.dir, '../../packages');
@@ -16,6 +17,18 @@ const purchases = JSON.parse(readFileSync(resolve(packages, 'purchases/apple/exa
 const impl = (plistKeys) => [{ extension: 'purchases', plistKeys }];
 const flat = (plist) => plist.replace(/>\s+</g, '><');
 const KEY = /<key>SKIncludeConsumableInAppPurchaseHistory<\/key><true\/>/;
+
+test('the kinds kept out of search are an Info.plist key on iOS and the Mac, widgets or not', () => {
+  const app = { id: 'dev.exact.lists', displayName: 'Lists', name: 'lists', manifest: { intents: { entities: {
+    task: { title: 'Task' }, list: { title: 'List', search: false }, unit: { title: 'Unit', search: false }, tag: { title: 'Tag', search: true } } } } };
+  const key = /<key>ExactSearchHiddenKinds<\/key><array><string>list<\/string><string>unit<\/string><\/array>/;
+  assert.match(flat(infoPlist(app)), key);
+  assert.match(flat(macInfoPlist(app)), key);
+  for (const ios of [true, false]) assert.deepEqual(embedInfoPlist({ app, reach: null, usageKeys: () => ({}), ios }).ExactSearchHiddenKinds, ['list', 'unit'], 'an embedding host merges the same key');
+  assert.doesNotMatch(infoPlist(app, false, { tv: true }), /ExactSearchHiddenKinds/);
+  assert.doesNotMatch(infoPlist({ ...app, manifest: { intents: { entities: { task: { title: 'Task' } } } } }), /ExactSearchHiddenKinds/);
+  assert.match(appleMetadataProblem('host.ios.infoPlist.ExactSearchHiddenKinds: not a known key'), /Exact writes this key itself/);
+});
 
 test('Bluetooth usage is localized on Apple and its background mode is iOS only', () => {
   const app = { id: 'dev.exact.strap', displayName: 'Strap', name: 'strap', manifest: {} };
@@ -71,7 +84,7 @@ test('metadata refusals reserve specific advice for proven grants', () => {
     ['macos', 'entitlements', 'com.apple.developer.team-identifier'],
     ['ios', 'entitlements', 'keychain-access-groups'],
     ...['ios', 'macos'].map(p => [p, 'entitlements', 'com.apple.security.application-groups']),
-    ...['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetEntities', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup'].map(k => ['ios', 'infoPlist', k]),
+    ...['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetEntities', 'ExactWidgetParameters', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup'].map(k => ['ios', 'infoPlist', k]),
     ...['allow-jit', 'allow-unsigned-executable-memory', 'disable-library-validation'].map(k => ['macos', 'entitlements', `com.apple.security.cs.${k}`]),
     ['ios', 'infoPlist', 'ExactCapturesInBackground'],
     ['ios', 'infoPlist', 'UIBackgroundModes'],

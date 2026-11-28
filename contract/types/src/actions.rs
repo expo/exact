@@ -231,7 +231,7 @@ impl Cx<'_, '_> {
                     for arg in args {
                         params.push(crate::source_argument(arg, name, scope, shapes)?);
                     }
-                    return crate::record_source(self.ct, name, params, Ty::Unit, *span);
+                    return crate::record_source(self.ct, name, params, Ty::Unit, false, *span);
                 }
                 // An action prop or injected action, called anywhere (LLP
                 // 1089 D1, D7): its arguments here, against its declared
@@ -286,7 +286,7 @@ impl Cx<'_, '_> {
                     });
                 }
                 let result = self.ct.mutations[mi].clone();
-                crate::record_source(self.ct, source, params, result, *span)?;
+                crate::record_source(self.ct, source, params, result, false, *span)?;
             }
             Stmt::Refresh { target, span } => {
                 if !c.resources.iter().any(|r| &r.name == target) {

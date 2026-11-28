@@ -419,7 +419,7 @@ fn boot_with(name: &str, fixture: &Fixture, grants: &'static str) -> (App, Runne
 
 /// The host's part: each request dispatched (a held one parked), released
 /// work run, each outcome fulfilled, until nothing is left to do.
-fn pump<D: exact_runner::DataSource>(r: &mut Runner<D>, parked: &mut Vec<(u64, u64)>) {
+pub(crate) fn pump<D: exact_runner::DataSource>(r: &mut Runner<D>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();

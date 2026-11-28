@@ -21,10 +21,10 @@ class SearchIndexModule(context: ExtensionContext) : ExactExtension(context) {
 
     override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
         val refused = when (name) {
-            "setContentIndex" -> set(args.optString("kind").takeIf { args.has("kind") }, args.optJSONArray("entries") ?: JSONArray())
-            "addContentIndexEntry" -> add(args.optJSONObject("description") ?: JSONObject())
+            "setContentIndex" -> set(args.optString("kind").takeIf { args.has("kind") }, args.optJSONArray("entries") ?: JSONArray(), args.opt("within"))
+            "addContentIndexEntry" -> add(args.optJSONObject("description") ?: JSONObject(), args.opt("within"))
             "deleteContentIndexEntry" -> { delete(args.optString("id")); null }
-            "contentIndexEntries" -> return reply(JSONObject().put("exact:answer", JSONArray(load())))
+            "contentIndexEntries" -> return reply(JSONObject().put("exact:answer", JSONArray(load().map { JSONObject(it.toString()).apply { remove("within") } })))
             else -> return reply(JSONObject().put("error", "NotSupportedError"))
         }
         if (refused != null) return reply(JSONObject().put("error", refused))
@@ -50,6 +50,10 @@ class SearchIndexModule(context: ExtensionContext) : ExactExtension(context) {
         for (e in entries) {
             val url = e.optString("url")
             if (e.optString("id").isEmpty() || e.optString("title").isEmpty() || !url.startsWith("/") || url.startsWith("//")) return "TypeError"
+            if (e.has("within") && !e.isNull("within")) {
+                val parents = e.optJSONArray("within") ?: return "TypeError"
+                if ((0 until parents.length()).any { parents.optString(it).isEmpty() || parents.get(it) !is String }) return "TypeError"
+            }
             val text = listOf("title", "description", "url").joinToString("") { e.optString(it) }
             if (text.toByteArray(Charsets.UTF_8).size > TEXT_BYTES) return "QuotaExceededError"
         }
@@ -57,13 +61,28 @@ class SearchIndexModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** The entries of `kind` replaced by `entries`, in their order; the other kinds kept. */
-    private fun set(kind: String?, entries: JSONArray): String? {
-        val tagged = (0 until entries.length()).map { i -> JSONObject(entries.getJSONObject(i).toString()).also { if (kind != null) it.put("kind", kind) } }
+    private fun set(kind: String?, entries: JSONArray, within: Any?): String? {
+        val copies = (0 until entries.length()).map { i -> JSONObject(entries.getJSONObject(i).toString()).also { if (kind != null) it.put("kind", kind) } }
+        val tagged = placed(copies, within) ?: return "TypeError"
         val all = load().filter { it.optString("kind") != (kind ?: "") } + tagged
         return refusal(all) ?: run { save(all); null }
     }
 
-    private fun add(entry: JSONObject): String? {
+    private fun placed(entries: List<JSONObject>, within: Any?): List<JSONObject>? {
+        if (within == null || within == JSONObject.NULL) return entries
+        val rows = within as? JSONArray ?: return null
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: return null
+            val parents = row.optJSONArray("within") ?: return null
+            val entry = entries.firstOrNull { it.optString("id") == row.optString("id") } ?: return null
+            entry.put("within", parents)
+        }
+        return entries
+    }
+
+    private fun add(description: JSONObject, within: Any?): String? {
+        val entry = JSONObject(description.toString())
+        if (within != null && within != JSONObject.NULL) entry.put("within", within)
         val all = load().filter { key(it) != key(entry) } + entry
         return refusal(all) ?: run { save(all); null }
     }

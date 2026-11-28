@@ -228,6 +228,11 @@ export function shortcutKeys(app, platform) {
     UIApplicationShortcutItemUserInfo: { url: item.url } })) };
 }
 
+export function searchKeys(app, platform) {
+  const hidden = Object.entries(app.manifest.intents?.entities ?? {}).filter(([, kind]) => kind.search === false).map(([kind]) => kind).sort();
+  return hidden.length && platform !== 'tvos' ? { ExactSearchHiddenKinds: hidden } : {};
+}
+
 /** The compiler flags that write the constant values the metadata pass reads, into `values`. */
 export const constValueArgs = (values, dir) => {
   writeFileSync(resolve(dir, 'protocols.json'), JSON.stringify(gathered));

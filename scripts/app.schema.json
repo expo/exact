@@ -630,8 +630,8 @@
       "properties": {
         "entities": {
           "type": "object",
-          "description": "Each content-index kind a parameter may name, with its type's name as the system shows it (D9).",
-          "additionalProperties": {"type": "object", "required": ["title"], "additionalProperties": false, "properties": {"title": {"type": "string", "minLength": 1}}}
+          "description": "Each content-index kind a parameter may name, with its type's name as the system shows it (D9). `within` names the kind whose entries this kind's entries belong to: a widget's row of this kind lists only the entries within the choice of its row of that kind. `search: false` keeps the kind's entries out of the system's search; they still serve widget rows, tool parameters and `contentIndexEntries`.",
+          "additionalProperties": {"type": "object", "required": ["title"], "additionalProperties": false, "properties": {"title": {"type": "string", "minLength": 1}, "within": {"type": "string", "minLength": 1}, "search": {"type": "boolean"}}}
         },
         "tools": {
           "type": "object",

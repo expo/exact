@@ -12,7 +12,7 @@ import { listAssets } from '../web/serve.mjs';
 import { packageActivityArm } from './activities.mjs';
 import { assertArchiveFrameworks, bakedAssetInputs, copyNativeResources, iosAssets, wrapFramework } from './assets.mjs';
 import { controlWidgetsSource, offeredControls } from './controls.mjs';
-import { appleFaces, intentsSource, pressesTools } from './intents.mjs';
+import { appleFaces, intentsSource, pressesTools, searchKeys } from './intents.mjs';
 import { alarmKeys, backgroundKeys, declaredOrigin, nfcKeys, startLocation, storeKeys, updateActivation } from './plist.mjs';
 import { associatedDomains, entitlementValue, grantEntitlements, grantEntitlementValues, merchantEntitlement, signInEntitlement } from './presence.mjs';
 import { writeEmbedPrivacyManifest, writePrivacyManifest } from './privacy.mjs';
@@ -144,7 +144,7 @@ export function embedEntitlements({ app, reach, hasWidgets, ios, claimedDomains 
 
 /** Exact-owned Info.plist keys for the brownfield host to merge into its app target. */
 export function embedInfoPlist({ app, reach, usageKeys, rosterKeys = {}, launchParts = [], alarm = null, hasWidgets = false, generation = null, ios = true }) {
-  const dict = { ...usageKeys(reach), ...rosterKeys };
+  const dict = { ...usageKeys(reach), ...rosterKeys, ...searchKeys(app, ios ? 'ios' : 'macos') };
   if (app.manifest.moduleConfig) dict.ExactModuleConfig = app.manifest.moduleConfig;
   if (app.manifest.audio_session) dict.ExactAudioSession = app.manifest.audio_session;
   if (launchParts.length) dict.ExactLaunchParts = launchParts;

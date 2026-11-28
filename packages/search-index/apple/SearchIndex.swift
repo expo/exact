@@ -19,9 +19,9 @@ public final class SearchIndexModule: ExactPackage {
             let refused: String?
             switch name {
             case "setContentIndex":
-                refused = index.set(kind: args["kind"] as? String, entries: args["entries"] as? [[String: Any]] ?? [])
+                refused = index.set(kind: args["kind"] as? String, entries: args["entries"] as? [[String: Any]] ?? [], within: args["within"])
             case "addContentIndexEntry":
-                refused = index.add(args["description"] as? [String: Any] ?? [:])
+                refused = index.add(args["description"] as? [String: Any] ?? [:], within: args["within"])
             case "deleteContentIndexEntry":
                 index.delete(id: args["id"] as? String ?? "")
                 refused = nil

@@ -346,6 +346,10 @@
       "name": "@exact/usb",
       "version": "1.0.0",
     },
+    "packages/widgets": {
+      "name": "@exact/widgets",
+      "version": "1.0.0",
+    },
     "packages/window-management": {
       "name": "@exact/window-management",
       "version": "1.0.0",
@@ -484,6 +488,8 @@
     "@exact/translation": ["@exact/translation@workspace:packages/translation"],
 
     "@exact/usb": ["@exact/usb@workspace:packages/usb"],
+
+    "@exact/widgets": ["@exact/widgets@workspace:packages/widgets"],
 
     "@exact/window-management": ["@exact/window-management@workspace:packages/window-management"],
 

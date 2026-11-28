@@ -191,6 +191,51 @@ fn widget_gallery_labels_require_a_new_binary_cohort() {
 }
 
 #[test]
+fn an_entity_kinds_relations_require_a_new_binary_cohort() {
+    let dir = app("entity-cohort");
+    let mut manifest = Manifest::read(&dir).unwrap();
+    manifest.json["intents"] =
+        serde_json::json!({"entities":{"shelf":{"title":"Shelf"},"book":{"title":"Book"}}});
+    manifest.json["widgets"] = serde_json::json!([{"kind":"card","families":["systemSmall"],
+        "component":"Card","props":"Props","refresh":"refresh","preview":{},
+        "configuration":{"title":"Card","parameters":[
+            {"name":"shelf","type":"entity","title":"Shelf","entity":"shelf"},
+            {"name":"book","type":"entity","title":"Book","entity":"book"}]}}]);
+    let build_for = |target: &str, manifest: &Manifest| {
+        compatibility_with_trust(&dir, "ios", target, manifest, Some(""), "development")
+            .unwrap()
+            .id
+    };
+    let build = |manifest: &Manifest| build_for("aarch64-apple-ios", manifest);
+    let original = build(&manifest);
+    let mut within = manifest.clone();
+    within.json["intents"]["entities"]["book"]["within"] = serde_json::json!("shelf");
+    assert_ne!(
+        original,
+        build(&within),
+        "a row that follows another is a generated query"
+    );
+    let mut hidden = manifest.clone();
+    hidden.json["intents"]["entities"]["shelf"]["search"] = serde_json::json!(false);
+    assert_ne!(
+        original,
+        build(&hidden),
+        "the kinds kept out of search are an Info.plist key"
+    );
+    let mut searchable = manifest.clone();
+    searchable.json["intents"]["entities"]["shelf"]["search"] = serde_json::json!(true);
+    assert_eq!(original, build(&searchable), "search is the default");
+    for target in ["aarch64-apple-tvos", "aarch64-apple-watchos"] {
+        assert_eq!(
+            build_for(target, &manifest),
+            build_for(target, &hidden),
+            "{target} has no system search to keep a kind out of"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn activity_state_rides_the_bundle_and_capabilities_require_a_binary() {
     let dir = app("activity-cohort");
     let mut m = Manifest::read(&dir).unwrap();

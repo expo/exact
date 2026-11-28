@@ -55,6 +55,28 @@ test('an entity parameter generates one entity type for its kind and an optional
   assert.ok(watch.includes('{ ["rows": (`parameter_rows` ?? .v6f6e65).exactValue] }'));
 });
 
+test('a row within another reads the parent row of each intent that has both', () => {
+  const shelf = { name: 'shelf', type: 'entity', title: 'Shelf', entity: 'shelf' }, book = { name: 'book', type: 'entity', title: 'Book', entity: 'book' };
+  const entries = [{ kind: 'library', families: ['systemSmall'], configuration: { title: 'Library', parameters: [book] } },
+    { kind: 'progress', families: ['systemSmall'], configuration: { title: 'Progress', parameters: [shelf, book] } },
+    { kind: 'cover', families: ['systemSmall'], configuration: { title: 'Cover', parameters: [shelf, book] } },
+    { kind: 'shelves', families: ['systemSmall'], configuration: { title: 'Shelves', parameters: [shelf] } }];
+  const entities = { shelf: { title: 'Shelf' }, book: { title: 'Book', within: 'shelf' } };
+  const source = widgetBundleSource(entries, { entities });
+  const query = name => source.split(`struct ${name}_Query: EntityStringQuery {`)[1].split('\n}\n')[0];
+  const bookQuery = query('Entity_626f6f6b');
+  assert.deepEqual([...bookQuery.matchAll(/@IntentParameterDependency<(\w+)>/g)].map(m => m[1]), ['Configure_70726f6772657373', 'Configure_636f766572'],
+    'one dependency per intent with both rows, none for library (no shelf row) or shelves (no book row)');
+  const within = 'within: exactParent0.flatMap { exactEntityID($0.`parameter_shelf`) } ?? exactParent1.flatMap { exactEntityID($0.`parameter_shelf`) }';
+  assert.ok(bookQuery.includes(`exactPublished(matching: string, ${within})`), 'text search follows the parent');
+  assert.ok(bookQuery.includes(`exactPublished(${within})`), 'the list follows the parent');
+  assert.ok(bookQuery.includes('exactChosen(identifiers) }'), 'a saved id is answered whatever the parent');
+  assert.ok(!query('Entity_7368656c66').includes('IntentParameterDependency'), 'the parent kind follows nothing');
+  assert.ok(source.includes('["shelf": `parameter_shelf`?.id, "book": Entity_626f6f6b.exactChild(`parameter_book`?.id, parent: `parameter_shelf`?.id)].compactMapValues { $0 }'));
+  assert.ok(source.includes('{ ["book": `parameter_book`?.id].compactMapValues { $0 } }'), 'with no parent row the child is read as chosen');
+  assert.equal(widgetBundleSource(entries, { entities: { shelf: { title: 'Shelf' }, book: { title: 'Book' } } }).includes('IntentParameterDependency'), false);
+});
+
 for (const [platform, sdkName, triple, alarm] of [
   ['ios', 'iphonesimulator', 'arm64-apple-ios17.0-simulator', 'ExactAlarms'],
   ['macos', 'macosx', 'arm64-apple-macos14.0', null],
@@ -77,9 +99,12 @@ struct ExactTimelineProvider: TimelineProvider {
 }
 extension EnvironmentValues { var widgetDisplayGamut: String { get { "srgb" } set {} } }
 extension ExactConfigurationEntity {
-    static func exactPublished(matching text: String? = nil) -> [Self] { [] }
+    static func exactPublished(matching text: String? = nil, within parent: String? = nil) -> [Self] { [] }
     static func exactChosen(_ ids: [String]) -> [Self] { ids.map { Self(id: $0, title: exactTitle, subtitle: nil) } }
+    static func exactChild(_ id: String?, parent: String?) -> String? { parent == "elsewhere" ? nil : id }
 }
+func exactEntityID<E: ExactConfigurationEntity>(_ entity: E?) -> String? { entity?.id }
+enum ExactPlacementsFile { static func record(kind: String, parameters: [String], listed: [[String: String]?]?, asked: [String: String], started: DispatchTime) {} }
 `);
       const runApple = (cmd, args) => {
         // `swiftc` leaves a `TemporaryDirectory.*` in TMPDIR each run: the children's TMPDIR is this test's directory, removed after.
@@ -90,12 +115,13 @@ extension ExactConfigurationEntity {
       const configuration = { title: 'Piggybank "plan"', parameters: [
         { name: 'categories', type: 'enum', title: 'Categories', default: 'two', values: [{ value: 'one', title: '1' }, { value: 'two', title: '2' }] },
         { name: 'detail', type: 'enum', title: 'Detail', values: [{ value: '\u00e9', title: 'Composed' }, { value: 'e\u0301', title: 'Decomposed' }] },
+        { name: 'shelf', type: 'entity', title: 'Shelf', entity: 'shelf' },
         { name: 'book', type: 'entity', title: 'Book', entity: 'book' },
       ] };
       const families = platform === 'watchos' ? ['accessoryRectangular'] : ['systemSmall'];
       const entries = [{ kind: 'add', families }, ...['plan-card', 'plan_card'].map(kind => ({ kind, families, configuration }))];
       const file = resolve(dir, 'WidgetBundle.swift'), values = resolve(dir, 'values.swiftconstvalues');
-      writeFileSync(file, widgetBundleSource(entries, { platform, entities: { book: { title: 'Book' } }, alarmMember: alarm ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '' }));
+      writeFileSync(file, widgetBundleSource(entries, { platform, entities: { shelf: { title: 'Shelf' }, book: { title: 'Book', within: 'shelf' } }, alarmMember: alarm ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '' }));
       const compilation = widgetCompilation({ entries, platform, activities: false, alarm, source: file, values, directory: dir });
       assert.equal(compilation.args.filter(a => a === '-module-name').length, 1);
       assert.equal(compilation.moduleName, alarm ?? 'ExactWidgets');
@@ -111,8 +137,8 @@ extension ExactConfigurationEntity {
       for (const parameter of ['categories', 'detail']) assert.ok(JSON.stringify(actions).includes(parameter), `${platform}: parameter metadata missing`);
       // Edit Widget lists an entity parameter's choices through its type's query; the watch has no such parameter.
       const offered = platform !== 'watchos';
-      assert.deepEqual(Object.keys(actions.entities), offered ? ['Entity_626f6f6b'] : []);
-      assert.deepEqual(Object.keys(actions.queries), offered ? ['Entity_626f6f6b_Query'] : []);
+      assert.deepEqual(Object.keys(actions.entities).sort(), offered ? ['Entity_626f6f6b', 'Entity_7368656c66'] : []);
+      assert.deepEqual(Object.keys(actions.queries).sort(), offered ? ['Entity_626f6f6b_Query', 'Entity_7368656c66_Query'] : []);
       assert.equal(actions.actions.Configure_706c616e2d63617264.parameters.some(p => p.name === 'parameter_book' && p.isOptional), offered);
       if (platform === 'macos') {
         writeFileSync(file, readFileSync(file, 'utf8').replace('@main struct ExactWidgets', 'struct ExactWidgets'));
@@ -129,6 +155,8 @@ extension ExactConfigurationEntity {
         precondition(intent.exactConfiguration["book"] == nil)
         intent.parameter_book = Entity_626f6f6b(id: "b1", title: "Piranesi", subtitle: nil)
         precondition(intent.exactConfiguration["book"] == "b1")
+        intent.parameter_shelf = Entity_7368656c66(id: "elsewhere", title: "Elsewhere", subtitle: nil)
+        precondition(intent.exactConfiguration["book"] == nil && intent.exactConfiguration["shelf"] == "elsewhere")
     }
 }`);
         const executable = resolve(dir, 'RoundTrip');

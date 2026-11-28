@@ -46,7 +46,8 @@ use takePhoto, Photo from "@exact/camera"
 use nfcStatus, scan, abortScan, abortWrite, openNFCSettings, reading, readingerror, NFCStatus, NDEFScanEnd, NDEFReading, NFCTag from "@exact/nfc"
 
 use setAppShortcuts, ShortcutItem from "@exact/quick-actions"
-use setContentIndex, ContentDescription from "@exact/search-index"
+use setContentIndex, ContentDescription, ContentParents from "@exact/search-index"
+use placedWidgets from "@exact/widgets"
 use appIcon, setAppIcon, AppIconStatus from "@exact/app-icon"
 
 routes nav
@@ -118,6 +119,9 @@ shape Found
   pages: number
 
 fn statusLabel(s: string): string = s == "want" ? "Want to Read" : (s == "reading" ? "Reading" : "Finished")
+fn chosenShelf(c: BookChoice): string = match c.shelf { case some(s) => statusLabel(s), case none => "No shelf chosen" }
+fn chosenBook(books: Book[], c: BookChoice): string = match c.book { case some(id) => match first(books.filter(b => b.id == id)) { case some(b) => b.title, case none => "A removed book" }, case none => "No book chosen" }
+fn keptBook(books: Book[], c: ShelfWidgetChoice): string = match c.book { case some(id) => match first(books.filter(b => b.id == id)) { case some(b) => b.title, case none => "A removed book" }, case none => "The latest book" }
 fn percent(cur: number, total: number): number = total > 0 ? round(cur / total * 100) : 0
 fn matches(b: Book, f: string, q: string): bool = (f == "all" or b.status == f) and (q == "" or b.title.toLowerCase().includes(q) or b.author.toLowerCase().includes(q))
 fn wholePages(text: string): bool = match parseNumber(text) { case some(n) => floor(n) == n and n > 0 and n <= 10000, case none => false }
@@ -171,6 +175,8 @@ component Shelf
   mutation found as shape Owner then openFound
   // The Home Screen icon: Shelf's own or Paper (app.json's alternate_icons).
   resource shownIcon = appIcon() as shape AppIconStatus else empty()
+  resource placedProgress = placedWidgets(kind="progress") as shape PlacedProgress else empty()
+  resource placedLibrary = placedWidgets(kind="library") as shape PlacedLibrary else empty()
   mutation iconSet as shape AppIconStatus refreshes shownIcon
 
   derive current = top(nav)
@@ -191,8 +197,10 @@ component Shelf
   task index when lib.ready key=indexKey
     after(1, reindex)
   action reindex
+    setContentIndex(kind="shelf", entries=["want", "reading", "done"].map(s => ContentDescription(id=s, kind=none, title=statusLabel(s), description=none,
+      category=none, icons=none, url="/", apple=none)))
     setContentIndex(kind="book", entries=lib.books.map(b => ContentDescription(id=b.id, kind=none, title=b.title, description=some(b.author),
-      category=none, icons=none, url=`/book/${b.id}`, apple=none)))
+      category=none, icons=none, url=`/book/${b.id}`, apple=none)), within=lib.books.map(b => ContentParents(id=b.id, within=[b.status])))
     setAppShortcuts(shortcuts=inProgress.slice(0, 1).map(b => ShortcutItem(name=`Continue ${b.title}`,
       short_name=some(b.title), description=none, url=`/book/${b.id}`, icons=none, apple=none, android=none)))
   derive canScan = formats.tracks and formats.formats.includes("ean_13") and camera.available
@@ -670,6 +678,10 @@ component Shelf
                     flex=1
                     min-height=0
                     StatsSections(lib=lib, finished=finished, goalBy=goalBy)
+                    if placedProgress.ready and placedProgress.placements.length > 0
+                      PlacedSection(placed=placedProgress, books=lib.books)
+                    if placedLibrary.ready and placedLibrary.placements.length > 0
+                      PlacedLibrarySection(placed=placedLibrary, books=lib.books)
                     if shownIcon.available
                       IconSection(status=shownIcon, primary=choosePrimaryIcon, choose=chooseIcon)
       // The tab bar: each tab a symbol over its label, naming its panel.
@@ -1238,6 +1250,41 @@ component IconSection
           if status.icon == some("Paper")
             image "symbol:checkmark" color="AccentColor"
 
+component PlacedSection
+  props
+    placed: PlacedProgress
+    books: Book[]
+  view
+    section testId="placed-progress"
+      header
+        text "Reading Progress Widgets"
+      for i in range(placed.placements.length) key = i
+        match placed.placements.at(i)
+          case some(c)
+            row testId=`placed-${i}`
+              text chosenBook(books, c) flex=1
+              text chosenShelf(c) color="-exact-secondary-label"
+          case none
+      footer
+        text "The books and shelves your Reading Progress widgets show on the Home Screen."
+
+component PlacedLibrarySection
+  props
+    placed: PlacedLibrary
+    books: Book[]
+  view
+    section testId="placed-library"
+      header
+        text "Your Shelf Widgets"
+      for i in range(placed.placements.length) key = i
+        match placed.placements.at(i)
+          case some(c)
+            row testId=`placed-library-${i}`
+              text keptBook(books, c)
+          case none
+      footer
+        text "The book each Your Shelf widget keeps in view on the Home Screen."
+
 // What a screen shows with nothing in it (UIKit's ContentUnavailableView).
 component Empty
   props
@@ -1291,3 +1338,48 @@ component ShelfWidget
         text "On your shelf" role="heading" aria-level=2
         text `${count}` font-variant-numeric="tabular-nums"
         text latest line-clamp=2
+
+shape ProgressWidgetProps
+  title: string
+  percent: number
+
+shape BookChoice
+  shelf: option<string>
+  book: option<string>
+
+component ProgressWidget
+  props
+    title: string
+    percent: number
+  inject
+    snapshot_configuration: BookChoice
+  view
+    link href="/stats"
+      column gap=8
+        text "Reading Progress" role="heading" aria-level=2
+        text title line-clamp=2
+        text `${percent}%` font-variant-numeric="tabular-nums"
+
+shape CoverWidgetProps
+  title: string
+  author: string
+
+component CoverWidget
+  props
+    title: string
+    author: string
+  inject
+    snapshot_configuration: BookChoice
+  view
+    link href="/"
+      column gap=8
+        text title role="heading" aria-level=2 line-clamp=2
+        text author line-clamp=2
+
+shape PlacedProgress
+  ready: bool
+  placements: BookChoice[]
+
+shape PlacedLibrary
+  ready: bool
+  placements: ShelfWidgetChoice[]

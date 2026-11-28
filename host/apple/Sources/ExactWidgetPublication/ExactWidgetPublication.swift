@@ -10,6 +10,7 @@ public enum ExactWidgetPublication {
     /// Set `WidgetLink`'s slot, before any session is made.
     public static func install() {
         WidgetLink.publication = Publication()
+        WidgetPlacements.install()
     }
 }
 

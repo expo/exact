@@ -801,6 +801,9 @@ fn check_answers(
     span: Span,
     errors: &mut Vec<CompileError>,
 ) {
+    if m.answers_widget().is_some() && shape.is_some() {
+        return;
+    }
     let Some(answers) = typed_answer(m, args).or_else(|| m.answers.clone()) else {
         return;
     };

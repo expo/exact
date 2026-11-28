@@ -209,19 +209,30 @@ func footprint() -> UInt64 {
     return status == KERN_SUCCESS ? max(info.phys_footprint, UInt64(max(0, info.ledger_phys_footprint_peak))) : 0
 }
 #endif
+enum ExactPlacementsFile {
+    static func record(kind: String, parameters: [String], listed: [[String: String]?]?, asked: [String: String], started: DispatchTime) {
+        let changed = WidgetPlacementRecords.record(kind: kind, parameters: parameters, listed: listed, asked: asked, root: WidgetContainer.root, appID: WidgetContainer.appID)
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+        widgetLog.notice("placements \(kind, privacy: .public): listed=\(listed?.count ?? -1) changed=\(changed) ms=\(elapsed)")
+    }
+}
 // An entity parameter's choices are the entries the app published to the App Group
 // (LLP 1126 D2): Edit Widget runs these in the extension, where no session boots.
 extension ExactConfigurationEntity {
     private init(_ entry: ContentIndexEntries.Entry) {
         self.init(id: entry.id, title: entry.title, subtitle: entry.description)
     }
-    static func exactPublished(matching text: String? = nil) -> [Self] {
-        ContentIndexEntries.published(kind: exactKind, matching: text).map(Self.init)
+    static func exactPublished(matching text: String? = nil, within parent: String? = nil) -> [Self] {
+        ContentIndexEntries.published(kind: exactKind, matching: text, within: parent).map(Self.init)
     }
     static func exactChosen(_ ids: [String]) -> [Self] {
         ContentIndexEntries.chosen(kind: exactKind, ids: ids, title: exactTitle).map(Self.init)
     }
+    static func exactChild(_ id: String?, parent: String?) -> String? {
+        ContentIndexEntries.child(kind: exactKind, id: id, parent: parent)
+    }
 }
+func exactEntityID<E: ExactConfigurationEntity>(_ entity: E?) -> String? { entity?.id }
 
 // SwiftUI has no public gamut environment key. The configuration seeds this
 // from UIKit traits or the Mac screen; the archived view carries it.

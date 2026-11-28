@@ -499,5 +499,5 @@ pub(super) fn pages_source(
         });
     }
     let list = Ty::List(Box::new(Ty::String));
-    record_source(ct, source, params, list, field.span)
+    record_source(ct, source, params, list, false, field.span)
 }

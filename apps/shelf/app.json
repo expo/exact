@@ -23,7 +23,8 @@
   ],
   "intents": {
     "entities": {
-      "book": { "title": "Book" }
+      "shelf": { "title": "Shelf", "search": false },
+      "book": { "title": "Book", "within": "shelf" }
     },
     "tools": {
       "logPages": {
@@ -103,6 +104,42 @@
         "description": "Choose a book to keep in view.",
         "parameters": [
           { "name": "book", "title": "Book", "type": "entity", "entity": "book" }
+        ]
+      }
+    },
+    {
+      "kind": "progress",
+      "title": "Reading Progress",
+      "description": "How far you are in a book from one of your shelves.",
+      "families": ["systemSmall"],
+      "component": "ProgressWidget",
+      "props": "ProgressWidgetProps",
+      "refresh": "widgetProgress",
+      "preview": { "title": "Piranesi", "percent": 44 },
+      "configuration": {
+        "title": "Reading Progress",
+        "description": "Choose a shelf, then a book on it.",
+        "parameters": [
+          { "name": "shelf", "type": "entity", "title": "Shelf", "entity": "shelf" },
+          { "name": "book", "type": "entity", "title": "Book", "entity": "book" }
+        ]
+      }
+    },
+    {
+      "kind": "cover",
+      "title": "Book",
+      "description": "The title and author of a book from one of your shelves.",
+      "families": ["systemSmall"],
+      "component": "CoverWidget",
+      "props": "CoverWidgetProps",
+      "refresh": "widgetCover",
+      "preview": { "title": "Piranesi", "author": "Susanna Clarke" },
+      "configuration": {
+        "title": "Book",
+        "description": "Choose a shelf, then a book on it.",
+        "parameters": [
+          { "name": "shelf", "type": "entity", "title": "Shelf", "entity": "shelf" },
+          { "name": "book", "type": "entity", "title": "Book", "entity": "book" }
         ]
       }
     }

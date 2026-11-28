@@ -259,9 +259,9 @@ test('a widget declares fixed enum choices and content-index entity choices', as
   const dir = mkdtempSync(resolve(tmpdir(), 'widget-configuration-'));
   const fixed = { name: 'rows', title: 'Rows', type: 'enum', values: [{ value: 'one', title: '1' }], default: 'one' };
   const entity = { name: 'book', title: 'Book', type: 'entity', entity: 'book' };
-  const read = parameters => {
+  const read = (parameters, entities = { book: { title: 'Book' } }) => {
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Choices', app: { id: 'dev.exact.choices', name: 'Choices' },
-      intents: { entities: { book: { title: 'Book' } } }, widgets: [{
+      intents: { entities }, widgets: [{
         kind: 'card', families: ['systemSmall'], component: 'Card', props: 'Props', refresh: 'refresh', preview: {},
         configuration: { title: 'Card', parameters },
       }] }));
@@ -272,6 +272,10 @@ test('a widget declares fixed enum choices and content-index entity choices', as
     for (const mixed of [{ ...entity, values: fixed.values }, { ...entity, default: 'one' }, { ...fixed, entity: 'book' }, { ...fixed, type: 'entity' }, { ...entity, type: 'list' }]) {
       assert.throws(() => read([mixed]), /parameters\[0\]: .* matches 0 of the allowed forms/, JSON.stringify(mixed));
     }
+    assert.deepEqual(read([entity], { shelf: { title: 'Shelf' }, book: { title: 'Book', within: 'shelf' } }), [entity]);
+    for (const within of ['', 7]) assert.throws(() => read([entity], { book: { title: 'Book', within } }), /entities/, JSON.stringify(within));
+    assert.deepEqual(read([entity], { book: { title: 'Book', search: false } }), [entity]);
+    assert.throws(() => read([entity], { book: { title: 'Book', search: 'no' } }), /entities/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -136,3 +136,69 @@ fn an_entity_field_is_an_optional_id_that_the_refresh_receives() {
         );
     }
 }
+
+#[test]
+fn a_kind_within_another_names_a_declared_kind_and_its_row_follows_one_parent_row() {
+    let shelf = json!({"name":"shelf","title":"Shelf","type":"entity","entity":"shelf"});
+    let book = json!({"name":"book","title":"Book","type":"entity","entity":"book"});
+    let kinds = json!({"shelf":{"title":"Shelf"},"book":{"title":"Book","within":"shelf"}});
+    let widget = manifest(json!([shelf, book]), kinds.clone())
+        .widgets()
+        .unwrap();
+    let rows = &widget[0].configuration.as_ref().unwrap().json()["parameters"];
+    assert_eq!(
+        rows[1]["within"], "shelf",
+        "the cohort carries the relation"
+    );
+    assert!(rows[0].get("within").is_none());
+    assert!(
+        manifest(json!([book]), kinds.clone()).widgets().is_ok(),
+        "with no parent row the child lists every entry"
+    );
+
+    for (rows, entities, edit) in [
+        (
+            json!([book]),
+            json!({"book":{"title":"Book","within":"shelves"}}),
+            "intents.entities.book.within names `shelves`, which `intents.entities` does not declare; name a declared kind",
+        ),
+        (
+            json!([book]),
+            json!({"book":{"title":"Book","within":7}}),
+            "intents.entities.book.within must be the name of another kind",
+        ),
+        (
+            json!([book]),
+            json!({"book":{"title":"Book","within":"book"}}),
+            "intents.entities.book.within makes a cycle (book, book); a kind cannot be within itself",
+        ),
+        (
+            json!([book]),
+            json!({"shelf":{"title":"Shelf","within":"book"},"book":{"title":"Book","within":"shelf"}}),
+            "intents.entities.book.within makes a cycle (book, shelf, book)",
+        ),
+        (
+            json!([book]),
+            json!({"a":{"title":"A","within":"b"},"b":{"title":"B","within":"missing"},"book":{"title":"Book"}}),
+            "intents.entities.b.within names `missing`, which `intents.entities` does not declare; name a declared kind",
+        ),
+        (
+            json!([book]),
+            json!({"book":{"title":"Book"},"y":{"title":"Y","within":"z"},"z":{"title":"Z","within":"missing"}}),
+            "intents.entities.z.within names `missing`",
+        ),
+        (
+            json!([shelf, {"name":"other","title":"Other","type":"entity","entity":"shelf"}, book]),
+            kinds.clone(),
+            "widgets[0].configuration has 2 `shelf` rows, and `book` is within `shelf`; keep one, so the `book` row knows which it follows",
+        ),
+        (
+            json!([book, shelf]),
+            kinds.clone(),
+            "widgets[0].configuration.parameters[1] (`shelf`) comes after `book`, which is within it; put it first",
+        ),
+    ] {
+        let error = manifest(rows.clone(), entities).widgets().unwrap_err();
+        assert!(error.contains(edit), "{rows}: {error}");
+    }
+}
