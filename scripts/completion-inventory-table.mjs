@@ -907,6 +907,7 @@ export const classifications = [
       "prepare_environment prepare_window_painter print_baked_receipt row_reuse_from_env run_headless Services::with_image_downloads Services::with_local_images show_material_look show_neutral_look"],
     ["painted:host/painted/src/canvas/codec.rs", "attach"],
     ["painted:host/painted/src/canvas/frame_partitions.rs", "attach kept"],
+    ["painted:host/painted/src/canvas/http_engine.rs", "attach transport"],
     ["painted:host/painted/src/canvas/legacy.rs", "attach decode glyph"],
     ["painted:host/painted/src/canvas/presence.rs", "attach"],
     ["painted:host/painted/src/presenter/requests/android.rs", "attach"],

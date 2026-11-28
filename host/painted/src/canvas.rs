@@ -225,6 +225,9 @@ mod timers;
 #[cfg(target_os = "android")]
 pub use device::{configure, window, Told};
 #[cfg(target_os = "android")]
+#[path = "canvas/http_engine.rs"]
+pub(crate) mod http_engine;
+#[cfg(target_os = "android")]
 #[path = "canvas/jni.rs"]
 pub mod jni;
 #[cfg(target_os = "android")]
