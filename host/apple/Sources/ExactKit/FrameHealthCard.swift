@@ -252,8 +252,8 @@ enum FrameHealthCardText {
     /// value, rounded up so that any hold-up shows. A spell counts in the read after it ends, which can be in a later
     /// window than its start, so the share stops at 100%.
     static func heldUp(_ t: FrameHealthCardReader.Window) -> String {
-        let span = max(1, UInt64(((t.read - t.from) * 1e9).rounded()))
-        return "\(min(100, (t.counts.heldUpNs * 100 + span - 1) / span))%"
+        let span = max(1, UInt64(((t.read - t.from) * 1e9).rounded())), held = min(t.counts.heldUpNs, span)
+        return "\((held * 100 + span - 1) / span)%"
     }
 
     /// The median work time: its bin's upper bound, but never more than the exact maximum it cannot
