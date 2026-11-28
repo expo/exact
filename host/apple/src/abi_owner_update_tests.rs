@@ -401,3 +401,172 @@ fn facts(bridge: &Bridge<StorageModule>, view: u32) -> Option<exact_kernel::Keyb
         .kernel()
         .keyboard_facts(view)
 }
+
+#[test]
+fn the_launch_modes_set_the_owner_layout_for_every_boot_after_them() {
+    // Bit 1 of `exact_launch_modes` lays every boot out under stage 5's owner layout from its first layout: a
+    // scroller's own bar then lies on its scrollport, out of its content's flow, so the row after it starts at the
+    // scroller's padding, not 50 below it, in the boot's own batch, for a boot, a prepared boot and a replacement alike;
+    // bit 0 alone, or a runtime never told, leaves it off (LLP 1123, "stage 5, the switch"). Each boot installs its own
+    // plan, found by its marker, with its own padding, so the row moves at each
+    let plan = |marker: &str, padding: u32| {
+        let source = format!(
+            "component Page\n  view\n    column\n      box testId=\"{marker}\" width=390 height=844 padding-top={padding} overflow-y=\"scroll\"\n        box -exact-safe-area-bar=\"top\" height=50\n        box testId=\"row\" height=20\n"
+        );
+        contract::compile(&source).unwrap().encode()
+    };
+    let (booted, prepared, replaced) = (
+        plan("booted", 10),
+        plan("prepared", 20),
+        plan("replaced", 30),
+    );
+    // The row's top in the batch the call returned, which must carry no error, under `marker`'s plan
+    let row = |bridge: &Bridge<StorageModule>, count: u32, marker: &str| -> f64 {
+        let batch: serde_json::Value =
+            serde_json::from_slice(bridge.output_bytes(count as usize)).unwrap();
+        assert!(batch["error"].is_null(), "{batch}");
+        let kernel = bridge.host.as_ref().unwrap().runner().kernel();
+        assert_eq!(
+            kernel.find_by_test_id(marker).len(),
+            1,
+            "{marker} is the live plan"
+        );
+        let id = kernel
+            .node_by_key(kernel.find_by_test_id("row")[0])
+            .unwrap()
+            .id;
+        let ops = batch["ops"].as_array().unwrap();
+        let frame = ops.iter().find(|op| op["op"] == "frame" && op["id"] == id);
+        frame
+            .and_then(|op| op["y"].as_f64())
+            .unwrap_or_else(|| panic!("no frame for the row: {batch}"))
+    };
+    let mut seen = Vec::new();
+    for bits in [None, Some(1), Some(2), Some(3)] {
+        let mut bridge = Bridge::new();
+        if let Some(bits) = bits {
+            bridge.set_launch_modes(bits);
+        }
+        let count = bridge.boot(
+            &booted,
+            StorageModule::default(),
+            Hooks::none(),
+            390.0,
+            844.0,
+        );
+        let first = row(&bridge, count, "booted");
+        bridge.input_write(&prepared);
+        bridge.prepare_plan(
+            prepared.len(),
+            StorageModule::default(),
+            Hooks::none(),
+            390.0,
+            844.0,
+        );
+        let count = bridge.commit_plan();
+        let then = row(&bridge, count, "prepared");
+        bridge.input_write(&replaced);
+        let count = bridge.boot_plan(
+            replaced.len(),
+            StorageModule::default(),
+            Hooks::none(),
+            390.0,
+            844.0,
+        );
+        seen.push((bits, [first, then, row(&bridge, count, "replaced")]));
+    }
+    let (off, on) = ([60.0, 70.0, 80.0], [10.0, 20.0, 30.0]);
+    assert_eq!(
+        seen,
+        [(None, off), (Some(1), off), (Some(2), on), (Some(3), on)]
+    );
+}
+
+/// A session update with every field present and no two edges alike, and its bytes in the hosts' wire form, which
+/// `OwnerUpdateIOSTests` asserts Swift's `SessionUpdateWire` encodes alike.
+const SESSION_GOLDEN: &str = "00006c420000803f0000084200000040010000000b0000000000000002000000000000000100006c420000000000000842000000000100000000000000000000c94300805a440401000000030c000000000000000100000000000000000100000000000000000000c94300805a440200000000000001440000c9430000b3430102010000803f00000000000000000000803f000000000000a0410107000000000000000101000000050000000000000001000020410000a0410000f041000020420000803f00000040000040400000804001";
+
+#[test]
+fn a_session_update_encodes_to_the_hosts_golden_bytes() {
+    use exact_kernel::style::targets::{ChainEntry, NativeTargets, Relation};
+    use exact_kernel::{KeyboardPolicy, RegionKind, ReservedRegion, WindowMap};
+    let target = |id, generation, insets| NativeTarget {
+        id,
+        generation,
+        insets,
+        frame: Some([0.0, 0.0, 402.0, 874.0]),
+    };
+    let update = exact_kernel::SessionUpdate {
+        band: [59.0, 1.0, 34.0, 2.0],
+        targets: NativeTargets {
+            chain: vec![ChainEntry {
+                target: target(11, 2, Some([59.0, 0.0, 34.0, 0.0])),
+                kinds: 4,
+            }],
+            relations: vec![(Relation::Window, target(12, 1, None))],
+        },
+        keyboard: KeyboardReport::Shown(Keyboard {
+            frame: [0.0, 516.0, 402.0, 358.0],
+            docked: true,
+        }),
+        keyboard_policy: Some(KeyboardPolicy::ResizesVisual),
+        window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, 0.0, 20.0])),
+        configuration: Some(7),
+        regions: Some(vec![ReservedRegion {
+            id: 5,
+            kind: RegionKind::Occlusion,
+            frame: [10.0, 20.0, 30.0, 40.0],
+            margins: [1.0, 2.0, 3.0, 4.0],
+            active: true,
+        }]),
+    };
+    let bytes = update.encode();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hex, SESSION_GOLDEN);
+    assert_eq!(
+        exact_kernel::SessionUpdate::decode(&bytes),
+        Ok(update.clone())
+    );
+    // And a kernel takes it: no positional chain kind, every target a first report
+    let (bridge, _, _) = page();
+    let kernel = bridge.host.as_ref().unwrap().runner().kernel();
+    assert_eq!(kernel.check_session_update(&update), Ok(()));
+}
+
+#[test]
+fn one_call_applies_an_owners_update_a_registration_and_the_sessions_update() {
+    // The route is an owner by its block, so its column reads the owner's segments; the box outside it reads the
+    // session's keyboard, and the reader below it the registered map's top inset
+    let plan = contract::compile(
+        "component Page\n  view\n    column\n      box testId=\"route\" width=390 height=400\n        box testId=\"column\" padding-top=\"var(--exact-viewport-segment-left-1-0, 7px)\"\n      box testId=\"outside\" height=300 padding-top=\"var(--exact-keyboard-inset-bottom, 7px)\"\n      box testId=\"reader\" padding-top=\"var(--exact-target-map-safe-area-inset-top, 7px)\"\n",
+    )
+    .unwrap()
+    .encode();
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan, StorageModule::default(), Hooks::none(), 390.0, 844.0);
+    let k = bridge.host.as_ref().unwrap().runner().kernel();
+    let id = |test: &str| k.node_by_key(k.find_by_test_id(test)[0]).unwrap().id;
+    let [route, column, outside, reader] = ["route", "column", "outside", "reader"].map(id);
+    let keyboard = exact_kernel::SessionUpdate {
+        keyboard: KeyboardReport::Shown(Keyboard {
+            frame: [0.0, 516.0, 390.0, 328.0],
+            docked: true,
+        }),
+        ..Default::default()
+    };
+    let call = [
+        block(route, 390.0),
+        record(route, &update().encode()),
+        registration("map", Some(&map(9, 1))),
+        session_record(&keyboard),
+    ]
+    .concat();
+    let batch = covers(&mut bridge, &call);
+    assert!(batch.contains("\"error\":null"), "{batch}");
+    let seen = (
+        top_padding(&bridge, column),
+        facts(&bridge, outside).is_some_and(|f| f.docked),
+        top_padding(&bridge, reader),
+    );
+    assert_eq!(seen, (210.0, true, 30.0));
+}

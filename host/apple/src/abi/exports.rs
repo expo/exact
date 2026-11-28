@@ -797,10 +797,11 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| { b.set_row_reuse(on != 0); 0 }, |n| n)
         }
 
-        /// Nonzero: subsequent boots omit layout-only boxes inside quiet collection rows (LLP 1171 D4).
+        /// The modes of subsequent boots: bit 0 omits layout-only boxes inside quiet collection rows (LLP 1171 D4),
+        /// bit 1 turns on stage 5's owner layout (LLP 1123, "stage 5, the switch").
         #[no_mangle]
-        pub extern "C" fn exact_flat_nodes(rt: u32, on: u32) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| { b.set_flat_nodes(on != 0); 0 }, |n| n)
+        pub extern "C" fn exact_launch_modes(rt: u32, bits: u32) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| { b.set_launch_modes(bits); 0 }, |n| n)
         }
 
         /// Deliver one native timer instance without draining other native timers.

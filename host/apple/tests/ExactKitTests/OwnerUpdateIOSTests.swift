@@ -92,6 +92,27 @@ final class OwnerUpdateIOSTests: XCTestCase {
         }
     }
 
+    /// A session made with stage 5's owner layout lays out under it (LLP 1123, "stage 5, the switch"): an edge cover
+    /// on its route's root, an owner by its block, pads nothing, where in a session made without it the cover moves
+    /// the root's children down, as on main.
+    func testASessionMadeWithTheOwnerLayoutLaysOutUnderIt() throws {
+        var moved: [[UInt32]] = []
+        for on in [false, true] {
+            let session = try fixture(ownerLayout: on)
+            XCTAssertEqual(session.ownerLayout, on)
+            let (route, _) = try firstRoute(session)
+            let children = Set(route.node.subviews.compactMap { ($0 as? NodeView)?.id })
+            let batch = session.runtime.covers([(route.node.id, .edges(.init(top: 50, right: 0, bottom: 0, left: 0)))])
+            XCTAssertNil(batch.error)
+            moved.append(batch.ops.filter { $0.op == .frame && children.contains($0.id) }.map(\.id))
+            session.destroy()
+            sessions.removeAll { $0 === session }
+            window?.isHidden = true
+        }
+        XCTAssertFalse(moved[0].isEmpty, "the cover moves the root's children")
+        XCTAssertEqual(moved[1], [], "the owner's root takes no padding from its cover")
+    }
+
     func testTheKernelTakesAnEncodedUpdateAndRefusesATruncatedOne() throws {
         let session = try fixture()
         let (route, view) = try firstRoute(session)
@@ -103,6 +124,46 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNotNil(session.runtime.ownerReports(updates: [(route.node.id, Data(truncated))]).error)
         // And the whole sample, its chain and relations with it, which the kernel decodes alike
         XCTAssertNil(session.runtime.ownerReports(updates: [(route.node.id, update.encode())]).error)
+    }
+
+    /// The session's update encodes as the kernel does (`a_session_update_encodes_to_the_hosts_golden_bytes` pins the
+    /// kernel's bytes for the same update, every field present and no two edges alike), rides the reports' records as
+    /// kind 29 after owners' updates and registrations, and is taken, refused truncated or followed by a byte.
+    func testTheSessionsUpdateEncodesAsTheKernelsAndRidesTheReports() throws {
+        let target = { (id: UInt64, generation: UInt64, insets: OwnerUpdateWire.Edges?) in
+            OwnerUpdateWire.Target(id: id, generation: generation, insets: insets, frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        }
+        var update = SessionUpdateWire()
+        update.band = .init(top: 59, right: 1, bottom: 34, left: 2)
+        update.chain = [(target(11, 2, .init(top: 59, right: 0, bottom: 34, left: 0)), 4)] // `Kind::Navigation`
+        update.relations = [(3, target(12, 1, nil))] // `Relation::Window`
+        update.keyboard = .shown(frame: CGRect(x: 0, y: 516, width: 402, height: 358), docked: true)
+        update.keyboardPolicy = .resizesVisual
+        update.windowMap = CGAffineTransform(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 20)
+        update.configuration = 7
+        update.regions = [.init(id: 5, kind: 1, frame: CGRect(x: 10, y: 20, width: 30, height: 40), margins: .init(top: 1, right: 2, bottom: 3, left: 4), active: true)]
+        let bytes = update.encode()
+        XCTAssertEqual(bytes.map { String(format: "%02x", $0) }.joined(), "00006c420000803f0000084200000040010000000b0000000000000002000000000000000100006c420000000000000842000000000100000000000000000000c94300805a440401000000030c000000000000000100000000000000000100000000000000000000c94300805a440200000000000001440000c9430000b3430102010000803f00000000000000000000803f000000000000a0410107000000000000000101000000050000000000000001000020410000a0410000f041000020420000803f00000040000040400000804001")
+        // Its record follows the owners' updates and the registrations, each framed by its view, kind and length
+        let owner = Data([1, 2, 3]), registration = Data([4, 5])
+        let records = Runtime.reportRecords(updates: [(7, owner)], registrations: [registration], session: bytes)
+        let words = { (data: Data) in (0..<data.count / 4).map { i in data.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: i * 4, as: UInt32.self)) } } }
+        XCTAssertEqual(words(records.prefix(12)), [7, 21, 3])
+        XCTAssertEqual(records.subdata(in: 12..<15), owner)
+        XCTAssertEqual(words(records.subdata(in: 15..<27)), [0, 22, 2])
+        XCTAssertEqual(records.subdata(in: 27..<29), registration)
+        XCTAssertEqual(words(records.subdata(in: 29..<41)), [0, 29, UInt32(bytes.count)])
+        XCTAssertEqual(records.suffix(from: 41), bytes)
+        let session = try fixture()
+        XCTAssertNil(session.runtime.ownerReports(session: bytes).error)
+        XCTAssertNotNil(session.runtime.ownerReports(session: bytes.prefix(bytes.count - 1)).error, "a truncated update")
+        XCTAssertNotNil(session.runtime.ownerReports(session: bytes + Data([0])).error, "an update followed by a byte")
+        XCTAssertNil(session.runtime.ownerReports(session: SessionUpdateWire().encode()).error, "no optional field")
+        // And beside an owner's update and a registration, in one call the kernel takes whole
+        let (route, view) = try firstRoute(session)
+        let margins = OwnerUpdateIOS(margins: OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).margins).encode()
+        let map = ExactNativeTarget.encode(name: "map", target: target(21, 1, .init(top: 30, right: 0, bottom: 0, left: 0)))
+        XCTAssertNil(session.runtime.ownerReports(updates: [(route.node.id, margins)], registrations: [map], session: bytes).error)
     }
 
     func testARegistrationRefusesAnInvalidOrTakenNameAndFreesItWhenDisposed() throws {
@@ -450,11 +511,11 @@ final class OwnerUpdateIOSTests: XCTestCase {
     }
 
     /// The native fixture booted in a window of the test host's scene, 402 by 874.
-    private func fixture() throws -> ExactSession {
+    private func fixture(ownerLayout: Bool = false) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let path = try XCTUnwrap(env["EXACT_FIXTURE_PLAN"], "build.mjs --test --ios compiles EXACT_FIXTURE_PLAN")
         let plan = try Data(contentsOf: URL(fileURLWithPath: path))
-        let session = ExactApp.shared.makeSession(label: "owner-update")
+        let session = ExactApp.shared.makeSession(label: "owner-update", ownerLayout: ownerLayout)
         sessions.append(session)
         let view = ExactView(session: session)
         sessionView = view

@@ -205,21 +205,28 @@ extension Runtime {
         postWithTopLayer(layout: true, done: done) { [self] in read(exact_host_covers(rt, write(bytes))) }
     }
     /// Content owners' updates (LLP 1123 D2), each the owner by its root's view and its
-    /// update in the kernel's encoding (`OwnerUpdateIOS.encode`), and targets native code
-    /// registered (D9, `ExactNativeTarget.encode`), under one layout, checked whole:
-    /// `exact_host_covers` kinds 21 and 22, each record's length after its kind.
-    func ownerReports(updates: [(UInt32, Data)] = [], registrations: [Data] = []) -> Batch {
-        return on(layout: true) {
-            var bytes = Data()
-            let records = updates.map { ($0.0, UInt32(21), $0.1) } + registrations.map { (UInt32(0), UInt32(22), $0) }
-            for (view, kind, record) in records {
-                for word in [view, kind, UInt32(record.count)] {
-                    withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
-                }
-                bytes.append(record)
+    /// update in the kernel's encoding (`OwnerUpdateIOS.encode`), targets native code
+    /// registered (D9, `ExactNativeTarget.encode`) and the session's update
+    /// (`SessionUpdateWire.encode`), under one layout: the kernel checks every one before it
+    /// applies any and refuses the call if one is refused, but passes over an update for a
+    /// view that is gone, which the call's error names beside what it applied.
+    func ownerReports(updates: [(UInt32, Data)] = [], registrations: [Data] = [], session: Data? = nil) -> Batch {
+        let bytes = Self.reportRecords(updates: updates, registrations: registrations, session: session)
+        return on(layout: true) { read(exact_host_covers(rt, write(bytes))) }
+    }
+    /// `ownerReports`' records: `exact_host_covers` kinds 21, 22 and 29, each its view, its kind and its length,
+    /// then the record.
+    static func reportRecords(updates: [(UInt32, Data)], registrations: [Data], session: Data?) -> Data {
+        var bytes = Data()
+        let records = updates.map { ($0.0, UInt32(21), $0.1) } + registrations.map { (UInt32(0), UInt32(22), $0) }
+            + (session.map { [(UInt32(0), UInt32(29), $0)] } ?? [])
+        for (view, kind, record) in records {
+            for word in [view, kind, UInt32(record.count)] {
+                withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
             }
-            return read(exact_host_covers(rt, write(bytes)))
+            bytes.append(record)
         }
+        return bytes
     }
     /// The border box a person dragged `view`'s `resize` grip to, under one
     /// layout (`Runner::resize_box`); nil keeps an axis.
