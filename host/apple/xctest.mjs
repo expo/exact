@@ -163,6 +163,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/swipe-push.contract'), '-o', env[`${prefix}_SWIPE_PUSH_PLAN`] = resolve(dir, 'swipe-push.plan')]);
   // SnapshotDriverTests' live tree: a bar and a ring under an ancestor's accent.
   contract([resolve(root, 'host/apple/tests/fixtures/live-accent.contract'), '-o', env[`${prefix}_LIVE_ACCENT_PLAN`] = resolve(dir, 'live-accent.plan')]);
+  // HeaderSearchFieldIOSTests' route search over a scroller whose keyboard dismissal is unsaid.
+  contract([resolve(root, 'host/apple/tests/fixtures/header-search-keys.contract'), '-o', env[`${prefix}_HEADER_SEARCH_KEYS_PLAN`] = resolve(dir, 'header-search-keys.plan')]);
   // HeldStateTests' own (a card that presses over a flat leaf), beside them.
   contract([resolve(root, 'host/apple/tests/fixtures/held-state.contract'), '-o', env[`${prefix}_HELD_STATE_PLAN`] = resolve(dir, 'held-state.plan')]);
   // ScrollTimelineTests': a scroll timeline's and a view timeline's consumers (LLP 1057.003 D5).

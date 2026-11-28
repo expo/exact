@@ -1,0 +1,20 @@
+// HeaderSearchFieldIOSTests: a route whose header holds a search, whose field
+// the search bar replaces as it opens in the toolbar on the folded iPhone Duo,
+// over a scroller whose keyboard dismissal is unsaid.
+routes nav
+  start "/"
+
+component HeaderSearchKeys
+  state query = ""
+  action search(v: string)
+    query = v
+  view
+    main navigationKey=`${top(nav).id}` testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationScroll="list" testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+          header
+            text "Chats" role="heading" aria-level=1
+            input type="search" value=query input=search placeholder="Search" testId="search"
+          scroll id="list" testId="list" flex=1 min-height=0
+            for i in range(60) key=i
+              text `Row ${i}` padding=16 border-bottom="1px solid -exact-separator"
