@@ -1464,6 +1464,7 @@ mod body_to;
 
 mod admission;
 mod cache;
+pub use cache::{freshness_of, Freshness};
 mod shared_cache;
 pub use shared_cache::SharedHttpCache;
 pub mod preload;

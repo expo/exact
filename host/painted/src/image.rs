@@ -67,6 +67,7 @@ pub use published::PublishedImage;
 pub(crate) use published::Publisher;
 #[path = "image/remote.rs"]
 mod remote;
+pub(crate) use remote::keep_on_disk;
 #[path = "image/svg.rs"]
 mod svg_picture;
 #[cfg(test)]

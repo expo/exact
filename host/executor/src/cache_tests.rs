@@ -673,7 +673,7 @@ fn the_render_style_core_does_not_enable_the_private_cache() {
 
 #[test]
 fn age_and_freshness_use_rfc_9111_arithmetic_and_monotonic_residence() {
-    let headers = |pairs: &[(&str, &str)]| {
+    let headers = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
         pairs
             .iter()
             .map(|(k, v)| ((*k).into(), (*v).into()))

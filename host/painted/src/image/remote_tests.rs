@@ -37,6 +37,8 @@ enum Answer {
     },
     /// Read the request and say nothing.
     Silent,
+    /// A status with these header lines (each ending `\r\n`) and this body.
+    Headed(u16, String, Vec<u8>),
 }
 
 /// Serve each request on its own thread, by `answer(path, headers)` (the
@@ -119,6 +121,12 @@ fn respond(mut stream: TcpStream, answer: &dyn Fn(&str, &str) -> Answer) {
             let _ = closed.send(());
             Ok(())
         }
+        Answer::Headed(status, extra, body) => stream
+            .write_all(&head(
+                &format!("{status} Nope"),
+                &format!("{extra}Content-Length: {}\r\n", body.len()),
+            ))
+            .and_then(|()| stream.write_all(&body)),
         Answer::Silent => {
             std::thread::sleep(Duration::from_secs(30));
             Ok(())
@@ -213,6 +221,138 @@ fn a_body_and_a_redirect_load_and_the_cache_answers_again() {
     let moved = fetched(&downloads, &format!("{origin}/moved")).unwrap();
     assert_eq!(bytes(&moved), picture);
     assert_eq!(downloads.fetches.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
+    let picture = png(4, 3, [10, 20, 30, 255]);
+    let body = picture.clone();
+    let (windows, retags, moves) = (
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    );
+    let refreshed = png(4, 3, [40, 50, 60, 255]);
+    let newer = refreshed.clone();
+    let origin = serve(move |path, headers| match path {
+        "/fresh.png" => Answer::Headed(200, "Cache-Control: max-age=3600\r\n".into(), body.clone()),
+        // Where a redirect leads may change: never kept under its URL.
+        "/moved.png" => Answer::Redirect("/fresh.png".into()),
+        "/moved-for-good.png" => Answer::Headed(301, "Location: /fresh.png\r\n".into(), Vec::new()),
+        // Two seconds fresh, its headers a second in coming: the wait is
+        // counted once in its age.
+        "/slow.png" => {
+            std::thread::sleep(Duration::from_millis(1100));
+            Answer::Headed(200, "Cache-Control: max-age=2\r\n".into(), body.clone())
+        }
+        // A 304 that names another representation is asked for again, whole.
+        "/retagged.png" if headers.contains("if-none-match") => {
+            Answer::Headed(304, "ETag: \"v2\"\r\n".into(), Vec::new())
+        }
+        "/retagged.png" if retags.fetch_add(1, Ordering::SeqCst) > 0 => Answer::Headed(
+            200,
+            "Cache-Control: no-cache\r\nETag: \"v2\"\r\n".into(),
+            refreshed.clone(),
+        ),
+        // Stored once, then moved: its validators are not the target's.
+        "/later-moved.png" if moves.fetch_add(1, Ordering::SeqCst) > 0 => {
+            Answer::Headed(301, "Location: /target.png\r\n".into(), Vec::new())
+        }
+        "/target.png" if headers.contains("if-none-match") => {
+            Answer::Headed(304, String::new(), Vec::new())
+        }
+        "/target.png" => Answer::Headed(
+            200,
+            "Cache-Control: max-age=3600\r\n".into(),
+            refreshed.clone(),
+        ),
+        // Refreshed, it is another picture, fresh for an hour.
+        "/window.png" if windows.fetch_add(1, Ordering::SeqCst) > 0 => Answer::Headed(
+            200,
+            "Cache-Control: max-age=3600\r\n".into(),
+            refreshed.clone(),
+        ),
+        "/window.png" => Answer::Headed(
+            200,
+            "Cache-Control: max-age=0, stale-while-revalidate=3600\r\n".into(),
+            body.clone(),
+        ),
+        _ if headers.contains("if-none-match: \"v1\"") => {
+            Answer::Headed(304, "Cache-Control: max-age=60\r\n".into(), Vec::new())
+        }
+        _ => Answer::Headed(
+            200,
+            "Cache-Control: no-cache\r\nETag: \"v1\"\r\n".into(),
+            body.clone(),
+        ),
+    });
+    let dir = std::env::temp_dir().join(format!("exact-relaunch-test-{}", spool_name().unwrap()));
+    // No memory cache: every answer is the disk's or the network's.
+    let launch = || {
+        let policy = Policy {
+            cache: 0,
+            ..Policy::default()
+        };
+        Downloads::with(policy, Some(disk::Disk::new(dir.clone(), disk::DISK_BYTES)))
+    };
+    let (fresh, stale) = (format!("{origin}/fresh.png"), format!("{origin}/stale.png"));
+    let window = format!("{origin}/window.png");
+    let (retagged, later) = (
+        format!("{origin}/retagged.png"),
+        format!("{origin}/later-moved.png"),
+    );
+    let slow = format!("{origin}/slow.png");
+    let first = launch();
+    let moved = format!("{origin}/moved.png");
+    let moved_for_good = format!("{origin}/moved-for-good.png");
+    for url in [&moved, &moved_for_good] {
+        assert_eq!(bytes(&fetched(&first, url).unwrap()), picture);
+    }
+    for url in [&fresh, &stale, &window, &retagged, &later, &slow] {
+        assert_eq!(bytes(&fetched(&first, url).unwrap()), picture);
+        // Stored once the load has settled.
+        let started = Instant::now();
+        while disk::Disk::new(dir.clone(), disk::DISK_BYTES)
+            .get(url)
+            .is_none()
+        {
+            assert!(started.elapsed() < SETTLED, "{url} is stored");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    for url in [&moved, &moved_for_good] {
+        assert!(disk::Disk::new(dir.clone(), disk::DISK_BYTES)
+            .get(url)
+            .is_none());
+    }
+    let second = launch();
+    for url in [&slow, &fresh] {
+        assert_eq!(bytes(&fetched(&second, url).unwrap()), picture);
+    }
+    assert_eq!(second.fetches.load(Ordering::Relaxed), 0);
+    // `no-cache`: asked with its validator, whose 304 is the stored body.
+    assert_eq!(bytes(&fetched(&second, &stale).unwrap()), picture);
+    assert_eq!(second.fetches.load(Ordering::Relaxed), 1);
+    // Within its window: shown from the disk, then asked for again behind it.
+    assert_eq!(bytes(&fetched(&second, &window).unwrap()), picture);
+    // The 304's headers freshen the stored entry, as the refresh's 200 does.
+    for url in [&stale, &window] {
+        let started = Instant::now();
+        loop {
+            let entry = disk::Disk::new(dir.clone(), disk::DISK_BYTES).get(url);
+            if entry.is_some_and(|e| e.head.usable(SystemTime::now()) == disk::Use::Fresh) {
+                break;
+            }
+            assert!(started.elapsed() < SETTLED, "{url} is freshened");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    assert_eq!(second.fetches.load(Ordering::Relaxed), 2);
+    for url in [&retagged, &later] {
+        assert_eq!(bytes(&fetched(&second, url).unwrap()), newer);
+    }
+    assert_eq!(second.fetches.load(Ordering::Relaxed), 6);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
