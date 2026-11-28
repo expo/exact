@@ -1,0 +1,17 @@
+component ScrollPumpProbe
+  state revised = false
+  action arm
+    revised = not revised
+  view
+    column testId="outer-scrollport" width="100%" height="100%" overflow-y="scroll" overflow-x="hidden" padding=24 box-sizing="border-box"
+      text "Arm the probe, fling the strip, then reveal the title." font="-exact-subheadline" margin-bottom=16 flex-shrink=0
+      row testId="fling-strip" width=288 height=80 overflow-x="scroll" overflow-y="hidden" flex-shrink=0
+        row width=416 height=80 gap=16 flex-shrink=0 align-items="center"
+          for stripe in [1, 2, 3, 4, 5, 6, 7] key=stripe
+            view width=44 height=64 flex-shrink=0 background-color="-exact-label"
+      button "Arm probe" press=arm testId="arm-probe" margin-top=12 align-self="start"
+      // The second strip is mounted, with its title inside its own clip and beyond the outer port's text lead.
+      view width=1 height="250vh" flex-shrink=0
+      row testId="clipped-strip" width=288 height=80 overflow-x="scroll" overflow-y="hidden" flex-shrink=0
+        row width=416 height=80 flex-shrink=0 align-items="center"
+          text (revised ? "The clipped title B" : "The clipped title A") testId="clipped-title" width=244 font-size=20 flex-shrink=0

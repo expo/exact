@@ -1,0 +1,28 @@
+{
+  "host": {
+    "web": {},
+    "ios": {
+      "minimumOS": "17.0",
+      "deviceFamily": [
+        "iphone",
+        "ipad"
+      ]
+    }
+  },
+  "deploy": {
+    "store": {
+      "web": "0",
+      "ios": "0"
+    }
+  },
+  "$schema": "../../scripts/app.schema.json",
+  "name": "Scroll Pump Probe",
+  "short_name": "Scroll Pump Probe",
+  "id": "dev.exact.scrollpump.probe",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "dev.exact.scrollpump.probe",
+    "name": "Scroll Pump Probe"
+  }
+}
