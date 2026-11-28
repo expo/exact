@@ -5,6 +5,16 @@ import QuartzCore
 #endif
 
 final class ColorReference: ExactModule {
+    override func later(_ request: [String: Any], reply: ExactReply) {
+        #if os(iOS)
+        // Answer once a check has settled the height, which `call` cannot wait for
+        if request["op"] as? String == "sidebarBarHeight" {
+            return sidebarBar.whenSettled { reply.send(["height": Double($0)]) }
+        }
+        #endif
+        super.later(request, reply: reply)
+    }
+
     override func call(_ request: [String: Any]) throws -> [String: Any] {
         switch request["op"] as? String {
         case "colorReference":
@@ -14,8 +24,9 @@ final class ColorReference: ExactModule {
             return ["available": false]
         case "sidebarBarHeight":
             #if os(iOS)
-            // Answer what was measured: the module says when it measures another height
-            return ["height": Double(sidebarBar.height)]
+            // Answer what was measured, or no height before a check has settled it (the page then asks `later`); the
+            // module says when it measures another height
+            return sidebarBar.settled ? ["height": Double(sidebarBar.height)] : [:]
             #else
             return ["height": 0]
             #endif

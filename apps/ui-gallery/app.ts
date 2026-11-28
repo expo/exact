@@ -179,7 +179,12 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
     native.watch('gallery-sidebar-bar');
     // A module that failed to load refuses the call, and the range bar keeps its own height
     try {
-      const height = (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
+      const height = (native.call({ op: 'sidebarBarHeight' }) as { height?: number }).height;
+      // Before the module's first check, wait for it, so the range bar keeps the height kept from the last launch until
+      // then
+      if (height === undefined) {
+        return native.later({ op: 'sidebarBarHeight' }).then((answer): number => answer.height as number, (): number => 0);
+      }
       return Number.isFinite(height) ? height : 0;
     } catch {
       return 0;

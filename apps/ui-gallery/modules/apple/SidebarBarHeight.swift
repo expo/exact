@@ -14,14 +14,18 @@ import UIKit
 /// registers one more check for the transition's end. The height holds while the split
 /// stays expanded, whether the list shows or not, so hiding the list, showing it or dragging it in moves nothing in
 /// the page's header. A collapse or a new split forgets it: a list that has not shown since launch, or since the
-/// split last expanded, is measured when it first shows, which raises the range bar then.
+/// split last expanded, is measured when it first shows, which raises the range bar then. The page asks at launch,
+/// before the first check, so an answer asked before the first check that settles the height waits for it.
 final class SidebarBarHeight {
-    /// What the `sidebarBarHeight` answer watches: said whenever `height` changes
+    /// What the `sidebarBarHeight` answer watches: said whenever `height` changes once settled
     static let topic = "gallery-sidebar-bar"
 
     private(set) var height: CGFloat = 0
     /// Called on the main thread when `height` changes
     var changed: () -> Void = {}
+    /// Whether a check has settled `height` since launch: until then it is no answer, and an answer waits
+    private(set) var settled = false
+    private var waiting: [(CGFloat) -> Void] = []
 
     /// The list's view, whose controller's split this follows
     private weak var list: UIView?
@@ -42,6 +46,13 @@ final class SidebarBarHeight {
     }
 
     deinit { expansions.map(NotificationCenter.default.removeObserver) }
+
+    /// Gives `answer` the height: at once once settled, else from the check that settles it.
+    func whenSettled(_ answer: @escaping (CGFloat) -> Void) {
+        guard !settled else { return answer(height) }
+        waiting.append(answer)
+        scheduleUpdate()
+    }
 
     /// Follows the split of the controller that `list`, the gallery's list, is in.
     func follow(list view: UIView) {
@@ -99,6 +110,18 @@ final class SidebarBarHeight {
                 }
                 now = inline
             }
+        }
+        if !settled {
+            // Settle at the first check that follows the list or that a request waits on, whatever it finds: a request
+            // enters after the hatches have come (`NativeHatches.connectHatches` queues their replay before activation,
+            // and `native.later` enters through the main queue), so with no list then, none is coming
+            guard list != nil || !waiting.isEmpty else { return }
+            settled = true
+            height = now
+            let answers = waiting
+            waiting = []
+            answers.forEach { $0(now) }
+            return
         }
         guard now != height else { return }
         height = now
