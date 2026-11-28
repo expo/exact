@@ -109,11 +109,53 @@ impl crate::Instance {
     ) -> Result<(), crate::SurfaceError> {
         self.surface.color_target(target);
         if self.has_color_inputs && (self.destination != target || !self.bound) {
-            let result = self.surface.bind(&self.inputs, None);
+            let at = if self.needs_rebind && !self.bound {
+                self.last_bind_at_ms
+            } else {
+                None
+            };
+            let result = self.surface.bind(&self.inputs, at);
             self.bound = result.is_ok();
+            if self.bound {
+                self.needs_rebind = false;
+            }
             result?;
         }
         self.destination = target;
+        Ok(())
+    }
+
+    /// Complete attachment to a live device: announce capabilities and target,
+    /// optionally prepare retained assets in the negotiated format, and arm a fresh frame.
+    pub(crate) fn finish_attach(
+        &mut self,
+        gpu: &crate::Gpu,
+        destination: ColorTarget,
+        prepare: bool,
+    ) -> Result<(), crate::SurfaceError> {
+        self.surface
+            .device_ready(gpu.device.features(), gpu.device.limits());
+        self.surface.color_space_granted(destination.space);
+        self.set_color_target(destination)?;
+        if self.needs_rebind && !self.bound {
+            let result = self.surface.bind(&self.inputs, self.last_bind_at_ms);
+            self.bound = result.is_ok();
+            if self.bound {
+                self.needs_rebind = false;
+            }
+            result?;
+        } else {
+            self.needs_rebind = false;
+        }
+        if prepare {
+            self.surface
+                .prepare_assets(&gpu.device, &gpu.queue, destination.format);
+        }
+        self.seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.presented.reset();
+        self.cadence.rest();
+        self.drain();
+        self.invalidate();
         Ok(())
     }
 }
@@ -160,7 +202,7 @@ impl Module {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         config.desired_maximum_frame_latency = FRAME_LATENCY;
         swapchains(|| target.configure(&gpu.device, &config));
-        let id = self.insert(name, surface, wake, Some((target, config)))?;
+        let id = self.insert(name, *factory, surface, wake, Some((target, config)))?;
         if let Some(inst) = self.instances.get_mut(&id) {
             inst.hdr = hdr;
             inst.alpha_modes = caps.alpha_modes;
@@ -225,23 +267,19 @@ impl Module {
         }
         config.present_mode = wgpu::PresentMode::AutoVsync;
         config.desired_maximum_frame_latency = FRAME_LATENCY;
-        let features = gpu.device.features();
-        let limits = gpu.device.limits();
         let Some(inst) = self.instances.get_mut(&id) else {
             return self.fail::<()>(format!("no canvas {id}")).is_some();
         };
         inst.alpha_modes = caps.alpha_modes.clone();
         inst.hdr = configure(&*inst.surface, &gpu.adapter, &caps, &mut config);
         swapchains(|| target.configure(&gpu.device, &config));
-        inst.seen = Default::default();
+        let destination = ColorTarget::of(&config);
         inst.presentation = Some(SurfaceRef::new(target));
         inst.config = Some(config);
-        inst.surface.device_ready(features, limits);
-        if let Err(e) = inst.report_color_space() {
+        if let Err(e) = inst.finish_attach(gpu, destination, false) {
             self.error = e.0;
             return false;
         }
-        inst.invalidate();
         true
     }
 

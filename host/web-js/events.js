@@ -474,6 +474,15 @@ export const onFileDrop = (e, kind, f, l) => {
 export const onFileDrag = (e, kind, f, l) => {
   return OnHooks.drag?.(e, kind, f);
 };
+// A drag of the node itself, its start and end, which drag-out.js tells it (LLP 1094.000 D16): the point it began at and
+// no data, which is the node's own.
+export const onDragSource = (e, kind, f, l) => {
+  e.exactDragEvents = true;
+  l(`exact${kind}`, ev => {
+    const d = ev.detail;
+    f([d.x, d.y, [], '', '', d.effect, d.shift, d.ctrl, d.alt, d.meta]);
+  });
+};
 // Normal blur commits before focusout chooses its DOM path. Flush callbacks run before post-flush focus commands or
 // autofocus; retired owners never dispatch teardown blur.
 export const onFocus = (e, kind, f, l) => {

@@ -360,3 +360,53 @@ fn response_fixtures_obey_local_network_permission_for_every_origin() {
         }
     }
 }
+
+#[test]
+fn a_scheduled_stream_fixture_checks_local_network_reach_before_running() {
+    let _turn = prompting(true);
+    for (origin, state, allowed) in [
+        (CallOrigin::Tool, State::Denied, false),
+        (CallOrigin::Wake, State::Prompt, false),
+        (CallOrigin::Tool, State::Granted, true),
+        (CallOrigin::App, State::Denied, true),
+    ] {
+        let (core, seen, woke) = setup();
+        let exact_runner::Answer::Later(mut request) =
+            exact_runner::Answer::stream(Request::get("http://printer.local/events"))
+        else {
+            unreachable!()
+        };
+        request.reach = reach(origin, state);
+        let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ran_c = ran.clone();
+        let out = RequestOut {
+            completion: None,
+            class: exact_runner::RequestClass::Read,
+            ticket: 1,
+            target: "test".into(),
+            request,
+            forced: false,
+        };
+        core.run_owned(
+            out,
+            Some(exact_runner::Work::Later(Box::new(move |reply| {
+                ran_c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                reply.send(Outcome::Messages(Vec::new()));
+            }))),
+        )
+        .unwrap();
+        let (_, outcome, _) = super::super::cache::tests::collect(&core, &woke);
+        assert_eq!(
+            ran.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(allowed),
+            "{origin:?} {state:?}"
+        );
+        if !allowed {
+            assert!(refused(&outcome).starts_with("NotAllowedError:"));
+        } else {
+            assert!(matches!(outcome, Outcome::Messages(ref ms) if ms.is_empty()));
+            core.forget(|_| false);
+        }
+        assert!(seen.0.lock().unwrap().is_empty());
+    }
+}

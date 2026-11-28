@@ -21,8 +21,10 @@ const loads = {};
 
 function gpuBinding(e, name) {
   const id = viewId(e);
+  let alive = true;
   e.exactSurfaceName = name;
   onEnd(() => {
+    alive = false;
     try {
       globalThis.exact?.gpu?.destroy(id);
     } catch (err) {
@@ -36,7 +38,7 @@ function gpuBinding(e, name) {
     if (x.gpu)
       return queueMicrotask(() => {
         try {
-          e.isConnected && x.gpu.surface(id, name, v);
+          alive && Views.get(id) === e && e.isConnected && x.gpu.surface(id, name, v);
         } catch (err) {
           say(`gpu: ${err.message}`);
         }

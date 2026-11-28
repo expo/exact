@@ -368,13 +368,13 @@ test('a direct world operation also receives the refusal that created its canvas
 });
 
 
-test('device loss replaces contexts without creating, restoring or unloading surfaces', async () => {
+test('device loss reconfigures existing canvases without creating, restoring, cloning or unloading surfaces', async () => {
   const f = await fixture({input:true});
-  const el = f.create(1); f.create(2, 'second');
+  const el = f.create(1), el2 = f.create(2, 'second');
   el.listeners.keydown({target:el, code:'KeyW', key:'w', timeStamp:1});
-  const ids = [];
+  const ids = [], passedCanvases = [];
   f.gpu.gpu_recover = async (surfaces, canvases) => {
-    ids.push(...surfaces); assert.equal(canvases.length, 2);
+    ids.push(...surfaces); passedCanvases.push(...canvases);
     return JSON.stringify({status:'recovered', instances:[...surfaces]});
   };
   f.gpu.gpu_create = () => { throw new Error('recovery recreated the surface'); };
@@ -383,7 +383,8 @@ test('device loss replaces contexts without creating, restoring or unloading sur
   await new Promise(resolve => setTimeout(resolve, 0));
   await f.exact.gpu.settled();
   assert.deepEqual(ids, [1,2]);
-  assert.equal(f.order.filter(x => x === 'replace').length, 2);
+  assert.deepEqual(passedCanvases, [el.canvas, el2.canvas]);
+  assert.equal(f.order.filter(x => x === 'replace' || x === 'clone').length, 0);
   assert.ok(!f.order.some(x => x.includes('destroy') || x.includes('unload')));
   assert.equal(f.exact.gpu.recovery.status, 'recovered');
   assert.equal(f.exact.gpu.agent(1, {op:'state'}).world.tick, 0);
@@ -392,7 +393,7 @@ test('device loss replaces contexts without creating, restoring or unloading sur
 });
 
 
-test('failed recovery removes clones and backs off instead of retrying each frame', async () => {
+test('failed recovery backs off instead of retrying each frame and never clones canvases', async () => {
   // The glue's timers with a delay are held until the test runs them, so the backoff cannot expire early on a slow machine
   const held=[], f=await fixture({setTimeout:(fn,ms)=>ms>0?held.push([fn,ms]):setTimeout(fn,ms)}); f.create(1);
   let attempts=0;
@@ -401,7 +402,7 @@ test('failed recovery removes clones and backs off instead of retrying each fram
   f.exact.gpu.deviceLost();
   await new Promise(r=>setTimeout(r,0));
   assert.equal(attempts,1);
-  assert.equal(f.order.filter(x=>x==='remove clone').length,1);
+  assert.equal(f.order.filter(x=>x==='clone'||x==='remove clone').length,0);
   for(let i=0;i<10;i++) { f.frame(); f.exact.gpu.deviceLost(); }
   await new Promise(r=>setTimeout(r,0));
   assert.equal(attempts,1,'retry is held until the backoff expires');
@@ -636,15 +637,105 @@ for(const status of ['healthy','no device']) test(`recovery ${status} leaves can
  f.exact.gpu.deviceLost();await new Promise(r=>setTimeout(r,0));
  assert.ok(!f.order.includes('replace'));assert.equal(f.exact.gpu.recovery.status,status);
 });
-test('second cutover failure preserves both live canvases and their input',async()=>{
- const f=await fixture({input:true}), first=f.create(1), second=f.create(2,'other');
- const replace=second.canvas.replaceWith;second.canvas.replaceWith=()=>{throw Error('second install');};
- f.gpu.gpu_recover=async()=>'{"status":"recovered"}';
- f.exact.gpu.deviceLost();await new Promise(r=>setTimeout(r,0));
- assert.ok(first.canvas.isConnected);assert.ok(second.canvas.isConnected);
- first.listeners.keydown({target:first,code:'KeyW',timeStamp:0});assert.equal(f.events.at(-1).code,'KeyW');
- second.canvas.replaceWith=replace;
- await new Promise(r=>setTimeout(r,150));
+test('navigation, backoff mounts, child resupply, failed flush, and trapping destroy stay resilient around device loss', async () => {
+  const held = [], childViews = [], childCounts = [], destroyed = [];
+  const f = await fixture({input:true, setTimeout:(fn,ms)=>ms>0?held.push([fn,ms]):setTimeout(fn,ms)});
+  f.gpu.gpu_children_mode = () => 3;
+  f.gpu.gpu_child_view = (...args) => { childViews.push(args); return true; };
+  f.gpu.gpu_children_count = (...args) => { childCounts.push(args); return true; };
+  f.gpu.gpu_placement = () => 0;
+  f.gpu.gpu_destroy = id => { destroyed.push(id); };
+  const first = f.create(1), second = f.create(2, 'other');
+  const child = new f.Element('div');
+  child.offsetLeft = 4; child.offsetTop = 6; child.offsetWidth = 20; child.offsetHeight = 10;
+  child.getAttribute = name => name === 'data-testid' ? 'card-0' : null;
+  first.children = [first.canvas, child];
+  second.children = [second.canvas];
+  f.gpu.gpu_dirty = () => true;
+  f.frame();
+  assert.equal(childViews.length, 1);
+  childViews.length = 0; childCounts.length = 0;
+
+  // Fail first recovery attempt -> enters backoff timer; mount canvas 3 during backoff,
+  // and close canvas 2 during backoff!
+  let failOnce = true;
+  f.gpu.gpu_recover = async () => {
+    if (failOnce) { failOnce = false; throw new Error('transient'); }
+    return '{"status":"recovered"}';
+  };
+  f.exact.gpu.deviceLost();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(held.length, 1);
+  const third = f.create(3, 'late');
+  assert.equal(f.exact.gpu.agent(3, {op:'state'}), null, 'canvas 3 waits through backoff instead of refusing');
+  f.destroy(2);
+  assert.ok(destroyed.includes(2), 'destroy runs immediately during backoff');
+  // Fire backoff retry -> recovers canvas 1 (resupplying Each child!), mounts canvas 3 cleanly.
+  held.shift()[0]();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(f.exact.gpu.recovery.status, 'recovered');
+  assert.ok(first.canvas.isConnected && third.canvas.isConnected);
+  assert.equal(childViews.length, 1, 'Each child geometry resupplied after recovery');
+  assert.deepEqual(childCounts, [[1, 1], [3, 0]]);
+  assert.ok(f.exact.gpu.agent(3, {op:'state'}), 'canvas 3 mounted after backoff recovery');
+
+  // Failed gpu_flush reports the error and still drains any healthy canvas whose first frame succeeded.
+  first.canvas.style.visibility = 'hidden';
+  f.gpu.gpu_flush = () => { f.publish(1, {presented:true}); return false; };
+  f.frame();
+  assert.equal(first.canvas.style.visibility, '');
+
+  // Trapping gpu_destroy must still retire listeners, observers, and publishers.
+  f.gpu.gpu_destroy = () => { throw new WebAssembly.RuntimeError('unreachable'); };
+  assert.doesNotThrow(() => f.destroy(1));
+  assert.equal(f.exact.gpu.surfaceOf(1), undefined);
+  assert.equal(f.records.at(-1), 'world');
+});
+
+test('repeated loss during recovery hits RECOVERY_LIMIT, waiter errors stay isolated, and swap drains waiters', async () => {
+  const f = await fixture({ input: true });
+  f.create(1);
+  let calls = 0;
+  f.gpu.gpu_recover = async () => {
+    calls++;
+    // Trigger another loss before any clean frame presents.
+    f.exact.gpu.deviceLost();
+    return '{"status":"recovered"}';
+  };
+  f.exact.gpu.deviceLost();
+  for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
+  assert.equal(calls, 5, 'bounded by RECOVERY_LIMIT even when each attempt returns recovered then loses again');
+  assert.equal(f.exact.gpu.recovery.status, 'no device');
+
+  // Waiter isolation + deviceLost microtask gap: a refused queued mount must not strand a peer mount.
+  const g = await fixture();
+  g.create(1);
+  let releaseRecover;
+  g.gpu.gpu_recover = () => new Promise(res => { releaseRecover = () => res('{"status":"recovered"}'); });
+  const origCreate = g.gpu.gpu_create;
+  g.gpu.gpu_create = (name, ...rest) => name === 'bad' ? 0 : origCreate(name, ...rest);
+  g.gpu.gpu_error = () => 'bad surface';
+  g.exact.gpu.deviceLost();
+  // Mount immediately after deviceLost() before the microtask runs: must queue behind recovery!
+  g.create(2, 'bad');
+  g.create(3, 'good');
+  assert.equal(g.exact.gpu.agent(3, { op: 'state' }), null);
+  await new Promise(r => setTimeout(r, 0));
+  releaseRecover();
+  await new Promise(r => setTimeout(r, 0));
+  assert.ok(g.exact.gpu.agent(3, { op: 'state' }), 'good surface mounted despite earlier bad waiter throwing');
+
+  // Swap during backoff clears waiters without leaking stale old-generation callbacks.
+  const held = [];
+  const h = await fixture({ setTimeout: (fn, ms) => ms > 0 ? held.push([fn, ms]) : setTimeout(fn, ms) });
+  h.create(1);
+  h.gpu.gpu_recover = async () => { throw new Error('transient'); };
+  h.exact.gpu.deviceLost();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(held.length, 1);
+  h.exact.gpu.surface(1, 'world', [123]); // queued during backoff against old moduleGen
+  await h.exact.gpu.swap(2);
+  assert.equal(h.exact.gpu.recovery, undefined);
 });
 
  test('fresh host restores exact keyboard control ownership without a new press',async()=>{
@@ -665,15 +756,20 @@ test('fresh host can release a saved pointer contact by its original identity',a
  const reply=f.exact.gpu.handle({op:'tap',id:1,contact:7,phase:'cancel'},null,x=>x);
  assert.equal(reply.delivery,'recognized');assert.deepEqual(f.events.map(e=>[e.name,e.id,e.phase,e.x,e.y]),[['move',7,'cancel',80,30]]);
 });
-test('attachment exception rolls back the published map and keeps both inputs live',async()=>{
- const f=await fixture({input:true}),a=f.create(1),b=f.create(2,'other');let fail=true;
- f.gpu.gpu_recover=async()=>'{"status":"recovered"}';
- f.gpu.gpu_wants_input=id=>{if(id===2&&fail){fail=false;throw Error('attach');}return true;};
- f.exact.gpu.deviceLost();await new Promise(r=>setTimeout(r,0));
- assert.ok(a.canvas.isConnected&&b.canvas.isConnected);
- for(const el of [a,b]) el.listeners.keydown({target:el,code:'KeyW',timeStamp:0});
- assert.equal(f.events.length,2);await new Promise(r=>setTimeout(r,150));
- assert.equal(f.exact.gpu.recovery.status,'recovered');
+test('recovery failure keeps canvases and input live until a retry succeeds', async () => {
+  const f = await fixture({input:true}), a = f.create(1), b = f.create(2, 'other');
+  let fail = true;
+  f.gpu.gpu_recover = async () => {
+    if (fail) { fail = false; throw Error('transient loss'); }
+    return '{"status":"recovered"}';
+  };
+  f.exact.gpu.deviceLost();
+  await new Promise(r => setTimeout(r, 0));
+  assert.ok(a.canvas.isConnected && b.canvas.isConnected);
+  for (const el of [a, b]) el.listeners.keydown({target:el, code:'KeyW', timeStamp:0});
+  await new Promise(r => setTimeout(r, 150));
+  assert.equal(f.events.length, 2);
+  assert.equal(f.exact.gpu.recovery.status, 'recovered');
 });
 
 for (const change of ['clear','remove']) test(`DOM ${change} cancels a held control without another pointer event`,async()=>{
@@ -699,18 +795,20 @@ for (const status of ['healthy','no device']) test(`recovery ${status} preserves
   resolveFetch(new Response(new Uint8Array([1]))); await f.exact.gpu.settled();
   assert.equal(aborted,false); assert.equal(delivered,1);
 });
-for (const site of ['before swap','after swap','attach']) test(`first canvas failure ${site} restores each listener exactly once`, async () => {
-  const f=await fixture({input:true}), a=f.create(1), b=f.create(2,'other');
-  const replace=a.canvas.replaceWith; let fail=true;
-  if(site==='attach') f.gpu.gpu_wants_input=id=>{if(id===1&&fail){fail=false;throw Error('attach');}return true;};
-  else a.canvas.replaceWith=function(el){if(site==='after swap')replace.call(this,el);if(fail){fail=false;throw Error('install');} if(site==='before swap')replace.call(this,el);};
-  f.gpu.gpu_recover=async()=>' {"status":"recovered"}';
-  f.exact.gpu.deviceLost(); await new Promise(r=>setTimeout(r,0));
+test('in-place recovery preserves listeners without duplicating them on retry', async () => {
+  const f = await fixture({input:true}), a = f.create(1), b = f.create(2, 'other');
+  let fail = true;
+  f.gpu.gpu_recover = async () => {
+    if (fail) { fail = false; throw Error('transient'); }
+    return '{"status":"recovered"}';
+  };
+  f.exact.gpu.deviceLost();
+  await new Promise(r => setTimeout(r, 0));
   assert.ok(a.canvas.isConnected && b.canvas.isConnected);
-  for(const el of [a,b]) el.listeners.keydown({target:el,code:'KeyW',timeStamp:0});
-  const count=f.events.length;
-  await new Promise(r=>setTimeout(r,150));
-  assert.equal(count,2); assert.equal(f.exact.gpu.recovery.status,'recovered');
+  await new Promise(r => setTimeout(r, 150));
+  for (const el of [a, b]) el.listeners.keydown({target:el, code:'KeyW', timeStamp:0});
+  assert.equal(f.events.length, 2);
+  assert.equal(f.exact.gpu.recovery.status, 'recovered');
 });
 function restoredButton(f, canvas) {
   const b=new f.Element('button'); b.parent=canvas; canvas.buttons=[b];
@@ -814,8 +912,6 @@ test('a named update sends the module only the arguments that changed since its 
   assert.deepEqual(last(), [['full', {saved: '<saved>', count: 5}]]);
   // After device recovery the first bind is whole again.
   f.gpu.gpu_recover = async surfaces => JSON.stringify({status:'recovered', instances:[...surfaces]});
-  const lost = host.canvas;
-  lost.replaceWith = el => { f.Element.prototype.replaceWith.call(lost, el); host.canvas = el; };
   f.exact.gpu.deviceLost();
   await new Promise(resolve => setTimeout(resolve, 0));
   await f.exact.gpu.settled();
@@ -1070,3 +1166,67 @@ need('chrome', chromium().unavailable)('the browser motion preference reaches a 
     }
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
+
+test('device losses after recovery completion but before first frame reach RECOVERY_LIMIT', async () => {
+  const f = await fixture();
+  f.gpu.gpu_published = () => undefined;
+  f.create(1);
+  let attempts = 0;
+  f.gpu.gpu_recover = async () => { attempts++; return '{"status":"recovered","instances":[1]}'; };
+  // Each loss arrives after the previous recovery resolved (never rendering a clean frame).
+  for (let i = 0; i < 6; i++) {
+    f.exact.gpu.deviceLost();
+    await new Promise(setImmediate);
+  }
+  assert.equal(attempts, 5);
+  assert.equal(f.exact.gpu.recovery.status, 'no device');
+});
+
+test('repeated r === 3 after recovery hits RECOVERY_LIMIT and resets after a clean frame', async () => {
+  const f = await fixture();
+  let published;
+  f.gpu.gpu_published = () => { const p = published; published = undefined; return p; };
+  f.create(1);
+  let attempts = 0, mode = 'lost';
+  f.gpu.gpu_recover = async () => { attempts++; return '{"status":"recovered","instances":[1]}'; };
+  f.gpu.gpu_dirty = () => true;
+  f.gpu.gpu_render = () => {
+    if (mode === 'clean') { published = '{"presented":true}'; return 0; }
+    return 3;
+  };
+  // 2 consecutive r === 3 losses, then a clean frame resets the failure counter.
+  f.exact.gpu.deviceLost();
+  await new Promise(setImmediate);
+  for (let i = 0; i < 2; i++) { f.frame(); await new Promise(setImmediate); }
+  assert.equal(attempts, 3);
+  assert.equal(f.exact.gpu.recovery.status, 'recovered');
+  mode = 'clean';
+  f.frame();
+  await new Promise(setImmediate);
+  // After the clean frame reset, 5 more consecutive losses are needed to go terminal.
+  mode = 'lost';
+  f.exact.gpu.deviceLost();
+  await new Promise(setImmediate);
+  for (let i = 0; i < 5; i++) { f.frame(); await new Promise(setImmediate); }
+  assert.equal(attempts, 8);
+  assert.equal(f.exact.gpu.recovery.status, 'no device');
+});
+
+test('mixed flush still drains a healthy canvas first-frame message when a peer fails', async () => {
+  const f = await fixture();
+  const records = new Map();
+  f.gpu.gpu_published = id => { const r = records.get(id); records.delete(id); return r; };
+  const h1 = f.create(1), h2 = f.create(2);
+  f.gpu.gpu_dirty = () => true;
+  f.gpu.gpu_render = id => {
+    if (id === 1) records.set(1, '{"presented":true}');
+    return 0;
+  };
+  f.gpu.gpu_flush = () => false;
+  f.gpu.gpu_error = () => 'peer failed';
+  h1.canvas.style.visibility = 'hidden';
+  h2.canvas.style.visibility = 'hidden';
+  f.frame();
+  assert.equal(h1.canvas.style.visibility, '');
+  assert.equal(h2.canvas.style.visibility, 'hidden');
+});

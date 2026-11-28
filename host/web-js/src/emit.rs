@@ -1333,6 +1333,8 @@ impl Em<'_> {
                 | EventKind::Drop
                 | EventKind::Dragenter
                 | EventKind::Dragleave
+                | EventKind::Dragstart // @ref LLP 1094.000 D16: drag-out.js tells the node.
+                | EventKind::Dragend
                 | EventKind::Atompress // LLP 1045.000 D7: the Markdown editor's and reader's.
                 | EventKind::Play
                 | EventKind::Playing

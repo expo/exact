@@ -70,19 +70,54 @@ enum DragFiles {
     /// into it (`copyfile(3)`'s `COPYFILE_DATA`), none of the source's mode
     /// or extended attributes. A copy that fails leaves what it wrote, and
     /// the destination is told it failed: a name in a folder others write to
-    /// can be another's by the time it is removed.
-    static func place(_ fd: Int32, at url: URL) throws {
+    /// can be another's by the time it is removed. `progress`, when given,
+    /// takes the file's size as its total and counts the bytes written; its
+    /// cancel, read before the copy, at each block and after the last, stops
+    /// it with `ECANCELED` (LLP 1094.000 D17).
+    static func place(_ fd: Int32, at url: URL, progress: Progress? = nil) throws {
         // Off the main thread: a file has no size bound
         dispatchPrecondition(condition: .notOnQueue(.main))
+        if progress?.isCancelled == true { throw POSIXError(.ECANCELED) }
         let out = Darwin.open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o666)
         guard out >= 0 else { throw posix() }
-        guard fcopyfile(fd, out, nil, copyfile_flags_t(COPYFILE_DATA)) == 0 else {
-            let error = posix()
+        let state = copyfile_state_alloc()
+        defer { copyfile_state_free(state) }
+        let counting = progress.map(Counting.init)
+        if let counting {
+            var info = stat()
+            if fstat(fd, &info) == 0 { counting.progress.totalUnitCount = Int64(info.st_size) }
+            // Unretained: `withExtendedLifetime` below keeps the counter alive through the copy
+            copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), Unmanaged.passUnretained(counting).toOpaque())
+            let counted: copyfile_callback_t = { what, stage, state, _, _, context in
+                guard let context else { return COPYFILE_CONTINUE }
+                let counting = Unmanaged<Counting>.fromOpaque(context).takeUnretainedValue()
+                // A write's error ends the copy with it, which `copyfile` would otherwise retry
+                if stage == COPYFILE_ERR { counting.failed = errno; return COPYFILE_QUIT }
+                if what == COPYFILE_COPY_DATA, stage == COPYFILE_PROGRESS {
+                    var copied: off_t = 0
+                    if copyfile_state_get(state, UInt32(COPYFILE_STATE_COPIED), &copied) == 0 { counting.progress.completedUnitCount = Int64(copied) }
+                }
+                return counting.progress.isCancelled ? COPYFILE_QUIT : COPYFILE_CONTINUE
+            }
+            copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CB), unsafeBitCast(counted, to: UnsafeRawPointer.self))
+        }
+        let copied = withExtendedLifetime(counting) { fcopyfile(fd, out, state, copyfile_flags_t(COPYFILE_DATA)) }
+        guard copied == 0 else {
+            // `COPYFILE_QUIT` sets `ECANCELED`: a write's own error is the one the callback saw
+            let error = counting.map { $0.failed } .flatMap { $0 == 0 ? nil : POSIXError(POSIXErrorCode(rawValue: $0) ?? .EIO) } ?? posix()
             Darwin.close(out)
             throw error
         }
+        // The bytes written, the file's size now, which may have changed since it was measured (D3)
+        var written = stat()
+        let wrote = fstat(out, &written) == 0 ? Int64(written.st_size) : nil
         // A write the system had not yet committed fails at the close (`close(2)`)
         guard Darwin.close(out) == 0 else { throw posix() }
+        if let progress {
+            // An empty file's copy calls back for no block, and a cancel may come as the last one ends
+            guard !progress.isCancelled else { throw POSIXError(.ECANCELED) }
+            if let wrote { progress.totalUnitCount = wrote; progress.completedUnitCount = wrote }
+        }
     }
 
     /// The session a drag opens its `app:/` files through and journals to,
@@ -113,5 +148,22 @@ enum DragFiles {
     }
 
     static func posix() -> Error { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+
+    /// A copy's progress, and the error of a write that ended it.
+    private final class Counting {
+        let progress: Progress
+        var failed: Int32 = 0
+        init(_ progress: Progress) { self.progress = progress }
+    }
+
+    /// What a destination that cancelled a file's copy is answered (LLP
+    /// 1094.000 D17), journaled as its cancel.
+    static func cancelled(_ entry: String, _ journal: Journal) -> Error {
+        _ = journal.failed(entry, "the destination cancelled its copy")
+        return CocoaError(.userCancelled)
+    }
+
+    /// Whether `error` is a copy's cancel.
+    static func isCancel(_ error: Error) -> Bool { (error as? POSIXError)?.code == .ECANCELED }
 }
 #endif

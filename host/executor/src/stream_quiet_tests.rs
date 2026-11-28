@@ -400,3 +400,124 @@ fn stream_open_head_does_not_reset_idle_timeout() {
         "idle timeout elapsed unexpectedly (head must not reset the 1000 ms timer): {took:?}"
     );
 }
+
+/// Scripted `answer stream` handoffs reserve a real `StreamKind` slot, release it
+/// when forgotten, and never run their work closure if executor admission refuses.
+#[test]
+fn fixture_stream_handoff_reserves_stream_slot_and_skips_refused_work() {
+    use crate::STREAMS;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (core, _script, woke) = setup();
+    let ran = Arc::new(AtomicUsize::new(0));
+    let mut opened = Vec::new();
+    // Fill every HTTP stream slot (STREAMS = 16) with open fixture streams.
+    for ticket in 1..=(STREAMS as u64) {
+        let mut out = stream(ticket, "/events", 4096);
+        out.request.stream_open = false;
+        let ran = ran.clone();
+        let work = exact_runner::Work::Later(Box::new(move |mut reply| {
+            ran.fetch_add(1, Ordering::SeqCst);
+            reply.message(exact_runner::Message {
+                data: format!("ev-{ticket}"),
+                ..Default::default()
+            });
+            reply.send(Outcome::Messages(Vec::new()));
+        }));
+        core.run_owned(out, Some(work)).unwrap();
+        let (t, outcome) = next(&core, &woke);
+        assert_eq!(t, ticket);
+        assert!(matches!(outcome, Outcome::Message(_)));
+        // Drain the empty opened marker too.
+        let (t2, opened_marker) = next(&core, &woke);
+        assert_eq!(t2, ticket);
+        assert!(matches!(opened_marker, Outcome::Messages(ref ms) if ms.is_empty()));
+        opened.push(ticket);
+    }
+    assert_eq!(ran.load(Ordering::SeqCst), STREAMS);
+
+    // One more stream fixture exceeds STREAMS -> refused BEFORE its closure runs!
+    let next_ticket = (STREAMS as u64) + 1;
+    let out_over = stream(next_ticket, "/events", 4096);
+    let ran_over = ran.clone();
+    let work_over = exact_runner::Work::Later(Box::new(move |_reply| {
+        ran_over.fetch_add(1, Ordering::SeqCst);
+    }));
+    let refused = core.run_owned(out_over, Some(work_over));
+    assert!(
+        refused.is_err(),
+        "concurrent fixture stream past STREAMS must be refused"
+    );
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        STREAMS,
+        "refused fixture must never execute or count"
+    );
+
+    // Forgetting ticket 1 releases its stream slot cleanly so the next ticket admits and runs.
+    core.forget(|t| t != 1);
+    let after_ticket = next_ticket + 1;
+    let out_after = stream(after_ticket, "/events", 4096);
+    let ran_after = ran.clone();
+    let work_after = exact_runner::Work::Later(Box::new(move |reply| {
+        ran_after.fetch_add(1, Ordering::SeqCst);
+        reply.send(Outcome::Failed {
+            kind: FailureKind::Network,
+            message: "the event stream ended".into(),
+        });
+    }));
+    core.run_owned(out_after, Some(work_after)).unwrap();
+    let (t_after, end_after) = next(&core, &woke);
+    assert_eq!(t_after, after_ticket);
+    assert!(matches!(
+        end_after,
+        Outcome::Failed {
+            kind: FailureKind::Network,
+            ..
+        }
+    ));
+    assert_eq!(ran.load(Ordering::SeqCst), STREAMS + 1);
+
+    // Forgetting all remaining open fixture streams settles the executor completely.
+    core.forget(|_| false);
+    assert!(settled(&core));
+}
+
+/// Queued buffered `answer stream` replies (`Work::HttpResponse` / `Work::Now` on `request.stream == true`)
+/// never reserve or release a `StreamKind` slot on completion or cancellation.
+#[test]
+fn buffered_stream_replies_keep_stream_count_intact() {
+    let (core, _script, woke) = setup();
+
+    // Buffered 429 on an idle executor: must not underflow `state.streams` when completing.
+    let out1 = stream(1, "/buffered-429", 4096);
+    let work1 = exact_runner::Work::HttpResponse(Arc::new(|| {
+        Outcome::Response(exact_runner::Response {
+            status: 429,
+            headers: vec![],
+            body: b"slow down".to_vec(),
+        })
+    }));
+    core.run_owned(out1, Some(work1)).unwrap();
+    let (t1, res1) = next(&core, &woke);
+    assert_eq!(t1, 1);
+    assert!(matches!(res1, Outcome::Response(r) if r.status == 429));
+    assert!(settled(&core));
+
+    // Refused `Work::Now` on `request.stream == true` also leaves stream counts untouched.
+    let out2 = stream(2, "/refused", 4096);
+    let work2 = exact_runner::Work::Now(Box::new(|| Outcome::Failed {
+        kind: FailureKind::Refused,
+        message: "answer stream does not support exactBodyFrom".into(),
+    }));
+    core.run_owned(out2, Some(work2)).unwrap();
+    let (t2, res2) = next(&core, &woke);
+    assert_eq!(t2, 2);
+    assert!(matches!(
+        res2,
+        Outcome::Failed {
+            kind: FailureKind::Refused,
+            ..
+        }
+    ));
+    assert!(settled(&core));
+}

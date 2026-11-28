@@ -42,7 +42,7 @@ pub use field::{FieldSelection, InputDetails, SelectionDirection};
 mod host_kinds;
 pub use host_kinds::{HistorySwipe, ScrollDrag};
 mod pointer;
-pub use pointer::{AtomEvent, DropEvent, MouseEvent, PointerEvent, WheelEvent};
+pub use pointer::{AtomEvent, DropEffect, DropEvent, MouseEvent, PointerEvent, WheelEvent};
 mod intersect;
 mod mounted_reorder;
 mod reorder;
@@ -173,6 +173,7 @@ pub use wakes::WakeHow;
 mod abort_tests;
 mod canvas_performance;
 mod split;
+mod stream_fixture_spec;
 mod surface_record;
 mod text_axes;
 mod time;
@@ -315,6 +316,10 @@ struct PendingReq {
     held: bool,
     long_poll: bool,
     replied: bool,
+    /// A scripted stream fixture delivered its open batch (or opened empty/parked):
+    /// `clock data` no longer waits on it while `pending(r)` still waits for the first mapped value.
+    fixture_opened: bool,
+    stream_meta: Option<Box<advance::stream_fixtures::StreamReqMeta>>,
     /// Never sent: when a resource an overrun refused is asked again (`overrun.rs`).
     reask_at: Option<f64>,
     /// The launch's own ask (its target was in `Runner::launch` when asked),
@@ -348,7 +353,11 @@ impl PendingReq {
     /// Waited on by a clock (a jump, `clock settle`, `clock data`): in flight, not held (D8, D9),
     /// not a re-ask's wait (no I/O: the agent's settle goes to its time, `overrun.rs`).
     fn waited(&self) -> bool {
-        self.in_flight() && !self.quiet() && !self.replied && self.reask_at.is_none()
+        self.in_flight()
+            && !self.quiet()
+            && !self.replied
+            && !self.fixture_opened
+            && self.reask_at.is_none()
     }
 
     /// A request with effects the host has not refused at admission, and no

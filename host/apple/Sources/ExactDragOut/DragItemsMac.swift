@@ -78,6 +78,8 @@ enum DragItemsMac {
         let resolver: AssetResolver?
         let journal: DragFiles.Journal
         var open: DragFiles.Opener = DragFiles.open
+        /// Each write's progress once it is published; a test's stand-in.
+        var published: (Progress) -> Void = { _ in }
 
         init(entry: String, name: String, resolver: AssetResolver?, journal: DragFiles.Journal) {
             self.entry = entry; self.name = name; self.resolver = resolver; self.journal = journal
@@ -91,13 +93,26 @@ enum DragItemsMac {
             do {
                 try write(to: url)
                 completionHandler(nil)
+            } catch where DragFiles.isCancel(error) {
+                completionHandler(DragFiles.cancelled(entry, journal))
             } catch {
                 completionHandler(journal.failed(entry, error.localizedDescription))
             }
         }
 
-        /// The file at `url`, its source descriptor closed before this returns.
-        private func write(to url: URL) throws {
+        /// The file at `url`, its source descriptor closed before this returns,
+        /// its copy published as a file progress for `url` (Foundation's
+        /// `publish()`), from before the source is opened until the write
+        /// ends; a subscriber's cancel stops it (LLP 1094.000 D17).
+        func write(to url: URL) throws {
+            let progress = Progress(totalUnitCount: -1)
+            progress.kind = .file
+            progress.fileOperationKind = .copying
+            progress.fileURL = url
+            progress.publish()
+            defer { progress.unpublish() }
+            published(progress)
+            if progress.isCancelled { throw POSIXError(.ECANCELED) }
             let fd: Int32
             if entry.hasPrefix("app:/") {
                 fd = try open(entry, journal).get()
@@ -107,7 +122,7 @@ enum DragItemsMac {
                 guard fd >= 0 else { throw DragFiles.posix() }
             }
             defer { Darwin.close(fd) }
-            try DragFiles.place(fd, at: url)
+            try DragFiles.place(fd, at: url, progress: progress)
         }
     }
 }

@@ -64,6 +64,10 @@ package protocol GroupedLists: AnyObject {
     /// The cell a list shows custom row `node` in, whatever its press: where
     /// a menu that lifted it returns to.
     func carrier(of node: NodeView) -> UIView?
+    /// The shape a context menu lifts carried row `node`'s cell in: beside
+    /// its detail, a sidebar's row is inset and rounded, as UIKit draws its
+    /// press and selection; nil elsewhere, where the whole cell lifts.
+    func liftShape(of node: NodeView) -> UIBezierPath?
     /// Runs the press of a tapped custom row `node` whose press is its
     /// cell's as UIKit's selection runs a tapped standard row's
     /// (`GroupedListView.pressSelected`); false for any other node, whose

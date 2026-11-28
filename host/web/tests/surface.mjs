@@ -1,5 +1,6 @@
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 import {assetDelivery} from '../gpu-assets.js';
+import { placementStyle, restoreChild, supplyChildren as supplySurfaceChildren, placeChildren as placeSurfaceChildren } from '../gpu-children.js';
 import { inertAncestor } from '../navigation/layers.js';
 import assert from 'node:assert/strict';
 
@@ -76,6 +77,7 @@ export async function fixture(options = {}) {
     .replace('import { padPoller } from "./gpu-pads.js";', '') // the pads are tested in gpu-pads.test.mjs, or passed as options.padPoller
     .replace('import { chooseTier, TIERS } from "./gpu-tier.js";', 'const TIERS = ["high", "mid", "low"], chooseTier = async () => "high";')
     .replace('import { showRefusal } from "./gpu-refusal.js";', 'const showRefusal = () => {};')
+    .replace('import { placementStyle, restoreChild, supplyChildren as supplySurfaceChildren, placeChildren as placeSurfaceChildren } from "./gpu-children.js";', '')
     .replaceAll('import.meta.url', '"http://fixture/"')
     .replace('import { pacer } from "./pace.js";', 'const pacer = () => Object.assign(now => now, {period_ms: 1000 / 120});') // the frame clock is tested in pace.test.mjs
     .replace('await import(`./gpu.js?g=${version}`)', 'await candidate(version)')
@@ -103,7 +105,7 @@ export async function fixture(options = {}) {
     remove() { order.push('remove clone'); this.isConnected = false; }
     replaceWith(el) { order.push("replace"); this.isConnected = false; el.isConnected = true; }
     getAttribute() { return null; }
-    hasAttribute(name) { return name === 'inert' && !!this.inert; }
+    hasAttribute(name) { return name === 'inert' ? !!this.inert : name === 'data-surface' ? this.kind === 'canvas' : false; }
     removeAttribute() {}
     setAttribute() {}
     addEventListener(name, fn) { const set = this.handlers.get(name) ?? new Set(); set.add(fn); this.handlers.set(name,set); this.listeners[name] = event => [...set].forEach(f => f(event)); }
@@ -120,9 +122,9 @@ export async function fixture(options = {}) {
     }
   }
   await new (Object.getPrototypeOf(async function() {}).constructor)(
-    'padPoller', 'inertAncestor', 'assetDelivery', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout', 'clearTimeout', 'getComputedStyle', 'loadJobs',
+    'padPoller', 'inertAncestor', 'assetDelivery', 'placementStyle', 'restoreChild', 'supplySurfaceChildren', 'placeSurfaceChildren', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout', 'clearTimeout', 'getComputedStyle', 'loadJobs',
     source + `;exact.finishRestore = (view) => { const e = surfaces.get(view); e.pendingRestore = {bytes:new Uint8Array([7])}; finishRestore(e, gpu); };`
-  )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), { exact, matchMedia: options.matchMedia, ...options.globals }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
+  )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), placementStyle, restoreChild, supplySurfaceChildren, placeSurfaceChildren, { exact, matchMedia: options.matchMedia, ...options.globals }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
     class { constructor(fn) { resizes.push(fn); } observe() {} disconnect() {} }, fn => { if (fn.name === "frame") frame = fn; return 1; }, () => {}, { search: '' }, { error: (...args) => diagnostics.push(args.join(' ')), warn: (...args) => diagnostics.push(args.join(' ')), info() {} }, window,
     options.performance ?? globalThis.performance, (fn, ms) => {
       if (ms === 1000) { const id = timerId--; metricTimers.set(id, fn); return id; }

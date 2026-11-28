@@ -368,6 +368,50 @@ final class DragInIOSTests: XCTestCase {
         XCTAssertFalse(heard.contains { $0.hasPrefix("1:38") }, "\(heard)")
     }
 
+    /// LLP 1094.000 D16: the app's own drag runs its source's `dragstart`
+    /// before its first enter here, and its `dragend` hears whether the
+    /// app's own drop was delivered, once that drop has landed.
+    func testTheAppsOwnDragStartsBeforeItsEnterAndEndsAfterItsDropLands() throws {
+        let p = presenter(column: ["drop", "dragenter", "dragleave"])
+        let drops = try drops(p), point = try XCTUnwrap(p.views[1]).convert(below, to: nil), gate = DispatchSemaphore(value: 0)
+        let own = OwnDrag { [unowned self] in heard.append("start") }, local = PointDragSession(at: point, in: window)
+        local.localContext = own
+        let session = Session([fileProvider(try fixture("a.pdf", "%PDF-1.4"), type: .pdf, gate: gate), provider(["with a file" as NSString])], at: point)
+        session.local = local
+        drops.dropInteraction(interaction, sessionDidEnter: session)
+        XCTAssertEqual(heard, ["start", "1:55"])
+        drops.dropInteraction(interaction, performDrop: session)
+        drops.dropInteraction(interaction, sessionDidEnd: session)
+        // UIKit's end comes before the drop's items arrive: the source's `dragend` waits for the drop
+        own.ended(taken: true) { [unowned self] taken in heard.append("end \(taken)") }
+        XCTAssertEqual(heard, ["start", "1:55"])
+        gate.signal()
+        hear(4)
+        XCTAssertEqual(heard, ["start", "1:55", #"1:38:[[],"with a file",""]"#, "end true"])
+        // A drop whose node is gone by the time its items arrive was not delivered, though UIKit took it
+        heard = []
+        let next = OwnDrag { [unowned self] in heard.append("start") }, nextLocal = PointDragSession(at: point, in: window)
+        nextLocal.localContext = next
+        let gone = Session([fileProvider(try fixture("b.pdf", "%PDF-1.4"), type: .pdf, gate: gate)], at: point)
+        gone.local = nextLocal
+        drops.dropInteraction(interaction, sessionDidEnter: gone)
+        drops.dropInteraction(interaction, performDrop: gone)
+        next.ended(taken: true) { [unowned self] taken in heard.append("end \(taken)") }
+        p.apply(wireBatch([["op": "destroy", "id": 1]]))
+        gate.signal()
+        hear(3)
+        XCTAssertEqual(heard, ["start", "1:55", "end false"])
+        // UIKit's drop where no node takes it now delivers nothing, whatever UIKit reports
+        heard = []
+        let last = OwnDrag { [unowned self] in heard.append("start") }, lastLocal = PointDragSession(at: point, in: window)
+        lastLocal.localContext = last
+        let missed = Session([provider(["late" as NSString])], at: CGPoint(x: 200, y: 600))
+        missed.local = lastLocal
+        drops.dropInteraction(interaction, performDrop: missed)
+        last.ended(taken: true) { [unowned self] taken in heard.append("end \(taken)") }
+        XCTAssertEqual(heard, ["start", "end false"])
+    }
+
     func testAFieldWhoseNodeDeclaresDropGivesUpItsOwnTextDrop() throws {
         let p = presenter(column: ["drop"], editor: ["input", "drop"])
         let editor = try XCTUnwrap(p.views[2]?.textArea)
@@ -476,7 +520,9 @@ private final class Session: NSObject, UIDropSession {
     var isRestrictedToDraggingApplication: Bool { false }
     func hasItemsConforming(toTypeIdentifiers typeIdentifiers: [String]) -> Bool { false }
     func canLoadObjects(ofClass aClass: any NSItemProviderReading.Type) -> Bool { false }
-    var localDragSession: (any UIDragSession)? { nil }
+    /// The drag session when a node of the app began the drag.
+    var local: UIDragSession?
+    var localDragSession: (any UIDragSession)? { local }
     var progressIndicatorStyle: UIDropSessionProgressIndicatorStyle = .none
     func loadObjects(ofClass aClass: any NSItemProviderReading.Type, completion: @escaping ([any NSItemProviderReading]) -> Void) -> Progress { Progress() }
     let progress = Progress()

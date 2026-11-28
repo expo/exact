@@ -252,17 +252,23 @@ impl Core {
         // An upload waits for its start holding no count, bytes or place of
         // its lane, so a queue of them refuses no other request; it takes
         // them as it starts (`stream::start`).
-        let waits = r.request.stream && r.request.upload_progress;
+        let live_stream = r.request.stream && work.is_none();
+        let fixture_stream_handoff = r.request.stream && matches!(work, Some(OwnedWork::Later(_)));
+        let counts_as_stream = live_stream || fixture_stream_handoff;
+        let waits = live_stream && r.request.upload_progress;
         // A process one-shot runs on a thread of its own with room of its
         // own, so a slow one leaves the lane's requests theirs (LLP 1133.007 D3).
         let one_shot = r.request.is_process() && !r.request.stream;
-        let slot = StreamKind::of(&r.request).filter(|_| !waits);
+        let slot = counts_as_stream
+            .then(|| StreamKind::of(&r.request))
+            .flatten()
+            .filter(|_| !waits);
         let admitted = (|| {
             let (lane, charge, limit) = checked?;
-            if !r.request.stream {
+            if !counts_as_stream {
                 stream_room(&state, lane, limit)?;
             }
-            let charge = if r.request.stream {
+            let charge = if counts_as_stream {
                 if let Some(kind) = slot {
                     state.streams.admit(kind)?;
                 }
@@ -340,7 +346,7 @@ impl Core {
         };
         // Only a request that waits in its lane's queue has one: a stream or
         // a one-shot starts on a thread of its own at once.
-        let queues = !r.request.stream && !one_shot;
+        let queues = !live_stream && !one_shot && !fixture_stream_handoff;
         let queued_deadline = if lane == 1 && queues && !reads::opaque(&work) {
             match r
                 .request
@@ -383,7 +389,68 @@ impl Core {
             state.counts[lane] += 1;
             state.bytes[lane] += charge;
         }
-        if r.request.stream || r.request.is_process() {
+        if fixture_stream_handoff {
+            let Some(OwnedWork::Later(hand)) = work else {
+                unreachable!("fixture_stream_handoff matched OwnedWork::Later");
+            };
+            state.streams.take(slot);
+            state.running.push(Running {
+                started: std::time::Instant::now(),
+                ticket: r.ticket,
+                lane,
+                transport_lane: lane,
+                charge,
+                limit,
+                abort: None,
+                exchange: None,
+                forgotten,
+                fixture_stream: true,
+                stream: slot,
+                waiting: false,
+                read: false,
+                overlap: false,
+                class: r.class,
+                terminal: false,
+                live: 0,
+                drained: false,
+                blocking: false,
+                generation: 0,
+                claim: asynch::Claim::None,
+                cached: false,
+                cache_exchange: None,
+                cache_replacing: None,
+                refresh: None,
+                cache_barrier: false,
+                invalidates: None,
+            });
+            drop(state);
+            // Match live streams and cached reads: enforce local-network reach before activating a fixture (LLP 1133.036 D6).
+            if let Err(error) = reach::admit_cached(&r.request) {
+                complete(
+                    &self.shared,
+                    r.ticket,
+                    outcome::fetch_failure(error, &AbortController::new()),
+                );
+                return Ok(());
+            }
+            let shared = self.shared.clone();
+            let ticket = r.ticket;
+            let reply = exact_runner::Reply::stream(move |outcome| match outcome {
+                Outcome::Message(m) => stream::deliver_fixture(&shared, ticket, m),
+                Outcome::Messages(ms) if ms.is_empty() => {
+                    stream::deliver_fixture_opened(&shared, ticket);
+                }
+                Outcome::Messages(ms) => {
+                    for m in ms {
+                        stream::deliver_fixture(&shared, ticket, m);
+                    }
+                }
+                end => complete(&shared, ticket, end),
+            });
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hand(reply)));
+            return Ok(());
+        }
+        if live_stream || r.request.is_process() {
             // Never queued behind held replies: a stream opens on its own
             // thread with its own transport, and reads there (LLP 1067 D3).
             // An upload takes its place and thread once its budget has room.
@@ -408,6 +475,7 @@ impl Core {
                 abort: Some(abort.clone()),
                 exchange: exchange.then(|| abort.clone()),
                 forgotten,
+                fixture_stream: false,
                 stream: slot,
                 waiting: waits || one_shot,
                 read: false,

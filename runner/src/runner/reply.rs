@@ -160,9 +160,23 @@ impl<D: DataSource> Runner<D> {
             return self.message(pos, outcome, &summary);
         }
         // Messages that waited together (LLP 1016.000 D4): one commit.
-        if let (Some(_), Outcome::Messages(_)) = (self.pending[pos].stream, &outcome) {
+        // An empty batch marks a parked/empty stream fixture open so `clock data`
+        // no longer waits on it while `pending(r)` still waits for a mapped value.
+        if let (Some(_), Outcome::Messages(ms)) = (self.pending[pos].stream, &outcome) {
+            if ms.is_empty() {
+                if self.pending[pos]
+                    .stream_meta
+                    .as_deref()
+                    .is_some_and(|m| m.fixture)
+                {
+                    self.pending[pos].fixture_opened = true;
+                    self.sync_pending_flags();
+                }
+                return Ok(None);
+            }
             return self.message(pos, outcome, &summary);
         }
+        self.cancel_stream_fixture(ticket);
         // A re-ask's wait was never sent (`overrun.rs`): only its invocation's end fails it.
         if self.pending[pos].reask_at.is_some() {
             return self.reask_answered(ticket, outcome, &summary);

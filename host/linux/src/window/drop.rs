@@ -109,10 +109,19 @@ pub(in crate::window) enum Heard {
     Dropped {
         number: u64,
         point: (f32, f32),
+        lift: Option<u32>,
     },
     Landed {
         number: u64,
         landing: Landing,
+    },
+    /// The compositor began lift `lift` (LLP 1094.000 D16): its node hears
+    /// `dragstart` before the window hears the drag over it.
+    LiftBegan(u32),
+    /// Lift `lift` ended, a destination taking it or not.
+    LiftEnded {
+        lift: u32,
+        taken: bool,
     },
     Journal(String),
 }
@@ -136,6 +145,7 @@ enum Command {
     },
     Lift {
         press: Press,
+        lift: u32,
         offers: Vec<(&'static str, Arc<[u8]>)>,
         files: Option<lift::Files>,
         icon: Option<lift::Icon>,
@@ -248,10 +258,14 @@ impl Drops {
                 self.hover = None;
                 p.drag_left();
             }
-            Heard::Dropped { number, point } => {
+            Heard::Dropped {
+                number,
+                point,
+                lift,
+            } => {
                 self.hover = None;
                 // Drops still waiting are about to land, as this one ended their wait
-                let id = p.drop_released_behind(point, p.modifiers());
+                let id = p.drop_released_behind(point, p.modifiers(), lift);
                 self.send(Command::Released { number, id });
             }
             Heard::Landed { number, landing } => {
@@ -269,6 +283,8 @@ impl Drops {
                     delivered: delivered.is_some(),
                 });
             }
+            Heard::LiftBegan(lift) => p.lift_began(lift, p.modifiers()),
+            Heard::LiftEnded { lift, taken } => p.lift_ended(lift, taken, p.modifiers()),
             Heard::Journal(line) => p.host_mut().log(line),
             // The window's input hears these
             Heard::Pointer { .. } | Heard::Ended(_) | Heard::Gone => {}
@@ -282,6 +298,8 @@ impl Drops {
         if self.hover.take().is_some() {
             p.drag_left();
         }
+        // Nothing more arrives or ends through it: its drops fail and its lifts end (LLP 1094.000 D16)
+        p.drags_gone();
     }
 
     /// Ask the presenter again whether a node under a drag that has not
@@ -367,7 +385,7 @@ struct Seat {
 
 /// A drag the window follows, on the device it entered by. `accepted` is
 /// the type the window last accepted it as, which decides whether its drop
-/// may be finished.
+/// may be finished; `lift` the window's own lift it is (LLP 1094.000 D16).
 struct Drag {
     number: u64,
     device: ObjectId,
@@ -376,6 +394,7 @@ struct Drag {
     wanted: Wanted,
     point: (f32, f32),
     accepted: Option<String>,
+    lift: Option<u32>,
 }
 
 /// A drop the presenter was told of, kept until it is delivered or
@@ -723,10 +742,11 @@ impl Listener {
                 }
                 Command::Lift {
                     press,
+                    lift,
                     offers,
                     files,
                     icon,
-                } => self.lift(press, offers, files, icon),
+                } => self.lift(press, lift, offers, files, icon),
                 Command::Landed { number, delivered } => {
                     let Some(at) = self.released.iter().position(|r| r.drag.number == number)
                     else {
@@ -1080,6 +1100,8 @@ impl Dispatch<WlDataDevice, ()> for Listener {
                     .data::<Offered>()
                     .and_then(|o| o.types.lock().ok().map(|t| t.clone()))
                     .unwrap_or_default();
+                // The window's own lift's offer shows the compositor began it, which its node hears first
+                let lift = state.entered_by(&types);
                 // A decoration's surface takes no drag, and neither does a drag that allows no copy or offers
                 // nothing exact2 reads
                 let wanted = (state.drag.is_none()
@@ -1105,6 +1127,7 @@ impl Dispatch<WlDataDevice, ()> for Listener {
                     wanted,
                     point,
                     accepted: None,
+                    lift,
                 });
                 state.tell(Heard::Over { number, point });
             }
@@ -1134,8 +1157,12 @@ impl Dispatch<WlDataDevice, ()> for Listener {
                 if drag.accepted.is_some() && copy {
                     // The event loop takes this drop's target first; a drop still waiting then lands with what
                     // came, and this drop's enters wait for it there
-                    let (number, point) = (drag.number, drag.point);
-                    state.tell(Heard::Dropped { number, point });
+                    let (number, point, lift) = (drag.number, drag.point, drag.lift);
+                    state.tell(Heard::Dropped {
+                        number,
+                        point,
+                        lift,
+                    });
                     let journal = state.journal();
                     for released in &mut state.released {
                         released.progress.cut(&journal);

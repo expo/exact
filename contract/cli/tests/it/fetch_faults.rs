@@ -418,3 +418,646 @@ fn failure_names_each_class_and_says_why() {
         Some(FailureCode::Offline)
     );
 }
+
+#[test]
+fn answer_stream_parks_events_off_settle_and_coexists_with_answer_fetch() {
+    use exact_runner::{DataError, Request, Store};
+
+    const STREAM_APP: &str = r#"
+shape State
+  log: string
+  status: string
+
+component App
+  state active = true
+  resource stream = openStream(active) as shape State
+  action stop
+    active = false
+  view
+    column
+      if failed(stream)
+        text "failed" testId="log"
+        text "failed" testId="status"
+      else if pending(stream)
+        text "waiting" testId="log"
+        text "loading" testId="status"
+      else
+        text stream.log testId="log"
+        text stream.status testId="status"
+      button "Stop" press=stop testId="stop"
+"#;
+
+    struct StreamSource {
+        log: String,
+    }
+    impl DataSource for StreamSource {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::Unavailable("request".into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
+            if args[0] == Value::Bool(false) {
+                return Ok(Answer::Now(Value::record(vec![
+                    Value::str(&self.log),
+                    Value::str("stopped"),
+                ])));
+            }
+            let mut req = Request::get("https://stream-fixture.invalid/chat");
+            req.stream = true;
+            req.method = "POST".into();
+            req.stream_open = true;
+            req.idle_timeout_ms = Some(200);
+            Ok(Answer::Later(req))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            match outcome {
+                Outcome::Message(m) => {
+                    if let Some(head) = m.head {
+                        let req_id = head
+                            .headers
+                            .iter()
+                            .find(|(k, _)| k == "x-stream-id")
+                            .map(|(_, v)| v.as_str())
+                            .unwrap_or("");
+                        self.log
+                            .push_str(&format!("[open:{}:{req_id}]", head.status));
+                    } else {
+                        self.log.push_str(&format!("[{}:{}]", m.event, m.data));
+                    }
+                    Ok(Answer::Now(Value::record(vec![
+                        Value::str(&self.log),
+                        Value::str("streaming"),
+                    ])))
+                }
+                Outcome::Messages(ms) => {
+                    for m in ms {
+                        self.log.push_str(&format!("[{}:{}]", m.event, m.data));
+                    }
+                    Ok(Answer::Now(Value::record(vec![
+                        Value::str(&self.log),
+                        Value::str("streaming"),
+                    ])))
+                }
+                Outcome::Failed { kind, message } => {
+                    self.log.push_str(&format!("[end:{kind:?}:{message}]"));
+                    Ok(Answer::Now(Value::record(vec![
+                        Value::str(&self.log),
+                        Value::str("ended"),
+                    ])))
+                }
+                Outcome::Response(r) => Ok(Answer::Now(Value::record(vec![
+                    Value::str(String::from_utf8_lossy(&r.body).as_ref()),
+                    Value::str(&format!("http:{}", r.status)),
+                ]))),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let mut r = Runner::boot(
+        contract::compile(STREAM_APP).unwrap(),
+        boxed(StreamSource { log: String::new() }),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+
+    // Arm BOTH `answer fetch` and `answer stream` on the exact same prefix: they must stay isolated.
+    agent::handle(
+        &r,
+        r#"{"op":"prefer","faults":{"answer":"https://stream-fixture.invalid/chat","response":{"status":200,"headers":{},"body":"fetch-only"}}}"#,
+    );
+    let armed = agent::handle(
+        &r,
+        r#"{"op":"prefer","faults":{"answerStream":"https://stream-fixture.invalid/chat","method":"POST","stream":{"status":200,"headers":{"x-stream-id":"s-1"},"mode":"events","steps":[{"kind":"event","name":"chunk","data":"Hello","afterMs":0},{"kind":"event","name":"chunk","data":" world","afterMs":100},{"kind":"end","afterMs":150}]}}}"#,
+    );
+    assert!(!armed.contains("\"error\""), "{armed}");
+
+    // Dispatch boot stream request through `fault_dispatch` (with a grants stub).
+    let reqs = r.take_requests();
+    assert_eq!(reqs.len(), 1);
+    let ticket = reqs[0].ticket;
+    // Exercise Web Wasm handoff directly (same schedule mechanics as native `fault_dispatch`).
+    let handoff = serde_json::json!({
+        "prefix": "https://stream-fixture.invalid/chat",
+        "method": "POST",
+        "url": "https://stream-fixture.invalid/chat",
+        "streamOpen": true,
+        "idleTimeoutMs": 200,
+        "maxResponseBytes": 1048576,
+        "stream": {
+            "status": 200,
+            "headers": { "x-stream-id": "s-1" },
+            "mode": "events",
+            "steps": [
+                { "kind": "event", "name": "chunk", "data": "Hello", "afterMs": 0 },
+                { "kind": "event", "name": "chunk", "data": " world", "afterMs": 100 },
+                { "kind": "end", "afterMs": 150 }
+            ]
+        }
+    });
+    let receipts = exact_runner::agent::open_web_stream_fixture(
+        &mut r,
+        ticket,
+        serde_json::to_vec(&handoff).unwrap().as_slice(),
+    )
+    .unwrap();
+    assert_eq!(
+        receipts.len(),
+        2,
+        "open head and after-0 chunk land as distinct turns"
+    );
+
+    let text = |r: &Runner<Source>, id: &str| {
+        let key = r.kernel().find_by_test_id(id)[0];
+        r.kernel()
+            .node_by_key(key)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text)
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(text(&r, "log"), "[open:200:s-1][chunk:Hello]");
+    assert_eq!(text(&r, "status"), "streaming");
+    assert!(
+        !r.has_pending(),
+        "clock data must not block on parked stream events"
+    );
+    assert_eq!(
+        r.data_timer_due_ms(),
+        None,
+        "clock settle must NOT advance past parked stream events"
+    );
+
+    // Explicit `clock +100` delivers the second chunk; stream remains open before `end` at 150 ms.
+    r.advance(100.0).unwrap();
+    assert_eq!(text(&r, "log"), "[open:200:s-1][chunk:Hello][chunk: world]");
+    assert_eq!(text(&r, "status"), "streaming");
+
+    // Explicit `clock +150` delivers clean EOF (`end`).
+    r.advance(150.0).unwrap();
+    assert_eq!(
+        text(&r, "log"),
+        "[open:200:s-1][chunk:Hello][chunk: world][end:Network:the event stream ended]"
+    );
+    assert_eq!(text(&r, "status"), "ended");
+
+    // `pass stream` disarms only the stream rule, leaving `answer fetch` intact.
+    let passed = agent::handle(
+        &r,
+        r#"{"op":"prefer","faults":{"passStream":"https://stream-fixture.invalid/chat"}}"#,
+    );
+    assert!(!passed.contains("\"error\""), "{passed}");
+    let state = agent::handle(&r, r#"{"op":"state"}"#);
+    assert!(state.contains("\"family\":\"stream\""), "{state}");
+    assert!(state.contains("\"armed\":false"), "{state}");
+    assert!(state.contains("\"body\":\"fetch-only\""), "{state}");
+}
+
+#[test]
+fn answer_stream_virtual_idle_timeout_and_fail_step_record_failure_hits() {
+    use exact_runner::{DataError, Request, Store};
+
+    const APP: &str = r#"
+shape State
+  text: string
+
+component App
+  resource s = openStream() as shape State
+  view
+    column
+      if failed(s)
+        text "failed" testId="out"
+      else if pending(s)
+        text "loading" testId="out"
+      else
+        text s.text testId="out"
+"#;
+
+    struct S;
+    impl DataSource for S {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::Unavailable("req".into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            let mut req = Request::get("https://stream-fixture.invalid/idle");
+            req.stream = true;
+            req.idle_timeout_ms = Some(100);
+            Ok(Answer::Later(req))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            match outcome {
+                Outcome::Message(m) => Ok(Answer::Now(Value::record(vec![Value::str(&m.data)]))),
+                Outcome::Failed { kind, message } => {
+                    Ok(Answer::Now(Value::record(vec![Value::str(&format!(
+                        "{kind:?}:{message}"
+                    ))])))
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let mut r = Runner::boot(
+        contract::compile(APP).unwrap(),
+        boxed(S),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.faults()
+        .answer_stream_method(
+            "https://stream-fixture.invalid/idle",
+            None,
+            &serde_json::json!({
+                "status": 200,
+                "headers": {},
+                "mode": "events",
+                "steps": [
+                    { "kind": "event", "data": "first", "afterMs": 0 },
+                    { "kind": "event", "data": "too-late", "afterMs": 250 }
+                ]
+            }),
+        )
+        .unwrap();
+    let req = r.take_requests().pop().unwrap();
+    // Gap between after 0 and after 250 exceeds idleTimeoutMs=100 -> virtual Timeout fires at 100 ms.
+    let handoff = serde_json::json!({
+        "prefix": "https://stream-fixture.invalid/idle",
+        "stream": {
+            "status": 200,
+            "headers": {},
+            "mode": "events",
+            "steps": [
+                { "kind": "event", "data": "first", "afterMs": 0 },
+                { "kind": "event", "data": "too-late", "afterMs": 250 }
+            ]
+        }
+    });
+    exact_runner::agent::open_web_stream_fixture(
+        &mut r,
+        req.ticket,
+        serde_json::to_vec(&handoff).unwrap().as_slice(),
+    )
+    .unwrap();
+    let read_out = |r: &Runner<Source>| {
+        let key = r.kernel().find_by_test_id("out")[0];
+        r.kernel()
+            .node_by_key(key)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text)
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(read_out(&r), "first");
+    r.advance(100.0).unwrap();
+    assert_eq!(read_out(&r), "Timeout:nothing arrived for 100 ms");
+    // Virtual idle timeout MUST record a failure hit in both native faults and Wasm failure drain.
+    let faults_json: serde_json::Value = serde_json::from_str(&r.faults().json()).unwrap();
+    assert_eq!(faults_json[0]["failureHits"].as_u64(), Some(1));
+    assert_eq!(r.take_stream_fixture_failures().len(), 1);
+}
+
+#[test]
+fn answer_stream_rearm_credits_exact_key_and_buffered_bytes_honors_fail() {
+    const APP: &str = r#"shape State
+  text: string
+component App
+  resource s = openStream() as shape State
+  view
+    column
+      if failed(s)
+        text "failed" testId="out"
+      else if pending(s)
+        text "loading" testId="out"
+      else
+        text s.text testId="out"
+"#;
+
+    struct S;
+    impl DataSource for S {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::Unavailable("req".into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            let mut req = Request::get("https://stream-fixture.invalid/bytes");
+            req.stream = true;
+            req.bytes = false;
+            Ok(Answer::Later(req))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            match outcome {
+                Outcome::Response(resp) => {
+                    Ok(Answer::Now(Value::record(vec![Value::str(&format!(
+                        "resp:{}:{}",
+                        resp.status,
+                        String::from_utf8_lossy(&resp.body)
+                    ))])))
+                }
+                Outcome::Failed { kind, message } => {
+                    Ok(Answer::Now(Value::record(vec![Value::str(&format!(
+                        "{kind:?}:{message}"
+                    ))])))
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let mut r = Runner::boot(
+        contract::compile(APP).unwrap(),
+        boxed(S),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let schedule = serde_json::json!({
+        "status": 200,
+        "headers": {},
+        "mode": "bytes",
+        "steps": [
+            { "kind": "bytes", "base64": "YQ==", "afterMs": 50 },
+            { "kind": "fail", "message": "truncated", "afterMs": 120 }
+        ]
+    });
+    r.faults()
+        .answer_stream_method(
+            "https://stream-fixture.invalid/bytes",
+            Some("GET"),
+            &schedule,
+        )
+        .unwrap();
+    let req = r.take_requests().pop().unwrap();
+    let handoff = serde_json::json!({
+        "prefix": "https://stream-fixture.invalid/bytes",
+        "method": "GET",
+        "stream": schedule,
+    });
+    exact_runner::agent::open_web_stream_fixture(
+        &mut r,
+        req.ticket,
+        serde_json::to_vec(&handoff).unwrap().as_slice(),
+    )
+    .unwrap();
+    let read_out = |r: &Runner<Source>| {
+        let key = r.kernel().find_by_test_id("out")[0];
+        r.kernel()
+            .node_by_key(key)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text)
+            .unwrap_or("")
+            .to_string()
+    };
+    // Must stay loading (NOT return an immediate 200) while chunks buffer on the virtual clock.
+    assert_eq!(read_out(&r), "loading");
+    // Re-arm the same (prefix, method) while in flight AND add a different method on same prefix.
+    r.faults()
+        .answer_stream_method(
+            "https://stream-fixture.invalid/bytes",
+            Some("GET"),
+            &serde_json::json!({ "status": 200, "headers": {}, "mode": "bytes", "steps": [{ "kind": "end", "afterMs": 500 }] }),
+        )
+        .unwrap();
+    r.faults()
+        .answer_stream_method(
+            "https://stream-fixture.invalid/bytes",
+            Some("POST"),
+            &serde_json::json!({ "status": 200, "headers": {}, "mode": "bytes", "steps": [{ "kind": "end", "afterMs": 500 }] }),
+        )
+        .unwrap();
+    r.advance(50.0).unwrap();
+    assert_eq!(read_out(&r), "loading");
+    r.advance(120.0).unwrap();
+    assert_eq!(read_out(&r), "Network:truncated");
+    let faults: serde_json::Value = serde_json::from_str(&r.faults().json()).unwrap();
+    let arr = faults.as_array().unwrap();
+    assert_eq!(
+        arr.iter()
+            .find(|f| f["method"].as_str() == Some("GET"))
+            .unwrap()["failureHits"]
+            .as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        arr.iter()
+            .find(|f| f["method"].as_str() == Some("POST"))
+            .unwrap()["failureHits"]
+            .as_u64(),
+        Some(0)
+    );
+}
+
+#[test]
+fn native_buffered_bytes_and_delayed_429_and_live_upload_waited() {
+    use exact_runner::{DataError, Request, Store, Work};
+    const APP: &str = r#"
+shape Out
+  text: string
+
+component App
+  state mode = "bytes"
+  resource res = load(mode) as shape Out
+  action switch
+    mode = "delay"
+  action to_upload
+    mode = "upload"
+  view
+    column
+      if failed(res)
+        text "failed" testId="out"
+      else if pending(res)
+        text "loading" testId="out"
+      else
+        text res.text testId="out"
+      button "Switch" press=switch testId="sw"
+      button "Upload" press=to_upload testId="up"
+"#;
+
+    struct S;
+    impl DataSource for S {
+        fn grants(&self) -> &str {
+            "net.fetch https://stream-fixture.invalid"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::Unavailable("request".into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
+            let mode = args[0].as_str().unwrap_or("");
+            let mut req = match mode {
+                "bytes" => Request::get("https://stream-fixture.invalid/buf-bytes"),
+                "delay" => Request::get("https://stream-fixture.invalid/delay-429"),
+                _ => {
+                    let mut u = Request::get("https://stream-fixture.invalid/upload");
+                    u.method = "POST".into();
+                    u.body = b"hi".to_vec();
+                    u.upload_progress = true;
+                    u
+                }
+            };
+            req.stream = true;
+            req.bytes = false;
+            req.http = exact_runner::HttpScheduling::Independent {
+                max_response_bytes: 1024 * 1024,
+            };
+            Ok(Answer::Later(req))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            match outcome {
+                Outcome::Response(resp) => Ok(Answer::Now(Value::record(vec![Value::str(
+                    &format!("{}:{}", resp.status, String::from_utf8_lossy(&resp.body)),
+                )]))),
+                Outcome::Failed { kind, message } => {
+                    Ok(Answer::Now(Value::record(vec![Value::str(&format!(
+                        "{kind:?}:{message}"
+                    ))])))
+                }
+                _ => Ok(Answer::Now(Value::record(vec![Value::str("msg")]))),
+            }
+        }
+    }
+
+    let mut r = Runner::boot(
+        contract::compile(APP).unwrap(),
+        boxed(S),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.faults()
+        .answer_stream_method(
+            "https://stream-fixture.invalid/buf-bytes",
+            Some("GET"),
+            &serde_json::json!({
+                "status": 200,
+                "headers": {},
+                "mode": "bytes",
+                "steps": [
+                    { "kind": "bytes", "base64": "SGVs", "afterMs": 50 },
+                    { "kind": "bytes", "base64": "bG8=", "afterMs": 80 },
+                    { "kind": "end", "afterMs": 100 }
+                ]
+            }),
+        )
+        .unwrap();
+    r.faults()
+        .answer_stream_method(
+            "https://stream-fixture.invalid/delay-429",
+            Some("GET"),
+            &serde_json::json!({ "status": 429, "headers": {}, "body": "wait", "afterMs": 200 }),
+        )
+        .unwrap();
+
+    // 1. Native `buffered_mode` byte schedule via `fault_dispatch` + `Work::Later`:
+    // must NOT abort on `Reply::drop`, must clear `has_pending()` for `clock data`,
+    // and must deliver the concatenated 200 response at 100 ms.
+    let req1 = r.take_requests().remove(0);
+    let work1 = match r.fault_dispatch(&req1) {
+        Some(exact_runner::Dispatch::Run(Work::Later(w))) => w,
+        _ => panic!("expected Work::Later"),
+    };
+    let outcomes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let o_c = outcomes.clone();
+    work1(exact_runner::Reply::stream(move |o| {
+        o_c.lock().unwrap().push(o);
+    }));
+    for o in outcomes.lock().unwrap().drain(..) {
+        r.fulfill(req1.ticket, o).unwrap();
+    }
+    assert!(
+        !r.has_pending(),
+        "parked buffered byte fixture unblocks clock data"
+    );
+    assert!(
+        r.holds(req1.ticket),
+        "buffered byte fixture must not abort on Reply drop"
+    );
+    r.advance(100.0).unwrap();
+    let read_out = |r: &Runner<Source>| {
+        let key = r.kernel().find_by_test_id("out")[0];
+        r.kernel()
+            .node_by_key(key)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text)
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(read_out(&r), "200:Hello");
+    assert!(
+        r.take_stream_fixture_failures().is_empty(),
+        "native sessions must never accumulate Wasm failure notifications"
+    );
+
+    // 2. Native delayed buffered 429 aborted before deadline leaves hits=0 and failureHits=0.
+    let sw_key = r.kernel().find_by_test_id("sw")[0];
+    let sw = r.kernel().node_by_key(sw_key).unwrap().id;
+    r.dispatch(sw, exact_runner::Event::Press).unwrap();
+    let req2 = r.take_requests().remove(0);
+    let work2 = match r.fault_dispatch(&req2) {
+        Some(exact_runner::Dispatch::Run(Work::HttpResponse(w))) => w,
+        _ => panic!("expected Work::HttpResponse"),
+    };
+    r.fulfill(req2.ticket, work2()).unwrap();
+    assert!(r.holds(req2.ticket), "delayed 429 must park until 300 ms");
+    // Switch to upload before 300 ms -> drops req2 before delivery!
+    let up_key = r.kernel().find_by_test_id("up")[0];
+    let up = r.kernel().node_by_key(up_key).unwrap().id;
+    r.dispatch(up, exact_runner::Event::Press).unwrap();
+    r.advance(400.0).unwrap();
+    let faults: serde_json::Value = serde_json::from_str(&r.faults().json()).unwrap();
+    let delay_entry = faults
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["prefix"].as_str() == Some("https://stream-fixture.invalid/delay-429"))
+        .unwrap();
+    assert_eq!(delay_entry["hits"].as_u64(), Some(0));
+    assert_eq!(delay_entry["failureHits"].as_u64(), Some(0));
+
+    // 3. Live upload receiving `exact:sending` remains waited on by clocks (no regression).
+    let req3 = r.take_requests().remove(0);
+    assert!(r.fault_dispatch(&req3).is_none());
+    assert!(r.has_pending());
+    r.fulfill(
+        req3.ticket,
+        Outcome::Message(exact_runner::Message {
+            event: exact_runner::UPLOAD_SENDING.into(),
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    assert!(
+        r.has_pending(),
+        "live upload must remain waited after exact:sending"
+    );
+}

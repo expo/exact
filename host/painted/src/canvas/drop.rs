@@ -26,12 +26,31 @@ impl<D: DataSource + Default> CanvasHost<D> {
     }
 
     /// The drag was released at pixels (`x`, `y`) before its items are
-    /// copied: the drop's number, or 0 when nothing takes it there.
-    pub fn drop_released(&mut self, x: f32, y: f32) -> u32 {
+    /// copied: the drop's number, or 0 when nothing takes it there. `lift`
+    /// is the app's own lift the drag is, 0 for another app's drag.
+    pub fn drop_released(&mut self, x: f32, y: f32, lift: u32) -> u32 {
         let held = self.p.modifiers();
         self.p
-            .drop_released((x / self.scale, y / self.scale), held)
+            .drop_released_lift(
+                (x / self.scale, y / self.scale),
+                held,
+                (lift != 0).then_some(lift),
+            )
             .unwrap_or(0)
+    }
+
+    /// The platform began lift `lift`: `startDragAndDrop` returned true
+    /// (LLP 1094.000 D16).
+    pub fn lift_began(&mut self, lift: u32) {
+        let held = self.p.modifiers();
+        self.p.lift_began(lift, held);
+    }
+
+    /// Lift `lift` ended, a destination taking it or not (`taken`,
+    /// `DragEvent.getResult`).
+    pub fn lift_ended(&mut self, lift: u32, taken: bool) {
+        let held = self.p.modifiers();
+        self.p.lift_ended(lift, taken, held);
     }
 
     /// Who takes a drop Android gives field `id`'s view at pixels (`x`,

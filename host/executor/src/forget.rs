@@ -193,6 +193,7 @@ impl Core {
     fn forget_with(&self, held: impl Fn(u64) -> bool, explicit: &[u64], suspending: bool) {
         let mut aborts = Vec::new();
         let mut cancels = Vec::new();
+        let mut fixture_done = Vec::new();
         {
             let mut guard = self.shared.state.lock().unwrap();
             let state = &mut *guard;
@@ -210,7 +211,6 @@ impl Core {
                             || explicit.contains(&job.ticket))
                     {
                         *counts -= 1;
-                        streams.release(StreamKind::of(&job.request));
                         *bytes -= job.charge;
                         return false;
                     }
@@ -248,6 +248,9 @@ impl Core {
                 let by_app = explicit.contains(&run.ticket);
                 if by_app || (!run.forgotten && !held(run.ticket)) {
                     run.forgotten = true;
+                    if run.fixture_stream {
+                        fixture_done.push(run.ticket);
+                    }
                     let stream = run.stream.is_some().then_some(run.ticket);
                     let abort = if by_app {
                         run.exchange.clone()
@@ -307,6 +310,13 @@ impl Core {
         #[cfg(test)]
         if let Some(before) = self.shared.before_stream_release.lock().unwrap().take() {
             before();
+        }
+        for ticket in fixture_done {
+            complete(
+                &self.shared,
+                ticket,
+                failed(FailureKind::Aborted, "stream fixture closed"),
+            );
         }
         stream::release(&self.shared, aborts, suspending);
         // An upload let go while it waits ends unsent; the places freed may start others.

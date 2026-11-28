@@ -29,6 +29,37 @@ impl Batch {
         self.ops
             .push(format!("{{\"op\":\"auth\",\"ticket\":{ticket}}}"));
     }
+
+    /// Notify the page's fault table of a scripted stream fixture hit and/or failure (LLP 1103).
+    pub fn stream_failure(
+        &mut self,
+        prefix: &str,
+        method: Option<&str>,
+        url: &str,
+        hit: bool,
+        failure: bool,
+    ) {
+        let mut s = String::from("{\"op\":\"streamFailure\",\"prefix\":");
+        quote(prefix, &mut s);
+        if let Some(method) = method {
+            s.push_str(",\"method\":");
+            quote(method, &mut s);
+        }
+        s.push_str(",\"url\":");
+        quote(url, &mut s);
+        s.push_str(if hit {
+            ",\"hit\":true"
+        } else {
+            ",\"hit\":false"
+        });
+        s.push_str(if failure {
+            ",\"failure\":true"
+        } else {
+            ",\"failure\":false"
+        });
+        s.push('}');
+        self.ops.push(s);
+    }
 }
 
 pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'static str> {

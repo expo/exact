@@ -25,4 +25,14 @@
     <style name="ExactScrollbars">
         <item name="android:scrollbars">vertical|horizontal</item>
     </style>
+    <!-- Edge-to-edge modal alert window (LLP 1115.001 D10, LLP 1105 D7): non-floating without
+         FLAG_DIM_BEHIND so the dialog window covers both system bars and DisplayPolicy honors the
+         page's light status/navigation bar appearance across API 29-37. -->
+    <style name="ExactAlertDialog" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@style/ExactAlert</item>
+    </style>
 </resources>

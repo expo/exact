@@ -325,6 +325,21 @@ fn step_json(step: &Step, s: &mut String) {
             s.push_str(",\"response\":");
             s.push_str(response);
         }
+        Step::AnswerStream {
+            prefix,
+            method,
+            stream,
+            ..
+        } => {
+            s.push_str("{\"op\":\"answer-stream\",\"prefix\":");
+            q(prefix, s);
+            if let Some(method) = method {
+                s.push_str(",\"method\":");
+                q(method, s);
+            }
+            s.push_str(",\"stream\":");
+            s.push_str(stream);
+        }
         Step::AnswerSource { source, value, .. } => {
             s.push_str("{\"op\":\"answer-source\",\"source\":");
             q(source, s);
@@ -333,6 +348,10 @@ fn step_json(step: &Step, s: &mut String) {
         }
         Step::PassFetch { prefix, .. } => {
             s.push_str("{\"op\":\"pass-fetch\",\"prefix\":");
+            q(prefix, s);
+        }
+        Step::PassStream { prefix, .. } => {
+            s.push_str("{\"op\":\"pass-stream\",\"prefix\":");
             q(prefix, s);
         }
         Step::DropStream { prefix, .. } => {

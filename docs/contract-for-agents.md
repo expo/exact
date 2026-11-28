@@ -5051,6 +5051,14 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   - **Android's top app bar and tvOS's bar leave out a readout**, and Android also leaves
     out the title's avatar, glyph-line subtitles and tap on the title (plain-text subtitles
     after the heading project into Material's small top app bar, LLP 1115.001 D11).
+    Projected bars own their container height on every projecting host (UIKit's bar on iOS,
+    AppKit's toolbar and 48 pt sheet title row on macOS, and Material 3's 64 dp small app
+    bar expanding with `font_scale` on Android pushed and `modal` sheet routes) and ignore
+    `height` or `min-height` written on `header`. When a route needs a specific authored bar
+    height (such as a 56 dp compact sheet toolbar), set `navigationBar="none"` on the route
+    or `appearance="none"` on `header` and size it in flow (for example `min-height=56`, so
+    large text still grows the header while keeping the sheet's native container, scrim,
+    detents, drag gestures and TalkBack pane title).
     The Mac's toolbar takes a header only when it has a place for every part: the heading, the first text
     after it (in a box or not) as the window's subtitle, buttons whose face is words,
     symbols, dots and at most one picture, readouts of words, symbols and dots, one
@@ -7712,9 +7720,15 @@ Fixtures keep request validation, file-read grants and upload limits, deadlines,
 response limits and native HTTP caching. Native prefetch and its foreground
 fallback use the same fixture. A web response and its clones keep the request URL
 and read-only headers.
-Unmatched URLs still go to the network. These are immediate, buffered responses;
-streams, redirects and `exactBodyTo` are not supported. See the
-[authored-test grammar](contract-grammar.md#authored-tests) for limits.
+Unmatched URLs still go to the network. `answer fetch` covers buffered HTTP
+responses; redirects and `exactBodyTo` are not supported. For HTTP(S)
+`exactStream` event and byte streams, use `answer stream "<prefix>" [method POST]
+with 200` followed by indented `event`, `bytes`, `end` or `fail` lines with
+cumulative `after <ms>` delays, and `pass stream "<prefix>"` to disarm it.
+`after 0` events land on `clock data`; later events park across `clock settle`
+and advance on `clock +<ms>`, letting a test interact mid-stream without a live
+server. See the [authored-test grammar](contract-grammar.md#authored-tests) for
+limits.
 
 To write through the app's own server as another person, `request POST "/items"
 {"title": "Bread"} as grace` is the driver calling it (`Authorization: Bearer grace`,

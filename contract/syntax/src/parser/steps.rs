@@ -123,6 +123,7 @@ impl Parser {
                     s,
                     Step::FailFetch { .. }
                         | Step::AnswerFetch { .. }
+                        | Step::AnswerStream { .. }
                         | Step::AnswerSource { .. }
                         | Step::Prefer { .. }
                         | Step::PreferExtension { .. }
@@ -281,7 +282,7 @@ impl Parser {
     }
 
     /// A launch line's quoted value.
-    fn launch_str(&mut self, word: &str, what: &str) -> R<String> {
+    pub(super) fn launch_str(&mut self, word: &str, what: &str) -> R<String> {
         match self.peek_kind().clone() {
             TokenKind::Str(s) if !s.is_empty() => {
                 self.next();
@@ -1011,34 +1012,50 @@ impl Parser {
                 self.next();
                 Step::BeforeData { span }
             }
-            // @ref LLP 1103 D3 — `fail fetch "<prefix>" [times N]`, `pass fetch "<prefix>"`.
-            "fail" | "pass" => {
+            // @ref LLP 1103 D3 — `fail fetch "<prefix>" [times N]`, `pass fetch|stream "<prefix>"`.
+            "pass" => {
+                if self.at_ident("fetch") {
+                    self.next();
+                    Step::PassFetch {
+                        prefix: self.launch_str("pass fetch", "the URL prefix a fetch starts with")?,
+                        span,
+                    }
+                } else if self.at_ident("stream") {
+                    self.next();
+                    Step::PassStream {
+                        prefix: self.launch_str("pass stream", "the URL prefix a stream starts with")?,
+                        span,
+                    }
+                } else {
+                    return self.err(
+                        "syntax-expected-step",
+                        "`pass` takes `fetch` or `stream`: `pass fetch \"https://api.example.com/\"` or `pass stream \"https://api.example.com/\"`",
+                    );
+                }
+            }
+            "fail" => {
                 if !self.at_ident("fetch") {
                     return self.err(
                         "syntax-expected-step",
-                        format!("`{word}` takes `fetch`: `{word} fetch \"https://api.example.com/\"`"),
+                        "`fail` takes `fetch`: `fail fetch \"https://api.example.com/\"` (to fail a stream, write `answer stream` with a `fail \"...\"` row or non-2xx status)",
                     );
                 }
                 self.next();
-                let prefix = self.launch_str(&format!("{word} fetch"), "the URL prefix a fetch starts with")?;
-                if word == "pass" {
-                    Step::PassFetch { prefix, span }
+                let prefix = self.launch_str("fail fetch", "the URL prefix a fetch starts with")?;
+                let times = if self.at_ident("times") {
+                    self.next();
+                    let n = self.step_number("how many fetches fail, a positive whole number")?;
+                    if n.fract() != 0.0 || !(1.0..=u32::MAX as f64).contains(&n) {
+                        return self.err(
+                            "syntax-expected-step",
+                            "`fail fetch … times` takes a positive whole number",
+                        );
+                    }
+                    Some(n as u32)
                 } else {
-                    let times = if self.at_ident("times") {
-                        self.next();
-                        let n = self.step_number("how many fetches fail, a positive whole number")?;
-                        if n.fract() != 0.0 || !(1.0..=u32::MAX as f64).contains(&n) {
-                            return self.err(
-                                "syntax-expected-step",
-                                "`fail fetch … times` takes a positive whole number",
-                            );
-                        }
-                        Some(n as u32)
-                    } else {
-                        None
-                    };
-                    Step::FailFetch { prefix, times, span }
-                }
+                    None
+                };
+                Step::FailFetch { prefix, times, span }
             }
             "drop" => {
                 self.expect_word("stream")?;
@@ -1055,6 +1072,7 @@ impl Parser {
                     span,
                 }
             }
+            "answer" if self.at_ident("stream") => return self.answer_stream(span),
             "answer" => {
                 self.expect_word("fetch")?;
                 let prefix = self.launch_str("answer fetch", "a URL prefix")?;
@@ -1343,6 +1361,7 @@ pub(super) fn launch_word(step: &Step) -> &'static str {
         Step::BeforeData { .. } => "before data",
         Step::FailFetch { .. } => "fail fetch",
         Step::AnswerFetch { .. } => "answer fetch",
+        Step::AnswerStream { .. } => "answer stream",
         Step::AnswerSource { .. } => "answer source",
         _ => "",
     }
@@ -1356,10 +1375,20 @@ pub fn is_launch(step: &Step) -> bool {
 /// Whether two launch lines set the same fact: `fail fetch` lines, the same
 /// prefix; preferences, the same fact after resolving drive aliases.
 pub fn same_launch(a: &Step, b: &Step) -> bool {
-    fn fetch_rule(step: &Step) -> Option<(&str, Option<&str>)> {
+    fn fetch_rule(step: &Step) -> Option<(&str, Option<String>)> {
         match step {
             Step::FailFetch { prefix, .. } => Some((prefix, None)),
-            Step::AnswerFetch { prefix, method, .. } => Some((prefix, method.as_deref())),
+            Step::AnswerFetch { prefix, method, .. } => {
+                Some((prefix, method.as_deref().map(str::to_ascii_uppercase)))
+            }
+            _ => None,
+        }
+    }
+    fn stream_rule(step: &Step) -> Option<(&str, Option<String>)> {
+        match step {
+            Step::AnswerStream { prefix, method, .. } => {
+                Some((prefix, method.as_deref().map(str::to_ascii_uppercase)))
+            }
             _ => None,
         }
     }
@@ -1371,6 +1400,9 @@ pub fn same_launch(a: &Step, b: &Step) -> bool {
         }
     }
     if let (Some(x), Some(y)) = (fetch_rule(a), fetch_rule(b)) {
+        return x == y;
+    }
+    if let (Some(x), Some(y)) = (stream_rule(a), stream_rule(b)) {
         return x == y;
     }
     if let (Step::AnswerSource { source: x, .. }, Step::AnswerSource { source: y, .. }) = (a, b) {

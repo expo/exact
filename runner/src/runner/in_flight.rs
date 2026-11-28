@@ -128,6 +128,7 @@ impl<D: DataSource> Runner<D> {
             let p = self.pending.remove(pos);
             self.note_retired(&p);
             let t = p.ticket;
+            self.cancel_stream_fixture(t);
             self.note_let_go(t, target);
             self.let_go_request(p);
             self.forgot = true;

@@ -660,6 +660,7 @@ impl Machine {
                 .then(|| abort.clone()),
             exchange: http.then(|| abort.clone()),
             forgotten: job.forgotten,
+            fixture_stream: false,
             stream: None,
             waiting: false,
             read: lane == 0

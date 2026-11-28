@@ -126,6 +126,12 @@ pub struct Wave {
 }
 
 impl Surface for Wave {
+    fn device_lost(&mut self) -> bool {
+        SHARED.with(|s| *s.borrow_mut() = None);
+        PHOTOS.with(|p| p.borrow_mut().clear());
+        false
+    }
+
     fn bind(&mut self, inputs: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
         let [photo, a, b, freeze] = inputs else {
             return Err(SurfaceError(format!("wave: expected 4 inputs, got {}", inputs.len())));

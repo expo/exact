@@ -1141,7 +1141,7 @@ async function main(args, lockHeld = false) {
     ['--sdk', sdkFor, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), '-parse-as-library', '-emit-library', swiftOptimization(), '-swift-version', '5', '-module-name', 'ExactAppModules', ...moduleSources, ...(packages.length ? ['-I', packagesIn, '-L', packagesIn, ...packageObjects(packagesIn)] : []), ...packageImports(packagesIn), ...(app.manifest.host?.[forIos ? 'ios' : 'macos']?.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...packageLink(packagesIn)] : []), ...frameworksFor(forIos, simulator, arch).args, ...(probe ? ['-Xlinker', '-rpath', '-Xlinker', '@loader_path/Frameworks'] : []), ...linkArgs(forIos), ...moduleLibraryLinkArgs({ wrapped: forIos && (production || embedOnly) && !probe }), '-o', out, ...targetArgs];
   const moduleLibraries = modulesBuilt ? frameworksFor(ios, ios && !device, ios ? iosArch : macArch).libraries : [];
   const macTarget = ['-target', moduleTripleFor(app, false)];
-  const { place: placePackages, stop: stopPkg, libraries: packageLibraries, resources: packageResources, frameworks: packageFrameworks, imports: packageImports, link: packageLink, products: packageProducts } = packageCompiler({ packages, packageDir, packageTargets,
+  const { place: placePackages, stop: stopPkg, libraries: packageLibraries, resources: packageResources, frameworks: packageFrameworks, imports: packageImports, link: packageLink, stamp: packageStamp, products: packageProducts } = packageCompiler({ packages, packageDir, packageTargets,
     packageCopies, seam, packagesRoot, swiftc, production, distribution, ios, tv, frameworkBundles,
     app, extensions: buildReceipt.graph.extensions, swiftInputs: buildReceipt.binary.inventories, minimum: { ios: app.manifest.host?.ios?.minimumOS, tvos: app.manifest.host?.ios?.minimumOS,
       macos: app.manifest.host?.macos?.minimumOS } });
@@ -1150,7 +1150,6 @@ async function main(args, lockHeld = false) {
   const ensurePackages = async () => { await packagesReady; if (!packageFrameworksAdded) { packageFrameworksAdded = true; moduleLibraries.push(...packageFrameworks); } };
   const packagesReady = placePackages(packageDir);
   packagesReady.catch(() => {}); background.push(packagesReady);
-  const packageStamp = dir => JSON.stringify([...packages.map(p => [p.module, createHash('sha256').update(readFileSync(resolve(dir, `${p.module}.dylib`))).digest('hex')]), ...packageProducts(dir).map(p => p.digest)]);
   const appModuleTarget = ios ? ['-target', moduleTripleFor(app, true, device, tv), '-sdk', sdk] : macTarget;
   const appModuleTask = modulesBuilt ? ensurePackages().then(() => arm(moduleArgs(sdkName, appModuleTarget, modulesBuilt, ios, ios && !device, ios ? iosArch : macArch), [...moduleSources, ...packageSources], modulesBuilt, frameworkStamp(ios, ios && !device, ios ? iosArch : macArch) + packageStamp(packageDir), true)()) : null;
   appModuleTask?.catch(() => {}); if (appModuleTask) background.push(appModuleTask);
@@ -1180,7 +1179,7 @@ async function main(args, lockHeld = false) {
     await appModuleTask;
     const intentArgs = moduleArgs(sdkName, appModuleTarget, modulesBuilt, ios, ios && !device, ios ? iosArch : macArch);
     const { keyArgs } = normalizeArmArgs(intentArgs, [...moduleSources, ...packageSources], armKeyOptions(modulesBuilt));
-    nativeIntents.push(nativeIntentModule({ moduleName: 'ExactAppModules', binary: modulesBuilt, sources: moduleSources, args: intentArgs, keyArgs, directory: resolve(linkRoot, 'native-intents'), swiftc, runApple }));
+    nativeIntents.push(nativeIntentModule({ moduleName: 'ExactAppModules', binary: modulesBuilt, sources: moduleSources, args: intentArgs, keyArgs, stamp: packageStamp(packageDir), directory: resolve(linkRoot, 'native-intents'), swiftc, runApple }));
     if (nativeIntents.some(Boolean)) intents = buildIntents({ ...intentOptions, nativeModules: nativeIntents });
   }
   // The early build stands when it succeeded and the bake came out as it was expected to.

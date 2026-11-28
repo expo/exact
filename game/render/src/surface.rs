@@ -521,10 +521,11 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.device_assets_invalidated = false;
         self.device = true;
     }
-    fn device_lost(&mut self) {
+    fn device_lost(&mut self) -> bool {
         self.hooks.device_lost();
         self.hook_clock.reset();
         self.gpu_timing = None;
+        self.look.retiered();
         for child in &mut self.placed.children {
             child.texture = None;
         }
@@ -548,6 +549,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         }
         self.assets_dirty = true;
         self.dirty = true;
+        true
     }
     fn take_error(&mut self) -> Option<SurfaceError> {
         if let Some(refusal) = self.refusal.take() {

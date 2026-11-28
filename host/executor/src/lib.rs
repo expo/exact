@@ -98,6 +98,7 @@ struct Running {
     /// explicit abort fires ([`Core::cancel`]). None for work and streams.
     exchange: Option<AbortController>,
     forgotten: bool,
+    fixture_stream: bool,
     stream: Option<StreamKind>,
     /// An upload waiting for its start (`stream::Uploads`), or a process
     /// one-shot, which has room of its own (`process::admit_one_shot`):

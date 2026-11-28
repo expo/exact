@@ -132,18 +132,25 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
         tabs: [...at('tab-bar').querySelectorAll('[role="tab"]')].map(box) };
     }, ids);
     // Notes, from each frame until `moved` reads it, which of `ids` have an animation running; and for each tab the
-    // leftmost and rightmost centre it is drawn at, and the centre its move starts from: where it is laid out, less the
-    // move's translate now, plus its first keyframe's
+    // leftmost and rightmost centre it is drawn at, and the centre its move starts from, read with the move sought to its
+    // first frame and back
     const watch = ids => page.evaluate(ids => {
       const seen = globalThis.duoSeen = Object.fromEntries(ids.map(id => [id, false]));
       const drawn = globalThis.duoDrawn = [];
       const look = () => {
         if (globalThis.duoSeen !== seen) return;
-        for (const id of ids) seen[id] ||= document.querySelector(`[data-testid="${id}"]`).getAnimations().length > 0;
+        for (const id of ids) seen[id] ||= document.querySelector(`[data-testid="${id}"]`).getAnimations().some(a => a.id === 'exact-layout-move');
         document.querySelectorAll('[data-testid="tab-bar"] [role="tab"]').forEach((tab, i) => {
           const r = tab.getBoundingClientRect(), x = r.left + r.width / 2;
-          const first = tab.getAnimations().map(a => a.effect.getKeyframes()[0]?.translate).find(Boolean);
-          const start = drawn[i]?.[2] ?? (first ? x - (parseFloat(getComputedStyle(tab).translate) || 0) + parseFloat(first) : undefined);
+          let start = drawn[i]?.[2];
+          const move = start === undefined && tab.getAnimations().find(a => a.id === 'exact-layout-move');
+          if (move) {
+            const at = move.currentTime;
+            move.currentTime = 0;
+            const s = tab.getBoundingClientRect();
+            start = s.left + s.width / 2;
+            move.currentTime = at;
+          }
           drawn[i] = [Math.min(x, drawn[i]?.[0] ?? x), Math.max(x, drawn[i]?.[1] ?? x), start];
         });
         requestAnimationFrame(look);
@@ -151,11 +158,13 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
       look();
     }, ids);
     const moved = () => page.evaluate(() => { const seen = globalThis.duoSeen; globalThis.duoSeen = null; return seen; });
-    // The tabs, since `watch`, whose move starts anywhere but where each was in `from` or which are drawn outside the span
-    // from there to where it is in `to`: each moves directly from its place to its new one
-    const strays = (from, to) => page.evaluate(() => globalThis.duoDrawn).then(drawn => drawn.flatMap(([left, right, start], i) => {
+    // The tabs, since `watch`, whose move starts anywhere but where each was in `from` (or, with `motion`, has no start
+    // though the tab moved) or which are drawn outside the span from there to where it is in `to`: each moves directly
+    // from its place to its new one
+    const strays = (from, to, motion) => page.evaluate(() => globalThis.duoDrawn).then(drawn => drawn.flatMap(([left, right, start], i) => {
       const [a, b] = [from, to].map(boxes => (boxes.tabs[i][0] + boxes.tabs[i][2]) / 2);
-      return left < Math.min(a, b) - 1 || right > Math.max(a, b) + 1 || (start !== undefined && Math.abs(start - a) > 1) ? [{ tab: tabs[i], left, right, start, from: a, to: b }] : [];
+      const unstarted = start === undefined ? motion && Math.abs(a - b) > 1 : Math.abs(start - a) > 1;
+      return left < Math.min(a, b) - 1 || right > Math.max(a, b) + 1 || unstarted ? [{ tab: tabs[i], left, right, start, from: a, to: b }] : [];
     }));
     const tabs = ['fold', 'panes', 'images', 'reflow', 'combos', 'keyboard', 'arrangement'].map(name => `tab-${name}`);
     // The tabs' left and right edges across a 40-pixel band at 460 pixels of a 960-pixel window
@@ -182,7 +191,7 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
           await settled(500);
           expect({ name, edge, reducedMotion, folding: await moved() }).toEqual({ name, edge, reducedMotion, folding: animates });
           const folded = await boxes(ids);
-          expect({ name, edge, reducedMotion, strays: await strays(flat, folded) }).toEqual({ name, edge, reducedMotion, strays: [] });
+          expect({ name, edge, reducedMotion, strays: await strays(flat, folded, motion) }).toEqual({ name, edge, reducedMotion, strays: [] });
           expect({ name, end: folded.first[edge === 'left' ? 2 : 3], start: folded.second[edge === 'left' ? 0 : 1] }).toEqual({ name, end: 460, start: 500 });
           expect({ name, header: folded.header, bar: folded.bar }).toEqual({ name, header: flat.header, bar: flat.bar });
           expect({ name, edge, tabs: folded.tabs }).toEqual({ name, edge, tabs: edge === 'left' ? flat.tabs.map(([, top, , bottom], i) => [across[i][0], top, across[i][1], bottom]) : flat.tabs });
@@ -190,7 +199,7 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
           await pose();
           await settled(flat.second[edge === 'left' ? 0 : 1]);
           expect({ name, edge, reducedMotion, opening: await moved() }).toEqual({ name, edge, reducedMotion, opening: animates });
-          expect({ name, edge, reducedMotion, strays: await strays(folded, flat) }).toEqual({ name, edge, reducedMotion, strays: [] });
+          expect({ name, edge, reducedMotion, strays: await strays(folded, flat, motion) }).toEqual({ name, edge, reducedMotion, strays: [] });
           expect(await boxes(ids)).toEqual(flat);
         }
       }

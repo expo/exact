@@ -505,7 +505,7 @@ export async function waitForInflight(waiting, deadline) {
 }
 
 import { bundledAsset, admitsNetwork, admittingGrant, admitsFetchHop, isSelfGrant, sameOriginRequest, selfWithoutPage, coversPath, grantError, scopedGrantSet } from './grant-admission.js';
-import { answeredFetch, countFault, faultMessage, matchFault, takeFault } from './faults.js';
+import { answeredFetch, countFault, countStreamFailureByPrefix, countStreamFault, decodeBase64, faultMessage, immutableHeaders, matchFault, matchStreamFault, takeFault } from './faults.js';
 import { reachRefusal, redirectFor, UNATTRIBUTED } from './address-space.js';
 
 // Network and page-module requests share admission and the byte ceiling.
@@ -588,6 +588,203 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
   // passes (9 is an auth session's delivery, glue.js). A body read from a file
   // counts against it.
   if (op.timeoutMs !== undefined && (!Number.isInteger(op.timeoutMs) || op.timeoutMs < 1 || op.timeoutMs > 3600000)) return failed(2, 'a request timeout must be 1 to 3600000 ms');
+  // @ref LLP 1103 — scripted HTTP stream fixture (`answer stream`): checked after
+  // grants, reach, and request limits, before any file I/O or live network call.
+  const streamFixture = op.stream && !op.longPoll && !op.upload && !socket && !asset && /^https?:/i.test(url) && matchStreamFault(url, method);
+  if (streamFixture) {
+    if (op.bodyFrom != null) return failed(2, 'answer stream does not support exactBodyFrom');
+    if (op.bodyTo != null) return failed(2, 'answer stream does not support exactBodyTo');
+    if (controller.signal.aborted) return failed(4, 'request aborted');
+    const checkInit = { method, headers, credentials: op.credentials, redirect: redirectFor(op.origin, op.redirect ?? 'follow', op.reachState), cache: cache === undefined ? 'default' : cache, ...(op.mode !== undefined ? { mode: op.mode } : cache === 'only-if-cached' ? { mode: 'same-origin' } : {}), signal: controller.signal };
+    if (decodedBody) checkInit.body = decodedBody;
+    let asked;
+    try {
+      asked = new Request(url, checkInit);
+      if (globalThis.__exactFetchSelf !== false && self && !globalThis.__exactRender) sameOriginRequest(asked);
+    } catch (error) {
+      return failed(error?.kind === 'Refused' ? 2 : 1, error);
+    }
+    const reqUrl = new URL(asked.url), origin = globalThis.location?.origin, cross = origin !== reqUrl.origin;
+    if ((cross && asked.mode === 'same-origin') || asked.cache === 'only-if-cached') return failed(1, 'TypeError: Failed to fetch');
+    if (cross && asked.mode === 'no-cors') return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
+    const spec = streamFixture.stream;
+    const streamPrefix = streamFixture.prefix, streamMethod = streamFixture.method ?? null;
+    const isBuffered = spec.body !== undefined || /^HEAD$/i.test(method);
+    if (isBuffered) {
+      const bodyBytes = spec.body !== undefined && !/^HEAD$/i.test(method) && ![204, 205, 304].includes(spec.status) ? encoder.encode(spec.body) : new Uint8Array();
+      const limit = op.maxResponseBytes ?? 1024 * 1024;
+      if (bodyBytes.length > limit) return failed(2, "answer stream exceeds the request's maxResponseBytes");
+      const afterMs = spec.body !== undefined ? (spec.afterMs ?? 0) : 0;
+      const makeBuffered = () => {
+        const headersObj = immutableHeaders(spec.headers);
+        const headerText = [...headersObj].map(([k, v]) => `${k}: ${v}`).join('\n');
+        return { kind: 0, status: spec.status, headers: headerText, headersObj, body: bodyBytes };
+      };
+      if (afterMs > 0) {
+        if (globalThis.__exactRender) return { refused: 'answer stream is driven on the page' };
+        // Web Wasm target: hand off delayed buffered reply to Runner (`kind == 12`) so hit/failure
+        // accounting happens only when the delayed reply actually lands (never if aborted early).
+        if (!controller.clock?.clock) {
+          return { kind: 12, status: 0, headers: '', body: encoder.encode(JSON.stringify({ prefix: streamPrefix, method: streamMethod, stream: spec })) };
+        }
+        // Web JS target: mark ticket unwaited on I/O and wait on a `data: true` virtual timer so
+        // `clock settle` and `clock +<ms>` advance to `due` without spinning on `inflight.n`.
+        const rt = controller.clock, rtClock = rt.clock, due = rtClock.now + afterMs;
+        controller.fixtureOpened?.();
+        controllers.add(controller);
+        try {
+          return await new Promise(resolve => {
+            let entry = null, done = false;
+            const finish = (outcome, sync = false) => {
+              if (done) return;
+              done = true;
+              controllers.delete(controller);
+              controller.signal.removeEventListener('abort', onAbort);
+              if (entry) { const idx = rtClock.timers.indexOf(entry); if (idx >= 0) rtClock.timers.splice(idx, 1); entry = null; }
+              if (sync) controller.finishFixture?.(outcome);
+              resolve(outcome);
+            };
+            const onAbort = () => finish(failed(4, 'request aborted'));
+            controller.signal.addEventListener('abort', onAbort, { once: true });
+            if (controller.signal.aborted || !active()) return finish(failed(4, 'request aborted'));
+            entry = {
+              due, once: true, data: true,
+              live: () => !controller.signal.aborted && active(),
+              action() {
+                entry = null;
+                if (controller.signal.aborted || !active()) { finish(failed(4, 'request aborted'), true); return true; }
+                countStreamFault(url, streamFixture);
+                finish(makeBuffered(), true);
+                return true;
+              },
+            };
+            rtClock.timers.push(entry);
+            if (!rtClock.agent) rt.drive?.();
+          });
+        } finally { controllers.delete(controller); }
+      }
+      if (controller.signal.aborted || !active()) return failed(4, 'request aborted');
+      countStreamFault(url, streamFixture);
+      return makeBuffered();
+    }
+    if (globalThis.__exactRender) return { refused: 'answer stream is driven on the page' };
+    countStreamFault(url, streamFixture);
+    // Web Wasm target: hand off streaming 2xx schedule to Runner's virtual clock (`kind == 12`).
+    // Runner takes request metadata (streamOpen, bytes, idleTimeoutMs, maxResponseBytes, url) from its own pending Request.
+    if (!controller.clock?.clock) {
+      return { kind: 12, status: 0, headers: '', body: encoder.encode(JSON.stringify({ prefix: streamPrefix, method: streamMethod, stream: spec })) };
+    }
+    // Web JS target: drive streaming 2xx schedule and virtual idle timeout on `rt.clock`.
+    const rt = controller.clock, rtClock = rt.clock, limit = op.maxResponseBytes ?? 1024 * 1024;
+    const bufferedBytes = spec.mode === 'bytes' && !protocol?.bytes;
+    const eofMsg = spec.mode === 'bytes' ? 'the byte stream ended' : 'the event stream ended';
+    controller.streamUrl = url;
+    controllers.add(controller);
+    try {
+      if (op.streamOpen && !bufferedBytes) {
+        message({ event: 'open', id: '', data: '', coalesced: 0, head: true, status: spec.status, headers: immutableHeaders(spec.headers), received: performance.now() });
+        if (controller.signal.aborted || !active()) return failed(4, 'request aborted');
+      }
+      const bufChunks = [];
+      let bufTotal = 0;
+      const makeMsg = step => {
+        if (step.kind === 'event') {
+          if (utf8Length(step.data) > limit) return { error: 'stream message exceeds limit' };
+          return { event: step.name ?? '', id: step.id ?? '', data: step.data, coalesced: 0, received: performance.now() };
+        }
+        const raw = decodeBase64(step.base64);
+        if (raw.byteLength > limit) return { error: 'stream message exceeds limit' };
+        return { event: '', id: '', data: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), coalesced: 0, received: performance.now() };
+      };
+      const openedAt = rtClock.now;
+      let lastHeard = openedAt, nextStep = 0;
+      const deliverAt = dueAfterMs => {
+        const batch = [];
+        while (nextStep < spec.steps.length && spec.steps[nextStep].afterMs === dueAfterMs) {
+          const step = spec.steps[nextStep];
+          if (step.kind === 'end' || step.kind === 'fail') break;
+          if (bufferedBytes) {
+            const raw = decodeBase64(step.base64);
+            if (bufTotal + raw.byteLength > limit) return { end: failed(2, "answer stream exceeds the request's maxResponseBytes") };
+            bufChunks.push(raw);
+            bufTotal += raw.byteLength;
+            lastHeard = rtClock.now;
+            nextStep++;
+          } else {
+            const m = makeMsg(step);
+            if (m.error) return { end: failed(2, m.error) };
+            batch.push(m);
+            nextStep++;
+          }
+        }
+        if (batch.length) {
+          for (let i = 0; i < batch.length; i++) message({ ...batch[i], more: i < batch.length - 1 });
+          lastHeard = rtClock.now;
+          if (controller.signal.aborted || !active()) return { end: failed(4, 'request aborted') };
+        }
+        if (nextStep < spec.steps.length && spec.steps[nextStep].afterMs === dueAfterMs) {
+          const term = spec.steps[nextStep++];
+          if (term.kind === 'fail') { countStreamFailureByPrefix(streamPrefix, streamMethod, url); return { end: failed(1, term.message) }; }
+          if (term.kind === 'end') {
+            if (bufferedBytes) {
+              const joined = new Uint8Array(bufTotal);
+              let at = 0;
+              for (const b of bufChunks) { joined.set(b, at); at += b.byteLength; }
+              const headersObj = immutableHeaders(spec.headers);
+              const headerText = [...headersObj].map(([k, v]) => `${k}: ${v}`).join('\n');
+              return { end: { kind: 0, status: spec.status, headers: headerText, headersObj, body: joined } };
+            }
+            return { end: failed(1, eofMsg) };
+          }
+        }
+        return null;
+      };
+      const leading = deliverAt(0);
+      if (leading) return leading.end;
+      controller.fixtureOpened?.();
+      return await new Promise(resolve => {
+        let entry = null, done = false;
+        const finish = (outcome, sync = false) => {
+          if (done) return;
+          done = true;
+          controllers.delete(controller);
+          controller.signal.removeEventListener('abort', onAbort);
+          if (entry) { const idx = rtClock.timers.indexOf(entry); if (idx >= 0) rtClock.timers.splice(idx, 1); entry = null; }
+          if (sync) controller.finishFixture?.(outcome);
+          resolve(outcome);
+        };
+        const onAbort = () => finish(failed(4, 'request aborted'));
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        if (controller.signal.aborted || !active()) return finish(failed(4, 'request aborted'));
+        const scheduleNext = () => {
+          if (done) return;
+          const stepDue = nextStep < spec.steps.length ? openedAt + spec.steps[nextStep].afterMs : Infinity;
+          const idleDue = op.idleTimeoutMs != null ? lastHeard + op.idleTimeoutMs : Infinity;
+          const due = Math.min(stepDue, idleDue);
+          if (!Number.isFinite(due)) return;
+          entry = {
+            due, once: true, data: false, streamFixture: true,
+            action() {
+              entry = null;
+              if (controller.signal.aborted || !active()) { finish(failed(4, 'request aborted'), true); return true; }
+              if (idleDue <= stepDue) {
+                countStreamFailureByPrefix(streamPrefix, streamMethod, url);
+                finish(failed(10, `nothing arrived for ${op.idleTimeoutMs} ms`), true);
+                return true;
+              }
+              const res = deliverAt(spec.steps[nextStep].afterMs);
+              if (res) finish(res.end, true);
+              else scheduleNext();
+              return true;
+            },
+          };
+          rtClock.timers.push(entry);
+          if (!rtClock.agent) rt.drive?.();
+        };
+        scheduleNext();
+      });
+    } finally { controllers.delete(controller); }
+  }
   // `exactBodyFrom`'s checks, made before anything is read: a refusal, or null.
   const fileBodyRefusal = () => {
     if (!bodyFile) return failed(3, `exactBodyFrom ${op.bodyFrom}: this host has no app files (no storage here)`);

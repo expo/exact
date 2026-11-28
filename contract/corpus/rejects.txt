@@ -2279,13 +2279,13 @@ component A
             text "a"
 ---
 == lower-handler-later
-# A drag's start is not heard yet (LLP 1094.000 D1).
+# A drag's continuous motion at its source is not heard (LLP 1094.000 D16).
 component A
   state n = 0
   action go
     n = 1
   view
-    column dragstart=go
+    column drag=go
       text "a"
 ---
 == lower-portal-mover

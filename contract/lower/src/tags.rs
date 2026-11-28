@@ -429,6 +429,9 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
     if exact_kernel::style::safe_area_properties::is_author_name(name) {
         return Some(AttrTarget::Styles(&[StyleId::SafeAreaProperties]));
     }
+    if let Some(target) = crate::transfer::attr(name) {
+        return Some(target);
+    }
     Some(match name {
         "datetime" => AttrTarget::Prop(PropId::Datetime),
         "format" => AttrTarget::Prop(PropId::TimeFormat),
@@ -526,15 +529,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // declares it hears each message from an input its `midiinputs` lists.
         "midimessage" => AttrTarget::Handler("midimessage"),
         "midiinputs" => AttrTarget::Prop(p("midiInputs")),
-        // DOM's `wheel` (studio diary R3), `drop` of files (R19), and the
-        // `dragenter` and `dragleave` of a file drag over the node.
+        // DOM's `wheel` (studio diary R3); a drag's are `transfer::attr`'s.
         "wheel" => AttrTarget::Handler("wheel"),
-        "drop" => AttrTarget::Handler("drop"),
-        "dragenter" => AttrTarget::Handler("dragenter"),
-        "dragleave" => AttrTarget::Handler("dragleave"),
-        // @ref LLP 1094.000 D1 — a drag out of the app, and what it carries.
-        "draggable" => AttrTarget::Prop(p("draggable")),
-        "dataTransfer" => AttrTarget::DataTransfer,
         // A press on an inline atom (LLP 1045.000 D7).
         "atompress" => AttrTarget::Handler("atompress"),
         "copy" => AttrTarget::Handler("copy"),

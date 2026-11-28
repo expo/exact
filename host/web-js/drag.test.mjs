@@ -147,6 +147,7 @@ test('install owns only marked drags and restores the card’s draggable attribu
   expect(listeners.map(({ type, capture }) => [type, capture])).toEqual([
     ['pointerdown', true], ['mousedown', true], ['pointerup', true], ['pointercancel', true], ['mouseup', true],
     ['pointermove', true], ['dragstart', true], ['dragend', true], ['dragstart', true], ['dragstart', false],
+    ['dragend', true],
   ]);
   document.root.append(card, foreign);
   card.append(field);

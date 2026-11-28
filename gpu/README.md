@@ -373,10 +373,31 @@ impl Surface for Status {
 ```
 
 An application reports poll/map errors through `Surface::take_error` rather
-than panicking as this small example does. Drop these device resources and
-pending results in `device_lost`, then recreate them on the new device. For
-continuous readback, use several staging buffers and skip any still awaiting
-a map or still mapped; each copied slot starts its map in `submitted()`.
+than panicking as this small example does. For continuous readback, use several
+staging buffers and skip any still awaiting a map or still mapped; each copied
+slot starts its map in `submitted()`.
+
+## Device loss and recovery
+
+A wgpu device can be lost at any time (driver reset, GPU-process restart, or
+explicit `device.destroy()`). By default `Surface::device_lost(&mut self) -> bool`
+returns `false`: the module drops the surface and reconstructs a fresh one from
+its registered factory under the same canvas ID, replaying its host configuration
+(waker, storage directories, clock ownership, reduced motion, lifecycle, size,
+color target, performance reporting, and last accepted bind). Ordinary surfaces
+that cache pipelines, buffers, or bind groups inside `self` therefore recover
+automatically without custom teardown code. Surfaces must not reuse unscoped
+`wgpu` handles across device loss in global or thread-local caches: clear any
+module-wide GPU cache in `device_lost`.
+
+Return `true` from `device_lost` only when the surface must keep live CPU state
+across recovery (such as a game simulation, loaded 3D model, or shader source)
+and has released every handle from the lost device, including cloned child views
+and pending GPU work. The module clears its child textures and notifies
+`children(None, None)` / `child(i, "", None, [0.; 4])` before calling
+`device_lost`, then reattaches the kept surface with `device_ready`,
+`color_space_granted`, `color_target`, and `prepare_assets` once the replacement
+device arrives.
 
 ## Frame pacing and timing
 

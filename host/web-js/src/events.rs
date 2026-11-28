@@ -66,6 +66,7 @@ pub(crate) fn binder(event: EventKind) -> Option<&'static str> {
         EventKind::Wheel => Some("onWheel"),
         EventKind::Drop => Some("onFileDrop"),
         EventKind::Dragenter | EventKind::Dragleave => Some("onFileDrag"),
+        EventKind::Dragstart | EventKind::Dragend => Some("onDragSource"),
         EventKind::Atompress => Some("onAtompress"),
         EventKind::Blur | EventKind::Focus => Some("onFocus"),
         EventKind::Focusin | EventKind::Focusout => Some("onFocusWithin"),
@@ -120,6 +121,8 @@ mod tests {
             Drop,
             Dragenter,
             Dragleave,
+            Dragstart,
+            Dragend,
             Atompress,
             Blur,
             Focus,
@@ -141,5 +144,8 @@ mod tests {
         for k in [Cancel, Play, Pause, Timeupdate] {
             assert!(binder(k).is_none(), "{k:?}");
         }
+        // LLP 1094.000 D16: drag-out.js tells a draggable node its drag's start and end
+        assert_eq!(binder(Dragstart), Some("onDragSource"));
+        assert_eq!(binder(Dragend), Some("onDragSource"));
     }
 }

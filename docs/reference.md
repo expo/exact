@@ -6522,7 +6522,8 @@ component Reopen
 
 A `drop` hands its action a `DragEvent` whose `files` are `doc:` handles of
 any type, a folder's included, whose `text` is the drag's plain text and
-whose `url` is its link, each `""` when it has none; a `paste`'s
+whose `url` is its link, each `""` when it has none, and whose `dropEffect`
+is `"copy"`; a `paste`'s
 `ClipboardEvent` has `files` too, image data with no file (a screenshot) as
 one `image.png`. Read files as any `doc:` path, under `fs.read doc:/`;
 `storage.fs.stat(path).isDirectory` tells a folder. A file drag over a

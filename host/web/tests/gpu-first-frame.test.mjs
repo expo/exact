@@ -231,20 +231,18 @@ test('replacement contexts wait for their own first complete frame', async () =>
   f.nextGpu.gpu_published = () => { const out = record; record = undefined; return out; };
   f.frame();
   expect(replacement.style.visibility).toBe('');
-  const clone = f.Element.prototype.cloneNode;
-  let recovered;
-  f.Element.prototype.cloneNode = function () { recovered = clone.call(this); return recovered; };
-  f.nextGpu.gpu_recover = async () => '{"status":"recovered"}';
+  let recoveredCanvas;
+  f.nextGpu.gpu_recover = async (_ids, canvases) => { recoveredCanvas = canvases[0]; return '{"status":"recovered"}'; };
   f.exact.gpu.deviceLost();
   await f.exact.gpu.settled();
-  expect(recovered.style.visibility).toBe('hidden');
+  expect(recoveredCanvas).toBe(replacement);
+  expect(replacement.style.visibility).toBe('hidden');
   record = '{"presented":true}'; f.frame();
-  expect(recovered.style.visibility).toBe('');
-  const active = recovered;
+  expect(replacement.style.visibility).toBe('');
   f.nextGpu.gpu_recover = async () => '{"status":"no device"}';
   f.exact.gpu.deviceLost();
   await f.exact.gpu.settled();
-  expect(active.style.visibility).toBe('hidden');
+  expect(replacement.style.visibility).toBe('hidden');
 });
 
 const browserTest = need('chrome', chromium({needs:['gpu']}).unavailable);
@@ -336,6 +334,135 @@ browserTest('an opaque preparation frame leaves the fallback and children visibl
     await page.evaluate(async () => { completeFrame(1); exact.gpu.surface(1,'delayed',[]); await exact.gpu.settled(); });
     expect(await pixels()).toEqual([[0,255,0,255],[0,255,0,255],[32,64,208,255]]);
     expect(await page.evaluate(() => records.includes('delayed\0{"presented":true}'))).toBe(true);
+    expect(errors).toEqual([]);
+  } finally { await browser?.close(); server.stop(true); }
+}, 60000);
+
+browserTest('WebGPU device loss recovers open canvases in place with zero validation errors', async () => {
+  const moduleSource = `
+    let device, next = 0, commands = [], rendered = [], records = new Map();
+    const canvases = new Map();
+    globalThis.devices = [];
+    const wireLost = d => {
+      globalThis.devices.push(d);
+      d.lost.then(() => globalThis.exact?.gpu?.deviceLost?.());
+    };
+    export default function() {}
+    export async function gpu_load() {
+      const adapter = await navigator.gpu.requestAdapter();
+      device = await adapter.requestDevice();
+      wireLost(device);
+    }
+    export async function gpu_recover(ids, elements) {
+      const adapter = await navigator.gpu.requestAdapter();
+      const fresh = await adapter.requestDevice();
+      device = fresh;
+      wireLost(device);
+      const format = navigator.gpu.getPreferredCanvasFormat();
+      commands = []; rendered = []; records.clear();
+      for (let i = 0; i < ids.length; i++) {
+        const entry = canvases.get(ids[i]);
+        if (!entry) continue;
+        entry.context = elements[i].getContext('webgpu');
+        entry.context.configure({ device, format, alphaMode: 'opaque' });
+        entry.dirty = true;
+      }
+      return JSON.stringify({ status: 'recovered', instances: ids.map(id => ({ id, state: 'retained' })) });
+    }
+    export function gpu_reduced_motion() {}
+    export function gpu_unload() { device?.destroy(); }
+    export function gpu_child_view() {} export function gpu_seekable() {}
+    export function gpu_shader_names() { return '[]'; } export function gpu_shaders_clear() {}
+    export function gpu_create(_name, canvas) {
+      const context = canvas.getContext('webgpu');
+      context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: 'opaque' });
+      const id = ++next;
+      canvases.set(id, { context, dirty: true });
+      return id;
+    }
+    export function gpu_bind_at() { return true; } export function gpu_lifecycle() {}
+    export function gpu_wants_input() { return false; } export function gpu_dirty(id) { return canvases.get(id)?.dirty ?? false; }
+    export function gpu_period() {} export function gpu_agent() {}
+    export function gpu_assets() { return '{"requests":[],"retired":[]}'; }
+    export function gpu_render(id) {
+      const entry = canvases.get(id), encoder = device.createCommandEncoder();
+      const pass = encoder.beginRenderPass({ colorAttachments: [{
+        view: entry.context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store',
+        clearValue: globalThis.devices.length >= 2 ? [0, 1, 0, 1] : [0, 0, 1, 1],
+      }] });
+      pass.end(); commands.push(encoder.finish()); rendered.push(id);
+      entry.dirty = false;
+      return 0;
+    }
+    export function gpu_flush() {
+      if (commands.length) device.queue.submit(commands.splice(0));
+      for (const id of rendered.splice(0)) records.set(id, '{"presented":true}');
+      return true;
+    }
+    export function gpu_published(id) { const record = records.get(id); records.delete(id); return record; }
+    export function gpu_messages() {}
+  `;
+  const html = `<!doctype html><style>
+    body { margin: 0; display: flex; }
+    .host { position: relative; isolation: isolate; width: 64px; height: 64px; background: #d02040; }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; }
+  </style><div class="host" id="one"><canvas data-surface></canvas></div>
+  <div class="host" id="two"><canvas data-surface></canvas></div><script type="module">
+    globalThis.exact = { views: new Map([[1, document.getElementById('one')], [2, document.getElementById('two')]]),
+      root: document.body, now: () => 0, devAssets: [], generation: 0, writeIn: text => text,
+      wasm: { exact_surface_record() {} }, send() {} };
+  </script>`;
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response(html, { headers: { 'content-type': 'text/html' } });
+    if (path === '/favicon.ico') return new Response(null, { status: 204 });
+    if (path === '/gpu.js') return new Response(moduleSource, { headers: { 'content-type': 'text/javascript' } });
+    return new Response(Bun.file(new URL(`..${path}`, import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
+  } });
+  let browser;
+  try {
+    browser = await suiteBrowser('chromium', { needs: ['gpu'] });
+    const page = await browser.newPage({ viewport: { width: 128, height: 64 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(`pageerror: ${error.message}`));
+    page.on('console', msg => { if (msg.type() === 'error') errors.push(`console: ${msg.text()}`); });
+    const pixels = async () => {
+      const { width, data } = decodePng(await page.screenshot());
+      return [[32, 32], [96, 32]].map(([x, y]) => [...data.slice((y * width + x) * 4, (y * width + x) * 4 + 4)]);
+    };
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      await import('/gpu-glue.js');
+      if (exact.gpu.recovery) throw new Error(exact.gpu.recovery.error);
+      globalThis.initialCanvases = [
+        document.querySelector('#one canvas'),
+        document.querySelector('#two canvas'),
+      ];
+      exact.gpu.surface(1, 'one', []);
+      exact.gpu.surface(2, 'two', []);
+      await exact.gpu.settled();
+    });
+    expect(await pixels()).toEqual([[0, 0, 255, 255], [0, 0, 255, 255]]);
+
+    // Trigger real WebGPU device loss, then a second consecutive loss to verify re-arming.
+    for (const expectedDevices of [2, 3]) {
+      await page.evaluate(async () => {
+        const current = devices.at(-1);
+        const lost = current.lost;
+        current.destroy();
+        await lost;
+        await Promise.resolve();
+        await exact.gpu.settled();
+      });
+      expect(await page.evaluate(() => ({
+        devices: devices.length,
+        sameCanvases:
+          document.querySelector('#one canvas') === initialCanvases[0] &&
+          document.querySelector('#two canvas') === initialCanvases[1],
+        status: exact.gpu.recovery?.status,
+      }))).toEqual({ devices: expectedDevices, sameCanvases: true, status: 'recovered' });
+      expect(await pixels()).toEqual([[0, 255, 0, 255], [0, 255, 0, 255]]);
+    }
     expect(errors).toEqual([]);
   } finally { await browser?.close(); server.stop(true); }
 }, 60000);

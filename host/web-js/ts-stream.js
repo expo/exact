@@ -266,7 +266,7 @@ export function open({ input, init, redirect, protocols, origin }, conv, grantSe
     batch.push(m);
     if (m.more) return;
     const ms = batch; batch = [];
-    if (!behind) { inOrder(() => each(ms)); return behind; }
+    if (!behind) { inOrder(() => each(ms)); controller.asyncMapper?.(behind); return behind; }
     const bytes = ms.reduce((n, m) => n + bytesOf(m), 0);
     if (held + ms.length > 4096 || heldBytes + bytes > 64 << 20) {
       fellBehind = true;
@@ -274,6 +274,7 @@ export function open({ input, init, redirect, protocols, origin }, conv, grantSe
     }
     held += ms.length; heldBytes += bytes;
     inOrder(() => { held -= ms.length; heldBytes -= bytes; return each(ms); });
+    controller.asyncMapper?.(behind);
     return behind;
   };
   const timed = m => {
@@ -282,17 +283,29 @@ export function open({ input, init, redirect, protocols, origin }, conv, grantSe
     g.enter(controller.streamName, m.received);
     try { return message(m); } finally { g.leave(); }
   };
-  return streamed(req, grantSet, timed, controller, (path, set) => readBodyFile(path, set, controller), protocol)
-    .then(o => {
-      gate()?.ended(controller.streamName);
-      if (o.refused) return o;
-      if (o.close) journal.push(`t=${clock.now} socket close: ${o.close.code} ${o.close.reason} (${controller.streamName})`);
-      const end = () => value(o.close ? { type: 'close', data: '', lastEventId: '', coalesced: 0, ...o.close } : o.kind
+  const mapEnd = o => {
+    gate()?.ended(controller.streamName);
+    if (o.refused) return o;
+    if (o.close) journal.push(`t=${clock.now} socket close: ${o.close.code} ${o.close.reason} (${controller.streamName})`);
+    const end = () => value(o.close ? { type: 'close', data: '', lastEventId: '', coalesced: 0, ...o.close } : o.kind
       ? { type: 'error', data: '', lastEventId: '', coalesced: 0, kind: KINDS[o.kind], message: said.decode(o.body), status: 0 }
       : req.upload ? { type: 'load', status: o.status, data: said.decode(o.body), lastEventId: '', coalesced: 0 }
       : { type: 'error', data: said.decode(o.body), lastEventId: '', coalesced: 0, kind: 'Response', message: `HTTP ${o.status}`, status: o.status, headers: o.headersObj ?? Response.error().headers });
-      // An injected end overtakes frames waiting on an unfinished mapper.
-      return controller.dropped ? end() : inOrder(end);
-    })
+    // An injected end overtakes frames waiting on an unfinished mapper.
+    return controller.dropped ? end() : inOrder(end);
+  };
+  let endDone = false, endResult;
+  const finishEnd = o => {
+    if (!endDone) { endDone = true; endResult = mapEnd(o); }
+    return endResult;
+  };
+  const outerFinish = controller.finishFixture;
+  if (outerFinish) controller.finishFixture = o => {
+    const r = finishEnd(o);
+    if (!r || typeof r.then !== 'function') outerFinish(r);
+    else controller.asyncMapper?.(r.then(v => outerFinish(v), e => outerFinish(failed(e))));
+  };
+  return streamed(req, grantSet, timed, controller, (path, set) => readBodyFile(path, set, controller), protocol)
+    .then(o => finishEnd(o))
     .finally(() => heard?.removeEventListener('abort', abort));
 }

@@ -378,7 +378,7 @@ export function sweepTestStores(base, storage) {
 export function backendFetchPrefixes(tests, origins) {
   const unique = [...new Set(origins.map(o => o.replace(/\/+$/, '')))];
   for (const t of tests) for (const step of t.steps) {
-    if (!['fail-fetch', 'answer-fetch', 'pass-fetch'].includes(step.op)) continue;
+    if (!['fail-fetch', 'answer-fetch', 'pass-fetch', 'answer-stream', 'pass-stream'].includes(step.op)) continue;
     step.prefix = resolveFaultPrefix(step.prefix, unique);
   }
   return tests;
@@ -429,7 +429,7 @@ export async function failureMark(s) {
   return {
     failures: Object.fromEntries(Object.entries(state.failures ?? {}).map(([name, f]) => [name, f.count])),
     failed: state.failed ?? {}, mutations: state.mutationFailures ?? {},
-    faults: Object.fromEntries((state.faults ?? []).map((f) => [f.method === undefined ? f.prefix : JSON.stringify([f.prefix, f.method]), f.failureHits ?? (!f.response || f.response.status >= 400 ? f.hits : 0)])), journal,
+    faults: Object.fromEntries((state.faults ?? []).map((f) => [f.family === 'stream' || f.method !== undefined ? JSON.stringify([f.family ?? 'fetch', f.prefix, f.method ?? null]) : f.prefix, f.failureHits ?? (f.stream ? (f.stream.body !== undefined && f.stream.status >= 400 ? f.hits : 0) : !f.response || f.response.status >= 400 ? f.hits : 0)])), journal,
   };
 }
 
@@ -821,7 +821,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // Advice beside the verdict, never a failure: a `fail fetch` armed before the app's data first loaded (app farm
     // round 2: six builds read the failed first load as a broken app; a client that must sync once cannot open offline).
     const notes = [], shots = []; // `shots`: the paths of the test's own `screenshot` steps (verify --shots copies them)
-    for (const st of granted.length ? t.steps : []) if ((st.op === 'fail-fetch' || st.op === 'pass-fetch') && !granted.some((o) => o.startsWith(st.prefix) || st.prefix.startsWith(o))) notes.push(`line ${st.line}: \`${st.op.replace('-', ' ')} ${JSON.stringify(st.prefix)}\` names no origin app.ts fetches (its net.fetch grants: ${granted.join(', ')}), so it changes nothing`);
+    for (const st of granted.length ? t.steps : []) if (['fail-fetch', 'pass-fetch', 'answer-stream', 'pass-stream'].includes(st.op) && !granted.some((o) => o.startsWith(st.prefix) || st.prefix.startsWith(o))) notes.push(`line ${st.line}: \`${st.op.replace('-', ' ')} ${JSON.stringify(st.prefix)}\` names no origin app.ts fetches (its net.fetch grants: ${granted.join(', ')}), so it changes nothing`);
     const early = (st) => notes.push(`line ${st.line}: \`fail fetch ${JSON.stringify(st.prefix)}\` is armed before the app has loaded its data, so every first load to it fails; a client that must sync once before it works offline (Snapback4's) cannot open its data at all. To test going offline after a load, put \`clock data\` before it; a launch with no network is what it tests as written`);
     for (const st of t.steps) {
       if (st.op === 'before-data') beforeData = true;
@@ -830,7 +830,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       else if (st.op === 'secret') secrets.push(st);
       else if (st.op === 'stored') stored.push([st.window ? '#window.' + st.name : st.name, st.json]);
       else if (st.op === 'fail-fetch') { early(st); facts.failFetch = [facts.failFetch, st.times == null ? st.prefix : `${st.prefix}\t${st.times}`].filter(Boolean).join('\n'); if (st.times != null) armed.set(st.prefix, st.line); }
-      else if (st.op === 'answer-fetch') facts.failFetch = [facts.failFetch, faultSpecOf([{prefix: st.prefix, method: st.method, hits: 0, armed: true, response: st.response}])].filter(Boolean).join('\n');
+      else if (st.op === 'answer-fetch' || st.op === 'answer-stream') facts.failFetch = [facts.failFetch, faultSpecOf([st.op === 'answer-stream' ? { family: 'stream', prefix: st.prefix, method: st.method, hits: 0, armed: true, stream: st.stream } : { prefix: st.prefix, method: st.method, hits: 0, armed: true, response: st.response }])].filter(Boolean).join('\n');
       else if (st.op === 'size') facts.size = [st.width, st.height];
       else if (st.op === 'at') opensAt = st.value;
       else if (st.op === 'prefer-extension') retainSubstitute(st);
@@ -1023,7 +1023,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
         armed.delete(prefix);
         let state;
         try { state = await s.state(); } catch (e) { failures.push(`${t.name}: line ${line}: fail fetch ${JSON.stringify(prefix)}: could not read whether it fired: ${e.message}`); return; }
-        const f = (state.faults ?? []).find((e) => e.prefix === prefix && e.method === undefined);
+        const f = (state.faults ?? []).find((e) => (e.family ?? 'fetch') === 'fetch' && e.prefix === prefix && e.method === undefined);
         if (!f || f.hits === 0) failures.push(`${t.name}: line ${line}: fail fetch ${JSON.stringify(prefix)} times ${f?.times ?? '?'} matched no fetch`);
       };
       // Before an input while counted faults are outstanding: those that fired leave the check, so a press the app
@@ -1032,7 +1032,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const settleFired = async () => {
         if (!armed.size) return;
         const faults = (await s.state()).faults ?? [];
-        for (const f of faults) if (f.method === undefined && f.hits > 0) armed.delete(f.prefix);
+        for (const f of faults) if ((f.family ?? 'fetch') === 'fetch' && f.method === undefined && f.hits > 0) armed.delete(f.prefix);
       };
       // The last `perf` block's counts, and what had failed at launch or at the last `expect no failures` (LLP 1146 D3, D4).
       // The launch's mark is empty: a failure while the app booted is one the test did not arrange.
@@ -1082,6 +1082,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             break;
           }
           case 'pass-fetch': { const r = await s.op({ op: 'prefer', faults: { pass: st.prefix } }); if (r?.error) throw new Error(r.error); break; }
+          case 'answer-stream': { if (n < leading) break; const r = await s.op({ op: 'prefer', faults: { answerStream: st.prefix, method: st.method, stream: st.stream } }); if (r?.error) throw new Error(r.error); break; }
+          case 'pass-stream': { const r = await s.op({ op: 'prefer', faults: { passStream: st.prefix } }); if (r?.error) throw new Error(r.error); break; }
           case 'drop-stream': {
             const r = await s.op({ op: 'prefer', faults: { dropStream: st.prefix } }).catch(e => {
               if (e.reply?.error) throw new Error(e.reply.error);

@@ -328,6 +328,44 @@ fn reply(shared: &Shared, ticket: u64) -> bool {
     !matches!(deliver(shared, ticket, m, true, 0), Delivered::Gone)
 }
 
+pub(super) fn deliver_fixture(shared: &Shared, ticket: u64, message: Message) {
+    let _ = deliver(shared, ticket, message, false, usize::MAX);
+}
+
+pub(super) fn deliver_fixture_opened(shared: &Shared, ticket: u64) {
+    let mut state = shared.state.lock().unwrap();
+    if state.retired {
+        return;
+    }
+    let Some((lane, elapsed_ms)) = state
+        .running
+        .iter()
+        .find(|run| run.ticket == ticket && !run.forgotten)
+        .map(|run| {
+            (
+                run.lane,
+                run.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            )
+        })
+    else {
+        return;
+    };
+    state.completed[lane].push_back(Completed {
+        ticket,
+        outcome: Outcome::Messages(Vec::new()),
+        elapsed_ms,
+        bytes: 0,
+        stream: None,
+        message: true,
+        light: false,
+        again: false,
+        reply: false,
+        finished_at: std::time::Instant::now(),
+        cached: false,
+    });
+    wake(&mut state);
+}
+
 fn deliver(
     shared: &Shared,
     ticket: u64,

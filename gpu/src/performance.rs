@@ -293,6 +293,7 @@ mod tests {
         let id = module
             .insert(
                 "probe",
+                || unreachable!(),
                 Box::new(Probe(calls.clone())),
                 crate::wake::WakeState::new().0,
                 None,

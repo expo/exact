@@ -8,6 +8,7 @@ use super::*;
 mod data_timers;
 mod fixture_replies;
 mod inputs;
+pub(in crate::runner) mod stream_fixtures;
 
 /// A timer or collection-feedback commit and the runner clock it happened at.
 #[derive(Debug, Clone)]
@@ -70,6 +71,10 @@ pub(super) struct Clock {
     /// Answers waiting on their own timers (`data_timers.rs`)
     data: data_timers::DataTimers,
     fixtures: Vec<fixture_replies::Delayed>,
+    stream_fixtures: Vec<stream_fixtures::ActiveStreamFixture>,
+    /// Wasm-handoff stream fixture credits `(prefix, method, url, count_hit, count_failure)`
+    /// queued for the page's fault table (never populated on native sessions).
+    stream_fixture_failures: Vec<(String, Option<String>, String, bool, bool)>,
     /// Inputs waiting on the work due by their arrival (`inputs.rs`)
     held: std::collections::VecDeque<inputs::Held>,
     /// Work that fell due is running, not an input's own action
@@ -580,14 +585,22 @@ impl<D: DataSource> Runner<D> {
             let wake =
                 Some(self.seek_cutoff(self.audio_due()[0])).filter(|at| timers && *at <= now_ms);
             let before_wake = |at: f64| wake.is_none_or(|w| at <= w);
-            // An answer's own timer (`data_timers.rs`): what is due before it
-            // goes first, and so does what is due with it; nothing later does,
-            // so the clock never goes back to it.
+            // An answer's own timer (`data_timers.rs`) and parked stream fixture rows
+            // (`stream_fixtures.rs`): what is due before them goes first, and so does
+            // what is due with them; nothing later does, so the clock never goes back.
             let data_at = self
                 .data_timer_due_ms()
                 .map(|at| self.seek_cutoff(at))
                 .filter(|at| timers && *at <= now_ms);
-            let before_data = |at: f64| data_at.is_none_or(|data| at <= data);
+            let stream_at = self
+                .stream_fixture_due_ms()
+                .map(|at| self.seek_cutoff(at))
+                .filter(|at| timers && *at <= now_ms);
+            let next_data = match (data_at, stream_at) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            let before_data = |at: f64| next_data.is_none_or(|data| at <= data);
             let ended = Some(self.seek_cutoff(self.audio_due()[1]))
                 .filter(|at| timers && *at <= now_ms && before_wake(*at) && before_data(*at))
                 .filter(|at| due.is_none_or(|(_, timer)| *at < timer));
@@ -926,8 +939,19 @@ impl<D: DataSource> Runner<D> {
                 continue;
             }
             if let Some(at) =
-                data_at.filter(|at| before_wake(*at) && due.is_none_or(|(_, timer)| *at < timer))
+                next_data.filter(|at| before_wake(*at) && due.is_none_or(|(_, timer)| *at < timer))
             {
+                if receipts.len() == TIMER_FIRE_LIMIT {
+                    return Advanced {
+                        receipts,
+                        now_ms: self.now_ms,
+                        error: Some(RunnerError::TimerFireLimit {
+                            limit: TIMER_FIRE_LIMIT,
+                        }),
+                        stopped_on_request: false,
+                        needs_apply: false,
+                    };
+                }
                 self.now_ms = if live { self.now_ms.max(at) } else { at };
                 let ticket = self.next_ticket;
                 if let Err(error) = self.release_fixture_replies(at, &mut receipts) {
@@ -939,7 +963,26 @@ impl<D: DataSource> Runner<D> {
                         needs_apply: false,
                     };
                 }
-                if (self.release_data_timers(at) || self.next_ticket != ticket) && until_request {
+                let stream_fired = match self.release_stream_fixtures(at, &mut receipts) {
+                    Ok(fired) => fired,
+                    Err(error) => {
+                        return Advanced {
+                            receipts,
+                            now_ms: self.now_ms,
+                            error: Some(error),
+                            stopped_on_request: false,
+                            needs_apply: false,
+                        };
+                    }
+                };
+                if !stream_fired {
+                    if (self.release_data_timers(at) || self.next_ticket != ticket) && until_request
+                    {
+                        landed = self.now_ms;
+                        stopped_on_request = true;
+                        break;
+                    }
+                } else if self.next_ticket != ticket && until_request {
                     landed = self.now_ms;
                     stopped_on_request = true;
                     break;

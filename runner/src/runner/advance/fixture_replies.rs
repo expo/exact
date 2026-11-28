@@ -7,11 +7,20 @@ use crate::{CompletionTiming, FailureKind, Outcome};
 
 type Reply = (Outcome, Option<CompletionTiming>);
 
+struct StreamCredit {
+    prefix: String,
+    method: Option<String>,
+    url: String,
+    is_failure: bool,
+    wasm_handoff: bool,
+}
+
 pub(super) struct Delayed {
     ticket: u64,
     due: f64,
     timeout: Option<u32>,
     reply: Option<Reply>,
+    stream_credit: Option<StreamCredit>,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -33,6 +42,38 @@ impl<D: DataSource> Runner<D> {
             due: asked_at + f64::from(timeout.unwrap_or(delay_ms)),
             timeout,
             reply: None,
+            stream_credit: None,
+        });
+    }
+
+    /// Delay a buffered `answer stream` reply and defer hit/failure accounting until delivery.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runner) fn delay_stream_fixture_reply(
+        &mut self,
+        ticket: u64,
+        asked_at: f64,
+        delay_ms: u32,
+        prefix: String,
+        method: Option<String>,
+        url: String,
+        is_failure: bool,
+        wasm_handoff: bool,
+    ) {
+        if delay_ms == 0 || !asked_at.is_finite() || !self.holds(ticket) {
+            return;
+        }
+        self.clock.fixtures.push(Delayed {
+            ticket,
+            due: asked_at + f64::from(delay_ms),
+            timeout: None,
+            reply: None,
+            stream_credit: Some(StreamCredit {
+                prefix,
+                method,
+                url,
+                is_failure,
+                wasm_handoff,
+            }),
         });
     }
 
@@ -103,6 +144,16 @@ impl<D: DataSource> Runner<D> {
             let f = self.clock.fixtures.remove(i);
             if !self.holds(f.ticket) {
                 continue;
+            }
+            if let Some(credit) = f.stream_credit {
+                self.record_stream_credit(
+                    &credit.prefix,
+                    credit.method.as_deref(),
+                    &credit.url,
+                    true,
+                    credit.is_failure,
+                    credit.wasm_handoff,
+                );
             }
             let (outcome, timing) = f.reply.unwrap();
             if let Some(receipt) = self.fulfill_measured(f.ticket, outcome, timing)? {

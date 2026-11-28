@@ -247,6 +247,17 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// A scripted HTTP stream fixture (`answer stream`, LLP 1103), installed before boot when leading a test.
+    AnswerStream {
+        /// What a matching stream request's URL starts with.
+        prefix: String,
+        /// An explicit HTTP method restricts the fixture to that method.
+        method: Option<String>,
+        /// Stream schedule or buffered non-streaming reply, encoded as JSON.
+        stream: String,
+        /// Where.
+        span: Span,
+    },
     /// `answer source <name> with <json>`: what the named source answers
     /// from here on, under `contract verify`'s runner. Leading a test (or the
     /// file), before boot; later, a step that asks again every resource
@@ -262,6 +273,13 @@ pub enum Step {
     /// `pass fetch "…"`: the prefix stops failing or answering (LLP 1103).
     PassFetch {
         /// The prefix a `fail fetch` armed.
+        prefix: String,
+        /// Where.
+        span: Span,
+    },
+    /// `pass stream "…"`: stream rules at the prefix stop answering (LLP 1103).
+    PassStream {
+        /// The prefix an `answer stream` armed.
         prefix: String,
         /// Where.
         span: Span,

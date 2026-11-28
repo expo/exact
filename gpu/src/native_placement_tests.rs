@@ -13,6 +13,9 @@ struct Sign {
     child_name: String,
 }
 impl Surface for Sign {
+    fn device_lost(&mut self) -> bool {
+        true
+    }
     fn storage(
         &mut self,
         data: &std::path::Path,

@@ -287,7 +287,7 @@ test('app-facing fetch refuses a fixture download before writing its destination
   try {
     const set = normalized('net.fetch https://api.test\nfs.write app:/tmp');
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
-    for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
+    for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js', 'load-once.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
     for (const name of ['rt-link.js', 'ts-fetch.js', 'ts-body-from.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
     writeFileSync(resolve(dir, 'admission-data.js'), `export const tsGrantSet = ${JSON.stringify(set)};`);
     writeFileSync(resolve(dir, 'storage-fs.js'), `export let writes = 0; export const bodyTarget = async () => ({ put() { writes++; return 7; }, close() {} });`);
@@ -483,3 +483,175 @@ test('Chromium gives fixtures the real response properties and request-mode refu
     expect(results.fixture.slice(1)).toEqual([{kind: 'Refused'}, {kind: 'Network'}]);
   } finally { await page.close(); server.stop(true); backend.stop(true); }
 }, 30_000);
+
+test('answer stream round-trips TSV, isolates from fetch faults, drives Web JS virtual clock, and hands off Web Wasm', async () => {
+  const url = 'https://stream.example.test/chat', set = normalized('net.fetch https://stream.example.test');
+  // Arm both `answer fetch` and `answer stream` on the same prefix: neither shadows or disarms the other.
+  expect(faultOp({ answer: url, response: { status: 200, headers: {}, body: 'fetch-body' } }).error).toBeUndefined();
+  const schedule = {
+    status: 200,
+    headers: { 'x-trace': 'stream-1' },
+    mode: 'events',
+    steps: [
+      { kind: 'event', name: 'chunk', id: '1', data: 'Hel', afterMs: 0 },
+      { kind: 'event', name: 'chunk', id: '2', data: 'lo', afterMs: 100 },
+      { kind: 'fail', message: 'reset mid-stream', afterMs: 250 },
+    ],
+  };
+  expect(faultOp({ answerStream: url, method: 'POST', stream: schedule }).error).toBeUndefined();
+
+  // Invalid stream fixtures are rejected without mutating the table.
+  const snap = faultsJson();
+  for (const bad of [
+    { status: 302, headers: {}, body: '' },
+    { status: 204, headers: {}, body: 'non-empty' },
+    { status: 200, headers: { 'content-type': 'application/json' }, mode: 'events', steps: [] },
+    { status: 200, headers: {}, mode: 'bytes', steps: [{ kind: 'bytes', base64: '!!!', afterMs: 0 }] },
+    { status: 200, headers: {}, mode: 'events', steps: [{ kind: 'event', data: 'a', afterMs: 50 }, { kind: 'event', data: 'b', afterMs: 10 }] },
+    { status: 200, headers: {}, mode: 'events', steps: [{ kind: 'end', afterMs: 0 }, { kind: 'event', data: 'late', afterMs: 10 }] },
+  ]) {
+    expect(faultOp({ answerStream: url, stream: bad }).malformed).toBe(true);
+  }
+  expect(faultsJson()).toEqual(snap);
+
+  // TSV round-trip through reload preserves both entries independently.
+  const { faultSpec } = await import('../../scripts/agent-launch.mjs');
+  const reloaded = parseFaults(faultSpec(faultSpecOf(faultsJson())));
+  expect(reloaded).toEqual(faultsJson());
+  globalThis.__exactFaults.entries = reloaded;
+
+  // Ordinary fetch still hits `answer fetch`, not `answer stream`.
+  expect(await (await fetchWith(set, url, { method: 'POST' })).text()).toBe('fetch-body');
+
+  // Web JS streaming fixture drives on virtual clock, excludes `clock settle` (`data: false`), and counts `fail` in `failureHits`.
+  const clock = { now: 10, agent: true, timers: [] };
+  const ctl = new AbortController();
+  let openedCalled = 0;
+  ctl.clock = { clock };
+  ctl.fixtureOpened = () => { openedCalled++; };
+  const received = [];
+  const running = request(
+    { method: 'POST', url, headers: [], stream: true, streamOpen: true },
+    { grantSet: set, controllers: new Set(), controller: ctl, message: m => received.push(m) },
+  );
+  await Promise.resolve();
+  expect(openedCalled).toBe(1);
+  expect(received.map(m => [m.head ? 'open' : m.event, m.head ? m.status : m.data])).toEqual([['open', 200], ['chunk', 'Hel']]);
+  expect(() => received[0].headers.set('x-mutated', '1')).toThrow(TypeError);
+  expect(clock.timers).toHaveLength(1);
+  expect(clock.timers[0]).toMatchObject({ due: 110, once: true, data: false, streamFixture: true });
+
+  clock.now = 110;
+  clock.timers.shift().action();
+  expect(received.map(m => m.data)).toEqual(['', 'Hel', 'lo']);
+  expect(clock.timers).toHaveLength(1);
+  expect(clock.timers[0].due).toBe(260);
+
+  clock.now = 260;
+  clock.timers.shift().action();
+  const outcome = await running;
+  expect([outcome.kind, new TextDecoder().decode(outcome.body)]).toEqual([1, 'reset mid-stream']);
+  const streamEntry = faultsJson().find(f => f.family === 'stream');
+  expect(streamEntry).toMatchObject({ hits: 1, failureHits: 1 });
+
+  // Web Wasm (no `controller.clock`) returns kind-12 handoff payload; `bodyFrom` is refused without counting.
+  const refused = await request({ method: 'POST', url, headers: [], stream: true, bodyFrom: 'app:/x' }, { grantSet: set, controllers: new Set() });
+  expect(refused.kind).toBe(2);
+  expect(faultsJson().find(f => f.family === 'stream').hits).toBe(1);
+  const wasmHandoff = await request({ method: 'POST', url, headers: [], stream: true, streamOpen: true }, { grantSet: set, controllers: new Set() });
+  expect(wasmHandoff.kind).toBe(12);
+  expect(JSON.parse(new TextDecoder().decode(wasmHandoff.body))).toMatchObject({ prefix: url, method: 'POST' });
+
+  // Lowercase method normalizes to uppercase; explicit HEAD on streaming 2xx schedule is refused.
+  expect(faultOp({ answerStream: url, method: 'HEAD', stream: schedule }).malformed).toBe(true);
+  expect(faultOp({ answerStream: 'https://stream.example.test/norm', method: 'post', stream: { status: 200, headers: {}, mode: 'events', steps: [{ kind: 'event', data: 'ok', afterMs: 0 }, { kind: 'end', afterMs: 10 }] } }).error).toBeUndefined();
+  expect(faultsJson().find(f => f.prefix === 'https://stream.example.test/norm').method).toBe('POST');
+
+  // Virtual idle timeout records failureHits, synchronous finishFixture fires inside action(),
+  // and re-arming the same (prefix, method) while open still credits failureHits to the live entry.
+  const idleUrl = 'https://stream.example.test/idle';
+  expect(faultOp({ answerStream: idleUrl, method: 'POST', stream: { status: 200, headers: {}, mode: 'events', steps: [{ kind: 'event', data: 'first', afterMs: 0 }, { kind: 'event', data: 'late', afterMs: 300 }] } }).error).toBeUndefined();
+  const idleClock = { now: 0, agent: true, timers: [] };
+  const idleCtl = new AbortController();
+  const syncEvents = [];
+  idleCtl.clock = { clock: idleClock };
+  idleCtl.fixtureOpened = () => {};
+  idleCtl.finishFixture = o => syncEvents.push(['sync-finish', o.kind, new TextDecoder().decode(o.body)]);
+  const idleRun = request(
+    { method: 'POST', url: idleUrl, headers: [], stream: true, idleTimeoutMs: 100 },
+    { grantSet: set, controllers: new Set(), controller: idleCtl, message: () => {} },
+  );
+  await Promise.resolve();
+  // Re-arm same (prefix, method) while the earlier stream is still open; also arm a GET rule on same prefix.
+  expect(faultOp({ answerStream: idleUrl, method: 'POST', stream: { status: 200, headers: {}, mode: 'events', steps: [{ kind: 'end', afterMs: 500 }] } }).error).toBeUndefined();
+  expect(faultOp({ answerStream: idleUrl, method: 'GET', stream: { status: 200, headers: {}, mode: 'events', steps: [{ kind: 'end', afterMs: 500 }] } }).error).toBeUndefined();
+  idleClock.now = 100;
+  idleClock.timers.shift().action();
+  syncEvents.push(['after-action']);
+  await idleRun;
+  // Terminal delivery fired synchronously BEFORE after-action, credited POST failureHits, and left GET untouched.
+  expect(syncEvents).toEqual([['sync-finish', 10, 'nothing arrived for 100 ms'], ['after-action']]);
+  expect(faultsJson().find(f => f.family === 'stream' && f.prefix === idleUrl && f.method === 'POST').failureHits).toBe(1);
+  expect(faultsJson().find(f => f.family === 'stream' && f.prefix === idleUrl && f.method === 'GET').failureHits).toBe(0);
+
+  // Buffered `bytes` schedule without protocol.bytes marks fixtureOpened, honors schedule offsets, and counts `fail`.
+  const bytesUrl = 'https://stream.example.test/bytes-fail';
+  expect(faultOp({ answerStream: bytesUrl, stream: { status: 200, headers: {}, mode: 'bytes', steps: [{ kind: 'bytes', base64: 'YQ==', afterMs: 50 }, { kind: 'fail', message: 'truncated', afterMs: 120 }] } }).error).toBeUndefined();
+  const bClock = { now: 0, agent: true, timers: [] };
+  const bCtl = new AbortController();
+  let bOpened = 0;
+  bCtl.clock = { clock: bClock };
+  bCtl.fixtureOpened = () => { bOpened++; };
+  const bRun = request({ method: 'GET', url: bytesUrl, headers: [], stream: true }, { grantSet: set, controllers: new Set(), controller: bCtl, message: () => {} });
+  await Promise.resolve();
+  expect(bOpened).toBe(1);
+  expect(bClock.timers).toHaveLength(1);
+  expect(bClock.timers[0].due).toBe(50);
+  bClock.now = 50;
+  bClock.timers.shift().action();
+  expect(bClock.timers).toHaveLength(1);
+  expect(bClock.timers[0].due).toBe(120);
+  bClock.now = 120;
+  bClock.timers.shift().action();
+  const bOut = await bRun;
+  expect([bOut.kind, new TextDecoder().decode(bOut.body)]).toEqual([1, 'truncated']);
+  expect(faultsJson().find(f => f.family === 'stream' && f.prefix === bytesUrl).failureHits).toBe(1);
+
+  // Delayed buffered 4xx: Web JS marks fixtureOpened and defers hits/failureHits (abort leaves 0/0);
+  // Web Wasm hands off kind 12 without counting eagerly; delivered buffered headers are immutable.
+  const delayUrl = 'https://stream.example.test/delay-429';
+  expect(faultOp({ answerStream: delayUrl, stream: { status: 429, headers: { 'retry-after': '5' }, body: 'slow down', afterMs: 200 } }).error).toBeUndefined();
+  const dClock = { now: 0, agent: true, timers: [] };
+  const dCtl = new AbortController();
+  let dOpened = 0;
+  dCtl.clock = { clock: dClock };
+  dCtl.fixtureOpened = () => { dOpened++; };
+  const dRun = request({ method: 'GET', url: delayUrl, headers: [], stream: true }, { grantSet: set, controllers: new Set(), controller: dCtl, message: () => {} });
+  await Promise.resolve();
+  expect(dOpened).toBe(1);
+  expect(dClock.timers).toHaveLength(1);
+  expect(dClock.timers[0]).toMatchObject({ due: 200, once: true, data: true });
+  dCtl.abort();
+  const dOut = await dRun;
+  expect(dOut.kind).toBe(4);
+  expect(faultsJson().find(f => f.family === 'stream' && f.prefix === delayUrl)).toMatchObject({ hits: 0, failureHits: 0 });
+  const wasmDelay = await request({ method: 'GET', url: delayUrl, headers: [], stream: true }, { grantSet: set, controllers: new Set() });
+  expect(wasmDelay.kind).toBe(12);
+  expect(faultsJson().find(f => f.family === 'stream' && f.prefix === delayUrl)).toMatchObject({ hits: 0, failureHits: 0 });
+  // When delivered on Web JS, counts 1/1 and exposes immutable headers.
+  const dCtl2 = new AbortController();
+  dCtl2.clock = { clock: dClock };
+  const dRun2 = request({ method: 'GET', url: delayUrl, headers: [], stream: true }, { grantSet: set, controllers: new Set(), controller: dCtl2, message: () => {} });
+  await Promise.resolve();
+  dClock.now = 200;
+  dClock.timers.shift().action();
+  const dOut2 = await dRun2;
+  expect(dOut2.status).toBe(429);
+  expect(() => dOut2.headersObj.set('x-bad', '1')).toThrow(TypeError);
+  expect(faultsJson().find(f => f.family === 'stream' && f.prefix === delayUrl)).toMatchObject({ hits: 1, failureHits: 1 });
+
+  // `pass stream` disarms only the stream rule, keeping `answer fetch` armed.
+  expect(faultOp({ passStream: url }).error).toBeUndefined();
+  expect(faultsJson().find(f => f.family === 'stream' && f.prefix === url).armed).toBe(false);
+  expect(faultsJson().find(f => !f.family && f.prefix === url).armed).toBe(true);
+});

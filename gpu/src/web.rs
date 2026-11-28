@@ -3,10 +3,13 @@
 
 use crate::{json, Frame, Module, Registry, SurfaceRef};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use wasm_bindgen::prelude::*;
 
 static MODULE_ALIVE: AtomicBool = AtomicBool::new(false);
+static MODULE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static LOSS_PENDING: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
@@ -14,7 +17,18 @@ thread_local! {
 }
 
 fn with<T>(f: impl FnOnce(&mut Module) -> T) -> Option<T> {
-    MODULE.with(|m| m.borrow_mut().as_mut().map(f))
+    let out = MODULE.with(|m| m.borrow_mut().as_mut().map(f));
+    if LOSS_PENDING.swap(false, Ordering::AcqRel) {
+        let active = MODULE.with(|m| {
+            m.borrow()
+                .as_ref()
+                .is_some_and(|m| m.gpu.is_some() && m.device_lost.load(Ordering::Acquire))
+        });
+        if active {
+            device_lost();
+        }
+    }
+    out
 }
 
 #[wasm_bindgen]
@@ -34,13 +48,18 @@ pub(crate) fn notify_wake() {
 }
 
 pub(crate) fn notify_loss(lost: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    let current = MODULE.with(|m| {
-        m.try_borrow().ok().is_some_and(|m| {
-            m.as_ref()
-                .is_some_and(|m| std::sync::Arc::ptr_eq(lost, &m.device_lost))
-        })
+    let notify = MODULE.with(|m| match m.try_borrow() {
+        Ok(m) => m
+            .as_ref()
+            .is_some_and(|m| m.gpu.is_some() && std::sync::Arc::ptr_eq(lost, &m.device_lost)),
+        Err(_) => {
+            // Re-entrant loss callback during an active module borrow: drain it
+            // as soon as the current `with()` call releases the borrow.
+            LOSS_PENDING.store(true, Ordering::Release);
+            false
+        }
     });
-    if current {
+    if notify {
         device_lost();
     }
 }
@@ -73,6 +92,8 @@ pub async fn load(
     });
     match crate::load_gpu_with_requirements(instance, None, requirements).await {
         Ok(gpu) => {
+            MODULE_GENERATION.fetch_add(1, Ordering::AcqRel);
+            LOSS_PENDING.store(false, Ordering::Release);
             MODULE.with(|m| {
                 let mut m = m.borrow_mut();
                 m.get_or_insert_with(|| Module::new(registry).with_requirements(requirements))
@@ -90,79 +111,152 @@ pub async fn load(
     }
 }
 
-/// Replacement canvases use the existing IDs and surface objects. No module load.
+/// Recover the lost device and reattach live canvases under their existing IDs.
+/// Keeps `MODULE` installed across the async device request so navigation,
+/// destruction, and status queries remain live while acquiring a new device.
 pub async fn recover(
     ids: &[u32],
     canvases: Vec<web_sys::HtmlCanvasElement>,
 ) -> Result<String, JsValue> {
-    let mut module = MODULE
-        .with(|m| m.borrow_mut().take())
-        .ok_or_else(|| JsValue::from_str("GPU module not loaded"))?;
-    let result: Result<String, crate::recovery::RecoveryFailure> = async {
-        if ids.len() != canvases.len() || ids.iter().any(|id| !module.instances.contains_key(id)) {
-            return Err(crate::recovery::RecoveryFailure::other(
-                "recovery canvas table mismatch",
+    if ids.len() != canvases.len() {
+        return Ok(
+            crate::recovery::RecoveryFailure::other("recovery canvas table mismatch").json(),
+        );
+    }
+    let mut unique = HashSet::with_capacity(ids.len());
+    if ids.iter().any(|id| !unique.insert(*id)) {
+        return Ok(
+            crate::recovery::RecoveryFailure::other("recovery canvas table mismatch").json(),
+        );
+    }
+    enum Begin {
+        Done(String),
+        Acquire {
+            instance: wgpu::Instance,
+            requirements: &'static [crate::grants::Requirements],
+            generation: u64,
+        },
+    }
+    let begin = MODULE.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        let Some(module) = guard.as_mut() else {
+            return Err(JsValue::from_str("GPU module not loaded"));
+        };
+        if ids.iter().any(|id| !module.instances.contains_key(id)) {
+            return Ok(Begin::Done(
+                crate::recovery::RecoveryFailure::other("recovery canvas table mismatch").json(),
             ));
         }
-        let outcome = module.recover().await?;
-        if !outcome.contains("\"status\":\"recovered\"") {
-            return Ok(outcome);
+        let Some(instance) = module.instance.clone() else {
+            return Ok(Begin::Done(
+                "{\"status\":\"no device\",\"instances\":[]}".into(),
+            ));
+        };
+        module.check_device();
+        if module.gpu.is_some() {
+            return Ok(Begin::Done(
+                "{\"status\":\"healthy\",\"instances\":[]}".into(),
+            ));
         }
-        // Stage the whole replacement table. Configurations remain on instances,
-        // even when adapter creation, attachment, or a second loss fails.
-        let gpu = module
-            .gpu
-            .as_ref()
-            .ok_or_else(|| crate::recovery::RecoveryFailure::other("no device"))?;
-        let mut targets = Vec::new();
-        for (id, canvas) in ids.iter().zip(canvases) {
-            let inst = module.instances.get_mut(id).unwrap();
-            if module.refused.contains_key(inst.name.as_str()) {
-                continue;
+        let generation = MODULE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+        Ok(Begin::Acquire {
+            instance,
+            requirements: module.requirements,
+            generation,
+        })
+    })?;
+    let Begin::Acquire {
+        instance,
+        requirements,
+        generation,
+    } = begin
+    else {
+        let Begin::Done(report) = begin else {
+            unreachable!()
+        };
+        return Ok(report);
+    };
+    // Acquire outside the `MODULE` RefCell so destroy/render/lifecycle stay live.
+    let gpu = match crate::load_gpu_with_requirements(instance, None, requirements).await {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            let failure = crate::recovery::RecoveryFailure::device(error);
+            MODULE.with(|slot| {
+                if MODULE_GENERATION.load(Ordering::Acquire) == generation {
+                    if let Some(m) = slot.borrow_mut().as_mut() {
+                        m.error = format!("device recovery: {}", failure.message());
+                    }
+                }
+            });
+            return Ok(failure.json());
+        }
+    };
+    let commit: Result<String, crate::recovery::RecoveryFailure> = MODULE.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        let Some(module) = guard.as_mut() else {
+            gpu.device.destroy();
+            return Err(crate::recovery::RecoveryFailure::other(
+                "GPU module unloaded during recovery",
+            ));
+        };
+        if MODULE_GENERATION.load(Ordering::Acquire) != generation {
+            gpu.device.destroy();
+            return Err(crate::recovery::RecoveryFailure::other(
+                "recovery superseded by a newer attempt",
+            ));
+        }
+        module.set_gpu(gpu);
+        let attach = (|| -> Result<(), crate::recovery::RecoveryFailure> {
+            let gpu = module
+                .gpu
+                .as_ref()
+                .ok_or_else(|| crate::recovery::RecoveryFailure::other("no device"))?;
+            let mut targets = Vec::new();
+            for (id, canvas) in ids.iter().zip(canvases) {
+                // Skip canvases destroyed while device acquisition was pending.
+                let Some(inst) = module.instances.get_mut(id) else {
+                    continue;
+                };
+                if module.refused.contains_key(inst.name.as_str()) {
+                    continue;
+                }
+                let config = inst.config.as_mut().ok_or_else(|| {
+                    crate::recovery::RecoveryFailure::other("missing presentation configuration")
+                })?;
+                let target = gpu
+                    .instance
+                    .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+                    .map_err(|e| crate::recovery::RecoveryFailure::other(e.to_string()))?;
+                let caps = target.get_capabilities(&gpu.adapter);
+                inst.hdr = crate::target::configure(&*inst.surface, &gpu.adapter, &caps, config);
+                inst.alpha_modes = caps.alpha_modes;
+                target.configure(&gpu.device, config);
+                targets.push((*id, target));
             }
-            let config = inst.config.as_mut().ok_or_else(|| {
-                crate::recovery::RecoveryFailure::other("missing presentation configuration")
-            })?;
-            let target = gpu
-                .instance
-                .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
-                .map_err(|e| crate::recovery::RecoveryFailure::other(e.to_string()))?;
-            let caps = target.get_capabilities(&gpu.adapter);
-            inst.hdr = crate::target::configure(&*inst.surface, &gpu.adapter, &caps, config);
-            inst.alpha_modes = caps.alpha_modes;
-            target.configure(&gpu.device, config);
-            targets.push((*id, target));
+            for (id, target) in targets {
+                let inst = module.instances.get_mut(&id).unwrap();
+                let destination = crate::ColorTarget::of(inst.config.as_ref().unwrap());
+                inst.presentation = Some(SurfaceRef::new(target));
+                inst.finish_attach(gpu, destination, true)
+                    .map_err(|e| crate::recovery::RecoveryFailure::other(e.0))?;
+            }
+            if module.device_lost.load(Ordering::Acquire) {
+                return Err(crate::recovery::RecoveryFailure::other(
+                    "replacement device was lost during recovery",
+                ));
+            }
+            Ok(())
+        })();
+        match attach {
+            Ok(()) => Ok(module.recovery_report()),
+            Err(error) => {
+                module.lose_device();
+                module.error = format!("device recovery: {}", error.message());
+                Err(error)
+            }
         }
-        for (id, target) in targets {
-            let inst = module.instances.get_mut(&id).unwrap();
-            let config = inst.config.as_ref().unwrap();
-            inst.surface
-                .device_ready(gpu.device.features(), gpu.device.limits());
-            let destination = crate::ColorTarget::of(config);
-            inst.surface.color_space_granted(destination.space);
-            inst.set_color_target(destination)
-                .map_err(|e| crate::recovery::RecoveryFailure::other(e.0))?;
-            inst.surface
-                .prepare_assets(&gpu.device, &gpu.queue, destination.format);
-            inst.presentation = Some(SurfaceRef::new(target));
-        }
-        if module
-            .device_lost
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Err(crate::recovery::RecoveryFailure::other(
-                "replacement device was lost during recovery",
-            ));
-        }
-        Ok(module.recovery_report())
-    }
-    .await;
-    if let Err(error) = &result {
-        module.lose_device();
-        module.error = format!("device recovery: {}", error.message());
-    }
-    MODULE.with(|m| *m.borrow_mut() = Some(module));
-    Ok(match result {
+    });
+    Ok(match commit {
         Ok(report) => report,
         Err(error) => error.json(),
     })
@@ -468,6 +562,8 @@ pub fn dirty_without_wake(id: u32) -> bool {
 /// Drop all surfaces and release the module's device.
 pub fn unload() {
     MODULE_ALIVE.store(false, Ordering::Release);
+    MODULE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    LOSS_PENDING.store(false, Ordering::Release);
     MODULE.with(|m| {
         if let Some(module) = m.borrow_mut().take() {
             module.unload();

@@ -39,6 +39,15 @@ mod tree;
 use tree::props_json;
 pub use tree::tagged;
 
+/// Open a scripted streaming 2xx fixture handed off from the web Wasm page (`kind == 12`, LLP 1103).
+pub fn open_web_stream_fixture<D: DataSource>(
+    runner: &mut Runner<D>,
+    ticket: u64,
+    payload: &[u8],
+) -> Result<Vec<crate::Timed>, crate::RunnerError> {
+    runner.open_web_stream_fixture_inner(ticket, payload)
+}
+
 /// Whether this launch carries the native agent in either clock mode.
 pub fn carried() -> bool {
     matches!(std::env::var("EXACT_AGENT").as_deref(), Ok("1" | "live"))
@@ -1316,7 +1325,26 @@ fn faults<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
     if after_key(request, "dropStream").is_some() {
         return error("drop stream is unavailable on this host");
     }
-    if let Some(prefix) = field_str(request, "answer") {
+    if let Some(prefix) = field_str(request, "answerStream") {
+        let value: serde_json::Value = match serde_json::from_str(full_request) {
+            Ok(v) => v,
+            Err(e) => return error(&e.to_string()),
+        };
+        let method = match value["faults"].get("method") {
+            Some(serde_json::Value::String(s)) => Some(s.as_str()),
+            Some(_) => return error("answer stream needs a method name"),
+            None => None,
+        };
+        if let Err(e) = table.answer_stream_method(&prefix, method, &value["faults"]["stream"]) {
+            return error(&e);
+        }
+    } else if let Some(prefix) = field_str(request, "passStream") {
+        if !table.pass_stream(&prefix) {
+            return error(&format!(
+                "pass stream \"{prefix}\": no stream fixture was armed for it"
+            ));
+        }
+    } else if let Some(prefix) = field_str(request, "answer") {
         let value: serde_json::Value = match serde_json::from_str(full_request) {
             Ok(v) => v,
             Err(e) => return error(&e.to_string()),

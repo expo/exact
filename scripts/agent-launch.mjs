@@ -1,4 +1,4 @@
-import { fixtureResponse, parseFaults } from '../host/web/faults.js';
+import { fixtureResponse, fixtureStream, parseFaults } from '../host/web/faults.js';
 export { faultSpecOf } from '../host/web/faults.js';
 import {gameNonInput, proofInputFiles, executionInputFiles} from '../game/inputs.mjs';
 export {gameNonInput} from '../game/inputs.mjs';
@@ -717,7 +717,8 @@ export function parityScript({ mediaClock = 'wall', lineHeight = null } = {}) {
 export function faultSpec(spec) {
   const lines = String(spec ?? '').split('\n').filter(l => l.trim());
   for (const line of lines) {
-    const [prefix, ...fields] = line.split('\t'), counts = fields.slice(0, 4); if (fields[4]) fixtureResponse(JSON.parse(fields[4]));
+    const [prefix, ...fields] = line.split('\t'), counts = fields.slice(0, 4);
+    if (fields[4]) { const o = JSON.parse(fields[4]), st = o && typeof o === 'object' && o.stream !== undefined && o.status === undefined; if (st) { const s = fixtureStream(o.stream); if (fields[6]?.toUpperCase() === 'HEAD' && s.steps !== undefined) throw new Error('answer stream: explicit `method HEAD` cannot declare a streaming 2xx schedule'); } else fixtureResponse(o); }
     if (!prefix) throw new Error('fail fetch: each fault names a non-empty URL prefix');
     if (fields.length > 7 || (fields[5] !== undefined && !/^\d+$/.test(fields[5])) || counts.some((c, i) => !(c === '-' || /^\d+$/.test(c)) && !(i === 3 && /^[01]$/.test(c)))) throw new Error(`fail fetch: an unreadable fault line: ${JSON.stringify(line)}`);
     if (counts[0] === '0') throw new Error('fail fetch: `times` is a positive integer');

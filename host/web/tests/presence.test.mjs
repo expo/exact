@@ -200,6 +200,109 @@ check('resize snaps an active move and takes new boxes without a move', async ()
   expect(await evaluate('document.getElementById("card").offsetHeight')).toBe(200);
 });
 
+check('a move adds its translate onto a zero translate added under it, and a turned and scaled box moves in its parent\'s space', async () => {
+  // WebKit paints a translate added to `none` farther from the box than it places it, and one added to `0px 0px` where
+  // it places it
+  const turned = `${card};position:absolute;top:100px;rotate:90deg;scale:2`;
+  const centre = () => evaluate('(r => [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)])(document.getElementById("card").getBoundingClientRect())');
+  await fixture(`<div id="card" style="${turned};left:0px"></div>`);
+  const from = await centre();
+  await style(`${turned};left:100px`);
+  await evaluate('seek(0)');
+  expect(await centre()).toEqual(from);
+  await evaluate('seek(500)');
+  expect(await centre()).toEqual([from[0] + 50, from[1]]);
+  expect(await evaluate(`document.getElementById('card').getAnimations().map(a => [a.effect.getKeyframes()[0].translate, a.effect.composite])`))
+    .toEqual([['0px', 'add'], ['-100px', 'add']]);
+});
+
+check('the zero translate under a move is held at its first frame, and goes with the move however it ends', async () => {
+  const parts = 'document.getElementById("card").getAnimations().length';
+  const pin = '(r => [r.left, r.top])(document.getElementById("pin").getBoundingClientRect())';
+  await fixture(`<div id="card" style="${card}"><div id="pin" style="position:fixed;left:0;top:0;width:10px;height:10px"></div></div>`);
+  await style(card + ';margin-left:100px');
+  expect(await evaluate(`document.getElementById('card').getAnimations().map(a => [a.id, a.effect.getKeyframes()[0].translate, a.effect.composite, a.playState === 'paused'])`))
+    .toEqual([['exact-layout-base', '0px', 'add', true], ['exact-layout-move', '-100px', 'add', false]]);
+  // While the move plays, the moving card contains its fixed child, as a translated box does
+  expect(await evaluate(pin)).not.toEqual([0, 0]);
+  // The page's clock seeks the move, not the zero, which stays at its first frame; and the zero still applies when
+  // something seeks every animation the card has
+  await evaluate('seek(400)');
+  expect(await evaluate(`document.getAnimations().find(a => a.id === 'exact-layout-base').currentTime`)).toBe(0);
+  expect(await evaluate(`(card => { for (const a of card.getAnimations()) { a.pause(); a.currentTime = 400; } return card.getAnimations().map(a => a.id); })(document.getElementById('card'))`))
+    .toEqual(['exact-layout-base', 'exact-layout-move']);
+  await evaluate(`document.getAnimations().find(a => a.id === 'exact-layout-move').play()`);
+  // Paused and sought past its end, the move shows nothing more, and the next frame lets it and the zero go with no batch
+  expect(await evaluate(`(async () => {
+    const move = document.getAnimations().find(a => a.id === 'exact-layout-move');
+    move.pause(); move.currentTime = 5000;
+    return new Promise(done => requestAnimationFrame(() => done([${parts}, ${pin}])));
+  })()`)).toEqual([0, [0, 0]]);
+  // Cancelled on its own, it takes the zero with it
+  await style(card + ';margin-left:0px');
+  expect(await evaluate(parts)).toBe(2);
+  // (Read once the cancellation has settled, before a frame could retire the move)
+  expect(await evaluate(`(async () => { const move = document.getAnimations().find(a => a.id === 'exact-layout-move'), settled = move.finished.catch(() => {}); move.cancel(); await settled; return ${parts}; })()`)).toBe(0);
+  // Paused and taken off its element, it goes with its zero at the next frame
+  await style(card + ';margin-left:100px');
+  expect(await evaluate(`(() => {
+    const move = document.getAnimations().find(a => a.id === 'exact-layout-move');
+    move.pause(); move.effect.target = null;
+    return new Promise(done => requestAnimationFrame(() => done(${parts})));
+  })()`)).toBe(0);
+});
+
+check('an older translate animation the box still shows stays when something plays every animation it has', async () => {
+  // A finished animation that fills is replaced by later finished, filling ones on the same property; the zero under a
+  // move never finishes, played or not
+  await fixture(`<div id="card" style="${card}"></div>`);
+  expect(await evaluate(`(async () => {
+    const card = document.getElementById('card');
+    const older = window.older = card.animate([{ translate: '0px 0px' }, { translate: '30px 0px' }], { duration: 1, fill: 'forwards' });
+    await older.finished;
+    return older.replaceState;
+  })()`)).toBe('active');
+  await style(card + ';margin-left:100px');
+  expect(await evaluate(`(async () => {
+    for (const a of document.getElementById('card').getAnimations()) a.play();
+    await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+    return [older.replaceState, document.getAnimations().find(a => a.id === 'exact-layout-base').playState];
+  })()`)).toEqual(['active', 'running']);
+});
+
+check('a move sought past its end hands the next one no residual, whatever its spring would say there', async () => {
+  const undamped = card.replace('1000 0 linear', '0 0 spring(1, 0, 1)'); // never settles: the module caps it at ten seconds
+  await fixture(`<div id="card" style="${undamped}"></div>`);
+  await style(undamped + ';margin-left:100px');
+  // In one task, so that no frame retires the move first
+  const [shown, start] = await evaluate(`(() => {
+    const card = document.getElementById('card'), move = document.getAnimations().find(a => a.id === 'exact-layout-move');
+    move.pause(); move.currentTime = move.effect.getComputedTiming().endTime + 100;
+    const shown = card.getBoundingClientRect().x;
+    batch({ops:[{op:'style',id:'card',css:${JSON.stringify(undamped + ';margin-left:200px')}}]});
+    seek(0);
+    return [shown, card.getBoundingClientRect().x];
+  })()`);
+  expect(start).toBeCloseTo(shown, 1);
+});
+
+check('a batch after a move shows nothing more reads no box in the box the move contained it in', async () => {
+  const pin = left => `position:fixed;left:${left};top:0;width:10px;height:10px;--exact-layout-transition:1000 0 linear`;
+  await fixture(`<div id="card" style="${card}"><div id="pin" style="${pin('50%')}"></div></div>`);
+  await style(card + ';margin-left:100px');
+  // (The fixed child, read in its parent, takes a move of its own here, which ends now)
+  await evaluate(`document.getElementById('pin').getAnimations().forEach(a => a.finish())`);
+  // In one task: the card's move is sought past its end, and the batch then moves its fixed child, which starts from
+  // where the viewport places it, as the card no longer contains it
+  expect(await evaluate(`(() => {
+    const move = document.getAnimations().find(a => a.id === 'exact-layout-move' && a.effect.target.id === 'card');
+    move.pause(); move.currentTime = 5000;
+    batch({ops:[{op:'style',id:'pin',css:${JSON.stringify(pin('75%'))}}]});
+    seek(0);
+    return Math.round(document.getElementById('pin').getBoundingClientRect().left - innerWidth / 2);
+  })()`)).toBe(0);
+});
+
 check('an interrupted spring uses the seeked time, including its delay and velocity', async () => {
   const spring = card.replace('1000 0 linear', '0 100 spring(300, 30, 1)'); // the private row (css.rs layout_transition_css; LLP 1081 D5)
   await fixture(`<div id="card" style="${spring}"></div>`);
@@ -275,32 +378,33 @@ check('a shrinking clip reveals children up to the shown box, then restores over
 
 check('a native button keeps its laid-out size and moves by its centre, which a resize around its place does not restart', async () => {
   const button = (left, width) => `position:absolute;left:${left}px;top:0;width:${width}px;height:44px;--exact-layout-transition:1000 0 linear`;
-  const shown = () => evaluate(`(r => [Math.round(r.left + r.width / 2), Math.round(r.width), [...document.getElementById('card').getAnimations()].length])(document.getElementById('card').getBoundingClientRect())`);
+  const shown = () => evaluate(`(r => [Math.round(r.left + r.width / 2), Math.round(r.width), document.getElementById('card').getAnimations().some(a => a.id === 'exact-layout-move')])(document.getElementById('card').getBoundingClientRect())`);
   await fixture(`<button id="card" data-button-style="bordered" style="${button(0, 100)}"></button>`);
   await style(button(100, 100)); // its centre moves from 50 to 150
   await evaluate('seek(500)');
-  expect(await shown()).toEqual([100, 100, 1]);
+  expect(await shown()).toEqual([100, 100, true]);
   // Half way it shows from 50 to 150: what it shows there takes the press, and its destination box does not
   expect(await evaluate('[document.elementFromPoint(60, 20).id, document.elementFromPoint(190, 20).id]')).toEqual(['card', 'exact-root']);
   await style(button(125, 50)); // the same centre, a smaller button: it goes on, at its new size
   await evaluate('seek(500)');
-  expect(await shown()).toEqual([100, 50, 1]);
+  expect(await shown()).toEqual([100, 50, true]);
   await evaluate('seek(750)');
-  expect(await shown()).toEqual([125, 50, 1]);
+  expect(await shown()).toEqual([125, 50, true]);
   expect(await evaluate('surface()')).toBeNull();
 });
 
 check('a native button hidden during its move does not resume it when shown again', async () => {
   const button = (left, display = 'block') => `position:absolute;left:${left}px;top:0;width:100px;height:44px;display:${display};--exact-layout-transition:1000 0 linear`;
-  const moves = () => evaluate(`document.getElementById('card').getAnimations().length`);
+  const moving = () => evaluate(`document.getElementById('card').getAnimations().some(a => a.id === 'exact-layout-move')`);
   await fixture(`<button id="card" data-button-style="bordered" style="${button(0)}"></button>`);
+  const none = () => evaluate(`document.getElementById('card').getAnimations().length === 0`);
   await style(button(100));
   await evaluate('seek(300)');
-  expect(await moves()).toBe(1);
+  expect(await moving()).toBe(true);
   await style(button(100, 'none'));
-  expect(await moves()).toBe(0);
+  expect(await none()).toBe(true);
   await style(button(100));
-  expect(await moves()).toBe(0);
+  expect(await none()).toBe(true);
 });
 
 check('a batch that changes no tree measures no moving native button, which goes on', async () => {
@@ -316,16 +420,16 @@ check('a batch that changes no tree measures no moving native button, which goes
     window.getComputedStyle = function (...args) { reads++; return computed.apply(this, args); };
     try {
       batch({ops:[{op:'at',ms:400}]});
-      return [reads, document.getElementById('card').getAnimations().length];
+      return [reads, document.getElementById('card').getAnimations().some(a => a.id === 'exact-layout-move')];
     } finally { proto.getBoundingClientRect = rect; proto.getClientRects = rects; window.getComputedStyle = computed; }
-  })()`)).toEqual([0, 1]);
+  })()`)).toEqual([0, true]);
 });
 
 check('a moving native button inside an exit ghost stops when the ghost goes, with no batch after', async () => {
   const button = left => `position:absolute;left:${left}px;top:0;width:100px;height:44px;--exact-layout-transition:20000 0 linear`;
   await fixture(`<div id="card" style="${card};position:relative"><button id="tab" data-button-style="bordered" style="${button(0)}"></button></div>`);
   await style(button(100), 'tab');
-  expect(await evaluate(`!!(globalThis.move = document.getElementById('tab').getAnimations()[0])`)).toBe(true);
+  expect(await evaluate(`!!(globalThis.move = document.getElementById('tab').getAnimations().find(a => a.id === 'exact-layout-move'))`)).toBe(true);
   await evaluate(`leave('pulse 100ms linear both'); seek(200)`);
   await evaluate('new Promise(resolve => setTimeout(resolve, 50))');
   expect(await evaluate(`[document.getElementById('card'), globalThis.move.playState]`)).toEqual([null, 'idle']);
@@ -337,7 +441,7 @@ check('a native button whose resizing, clipping parent is hidden ends its move, 
   await fixture(`<div id="card" style="${parent('40px')}"><button id="tab" data-button-style="bordered" style="${button(0)}"></button></div>`);
   await style(button(100), 'tab');
   await style(parent('140px'));
-  expect(await evaluate(`[document.getElementById('tab').getAnimations().length, !!surface()]`)).toEqual([1, true]);
+  expect(await evaluate(`[document.getElementById('tab').getAnimations().some(a => a.id === 'exact-layout-move'), !!surface()]`)).toEqual([true, true]);
   await style(parent('140px', 'none'));
   expect(await evaluate(`document.getElementById('tab').getAnimations().length`)).toBe(0);
   await style(parent('140px'));
@@ -350,7 +454,7 @@ check('a resized box drops its surface when the paused move leaves the element',
   expect(await evaluate(`(async () => {
     seek(500);
     const card = document.getElementById('card');
-    const move = card.getAnimations().find(a => 'translate' in a.effect.getKeyframes()[0]);
+    const move = card.getAnimations().find(a => a.id === 'exact-layout-move');
     const during = getComputedStyle(card).clipPath;
     move.currentTime = move.effect.getComputedTiming().endTime;
     const goneWhilePaused = move.playState === 'paused' && !card.getAnimations().includes(move);

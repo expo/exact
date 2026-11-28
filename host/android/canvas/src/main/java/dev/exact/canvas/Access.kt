@@ -616,12 +616,13 @@ internal class Access(private val host: View) {
      * `ViewRootImpl.handleDragEvent`). The node offers the view's Cancel beside its Start while the view has it,
      * and says what the view would ([heard]). Whether the drag began.
      */
-    fun drag(view: Int, clip: android.content.ClipData, flags: Int): Boolean {
+    fun drag(view: Int, clip: android.content.ClipData, flags: Int, lift: DragOut.Lift): Boolean {
         // A service that went before the request came begins nothing: with no service on, Android would drag the
         // window's last touch.
         if (!manager.isEnabled) return false
         val n = nodes.values.firstOrNull { it.view == view && drags(it) && real(it) == null } ?: return false
-        if (!host.startDragAndDrop(clip, DragOut.blank, DragOut.OWN, flags)) return false
+        if (!host.startDragAndDrop(clip, DragOut.blank, lift, flags)) return false
+        DragOut.began(lift)
         dragging = n.id
         cancellable = true
         changed(n.id, AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)

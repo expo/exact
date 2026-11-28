@@ -211,6 +211,9 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package var imageSource: String?
     package var loadGeneration = 0
     package var pressed = false { didSet { if pressed != oldValue { pressChanged() } } }
+    /// How often a list renewed the view for another item (LLP 1078), by
+    /// which a drag from it knows it still shows the item it lifted.
+    package internal(set) var renewals = 0
     var keyboardPressed = false
     var press = PressFeedback() // LLP 1061: the feedback `pressed` drives
     var pressPaint = PressPaint() // LLP 1061 D7: the author's pressed paint

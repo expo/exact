@@ -304,11 +304,16 @@ function createPresence(root) {
     sf.hidden.clear();
   }
 
+  // A move that shows nothing more without having finished (paused and sought past its end, or taken off its element)
+  // ends, its parts with it
+  function retire() {
+    for (const [el, f] of flips) if (!el.isConnected || f.animation.effect?.target !== el || f.animation.effect.getComputedTiming().progress === null) stop(el);
+  }
+
   function sync(placed = false) {
+    retire();
     for (const el of surfaces) {
       const f = flips.get(el), sf = f.surface;
-      // A paused move can leave the effect stack without resolving `finished`.
-      if (!el.isConnected || !el.getAnimations().includes(f.animation)) { stop(el); continue; }
       reveal(f);
       f.animation.effect.target = null;
       const cs = getComputedStyle(el);
@@ -335,7 +340,7 @@ function createPresence(root) {
       f.animation.effect.target = el;
       sf.hide.effect.target = el;
     }
-    if (surfaces.size && frame === null) frame = requestAnimationFrame(() => { frame = null; sync(); });
+    if (flips.size && frame === null) frame = requestAnimationFrame(() => { frame = null; sync(); });
   }
 
   // What a running move still has to go, `[dx, dy, dw, dh]` from the laid-out
@@ -362,7 +367,7 @@ function createPresence(root) {
     for (const a of [f.animation, ...f.parts]) a.cancel();
     f.surface?.stand.remove();
     surfaces.delete(el);
-    if (!surfaces.size && frame !== null) { cancelAnimationFrame(frame); frame = null; }
+    if (!flips.size && frame !== null) { cancelAnimationFrame(frame); frame = null; }
   }
 
   // The element's surface, standing in for it behind it while its size
@@ -402,7 +407,17 @@ function createPresence(root) {
     const moved = frames(([dx, dy]) => ({ translate: `${dx}px ${dy}px` })), parts = [];
     // Its stand-in copies the element's transforms before the move adds to them.
     const sf = samples.some(([s]) => s[2] || s[3]) ? surface(el, place) : null;
+    // A zero translate added under the move gives it a base other than `none` and adds no displacement: WebKit paints
+    // a translate added to `none` farther from the box than it places it, and one added to `0px 0px` where it places it.
+    // With the move's timing, held at its first frame as one of the move's parts, it lasts until the module ends the
+    // move, applies wherever something seeks every animation the element has, and, played or finished by something
+    // else, ends no earlier than the move. It never fills past its end, so it never takes an older animation's place.
+    const base = el.animate([{ translate: '0px 0px' }, { translate: '0px 0px' }], { ...timing, composite: 'add' });
+    base.id = 'exact-layout-base';
+    base.pause();
+    parts.push(base);
     const animation = el.animate(moved, { ...timing, composite: 'add' });
+    animation.id = 'exact-layout-move';
     if (sf) {
       const size = ([, , dw, dh]) => [Math.max(0, w + dw), Math.max(0, h + dh)];
       sf.hide = el.animate([CLEAR, CLEAR], timing);
@@ -428,7 +443,9 @@ function createPresence(root) {
     }
     const f = { animation, parts, surface: sf, d, v, config };
     flips.set(el, f);
-    animation.finished.then(() => { if (flips.get(el) === f) stop(el); }, () => {});
+    // A move that finishes or is cancelled takes its parts with it
+    const end = () => { if (flips.get(el) === f) stop(el); };
+    animation.finished.then(end, end);
   }
 
   return {
@@ -463,6 +480,8 @@ function createPresence(root) {
       const still = stillBatch = changesNoTree(batch);
       if (batch.presenceSnap) { for (const el of tracked) stop(el); }
       else if (!still) {
+        // Before any box is read, so that none is read in a box a move that shows nothing more still contains it in
+        retire();
         const gains = (batch.ops ?? []).filter(op => op.op === 'style' && op.css?.includes(LAYOUT)).map(op => views.get(op.id));
         for (const el of new Set([...tracked, ...gains])) {
           // (A hidden element has no box to move from, though its computed size stays what was written)

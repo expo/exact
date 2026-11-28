@@ -7,6 +7,7 @@ fn types(text: &str, url: &str) -> Vec<&'static str> {
     let lifts = Lifts::default();
     lifts.held.set(Some(Press { seat: 1, serial: 2 }));
     let lift = Lift {
+        id: 7,
         text: text.into(),
         url: url.into(),
         files: Vec::new(),
@@ -16,10 +17,44 @@ fn types(text: &str, url: &str) -> Vec<&'static str> {
         hotspot: (0., 0.),
     };
     assert!((lifts.lifter().lift)(lift), "a held press takes the lift");
-    let Some(Command::Lift { offers, .. }) = lifts.take() else {
+    let Some(Command::Lift { offers, lift, .. }) = lifts.take() else {
         panic!("the lift waits to go");
     };
+    assert_eq!(lift, 7, "the lift goes by the presenter's number");
     offers.iter().map(|(mime, _)| *mime).collect()
+}
+
+/// LLP 1094.000 D16: Wayland's `enter` names an offer, not its source, so
+/// the window knows its own lift's offer by the lift's own type, unique in
+/// and among processes: another client's offer, an enter before the lift's
+/// own, or another lift's, is no lift's.
+#[test]
+fn the_windows_own_lift_is_known_by_its_own_type_alone() {
+    let (first, second) = (own_type(), own_type());
+    assert_ne!(first, second);
+    let pid = std::process::id();
+    assert!(
+        first.starts_with(&format!("application/x-exact-lift-{pid}-")),
+        "{first}"
+    );
+    let offer = |types: &[&str]| types.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    let waiting = [first.as_str(), second.as_str()];
+    let foreign = offer(&[TEXTS[0], URI_LIST]);
+    assert_eq!(
+        offered(waiting.into_iter(), &foreign),
+        None,
+        "another client's drag"
+    );
+    let another_process = offer(&[TEXTS[0], &format!("application/x-exact-lift-{}-0", pid + 1)]);
+    assert_eq!(
+        offered(waiting.into_iter(), &another_process),
+        None,
+        "another Exact app's"
+    );
+    assert_eq!(
+        offered(waiting.into_iter(), &offer(&[TEXTS[0], &second])),
+        Some(1)
+    );
 }
 
 #[test]
@@ -40,6 +75,7 @@ fn a_lift_offers_its_text_and_its_link_by_their_own_types() {
 fn a_lift_with_no_left_press_held_is_declined() {
     let lifts = Lifts::default();
     let lift = Lift {
+        id: 7,
         text: "Fuji".into(),
         url: String::new(),
         files: Vec::new(),

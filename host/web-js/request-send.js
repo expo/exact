@@ -1,4 +1,5 @@
 import { counted, longPollEnded, longPollReplied, trackAnswer, Open } from "./held.js";
+import { rt } from "./rt-link.js";
 import { failureCode, failureReason } from "./shape.js";
 
 export function sendRequest(t, land, out, data, inflight, say) {
@@ -30,9 +31,14 @@ export function sendRequest(t, land, out, data, inflight, say) {
       done({ streamed: ms }, true);
     };
     const open = () => {
-      t.ctl = new AbortController(); t.ctl.forced = t.forced; t.ctl.recount = () => counted(t, inflight); t.ctl.active = () => t.held() && !t.r?.gone; t.ctl.resource = !!t.r; t.ctl.owner = t.r; t.ctl.ticket = t.id; t.ctl.streamName = t.name; t.messages = t.coalesced = 0; Open.add(t); // `resource`: a socket it owns takes its mapper's replies (ts-stream.js); a Rust source's knows it by `owner` and `ticket` (rust-data.js)
+      let settled = false;
+      const settle = (o, more) => { if (!more) { if (settled) return; settled = true; } done(o, more); };
+      t.ctl = new AbortController(); t.ctl.clock = rt; t.ctl.forced = t.forced; t.ctl.recount = () => counted(t, inflight); t.ctl.active = () => t.held() && !t.r?.gone; t.ctl.resource = !!t.r; t.ctl.owner = t.r; t.ctl.ticket = t.id; t.ctl.streamName = t.name; t.messages = t.coalesced = 0; Open.add(t); // `resource`: a socket it owns takes its mapper's replies (ts-stream.js); a Rust source's knows it by `owner` and `ticket` (rust-data.js)
       t.ctl.replied = () => { if (t.waiting) { t.waiting = false; counted(t, inflight); } longPollReplied(t); }; // a long poll's reply of any kind (LLP 1016.000 D8 on D9): out of the clocks' count, held, a reply for `clock held`
-      (t.stream ? t.stream(o => done(o, true), t.ctl) : data.fetch(t.req, streamed, t.ctl)).then(done, failed);
+      t.ctl.fixtureOpened = () => { if (t.waiting) { t.waiting = false; counted(t, inflight); } }; // an `answer stream` fixture opened with parked rows (LLP 1103): unblocks `clock data` while keeping `pending(r)` true until first mapped value
+      t.ctl.finishFixture = o => settle(o, false); // synchronous virtual-clock terminal delivery so later timers in the same jump see the outcome
+      t.ctl.asyncMapper = p => { if (p && typeof p.then === 'function') { inflight.n++; p.finally(() => { inflight.n--; }); } }; // pause virtual clock jumps until an async stream mapper settles and commits
+      (t.stream ? t.stream(o => settle(o, true), t.ctl) : data.fetch(t.req, streamed, t.ctl)).then(o => settle(o, false), e => settle({ failed: 1, message: String(e?.message ?? e) }, false));
     };
     if (t.stream || t.req?.stream || t.req?.cancel) open();
     else if (t.req) data.fetch(t.req, undefined, { active: () => t.held() && !t.r?.gone }).then(done, failed);

@@ -1223,6 +1223,27 @@ impl<D: DataSource> Runner<D> {
             held: request.is_held(),
             long_poll: request.stream && request.long_poll.is_some(),
             replied: false,
+            fixture_opened: false,
+            stream_meta: (request.stream
+                && !request.upload_progress
+                && request.long_poll.is_none()
+                && request.listen.is_none())
+            .then(|| {
+                Box::new(super::advance::stream_fixtures::StreamReqMeta {
+                    url: request.url.clone(),
+                    is_head: request.method.eq_ignore_ascii_case("HEAD"),
+                    stream_open: request.stream_open,
+                    bytes: request.bytes,
+                    idle_timeout_ms: request.idle_timeout_ms,
+                    max_response_bytes: match request.http {
+                        crate::HttpScheduling::Independent { max_response_bytes } => {
+                            max_response_bytes as usize
+                        }
+                        _ => 64 * 1024 * 1024,
+                    },
+                    fixture: false,
+                })
+            }),
             reask_at: None,
             launch,
             reasks: 0,

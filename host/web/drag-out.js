@@ -3,8 +3,8 @@
 // admitted data, read from its `data-` attributes: `text` as `text/plain`, `url` and then each shipped file's
 // absolute URL as `text/uri-list`, an image file as `text/html`, and the first file, by its admitted name, as Chrome's `DownloadURL`,
 // which Chrome on macOS and Windows saves as a file where the drop lands in the Finder or Explorer; elsewhere the
-// receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
-// `drag.js`; the wasm target's glue loads it when a node first turns draggable.
+// receiver reads the URL. A node that carries nothing begins no drag. The node hears the drag's start and end (D16,
+// `follow`). The JS target loads it from `drag.js`; the wasm target's glue loads it when a node first turns draggable.
 
 import { DRAG_FIELDS, downForDrag, dragPathFrom, observeDragInput, pressedAt } from './drag-input.js';
 
@@ -214,10 +214,17 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
   const given = new WeakMap();
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
+    // The browser runs one drag at a time, so a new one ends the following of any whose end never came
+    if (session) end(session);
     const node = decide(event, owns, downForDrag(presses, event), inPage, presses);
     const data = readPayload(event, node, root.baseURI ?? globalThis.document?.baseURI);
     give(event, node, data);
-    if (data) given.set(event, { node, data });
+    if (!data) return;
+    given.set(event, { node, data });
+    // Followed from here, as a listener at the node may stop the event's propagation; a node whose target binds
+    // `dragstart` or `dragend` is marked so
+    const source = event.composedPath?.()[0] ?? event.target;
+    if (node.exactDragEvents) follow(event, node, source, (el) => inPage(el) && owns(el));
   }, { capture: true, signal });
   // Given again where the event reaches the document, over what a listener at the node wrote: the drag carries the
   // data the node declared as it began. A listener that took the node or the browser's source out of the page, into
@@ -233,6 +240,72 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
     if (inPage(payload.node) && inPage(source) && owns(payload.node)) give(event, payload.node, payload.data);
     else event.preventDefault();
   }, { signal });
+  // The page's own hover and drop of the drag come after its source's `dragstart`, so the start goes first if its timer
+  // has not run: the window's capture listeners run before any in the document.
+  const view = root.defaultView ?? globalThis;
+  for (const type of ['dragenter', 'drop']) {
+    view.addEventListener(type, (event) => { if (session && event.isTrusted !== false) begun(session); }, { capture: true, signal });
+  }
+  root.addEventListener('dragend', (event) => { if (session) ended(session, event); }, { capture: true, signal });
+}
+
+/** The drag a node of the app began (D16), `{ node, start, source, at, live, started }`: the node, the browser's
+ * `dragstart`, the element the browser began it at, the point in the node's content box it began at, whether the node is
+ * still the app's and in the page, and whether it has heard its `dragstart`. */
+let session = null;
+
+/** Follows the drag `node` began at `source` from `start`. The node hears `dragstart` once the event's dispatch has
+ * ended uncancelled, which a zero-delay timer reads after every listener ran, or sooner, before the drag's first event
+ * in the page; then its `dragend` with the browser's `dropEffect`, once that event's dispatch is over. Neither changes
+ * what the drag carries. The page's own drop of the drag is delivered within its event, before the browser's
+ * `dragend`: the drag carries no file item, the one kind a drop waits for (drag-in.js `receive`). */
+function follow(start, node, source, live) {
+  const s = session = { node, start, source, at: offset(node, start), live, started: false };
+  setTimeout(() => begun(s));
+  // WebKit sends a source removed during the drag its `dragend` alone
+  s.onEnd = (event) => ended(s, event);
+  source.addEventListener('dragend', s.onEnd, true);
+}
+
+/** The node hears `dragstart` once, if the browser began the drag: no listener cancelled its start. */
+function begun(s) {
+  if (s.started || session !== s) return;
+  if (s.start.defaultPrevented) return end(s);
+  s.started = true;
+  tell(s, 'dragstart', 'none', s.start);
+}
+
+function ended(s, event) {
+  if (session !== s || event.isTrusted === false) return;
+  begun(s);
+  if (session !== s) return;
+  end(s);
+  // What the drag did and the keys held are read now, and told once the browser's dispatch is over
+  const effect = event.dataTransfer?.dropEffect === 'copy' ? 'copy' : 'none';
+  const keys = { shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey };
+  setTimeout(() => tell(s, 'dragend', effect, keys));
+}
+
+function end(s) {
+  if (session === s) session = null;
+  s.source.removeEventListener('dragend', s.onEnd, true);
+}
+
+/** Tells the node the drag's `kind`, unless it is gone from the page or the app. */
+function tell(s, kind, effect, event) {
+  if (!s.live(s.node)) return;
+  const detail = { x: s.at[0], y: s.at[1], effect, shift: event.shiftKey, ctrl: event.ctrlKey, alt: event.altKey, meta: event.metaKey };
+  s.node.dispatchEvent(new CustomEvent(`exact${kind}`, { detail }));
+}
+
+/** `event`'s point from `el`'s content box, in its own CSS px with a scale undone, as a pointer's record reads it. */
+function offset(el, event) {
+  const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+  const sx = el.offsetWidth ? r.width / el.offsetWidth : 1, sy = el.offsetHeight ? r.height / el.offsetHeight : 1;
+  return [
+    (event.clientX - r.left) / (sx || 1) - parseFloat(cs.borderLeftWidth) - parseFloat(cs.paddingLeft),
+    (event.clientY - r.top) / (sy || 1) - parseFloat(cs.borderTopWidth) - parseFloat(cs.paddingTop),
+  ];
 }
 
 // Loaded as a page script by the wasm target's glue (`loadAfterPaint`), which reads what it registers.

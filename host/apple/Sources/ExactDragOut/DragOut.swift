@@ -20,7 +20,9 @@ final class DragOutHost: DragOutCapability {
 
 /// One `UIDragInteraction` on each node carrying `draggable=true`, keyed by
 /// node id, as `ContextMenuHost` keys its menus. The items are read from the
-/// node's admitted props when a lift begins, and nothing runs in the app.
+/// node's admitted props when a lift begins, and nothing runs in the app
+/// until UIKit's callback returns: then each node that joined the drag hears
+/// `dragstart`, and at the drag's end `dragend` (D16).
 final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     private weak var presenter: Presenter?
     private var interactions: [UInt32: UIDragInteraction] = [:]
@@ -33,6 +35,17 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     /// A hash of the `url` value each draggable node last had journaled as
     /// unreadable, kept only while the node is in the tree.
     private var unreadable: [UInt32: Int] = [:]
+    /// The drags under way, by session: the nodes that joined each, with the
+    /// point in each node's box where it joined, and the app's own drop side's
+    /// view of it (D16).
+    private var drags: [ObjectIdentifier: Drag] = [:]
+    private final class Drag {
+        var own: OwnDrag?
+        var sources: [(node: DragItems.Lifted, line: String)] = []
+    }
+    /// The node a tap adds to a drag, and where in its box, from UIKit's
+    /// question until it adds the node's items.
+    private var adding: (node: DragItems.Lifted, line: String)?
 
     init(_ presenter: Presenter) { self.presenter = presenter }
 
@@ -49,6 +62,11 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
             }
         }
         unreadable = unreadable.filter { draggable.contains($0.key) }
+        // A drag's source keeps its interaction while the drag runs, whose end it hears through it, though it no
+        // longer lifts (`lifts`)
+        for source in drags.values.flatMap(\.sources) where wanted[source.node.id] == nil {
+            if let view = live(source.node), interactions[view.id]?.view === view { wanted[view.id] = view }
+        }
         for (id, interaction) in interactions where wanted[id] == nil || interaction.view !== wanted[id] {
             if let view = interaction.view { detach(interaction, from: view) } else { companions[ObjectIdentifier(interaction)] = nil }
             interactions[id] = nil
@@ -82,6 +100,8 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
 
     func reset() {
         unreadable.removeAll()
+        drags.removeAll()
+        adding = nil
         for (_, interaction) in interactions {
             if let view = interaction.view { detach(interaction, from: view) } else { companions[ObjectIdentifier(interaction)] = nil }
         }
@@ -179,7 +199,81 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         let carried = session.items.contains { item in
             (item.localObject as? DragItems.Lifted).map { $0.id == node.id && $0.incarnation == node.incarnation } ?? false
         }
-        return carried ? [] : DragItems.items(of: node, in: presenter?.session)
+        guard !carried else { return [] }
+        adding = (DragItems.Lifted(node), Self.line(node, at: view.convert(point, to: node)))
+        return DragItems.items(of: node, in: presenter?.session)
+    }
+
+    // MARK: The drag's start and end (D16)
+
+    /// The lifted node joins the drag at the session's touch; it hears its
+    /// `dragstart` once this returns, or as the app's own drop side first
+    /// hears the drag.
+    func dragInteraction(_ interaction: UIDragInteraction, sessionWillBegin session: UIDragSession) {
+        let drag = Drag()
+        // One source a node, whose items are several when it carries several values
+        var nodes: [DragItems.Lifted] = []
+        for case let node as DragItems.Lifted in session.items.map(\.localObject)
+        where !nodes.contains(where: { $0.id == node.id && $0.incarnation == node.incarnation }) { nodes.append(node) }
+        let lifted = nodes.compactMap { node in live(node).map { (node, Self.line($0, at: session.location(in: $0))) } }
+        drag.sources = lifted
+        let own = OwnDrag { [weak self] in
+            for source in lifted { self?.tell(source.0, 69, source.1) }
+        }
+        drag.own = own
+        drags[ObjectIdentifier(session)] = drag
+        session.localContext = own
+    }
+
+    /// A tapped node joins the drag: it hears its `dragstart` once this
+    /// returns, after the drag's own.
+    func dragInteraction(_ interaction: UIDragInteraction, session: UIDragSession, willAdd items: [UIDragItem], for addingInteraction: UIDragInteraction) {
+        guard let drag = drags[ObjectIdentifier(session)], let adding,
+              items.contains(where: { ($0.localObject as? DragItems.Lifted).map { $0.id == adding.node.id && $0.incarnation == adding.node.incarnation } ?? false })
+        else { return }
+        self.adding = nil
+        drag.sources.append(adding)
+        DispatchQueue.main.async { [weak self] in
+            drag.own?.starting()
+            self?.tell(adding.node, 69, adding.line)
+        }
+    }
+
+    /// A drop never moves anything of the app's: a destination takes a copy.
+    func dragInteraction(_ interaction: UIDragInteraction, sessionAllowsMoveOperation session: UIDragSession) -> Bool { false }
+
+    /// Each node that joined the drag, still mounted as that node, hears
+    /// `dragend` once this returns, after the app's own drop of it lands: a
+    /// copy, or none for a cancelled or refused drag. The drag's record goes
+    /// first, so a `dragend` action that lifts again begins another.
+    func dragInteraction(_ interaction: UIDragInteraction, session: UIDragSession, didEndWith operation: UIDropOperation) {
+        guard let drag = drags.removeValue(forKey: ObjectIdentifier(session)) else { return }
+        DispatchQueue.main.async { [weak self] in
+            drag.own?.ended(taken: operation == .copy) { taken in
+                guard let self else { return }
+                for source in drag.sources { self.tell(source.node, 70, source.line + "\n" + (taken ? "copy" : "none")) }
+                self.sync()
+            }
+        }
+    }
+
+    /// `node`'s view while it is still that node, mounted.
+    private func live(_ node: DragItems.Lifted) -> NodeView? {
+        guard let view = presenter?.views[node.id], view === node.view, view.incarnation == node.incarnation else { return nil }
+        return view
+    }
+
+    /// `node` hears an event of `kind`, its point line `line`, if it is still that node.
+    private func tell(_ node: DragItems.Lifted, _ kind: UInt32, _ line: String) {
+        guard let view = live(node) else { return }
+        presenter?.clipboard(view.id, kind, line)
+    }
+
+    /// A `DragEvent`'s point line at `point` in `node`: from its content box,
+    /// with no modifier keys, which a drag session does not report.
+    private static func line(_ node: NodeView, at point: CGPoint) -> String {
+        let box = node.contentBox()
+        return "\(Double(point.x - box.minX)),\(Double(point.y - box.minY))"
     }
 
     /// The node from whose view UIKit shows a context menu (D4). A request for

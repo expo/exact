@@ -1230,8 +1230,9 @@ fn every_render_prepares_retained_assets_before_surface_readiness() {
         fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
             Ok(())
         }
-        fn device_lost(&mut self) {
+        fn device_lost(&mut self) -> bool {
             self.prepared = false;
+            true
         }
         fn prepare_assets(&mut self, _: &wgpu::Device, _: &wgpu::Queue, _: wgpu::TextureFormat) {
             self.prepared = true;

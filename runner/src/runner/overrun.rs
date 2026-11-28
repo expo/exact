@@ -125,6 +125,8 @@ impl<D: DataSource> Runner<D> {
             held: false,
             long_poll: false,
             replied: false,
+            fixture_opened: false,
+            stream_meta: None,
             reask_at: Some(at),
             launch: self.launch.contains(&i),
             reasks,

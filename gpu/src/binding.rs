@@ -119,6 +119,7 @@ impl Module {
             self.error = "no such canvas".into();
             return false;
         };
+        inst.last_size = Some((width, height));
         if inst.surface.size(width, height) {
             inst.invalidate();
         }

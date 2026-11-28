@@ -616,10 +616,11 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         if shown === source {
             if owner.liftsCell == nil { owner.liftsCell = presenter?.groupedLists?.cell(carrying: source) != nil }
             if owner.liftsCell == true {
-                guard let cell = presenter?.groupedLists?.carrier(of: source), cell.window != nil, source.isDescendant(of: cell),
-                      let target = LiftTarget.target(cell) else { return nil }
+                guard let cell = presenter?.groupedLists?.carrier(of: source), cell.window != nil, source.isDescendant(of: cell) else { return nil }
                 let parameters = UIPreviewParameters()
-                parameters.visiblePath = LiftTarget.rounded(cell)
+                // Its shape as the cell shows now: a return finds it as it is, resized or out of the sidebar
+                parameters.visiblePath = presenter?.groupedLists?.liftShape(of: source)
+                guard let target = LiftTarget.target(cell, around: parameters.visiblePath?.bounds) else { return nil }
                 return UITargetedPreview(view: cell, parameters: parameters, target: target)
             }
         }

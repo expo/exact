@@ -220,4 +220,143 @@ test('unarranged accepts expected resource refusals and 4xx/5xx answer fetch fix
   });
   expect(okOnly.faults).toEqual({ 'https://api.test/ok': 0 });
   expect(unarranged(base, okOnly)).toEqual(['resource feed was refused once (HTTP 500)']);
+
+  // Stream fixtures key separately from fetch fixtures on the same prefix.
+  const mixed = await failureMark({
+    state: async () => ({
+      failures: {},
+      failed: {},
+      faults: [
+        { prefix: 'https://api.test/chat', hits: 1, failureHits: 0, response: { status: 200 } },
+        { family: 'stream', prefix: 'https://api.test/chat', method: 'POST', hits: 1, failureHits: 1, stream: { status: 200, mode: 'events', steps: [] } },
+      ],
+    }),
+    op: async () => ({ next: 9 }),
+  });
+  expect(mixed.faults).toEqual({
+    'https://api.test/chat': 0,
+    '["stream","https://api.test/chat","POST"]': 1,
+  });
 });
+
+engineTest.chromium('authored answer stream parks chunks off clock settle and supports mid-stream actions without a server (#2087)', async () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const dir = mkdtempSync(join(root, 'target/answer-stream-e2e-'));
+  const dist = join(dir, 'dist'), file = join(dir, 'app.test.contract');
+  const server = createServer((req, res) => serveBuildTree(dist, req, res));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const appOrigin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    writeFileSync(join(dir, 'app.json'), JSON.stringify({
+      name: 'Stream Fixture',
+      app: { id: 'test.stream-fixture', name: 'Stream Fixture' },
+      host: { web: {} },
+      rust: false,
+    }));
+    writeFileSync(join(dir, 'app.contract'), `shape ChatState
+  phase: string
+  output: string
+component App
+  state runId = 1
+  state active = true
+  resource chat = chatStream(runId, active) as shape ChatState
+  action stop
+    active = false
+  action restart
+    active = true
+    runId = runId + 1
+  view
+    column
+      if failed(chat)
+        text "failed" testId="phase"
+        text "" testId="output"
+      else
+        text chat.phase testId="phase"
+        text chat.output testId="output"
+      button "Stop" testId="stop" press=stop
+      button "Restart" testId="restart" press=restart
+`);
+    writeFileSync(join(dir, 'app.ts'), `export const grants = 'net.fetch https://stream-fixture.invalid';
+let acc = '';
+export async function answer(_source: string, args: unknown[]) {
+  const active = args[1] as boolean;
+  if (!active) return { phase: 'stopped', output: acc };
+  acc = '';
+  let head = '';
+  return fetch('https://stream-fixture.invalid/chat', {
+    method: 'POST',
+    exactStreamOpen: true,
+    exactIdleTimeout: 500,
+    exactStream(ev: any) {
+      if (ev.type === 'open') {
+        head = 'open:' + ev.status + ':' + (ev.headers.get('x-stream') ?? '');
+        return { phase: 'streaming', output: head + '|' + acc };
+      }
+      if (ev.type === 'chunk') {
+        const parsed = JSON.parse(ev.data);
+        acc += parsed.text;
+        return { phase: 'streaming', output: head + '|' + acc };
+      }
+      if (ev.type === 'error') {
+        const phase = ev.message === 'the event stream ended' ? 'done' : 'error:' + ev.message;
+        return { phase, output: head + '|' + acc };
+      }
+      return { phase: 'streaming', output: head + '|' + acc };
+    },
+  });
+}
+`);
+    writeFileSync(file, `test "stop mid-stream before finish"
+  answer stream "https://stream-fixture.invalid/chat" method POST with 200 header "x-stream" "s1"
+    event {"text":"Hello"} name "chunk" after 0
+    event {"text":" world"} name "chunk" after 200
+    end after 400
+  expect text "output" == "open:200:s1|Hello"
+  expect text "phase" == "streaming"
+  clock settle
+  expect text "output" == "open:200:s1|Hello"
+  expect text "phase" == "streaming"
+  tap "stop"
+  clock data
+  expect text "phase" == "stopped"
+  clock +500
+  expect text "output" == "Hello"
+  expect text "phase" == "stopped"
+  expect no failures
+test "step virtual clock through chunks, reload, and mid-stream fail"
+  answer stream "https://stream-fixture.invalid/chat" method POST with 200
+    event {"text":"A"} name "chunk" after 0
+    event {"text":"B"} name "chunk" after 150
+    end after 300
+  expect text "output" == "open:200:|A"
+  expect text "phase" == "streaming"
+  clock +150
+  expect text "output" == "open:200:|AB"
+  expect text "phase" == "streaming"
+  clock +150
+  expect text "phase" == "done"
+  reload
+  expect text "output" == "open:200:|A"
+  answer stream "https://stream-fixture.invalid/chat" method POST with 200
+    event {"text":"X"} name "chunk" after 0
+    fail "connection reset" after 50
+  tap "restart"
+  clock data
+  expect text "output" == "open:200:|X"
+  clock +50
+  expect text "phase" == "error:connection reset"
+  expect no failures
+`);
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'stream-fixture', '--out', dist, '--render', 'none'], {
+      cwd: root,
+      env: { ...process.env, EXACT_APP_DIR: dir },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect(status, stdout + stderr).toBe(0);
+    const result = await runTests({ host: 'web', app: dir, file, webDist: dist, url: `${appOrigin}/` });
+    expect(result.results.map(t => t.failures)).toEqual([[], []]);
+    expect([result.passed, result.failed]).toEqual([2, 0]);
+  } finally { server.close(); rmSync(dir, { recursive: true, force: true }); }
+}, 180_000);

@@ -1260,9 +1260,37 @@ Development render servers apply the table before fetching request-time data.
 A web launch revalidates only matching checkpoint answers through the real source;
 unrelated rendered answers stay settled.
 The real source parses the response, so an HTTP error status is a response,
-where `fail fetch` is a rejected connection. These fixtures cover buffered HTTP
+where `fail fetch` is a rejected connection. `answer fetch` covers buffered HTTP
 requests, including a worker's; streams, long polls, redirects, `exactBodyTo`
 and response files are not supported.
+
+`answer stream "<prefix>" [method POST] with <status> [header "<name>" "<value>"]…`
+answers matching HTTP(S) `exactStream` requests (event streams and byte streams)
+without opening the network (LLP 1103). Like `answer fetch`, it may lead a test
+or the file, or run as a step; `pass stream "<prefix>"` disarms all stream
+fixtures at that prefix. Stream fixtures live in their own namespace, so an
+`answer fetch` and an `answer stream` can share a prefix without colliding.
+
+For a streaming 2xx status (200–299 except 204 and 205), indented lines declare
+the schedule, with monotonically non-decreasing cumulative `after <ms>` offsets
+from stream open (default `after 0`):
+
+- `event <string | JSON> [name "<name>"] [id "<id>"] [after <ms>]` delivers an SSE event (`content-type: text/event-stream` by default).
+- `bytes <string | base64 "<b64>"> [after <ms>]` delivers a byte chunk (`content-type: application/octet-stream` by default; cannot mix with `event` rows).
+- `end [after <ms>]` ends the stream cleanly (HTTP EOF).
+- `fail "<message>" [after <ms>]` ends the stream with a network error and counts as an arranged failure for `expect no failures`.
+
+Without a terminal `end` or `fail`, the stream stays open after its last row so
+the test can act mid-stream (such as pressing Stop or running `drop stream`).
+`after 0` rows and `exactStreamOpen` land on `clock data`; later rows and
+virtual `exactIdleTimeout` deadlines do not extend `clock settle` on their own
+(advance virtual time with `clock +<ms>`, though any clock advance past their
+offset—including a `clock settle` moving for an unrelated animation or data
+timer—delivers them). For a non-2xx status (400–599) or 204, 205 or 304,
+the inline form `answer stream "<prefix>" with <status> [header …] [<body>] [after <ms>]`
+delivers a terminal buffered HTTP response without `exactStreamOpen`. Long polls,
+WebSockets, upload progress streams, `exactBodyFrom` and `exactBodyTo` are
+outside `answer stream`.
 
 `answer source pairing with {"phase": "code", "code": "123456"}` supplies a typed
 answer in `contract verify`. It applies to every argument list for that source.
@@ -2302,7 +2330,7 @@ host.
 | Zero or one `WheelEvent` (the action takes it or leaves it) | `wheel` |
 | Zero or one `HistorySwipeEvent` (the action takes it or leaves it) | `historyswipe`, on the navigation root |
 | Zero or one `ScrollDragEvent` (the action takes it or leaves it) | `scrolldragend`: the release velocity and where the scroll will stop (below) |
-| Zero or one `DragEvent` (the action takes it or leaves it) | `drop`, `dragenter`, `dragleave` |
+| Zero or one `DragEvent` (the action takes it or leaves it) | `drop`, `dragenter`, `dragleave`, `dragstart`, `dragend` |
 | Zero or one `ClipboardEvent` (the action takes it or leaves it) | `copy`, `cut`, `paste` ([clipboard](#clipboard)) |
 | Zero or one `FocusEvent` (the action takes it or leaves it) | `focusin`, `focusout`: `target` is the focused element's `id` (or `""`); `relatedTarget` is `some(id)` for the other element or `none` |
 | Zero or one `Selection` (the action takes it or leaves it) | `selectionchange`, on a `text` ([text selection](#text-selection)) |
@@ -2631,7 +2659,8 @@ a browser, another Exact app) onto the innermost node that declares it, when
 the drag carries files, plain text or a link and its source allows a copy
 (LLP 1094.001): its `DragEvent` is `offsetX`, `offsetY`, `files` (a
 `string[]` of `doc:` handles minted as a picker's are, LLP 1069.010 D1,
-readable under `fs.read doc:/`), `text`, `url` and the modifiers. `text` is
+readable under `fs.read doc:/`), `text`, `url`, `dropEffect` (`"copy"`, the
+operation Exact takes) and the modifiers. `text` is
 the drag's plain text, its items' joined by line breaks; `url` is its first
 link that is not a file (a `file:` URL is a file), of any scheme, so check
 it before following it. Each is `""` when the drag has none, so a link
@@ -2686,8 +2715,8 @@ the box or is cancelled. A drop a node takes sends `drop` and no
 an ancestor's overlay included, since it is the app's state. A drop no node
 takes, one a field takes, and one that carried nothing that arrived send
 `dragleave` instead. Their `DragEvent` has the point and the modifiers and
-no data (`files` `[]`, `text` and `url` `""`), which the DOM keeps from a page
-until the drop. They are heard whether or not a `drop` will take the drag, so
+no data (`files` `[]`, `text` and `url` `""`, `dropEffect` `"none"`), which
+the DOM keeps from a page until the drop. They are heard whether or not a `drop` will take the drag, so
 an overlay can say where it would land:
 
 ```text
@@ -2735,7 +2764,17 @@ destination asks for it, which drops SQLite's locks on it
 so drag a copy made with `storage.fs` while the database is closed, or an
 export of its rows. The data is declared on the node, not set in
 a `dragstart` listener, because every platform takes a drag's items as it
-begins; `dragstart`, `drag` and `dragend` are refused for now
+begins. `dragstart` and `dragend` on the draggable node (LLP 1094.000 D16)
+tell it, after the platform began the drag and once it ended, for the
+node's own look, a card that dims while it is dragged: they change nothing
+the drag carries, which a change to `dataTransfer` gives the next drag.
+Their `DragEvent` has the point in the node where the drag began, the keys
+held, and no data; at `dragend` its `dropEffect` is `"copy"` when a
+destination took the drag, and `"none"` when it was cancelled or refused,
+the app's own `drop` counting once it is delivered. A drag the app drops on
+itself hears `dragstart`, the drop's `dragenter` and `drop`, then `dragend`,
+in that order. Either on a node that never drags is refused
+(`lower-drag-event-source`), and `drag`, HTML's source motion, everywhere
 (`lower-handler-later`). The runner admits each file, name and `url` for the
 host and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
 carries ([recipe](recipes/drag-out.md)). On iOS, iPadOS and Android a press

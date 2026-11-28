@@ -40,6 +40,11 @@ class DragOutTest {
             lateinit var saved: File
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun journal(line: String) { lines += line }
+            /** The lifts the platform began, and those it began no drag for (LLP 1094.000 D16). */
+            val began = ArrayList<Int>()
+            val refused = ArrayList<Int>()
+            @JvmStatic @Implementation fun liftBegan(lift: Int) { began += lift }
+            @JvmStatic @Implementation fun liftEnded(lift: Int, taken: Boolean) { if (!taken) refused += lift }
             @JvmStatic @Implementation fun assetRoot(): String? = null
             @JvmStatic @Implementation fun openApp(path: String): android.os.ParcelFileDescriptor? =
                 if (path == "app:/data/saved.txt" && saved.isFile) android.os.ParcelFileDescriptor.open(saved, android.os.ParcelFileDescriptor.MODE_READ_ONLY) else null
@@ -51,10 +56,10 @@ class DragOutTest {
     @Test fun theRequestReadsAsThePresenterWritesIt() {
         val words = intArrayOf(7, 10, 20, 30, 40, 15, 25, 1, 4, 1768584518, 21, 1886680168, 791624307, 1835104357, 778398832,
             795701091, 49, 2, 12, 1702064993, 1630499700, 1735290926, 5, 1852845665, 103, 15, 980447329, 1952539695, 778186593,
-            6710384, 9, 1702129486, 1685073523, 102)
+            6710384, 9, 1702129486, 1685073523, 102, 3)
         val ask = DragOut.read(intArrayOf(99) + words, 1)
         assertEquals(DragOut.Ask(7, Rect(10, 20, 40, 60), Point(15, 25), true, "Fuji", "https://example.com/1",
-            listOf(DragOut.Dragged("assets/a.png", "a.png"), DragOut.Dragged("app:/data/b.pdf", "Notes.pdf"))), ask)
+            listOf(DragOut.Dragged("assets/a.png", "a.png"), DragOut.Dragged("app:/data/b.pdf", "Notes.pdf")), 3), ask)
     }
 
     @Test fun aShippedFileAnAppFileTheUrlAndTheTextAreItsItems() {
@@ -121,7 +126,7 @@ class DragOutTest {
         val view = View(context)
         val clip = DragOut.clip(context, "Mount Fuji", "", emptyList())!!
         val activity = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java).get()
-        val start = { DragOut.start(activity, view, Rect(0, 0, 10, 10), Point(5, 5), clip) }
+        val start = { DragOut.start(activity, view, Rect(0, 0, 10, 10), Point(5, 5), clip, DragOut.Lift(1, activity)) }
         val notBegun = "drag: not begun: the finger held for it lifted before its shadow was drawn"
         val tried = "drag: the platform began no drag: another drag is under way, or the view left its window"
         fun touch(action: Int, at: Long, pointers: Int = 1) {
@@ -167,20 +172,24 @@ class DragOutTest {
         val clip = DragOut.clip(context, "Mount Fuji", "", emptyList())!!
         fun touch(action: Int, at: Long) = DragOut.touched(android.view.MotionEvent.obtain(at, at, action, 0f, 0f, 0))
 
+        Journal.began.clear(); Journal.refused.clear()
         touch(android.view.MotionEvent.ACTION_DOWN, 1); DragOut.held(1)
-        DragOut.start(activity, view, Rect(0, 0, view.width, view.height), Point(5, 5), clip)
+        DragOut.start(activity, view, Rect(0, 0, view.width, view.height), Point(5, 5), clip, DragOut.Lift(1, activity))
         touch(android.view.MotionEvent.ACTION_UP, 1); touch(android.view.MotionEvent.ACTION_DOWN, 2)
         HeldCopy.held.removeAt(0)()
         assertEquals(listOf("drag: not begun: the finger held for it lifted before its shadow was drawn"), Journal.lines)
 
         DragOut.held(2)
-        DragOut.start(activity, view, Rect(0, 0, 2560, 1600), Point(5, 5), clip)
+        DragOut.start(activity, view, Rect(0, 0, 2560, 1600), Point(5, 5), clip, DragOut.Lift(2, activity))
         assertTrue(HeldCopy.sizes.last().let { it.x * it.y <= 1024 * 1024 })
+        assertEquals("nothing begun before the copy arrives", emptyList<Int>(), Journal.began)
         HeldCopy.held.removeAt(0)()
         assertEquals("one more line would be a drag not begun", 1, Journal.lines.size)
+        assertEquals("the lift that began is told, once its call returned", listOf(2), Journal.began)
+        assertEquals("the lift whose finger lifted first is told it began no drag", listOf(1), Journal.refused)
 
         // While the window has yet to hear an earlier drag's end, none begins.
-        DragOut.start(activity, view, Rect(0, 0, 10, 10), Point(5, 5), clip) { true }
+        DragOut.start(activity, view, Rect(0, 0, 10, 10), Point(5, 5), clip, DragOut.Lift(3, activity)) { true }
         HeldCopy.held.removeAt(0)()
         assertEquals(DragOut.UNHEARD, Journal.lines.last())
         touch(android.view.MotionEvent.ACTION_UP, 2)

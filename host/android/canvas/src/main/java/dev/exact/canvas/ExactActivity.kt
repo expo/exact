@@ -719,30 +719,16 @@ open class ExactActivity : Activity() {
             }
         }
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(c[4]))
-        val bars = barAppearance(c[5])
-        val hide = bars.hidden.takeIf { it != barsHidden }
-        barsHidden = bars.hidden
-        if (Build.VERSION.SDK_INT < 30) {
-            Legacy.lightBars(window, bars.statusLight, bars.navigationLight)
-            hide?.let { Legacy.hideBars(window, it) }
-            return
-        }
-        val controller = window.insetsController ?: return
-        val status = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-        val navigation = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        controller.setSystemBarsAppearance(
-            (if (bars.statusLight) status else 0) or (if (bars.navigationLight) navigation else 0), status or navigation)
-        // Immersive mode as a hand-built app asks for it: both bars go, and a swipe from an edge shows them over the
-        // page for a moment. Only a change is applied, so a chrome that moves the page does not hide bars the person
-        // has just swiped in.
-        if (hide == true) {
-            controller.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            controller.hide(android.view.WindowInsets.Type.systemBars())
-        } else if (hide == false) controller.show(android.view.WindowInsets.Type.systemBars())
+        val next = barAppearance(c[5])
+        val hide = next.hidden.takeIf { it != bars?.hidden }
+        bars = next
+        applyBarAppearance(window, next, hide)
+        requests.surfaces?.barAppearance(next)
     }
 
-    /** Whether [chrome] last hid the system bars; null before the first. */
-    private var barsHidden: Boolean? = null
+    /** The page's last resolved bar appearance from [chrome]; null before the first chrome update. */
+    internal var bars: BarAppearance? = null
+        private set
 
     /** The device's settings as the host was last told them. */
     private var told: Device? = null

@@ -380,7 +380,7 @@ fn check_tasks(c: &Component) -> Vec<AnalyzeError> {
 
 /// The handler attributes (the web's events, LLP 1005 §3): `press`,
 /// `change`, `input`, `hover`, `focus`, `blur`, `key`, `submit`, `load`, `message`.
-pub const HANDLERS: [&str; 91] = [
+pub const HANDLERS: [&str; 93] = [
     "press",
     "change",
     "input",
@@ -436,10 +436,14 @@ pub const HANDLERS: [&str; 91] = [
     "wheel",
     // DOM's `drop` of files from outside (studio diary R19): each a `doc:`
     // handle in the `DragEvent` its action may take. `dragenter` and
-    // `dragleave` bracket a file drag over the node, with the same record.
+    // `dragleave` bracket a file drag over the node, with the same record,
+    // and `dragstart` and `dragend` a drag of the node itself (LLP 1094.000
+    // D16).
     "drop",
     "dragenter",
     "dragleave",
+    "dragstart",
+    "dragend",
     // A press on an inline atom of a Markdown text or field (LLP 1045.000
     // D7); it may hand its action an `AtomEvent`.
     "atompress",

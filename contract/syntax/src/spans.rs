@@ -187,7 +187,7 @@ record_variants! {
     Step {
         Scroll { target, span }, Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, modifiers, path, span },
         Size { width, height, span }, At { location, span }, Epoch { value, span }, TimeZone { zone, span },
-        Locale { tag, span }, Prefer { name, value, span }, PreferExtension { key, value, span }, Seed { seed, span }, SignedIn { key, account, span }, Secret { name, value, span }, Stored { name, value, window, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, AnswerFetch { prefix, method, response, span }, AnswerSource { source, value, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
+        Locale { tag, span }, Prefer { name, value, span }, PreferExtension { key, value, span }, Seed { seed, span }, SignedIn { key, account, span }, Secret { name, value, span }, Stored { name, value, window, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, AnswerFetch { prefix, method, response, span }, AnswerStream { prefix, method, stream, span }, AnswerSource { source, value, span }, PassFetch { prefix, span }, PassStream { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
         DropStream { prefix, span }, Pick { target, paths, span }, Authorize { cancel, span }, Presence { answer, span }, Ticket { target, answer, span }, Clipboard { target, edit, text, span },
         Clock { arg, span }, Background { ms, span }, Fold { degrees, span }, Rotate { orientation, span }, Reload { span }, Close { span }, Back { span }, Resize { width, height, span }, Screenshot { path, span }, ExpectRefusal { target, span }, ExpectTree { target, present, span }, ExpectDisabled { target, disabled, span }, ExpectFocused { target, span },
         ExpectSample { target, x, y, color, tolerance, span }, ExpectScreenshot { target, reference, span },
@@ -333,8 +333,10 @@ impl Step {
             | Step::BeforeData { span }
             | Step::FailFetch { span, .. }
             | Step::AnswerFetch { span, .. }
+            | Step::AnswerStream { span, .. }
             | Step::AnswerSource { span, .. }
             | Step::PassFetch { span, .. }
+            | Step::PassStream { span, .. }
             | Step::DropStream { span, .. }
             | Step::Request { span, .. }
             | Step::Type { span, .. }

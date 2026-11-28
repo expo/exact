@@ -932,6 +932,10 @@ function apply(batch) {
           syncViewportFit();
           break;
         }
+        case "streamFailure": {
+          globalThis.exact.faults?.countStreamCreditByPrefix?.(op.prefix, op.method ?? null, op.url, !!op.hit, op.failure !== false);
+          break;
+        }
         case "at": {
           // The ops that follow were committed at this clock (a timer's due
           // time inside one advance): what the ops before it started belongs

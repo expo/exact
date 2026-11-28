@@ -87,6 +87,9 @@ pub struct HostLinks<D: DataSource> {
     pub drag: Option<DragHooks<D>>,
     /// The agent API's reads (LLP 1012): `exact_runner::agent::handle`.
     pub inspect: Option<fn(&Runner<D>, &str) -> String>,
+    /// Scripted HTTP stream fixture handoff (`answer stream`, LLP 1103), linked with inspection only.
+    pub stream_fixture:
+        Option<fn(&mut Runner<D>, u64, &[u8]) -> Result<Vec<Timed>, exact_runner::RunnerError>>,
     /// The runner's device capabilities (LLP 1069, linked by use).
     pub device: exact_runner::DeviceLinks<D>,
     /// The page's word on an auth session (LLP 1069.006 D4): `auth.rs`.
@@ -106,6 +109,7 @@ impl<D: DataSource> HostLinks<D> {
     pub const ALL: HostLinks<D> = HostLinks {
         drag: Some(DragHooks::LINKED),
         inspect: Some(exact_runner::agent::handle::<D>),
+        stream_fixture: Some(exact_runner::agent::open_web_stream_fixture::<D>),
         device: exact_runner::DeviceLinks::ALL,
         auth: Some(Host::<D>::auth_linked),
     };
@@ -114,6 +118,7 @@ impl<D: DataSource> HostLinks<D> {
     pub const CORE: HostLinks<D> = HostLinks {
         drag: None,
         inspect: None,
+        stream_fixture: None,
         device: exact_runner::DeviceLinks::CORE,
         auth: None,
     };
@@ -128,6 +133,11 @@ impl<D: DataSource> HostLinks<D> {
             },
             inspect: if linked.inspection {
                 Some(exact_runner::agent::handle::<D>)
+            } else {
+                None
+            },
+            stream_fixture: if linked.inspection {
+                Some(exact_runner::agent::open_web_stream_fixture::<D>)
             } else {
                 None
             },
@@ -244,6 +254,9 @@ pub struct Host<D: DataSource> {
     drag: Option<DragHooks<D>>,
     /// The agent API's reads, when the artifact links inspection.
     inspect: Option<fn(&Runner<D>, &str) -> String>,
+    /// Scripted HTTP stream fixture handoff, when the artifact links inspection.
+    stream_fixture:
+        Option<fn(&mut Runner<D>, u64, &[u8]) -> Result<Vec<Timed>, exact_runner::RunnerError>>,
     /// The page's word on an auth session, when the artifact links auth.
     auth_word: Option<fn(&mut Host<D>, &str) -> String>,
     /// The page's clock at the last call, milliseconds from script start.
@@ -324,6 +337,7 @@ impl<D: DataSource> Host<D> {
             reorder_drags: reorder_drag::ReorderDrags::new()?,
             drag: links.drag,
             inspect: links.inspect,
+            stream_fixture: links.stream_fixture,
             auth_word: links.auth,
             now_ms: 0.0,
             font_names,
@@ -969,6 +983,9 @@ impl<D: DataSource> Host<D> {
         for c in self.runner.take_commands() {
             batch.command(&c.name, &c.args, c.source);
         }
+        for (prefix, method, url, hit, failure) in self.runner.take_stream_fixture_failures() {
+            batch.stream_failure(&prefix, method.as_deref(), &url, hit, failure);
+        }
         batch.timed(&mut self.runner, false);
         // What the commit kept or forgot (LLP 1018 D1), for the page to persist.
         for w in self.runner.take_store_writes() {
@@ -1133,6 +1150,17 @@ impl<D: DataSource> Host<D> {
         now_ms: f64,
     ) -> String {
         self.now_ms = now_ms.max(self.now_ms);
+        // Kind 12: scripted HTTP stream fixture opened on the page (`answer stream`, LLP 1103).
+        // Linked only with inspection (never in release builds).
+        if kind == 12 {
+            let Some(open_fixture) = self.stream_fixture else {
+                return self.batch_for(&[], None);
+            };
+            return match open_fixture(&mut self.runner, ticket, &body) {
+                Ok(receipts) => self.batch_for(&receipts, None),
+                Err(e) => self.batch_for(&[], Some(&format!("{e:?}"))),
+            };
+        }
         // Kind 9: the answer the runner settled for an auth session (`auth.rs`).
         let outcome = match kind {
             9 => match exact_runner::auth::take_settled(&mut self.runner, ticket) {

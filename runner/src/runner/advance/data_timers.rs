@@ -55,6 +55,7 @@ impl<D: DataSource> Runner<D> {
         requests: Vec<RequestOut>,
     ) -> Vec<RequestOut> {
         self.prune_fixture_replies();
+        self.prune_stream_fixtures();
         let now = self.now_ms;
         let mut out = Vec::with_capacity(requests.len());
         for r in requests {

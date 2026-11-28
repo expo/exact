@@ -8,6 +8,7 @@
 //! `EXACT_AGENT_FAIL_FETCH` at launch under the agent, or by the agent's
 //! `faults` operation.
 
+use super::stream_fixture_spec::{parse_stream_fixture, stream_fixture_json, StreamFixture};
 use super::Runner;
 use crate::{
     Advanced, DataSource, Dispatch, FailureKind, Outcome, Request, RequestOut, Response, Timed,
@@ -54,6 +55,7 @@ impl<D: DataSource> Runner<D> {
         let mut error = None;
         for ticket in tickets {
             let message = "stream dropped by test";
+            self.cancel_stream_fixture(ticket);
             // The injected end overtakes any frames waiting on an unfinished mapper.
             self.fail_mapper_turn(ticket, message);
             self.explicit_aborts.push(ticket);
@@ -84,11 +86,23 @@ impl<D: DataSource> Runner<D> {
     }
 }
 
+/// Which request family a fault table entry governs (LLP 1103).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FaultFamily {
+    /// Plain HTTP fetches (`fail fetch`, `answer fetch`, `pass fetch`).
+    #[default]
+    Fetch,
+    /// HTTP(S) `exactStream` requests (`answer stream`, `pass stream`).
+    Stream,
+}
+
 /// One armed prefix (D3): how many matching fetches it fails yet (`None`:
 /// every one until `pass`), whether it still matches, and how many it has
 /// failed since it was armed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fault {
+    /// Request family (`fetch` vs `stream`).
+    pub family: FaultFamily,
     /// Matches a URL that starts with it.
     pub prefix: String,
     /// The HTTP method selected by this response fixture.
@@ -107,6 +121,8 @@ pub struct Fault {
     pub armed: bool,
     /// A final HTTP response instead of a connection failure.
     pub response: Option<Arc<Response>>,
+    /// A scripted HTTP stream schedule or buffered stream reply (`family == Stream`).
+    pub stream: Option<Arc<StreamFixture>>,
 }
 
 fn response_json(response: &Response, after_ms: u32) -> serde_json::Value {
@@ -192,6 +208,14 @@ fn table_spec(entries: &[Fault]) -> String {
     entries
         .iter()
         .map(|f| {
+            let payload = if let Some(stream) = &f.stream {
+                serde_json::json!({ "stream": stream_fixture_json(stream) }).to_string()
+            } else {
+                f.response
+                    .as_ref()
+                    .map(|r| response_json(r, f.after_ms).to_string())
+                    .unwrap_or_default()
+            };
             format!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}{}\n",
                 f.prefix,
@@ -199,10 +223,7 @@ fn table_spec(entries: &[Fault]) -> String {
                 n(f.left),
                 f.hits,
                 u8::from(f.armed),
-                f.response
-                    .as_ref()
-                    .map(|r| response_json(r, f.after_ms).to_string())
-                    .unwrap_or_default(),
+                payload,
                 f.failure_hits,
                 f.method
                     .as_ref()
@@ -219,21 +240,40 @@ fn table_fits(entries: &[Fault]) -> Result<(), String> {
         .iter()
         .map(|f| 20 - f.hits.to_string().len() - f.failure_hits.to_string().len())
         .sum();
-    if entries.iter().any(|f| f.response.is_some()) && table_spec(entries).len() + growth > 65536 {
+    if entries.iter().any(Fault::has_payload) && table_spec(entries).len() + growth > 65536 {
         return Err("answer fetch: launch fixtures exceed 64 KiB".into());
     }
     Ok(())
 }
 
 impl Fault {
-    fn matches(&self, url: &str, method: &str, answers: bool) -> bool {
-        self.live()
-            && (answers || self.response.is_none())
-            && url.starts_with(&self.prefix)
-            && self.method.as_deref().is_none_or(|m| m == method)
+    fn has_payload(&self) -> bool {
+        self.response.is_some() || self.stream.is_some()
     }
 
-    fn priority(&self) -> (usize, bool) {
+    fn matches(&self, url: &str, method: &str, answers: bool) -> bool {
+        self.family == FaultFamily::Fetch
+            && self.live()
+            && (answers || self.response.is_none())
+            && url.starts_with(&self.prefix)
+            && self
+                .method
+                .as_deref()
+                .is_none_or(|m| m.eq_ignore_ascii_case(method))
+    }
+
+    pub(super) fn matches_stream(&self, url: &str, method: &str) -> bool {
+        self.family == FaultFamily::Stream
+            && self.live()
+            && self.stream.is_some()
+            && url.starts_with(&self.prefix)
+            && self
+                .method
+                .as_deref()
+                .is_none_or(|m| m.eq_ignore_ascii_case(method))
+    }
+
+    pub(super) fn priority(&self) -> (usize, bool) {
         (self.prefix.len(), self.method.is_some())
     }
 
@@ -298,28 +338,62 @@ impl Faults {
             };
             let hits = count(fields.next())?.unwrap_or(0);
             let armed = fields.next() != Some("0");
-            let response = fields
+            let payload = fields
                 .next()
                 .filter(|s| !s.is_empty())
-                .map(|s| {
-                    serde_json::from_str(s)
-                        .map_err(|e| e.to_string())
-                        .and_then(|v| parse_response(&v))
-                })
+                .map(|s| serde_json::from_str::<serde_json::Value>(s).map_err(|e| e.to_string()))
                 .transpose()?;
-            let (response, after_ms) = response.map_or((None, 0), |(r, ms)| (Some(r), ms));
-            let failure_hits =
-                count(fields.next())?.unwrap_or(if counts_as_failure(response.as_ref()) {
-                    hits
-                } else {
-                    0
-                });
+            let (family, response, after_ms, stream) = match payload {
+                None => (FaultFamily::Fetch, None, 0, None),
+                Some(v) if v.get("stream").is_some() && v.get("status").is_none() => {
+                    let parsed = parse_stream_fixture(&v["stream"])?;
+                    (FaultFamily::Stream, None, 0, Some(Arc::new(parsed)))
+                }
+                Some(v) => {
+                    let (r, ms) = parse_response(&v)?;
+                    (FaultFamily::Fetch, Some(Arc::new(r)), ms, None)
+                }
+            };
+            let default_failures = match family {
+                FaultFamily::Fetch => {
+                    if counts_as_failure(response.as_deref()) {
+                        hits
+                    } else {
+                        0
+                    }
+                }
+                FaultFamily::Stream => {
+                    if stream
+                        .as_deref()
+                        .is_some_and(StreamFixture::is_buffered_failure)
+                    {
+                        hits
+                    } else {
+                        0
+                    }
+                }
+            };
+            let failure_hits = count(fields.next())?.unwrap_or(default_failures);
             let method = fields.next().map(check_method).transpose()?;
-            if fields.next().is_some() || method.is_some() && response.is_none() {
+            if fields.next().is_some()
+                || (method.is_some() && response.is_none() && stream.is_none())
+            {
                 return Err("answer fetch: invalid method in launch fixture".into());
             }
-            faults.retain(|f| f.prefix != prefix || f.method != method);
+            if family == FaultFamily::Stream
+                && method
+                    .as_deref()
+                    .is_some_and(|m| m.eq_ignore_ascii_case("HEAD"))
+                && stream.as_deref().is_some_and(StreamFixture::is_streaming)
+            {
+                return Err(
+                    "answer stream: explicit `method HEAD` cannot declare a streaming 2xx schedule"
+                        .into(),
+                );
+            }
+            faults.retain(|f| f.family != family || f.prefix != prefix || f.method != method);
             faults.push(Fault {
+                family,
                 prefix: prefix.to_string(),
                 method,
                 after_ms,
@@ -328,7 +402,8 @@ impl Faults {
                 hits,
                 failure_hits,
                 armed,
-                response: response.map(Arc::new),
+                response,
+                stream,
             });
         }
         table_fits(&faults)?;
@@ -343,8 +418,16 @@ impl Faults {
         table_spec(&self.table())
     }
 
-    fn table(&self) -> std::sync::MutexGuard<'_, Vec<Fault>> {
+    pub(super) fn table(&self) -> std::sync::MutexGuard<'_, Vec<Fault>> {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(super) fn push_log(&self, line: String) {
+        let mut lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
+        lines.push_back(line);
+        if lines.len() > super::JOURNAL_RING {
+            lines.pop_front();
+        }
     }
 
     /// Arms `prefix` for `times` fetches, or every one; arming it again
@@ -358,8 +441,9 @@ impl Faults {
         }
         let mut table = self.table();
         let mut next = table.clone();
-        next.retain(|f| f.prefix != prefix || f.method.is_some());
+        next.retain(|f| f.family != FaultFamily::Fetch || f.prefix != prefix || f.method.is_some());
         next.push(Fault {
+            family: FaultFamily::Fetch,
             prefix: prefix.to_string(),
             method: None,
             after_ms: 0,
@@ -368,10 +452,13 @@ impl Faults {
             hits: 0,
             failure_hits: table
                 .iter()
-                .find(|f| f.prefix == prefix && f.method.is_none())
+                .find(|f| {
+                    f.family == FaultFamily::Fetch && f.prefix == prefix && f.method.is_none()
+                })
                 .map_or(0, |f| f.failure_hits),
             armed: true,
             response: None,
+            stream: None,
         });
         table_fits(&next)?;
         *table = next;
@@ -397,36 +484,124 @@ impl Faults {
         }
         let mut table = self.table();
         let mut next = table.clone();
-        next.retain(|f| f.prefix != prefix || f.method != method);
+        next.retain(|f| f.family != FaultFamily::Fetch || f.prefix != prefix || f.method != method);
         next.push(Fault {
+            family: FaultFamily::Fetch,
             prefix: prefix.into(),
             times: None,
             left: None,
             hits: 0,
             failure_hits: table
                 .iter()
-                .find(|f| f.prefix == prefix && f.method == method)
+                .find(|f| {
+                    f.family == FaultFamily::Fetch && f.prefix == prefix && f.method == method
+                })
                 .map_or(0, |f| f.failure_hits),
             armed: true,
             method,
             after_ms,
             response: Some(Arc::new(response)),
+            stream: None,
         });
         table_fits(&next)?;
         *table = next;
         Ok(())
     }
 
-    /// Stops `prefix` failing; its hits stay for the test's check. Whether
-    /// it was in the table.
+    /// Install a scripted HTTP stream fixture for a prefix and optional HTTP method (LLP 1103).
+    pub fn answer_stream_method(
+        &self,
+        prefix: &str,
+        method: Option<&str>,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        let method = method
+            .map(check_method)
+            .transpose()?
+            .map(|m| m.to_ascii_uppercase());
+        let parsed = parse_stream_fixture(value)?;
+        if prefix.is_empty() || prefix.contains(['\t', '\r', '\n']) {
+            return Err("answer stream needs a URL prefix without tabs or newlines".into());
+        }
+        if method.as_deref() == Some("HEAD") && parsed.is_streaming() {
+            return Err(
+                "answer stream: explicit `method HEAD` cannot declare a streaming 2xx schedule"
+                    .into(),
+            );
+        }
+        let mut table = self.table();
+        let mut next = table.clone();
+        next.retain(|f| {
+            f.family != FaultFamily::Stream || f.prefix != prefix || f.method != method
+        });
+        next.push(Fault {
+            family: FaultFamily::Stream,
+            prefix: prefix.into(),
+            method: method.clone(),
+            after_ms: 0,
+            times: None,
+            left: None,
+            hits: 0,
+            failure_hits: table
+                .iter()
+                .find(|f| {
+                    f.family == FaultFamily::Stream && f.prefix == prefix && f.method == method
+                })
+                .map_or(0, |f| f.failure_hits),
+            armed: true,
+            response: None,
+            stream: Some(Arc::new(parsed)),
+        });
+        table_fits(&next)?;
+        *table = next;
+        Ok(())
+    }
+
+    /// Stops `prefix` failing or answering plain fetches; its hits stay for the test's check.
     pub fn pass(&self, prefix: &str) -> bool {
         let mut table = self.table();
         let mut found = false;
-        for entry in table.iter_mut().filter(|f| f.prefix == prefix) {
+        for entry in table
+            .iter_mut()
+            .filter(|f| f.family == FaultFamily::Fetch && f.prefix == prefix)
+        {
             entry.armed = false;
             found = true;
         }
         found
+    }
+
+    /// Stops `prefix` answering HTTP streams; its hits stay for the test's check.
+    pub fn pass_stream(&self, prefix: &str) -> bool {
+        let mut table = self.table();
+        let mut found = false;
+        for entry in table
+            .iter_mut()
+            .filter(|f| f.family == FaultFamily::Stream && f.prefix == prefix)
+        {
+            entry.armed = false;
+            found = true;
+        }
+        found
+    }
+
+    pub(super) fn count_stream_hit(&self, prefix: &str, method: Option<&str>, is_failure: bool) {
+        if let Some(entry) = self.table().iter_mut().find(|f| {
+            f.family == FaultFamily::Stream && f.prefix == prefix && f.method.as_deref() == method
+        }) {
+            entry.hits += 1;
+            if is_failure {
+                entry.failure_hits += 1;
+            }
+        }
+    }
+
+    pub(super) fn count_stream_failure(&self, prefix: &str, method: Option<&str>) {
+        if let Some(entry) = self.table().iter_mut().find(|f| {
+            f.family == FaultFamily::Stream && f.prefix == prefix && f.method.as_deref() == method
+        }) {
+            entry.failure_hits += 1;
+        }
     }
 
     /// Whether a fetch of `url` fails, counting it: the longest live prefix
@@ -483,6 +658,9 @@ impl Faults {
             }
             out.push_str("{\"prefix\":");
             crate::json::quote(&f.prefix, &mut out);
+            if f.family == FaultFamily::Stream {
+                out.push_str(",\"family\":\"stream\"");
+            }
             if let Some(method) = &f.method {
                 out.push_str(",\"method\":");
                 crate::json::quote(method, &mut out);
@@ -500,6 +678,9 @@ impl Faults {
                     ",\"response\":{}",
                     response_json(response, f.after_ms)
                 ));
+            }
+            if let Some(stream) = &f.stream {
+                out.push_str(&format!(",\"stream\":{}", stream_fixture_json(stream)));
             }
             out.push('}');
         }
@@ -557,11 +738,14 @@ impl<D: DataSource> Runner<D> {
     /// streams are not matched (D5). The journal says so.
     pub fn fault_dispatch(&mut self, r: &RequestOut) -> Option<Dispatch> {
         let request = &r.request;
-        if request.stream || request.is_native() || request.is_auth() || request.surface.is_some() {
+        if request.is_native() || request.is_auth() || request.surface.is_some() {
             return None;
         }
         if self.faults.is_empty() {
             return None;
+        }
+        if request.stream {
+            return self.stream_fault_dispatch(r);
         }
         // A fixture must not turn an ungranted request into a successful one.
         let answers = self.links.grants.is_some_and(|link| {

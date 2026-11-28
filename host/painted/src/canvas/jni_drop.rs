@@ -36,16 +36,19 @@ macro_rules! canvas_jni_drop {
             with(|h| h.drag_dropped(x, y));
         }
 
-        /// The drag was released at (`x`, `y`) px: the drop's number, 0 when
-        /// nothing takes it (`CanvasHost::drop_released`).
+        /// The drag, the app's own lift `lift` or another app's (0), was
+        /// released at (`x`, `y`) px: the drop's number, 0 when nothing takes
+        /// it (`CanvasHost::drop_released`).
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_dropReleased(
             _env: *mut $crate::canvas::jni_sys::JNIEnv,
             _class: $crate::canvas::jni_sys::jclass,
             x: $crate::canvas::jni_sys::jfloat,
             y: $crate::canvas::jni_sys::jfloat,
+            lift: $crate::canvas::jni_sys::jint,
         ) -> $crate::canvas::jni_sys::jint {
-            with(|h| h.drop_released(x, y)).unwrap_or(0) as $crate::canvas::jni_sys::jint
+            with(|h| h.drop_released(x, y, lift as u32)).unwrap_or(0)
+                as $crate::canvas::jni_sys::jint
         }
 
         /// Who takes a drop Android gives field `id`'s view at (`x`, `y`) px
@@ -59,6 +62,27 @@ macro_rules! canvas_jni_drop {
             y: $crate::canvas::jni_sys::jfloat,
         ) -> $crate::canvas::jni_sys::jint {
             with(|h| h.field_drop(id as u32, x, y)).unwrap_or(-1)
+        }
+
+        /// The platform began lift `lift` (`CanvasHost::lift_began`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_liftBegan(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            lift: $crate::canvas::jni_sys::jint,
+        ) {
+            with(|h| h.lift_began(lift as u32));
+        }
+
+        /// Lift `lift` ended, taken or not (`CanvasHost::lift_ended`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_liftEnded(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            lift: $crate::canvas::jni_sys::jint,
+            taken: $crate::canvas::jni_sys::jboolean,
+        ) {
+            with(|h| h.lift_ended(lift as u32, taken != 0));
         }
 
         /// Drop `id`'s items arrived, as JSON (`CanvasHost::drop_landed`).

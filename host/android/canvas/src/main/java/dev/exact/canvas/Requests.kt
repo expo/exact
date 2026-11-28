@@ -286,14 +286,15 @@ internal class Requests(private val activity: ExactActivity) {
      * assistive service started it, its text and URL, then its files' count and each file as the node names it and
      * the name it is offered under. */
     private fun drag(w: IntArray, at: Int) {
-        val view = view ?: return
         val ask = DragOut.read(w, at)
+        val lift = DragOut.Lift(ask.lift, activity)
+        val view = view ?: return DragOut.refused(lift, "drag: not begun: the window has no view to drag from")
         val clip = DragOut.clip(activity, ask.text, ask.url, ask.files)
-            ?: return Exact.journal("drag: nothing to drag: the node carries no text, no URL and no file the app has")
-        if (!ask.service) return DragOut.start(activity, view, ask.box, ask.finger, clip) { activity.windowDragging }
-        if (activity.windowDragging) return Exact.journal(DragOut.UNHEARD)
-        if (!activity.access.drag(ask.node, clip, DragOut.flags(true, Build.VERSION.SDK_INT))) {
-            Exact.journal("drag: the platform began no drag for the service: another drag is under way, or the node is gone")
+            ?: return DragOut.refused(lift, "drag: nothing to drag: the node carries no text, no URL and no file the app has")
+        if (!ask.service) return DragOut.start(activity, view, ask.box, ask.finger, clip, lift) { activity.windowDragging }
+        if (activity.windowDragging) return DragOut.refused(lift, DragOut.UNHEARD)
+        if (!activity.access.drag(ask.node, clip, DragOut.flags(true, Build.VERSION.SDK_INT), lift)) {
+            DragOut.refused(lift, "drag: the platform began no drag for the service: another drag is under way, or the node is gone")
         }
     }
 
