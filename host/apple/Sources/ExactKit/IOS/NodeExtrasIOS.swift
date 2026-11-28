@@ -693,12 +693,18 @@ extension NodeView {
         return false
         #endif
     }
-    /// Whether this is a grouped list UIKit shows as the split's sidebar, on the ground the compiler gave it (`list_rows`,
-    /// LLP 1115.000 D2), its author having said none: that ground is UIKit's sidebar's, which the split's column paints
-    /// (LLP 1127 D7), so the detail under the sidebar shows through it as through a hand-built split's.
-    package var groundIsSidebars: Bool {
+    /// Whether this node's ground is the split column's it shows in, its author having said none: a grouped list UIKit
+    /// shows as the sidebar, on the ground the compiler gave it (`list_rows`, LLP 1115.000 D2), and a route UIKit shows
+    /// in the inspector column, with the grouped lists in it, on the ground a sheet would have (LLP 1116.009 D3). The
+    /// split's column paints that ground (LLP 1127 D7), so the detail under the column shows through it as through a
+    /// hand-built split's, and UIKit draws the lists there on the column's glass.
+    package var groundIsSplitColumns: Bool {
         #if os(iOS)
-        groupedOwner && !wrote("background_color") && presenter?.navigation.showsAsSidebar(self) == true
+        // Read the presenter's navigation, which its first read makes, only for a grouped list or an inspector's route:
+        // every box asks as it paints
+        let inspector = props["navigationInspector"] == "true"
+        guard groupedOwner || inspector, !wrote("background_color"), let navigation = presenter?.navigation else { return false }
+        return groupedOwner && navigation.showsAsSidebar(self) || navigation.showsInInspector(self)
         #else
         false
         #endif

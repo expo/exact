@@ -429,6 +429,9 @@ package protocol NavigationHosting: AnyObject {
     var barItemBlocks: [UInt32: HostBlock] { get }
     /// Whether a grouped list shows as UIKit's sidebar: in a split's list column while the split is expanded (LLP 1127 D7).
     func showsAsSidebar(_ list: UIView) -> Bool
+    /// Whether `view` is in a split's inspector column while the split is expanded, beside the detail on the column
+    /// UIKit paints.
+    func showsInInspector(_ view: UIView) -> Bool
     /// The row of a sidebar list whose detail shows, which stays selected;
     /// `.some(nil)` for none, and nil while the runner cannot say.
     func sidebarSelection(_ list: UIView) -> UInt32??
@@ -762,6 +765,7 @@ package final class NoNavigation: NavigationHosting {
     #endif
     package var barItemBlocks: [UInt32: HostBlock] { [:] }
     package func showsAsSidebar(_ list: UIView) -> Bool { false }
+    package func showsInInspector(_ view: UIView) -> Bool { false }
     package func sidebarSelection(_ list: UIView) -> UInt32?? { .some(nil) }
     package func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void) { press() }
 

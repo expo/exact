@@ -406,6 +406,16 @@ extension NavigationHost {
         sidebar(containing: view) != nil
     }
 
+    /// Whether `view` is in the split's inspector column, beside the detail, as UIKit shows a route there (LLP 1127 D7)
+    func showsInInspector(_ view: UIView) -> Bool {
+        #if os(iOS)
+        guard let split, split.settlesExpanded, let column = split.inspector?.viewIfLoaded else { return false }
+        return view.isDescendant(of: column)
+        #else
+        return false
+        #endif
+    }
+
     private func sidebar(containing view: UIView) -> SplitIOS? {
         func contains(_ columns: SplitIOS) -> Bool {
             columns.settlesExpanded && columns.list.stackRoutes.first?.viewIfLoaded.map(view.isDescendant(of:)) == true

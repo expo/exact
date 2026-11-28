@@ -27,6 +27,9 @@ package protocol GroupedLists: AnyObject {
     func sync(changed: Set<UInt32>?)
     /// The list `id`'s owner changed its frame outside a batch (`setReach`): the list's geometry follows.
     func geometryChanged(_ id: UInt32)
+    /// `route` moved into or out of a split's column, where its lists' grounds are the column's: each list under it
+    /// paints its box again and takes its place's ground.
+    func placeChanged(under route: UIView)
     /// Whether some list holds a custom row's views in its cells.
     var carriesRows: Bool { get }
     func reset()

@@ -257,6 +257,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
 
     /// The backdrop's colours last written, light and dark.
     private var backdropKey: [[Double]?]?
+    /// Whether the route was on a split's column at its last backdrop.
+    private var wasOnColumn = false
     /// The controller's view paints what shows behind the route: a dynamic colour resolved for the
     /// controller's current appearance, re-resolved by UIKit when it changes (a route loaded before
     /// its window has a trait collection would otherwise keep the light colour in dark mode), and
@@ -268,17 +270,26 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// (`ModalController.paintSurface`: UIKit's glass at a partial detent, LLP 1141.001 D3). What
     /// is behind the sheet is not, and dimming belongs to UIKit's presentation. A full-screen route
     /// that paints its own background is clear, as its presentation is (`NodeView.paintsOverPage`):
-    /// the route paints it once, over the page. The route UIKit shows as the split's sidebar is clear
-    /// where its author wrote no ground, over the sidebar the split's column paints (LLP 1127 D7).
+    /// the route paints it once, over the page. The route UIKit shows in a split's column, the sidebar
+    /// or the inspector, is clear where its author wrote no ground, over the column UIKit paints (LLP
+    /// 1127 D7).
     func paintBackdrop() {
         guard isViewLoaded else { return }
         let view = surface
         // The route's view takes its accent as its tint, which its backdrop in the tint is resolved by
         assign(view, \.tintColor, node.ownAccent)
         let modal = NavigationRules.sheetLike(node.props["navigationPresentation"])
-        // The sidebar's route on no ground its author wrote is on UIKit's sidebar, which the split's column paints
-        // (LLP 1127 D7): clear, so the detail under the sidebar shows through it
-        let overPage = node.paintsOverPage || !node.wrote("background_color") && host?.presenter.navigation.showsAsSidebar(view) == true
+        // A route on no ground its author wrote in a split's column, the sidebar or the inspector, is on the column UIKit
+        // paints (LLP 1127 D7): clear, so the detail under the column shows through it, and UIKit draws the lists in it
+        // on the column's glass. The boxes whose ground is the column's paint again as the route enters or leaves it.
+        let navigation = host?.presenter.navigation
+        let onColumn = !node.wrote("background_color") && (navigation?.showsAsSidebar(view) == true || navigation?.showsInInspector(view) == true)
+        if onColumn != wasOnColumn {
+            wasOnColumn = onColumn
+            node.layer.setNeedsDisplay()
+            host?.presenter.groupedLists?.placeChanged(under: node)
+        }
+        let overPage = node.paintsOverPage || onColumn
         let key = overPage ? []
             : modal ? [ownBackdrop(dark: false), ownBackdrop(dark: true)]
             : [backdrop(dark: false), backdrop(dark: true)]

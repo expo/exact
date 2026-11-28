@@ -247,6 +247,15 @@ final class GroupedListHost: GroupedLists {
         tellSoon()
     }
 
+    func placeChanged(under route: UIView) {
+        for list in lists.values where list.owner.isDescendant(of: route) {
+            list.owner.layer.setNeedsDisplay()
+            #if os(iOS)
+            list.followGround()
+            #endif
+        }
+    }
+
     /// After a batch. `changed` is the touched views and their ancestors; a
     /// list outside it keeps its model and only carries its rows again.
 
@@ -517,6 +526,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     private var rootMargins = NSDirectionalEdgeInsets.zero
     /// In a split's list column beside its detail: UIKit's sidebar list (GroupedSidebarIOS.swift).
     var sidebar = false
+    /// The collection view's background as this list last set it; nil while UIKit chooses it.
+    private var setGround: UIColor?
     /// The theme's roles this list last drew with (LLP 1095 D4): a new table
     /// (an update, a dev reload) configures every row and the layout again.
     private var theme = ThemeRoles.generation
@@ -656,8 +667,21 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             : ThemeRoles.color("grouped-background", in: root)
     }
     #if os(iOS)
-    /// The ground where none is written: the theme's, else UIKit's for the list's appearance.
+    /// The ground where none is written: the theme's, else UIKit's for the list's appearance on a page.
     var platformGround: UIColor { themeGround ?? (model.appearance == .plain ? .systemBackground : .systemGroupedBackground) }
+
+    /// The collection view's own background, which shows through a clear section ground and below a short list.
+    /// UIKit chooses it for the list's place as it lays the list out, a page's grey and clear in a split's sidebar or
+    /// inspector column over their glass, and again as the list moves between them, until the app sets one; from then
+    /// on it never chooses (measured on iOS 27.1). So the list sets one only where its author wrote its ground or a
+    /// theme replaces the platform's, and a list that has set one gives itself its place's ground after.
+    func followGround() {
+        let wanted: UIColor? = sidebar ? nil : writesGround ? .clear : themeGround
+        let ground = wanted ?? (setGround == nil ? nil : owner.groundIsSplitColumns ? .clear : platformGround)
+        guard ground != setGround else { return }
+        setGround = ground
+        collection.backgroundColor = ground
+    }
     #endif
 
     /// Each section's header and footer exist only where it has the text.
@@ -756,7 +780,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         let writes = owner.wrote("background_color"), flipped = followSidebar()
         let restyled = next.style != previous.style || rethemed || writes != writesGround || flipped
         writesGround = writes
-        // Beside its detail, the list's ground is UIKit's sidebar's (`groundIsSidebars`); collapsed, its own again
+        // Beside its detail, the list's ground is UIKit's sidebar's (`groundIsSplitColumns`); collapsed, its own again
         if flipped { owner.applyBoxLayer() }
         model = next
         rows = Dictionary(next.sections.flatMap { $0.rows }.map { ($0.view, $0) }, uniquingKeysWith: { a, _ in a })
@@ -815,10 +839,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         let regapped = previous.sections.map(\.spaceAbove) != next.sections.map(\.spaceAbove) || previous.spaceBelow != next.spaceBelow
         if restyled { collection.setCollectionViewLayout(layout(), animated: false) }
         #if os(iOS)
-        // The collection view's own background shows through a clear section ground and below a short list, and UIKit
-        // gives it the appearance's ground only for a layout with none of its own, so it is set here.
-        let ground: UIColor? = sidebar ? nil : writesGround ? .clear : platformGround
-        if collection.backgroundColor != ground { collection.backgroundColor = ground }
+        followGround()
         #endif
         // An unchanged snapshot can reset UIKit's estimated geometry and
         // adjust its offset after the core's pending scroll write. Remounting

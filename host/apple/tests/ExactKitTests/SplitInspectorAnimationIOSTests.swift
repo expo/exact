@@ -63,6 +63,84 @@ extension SplitIOSTests {
         XCTAssertEqual(notes.frame.width, wide.width, accuracy: 0.5)
     }
 
+    /// LLP 1127 D7: a route UIKit shows in the inspector's column, its author having written no ground, is on the
+    /// column's glass, as a hand-built inspector whose views paint nothing is: its controller and its box paint
+    /// nothing, nor does its grouped list's box, and the list's collection view keeps the clear ground UIKit gives a
+    /// list there. Collapsed, the route is a sheet on the grouped ground its grouped scroll gives it (LLP 1116.007 D5),
+    /// and UIKit's grey is the list's; expanded again, the column's glass.
+    func testARouteInTheInspectorsColumnIsOnTheColumnsGlassAndASheetsGroundFolded() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "folded, UIKit presents the info's sheet in its window scene") }
+        let (session, agent, split) = try inspectedNotes()
+        let info = try node(session, "info-page"), band = try node(session, "info-band"), owner = try node(session, "info-facts")
+        let lists = session.presenter.groupedLists as! GroupedListHost
+        let list = try XCTUnwrap(lists.lists[owner.id], "the info's grouped list")
+        func controller() -> RouteController? { sequence(first: info as UIResponder, next: \.next).first { $0 is RouteController } as? RouteController }
+        func alpha(_ colour: UIColor?, in view: UIView) -> CGFloat {
+            var a: CGFloat = 0
+            colour?.resolvedColor(with: view.traitCollection).getWhite(nil, alpha: &a)
+            return a
+        }
+        func grounds() -> [String: CGFloat] {
+            list.collection.layoutIfNeeded()
+            let route = controller()
+            return ["route's controller": route.map { alpha($0.view.backgroundColor, in: $0.view) } ?? -1,
+                    "route's box": info.layer.backgroundColor?.alpha ?? 0, "band's box": band.layer.backgroundColor?.alpha ?? 0,
+                    "list's box": owner.layer.backgroundColor?.alpha ?? 0,
+                    "list's collection view": alpha(list.collection.backgroundColor, in: list.collection)]
+        }
+        func onGlass() -> Bool { grounds().values.allSatisfy { $0 == 0 } }
+        func transitionFacts() -> String {
+            let c = split.controller.transitionCoordinator
+            let from = c?.viewController(forKey: .from).map { "\(type(of: $0))" } ?? "none", to = c?.viewController(forKey: .to).map { "\(type(of: $0))" } ?? "none"
+            let root = split.controller.view.window?.rootViewController
+            var presented: [String] = []
+            var next = root?.presentedViewController
+            while let p = next { presented.append("\(type(of: p)) beingPresented \(p.isBeingPresented) in a window \(p.viewIfLoaded?.window != nil)"); next = p.presentedViewController }
+            return "transition from \(from) to \(to) style \(c?.presentationStyle.rawValue ?? -9) animated \(c?.isAnimated ?? false) cancelled \(c?.isCancelled ?? false), "
+                + "split's own \(split.controller.isBeingPresented), presented \(presented), window \(split.controller.view.window?.frame ?? .zero), "
+                + "split's view \(split.controller.view.frame), mode \(split.controller.displayMode.rawValue), inspector shown \(split.controller.isShowing(.inspector))"
+        }
+        // As a fold or an unfold of the Duo: the width class and the window's size change together
+        let window = try XCTUnwrap(split.controller.view.window)
+        func fold(open: Bool) {
+            split.controller.traitOverrides.horizontalSizeClass = open ? .regular : .compact
+            window.traitOverrides.horizontalSizeClass = open ? .regular : .compact
+            window.updateTraitsIfNeeded()
+            window.frame = CGRect(origin: .zero, size: open ? CGSize(width: 951, height: 669) : CGSize(width: 466, height: 678))
+            window.rootViewController?.view.subviews.first?.frame = window.bounds
+        }
+        func facts() -> String {
+            let route = controller()
+            let chain = sequence(first: list.collection as UIView, next: \.superview).map { "\(type(of: $0))" }.suffix(12)
+            return "collapsed \(split.controller.isCollapsed), inspecting \(split.inspecting != nil), route \(route.map { "\($0)" } ?? "none"), "
+                + "parent \(route?.parent.map { "\(type(of: $0))" } ?? "none"), presenting \(route?.presentingViewController.map { "\(type(of: $0))" } ?? "none"), "
+                + "in a window \(info.window != nil), transition \(split.controller.transitionCoordinator != nil), native \(agent.nativeInFlight()), "
+                + "grounds \(grounds()), list in \(chain.joined(separator: " < ")), " + transitionFacts()
+        }
+        until("UIKit has laid the list out in the column") { !list.collection.visibleCells.isEmpty && info.window != nil }
+        info.layer.displayIfNeeded(); owner.layer.displayIfNeeded()
+        XCTAssertTrue(onGlass(), "in the column, nothing paints over its glass: \(grounds())")
+
+        fold(open: false)
+        waitFor("collapsed, the info is a sheet", cap: 20, facts: facts) {
+            split.controller.isCollapsed && controller()?.presentingViewController != nil
+                && info.window != nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight()
+        }
+        info.layer.displayIfNeeded(); owner.layer.displayIfNeeded()
+        let folded = grounds()
+        XCTAssertEqual(folded["route's box"], 1, "the sheet is on its route's grouped ground: \(folded)")
+        XCTAssertEqual(folded["list's collection view"], 1, "UIKit's grey is the list's in a sheet: \(folded)")
+
+        fold(open: true)
+        waitFor("expanded, the info is in the column again", cap: 20, facts: facts) {
+            !split.controller.isCollapsed && split.inspecting != nil && info.window != nil
+                && split.controller.transitionCoordinator == nil && !agent.nativeInFlight()
+        }
+        info.layer.displayIfNeeded(); owner.layer.displayIfNeeded()
+        XCTAssertTrue(onGlass(), "back in the column, on its glass again: \(grounds())")
+    }
+
     private static func longest(_ layer: CALayer) -> CAAnimation? {
         (layer.animationKeys() ?? []).compactMap { layer.animation(forKey: $0) }.max { $0.duration < $1.duration }
     }
