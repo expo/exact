@@ -3,6 +3,7 @@
 // tree. Exact keeps no list of file types, so a type iOS adds needs no change
 // here, and every call is iOS 14 or earlier, below Exact's iOS 17 floor.
 #if os(iOS)
+import ExactKit
 import Foundation
 import UniformTypeIdentifiers
 
@@ -14,17 +15,23 @@ enum DropItems {
         case file(String)
         /// A link that is not a file, plain text, or both, each read alone.
         case words(url: Bool, text: Bool)
+        /// An Exact node's file with its link and text, each read.
+        case fileAndWords(String, url: Bool, text: Bool)
         /// Nothing usable: a bare `file:` URL, which another app's is not
         /// readable, or only types the system cannot name.
         case none
     }
 
-    /// 1. A file the item offers to open in place is a file. 2. An item that
+    /// 1. A file the item offers to open in place is a file. 2. An Exact
+    /// node's file item, which carries `NodeItem.type`, leading with a type
+    /// outside `public.text` and `public.url`, is that file, with its link
+    /// and text read too, as the web's drop gives every type a drag carries
+    /// (LLP 1094.000 D4). 3. An item that
     /// registers a URL that is not a file URL, or a type in
     /// `public.plain-text`'s tree, gives its link and its plain text: a link
     /// card its link and title, rich text its plain-text form. Text asks the
     /// tree because `loadObject(ofClass: NSString.self)` answers a link-only
-    /// item with the link's own string. 3. Otherwise the item is a file, by
+    /// item with the link's own string. 4. Otherwise the item is a file, by
     /// its first type the system declares that is not a URL, else its first
     /// dynamic one, as Exact's own file card of an unknown extension
     /// registers. UIKit's pictures lead with a type the system cannot name
@@ -35,6 +42,9 @@ enum DropItems {
         let types = provider.registeredTypeIdentifiers
         let url = types.contains(UTType.url.identifier) && !types.contains(UTType.fileURL.identifier)
         let text = types.contains { UTType($0)?.conforms(to: .plainText) == true }
+        if types.contains(NodeItem.type), let first = types.first, let lead = UTType(first), !lead.conforms(to: .text), !lead.conforms(to: .url) {
+            return url || text ? .fileAndWords(first, url: url, text: text) : .file(first)
+        }
         if url || text { return .words(url: url, text: text) }
         let named = types.compactMap { id in UTType(id).flatMap { $0.conforms(to: .url) ? nil : (id, $0) } }
         return (named.first { $0.1.isDeclared } ?? named.first { $0.1.isDynamic }).map { Kind.file($0.0) } ?? .none
@@ -54,8 +64,7 @@ enum DropItems {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("exact-dropped", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         for (index, provider) in providers.enumerated() {
-            switch kind(of: provider) {
-            case .file(let type):
+            let file = { (type: String) in
                 group.enter()
                 _ = provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
                     // UIKit removes its file once this returns, so it is copied here
@@ -63,7 +72,8 @@ enum DropItems {
                     if url == nil { say("drop: an item's file did not arrive: \(error?.localizedDescription ?? "UIKit gave none")") }
                     DispatchQueue.main.async { files[index] = copy; group.leave() }
                 }
-            case .words(let url, let text):
+            }
+            let words = { (url: Bool, text: Bool) in
                 if url {
                     group.enter()
                     _ = provider.loadObject(ofClass: URL.self) { link, _ in
@@ -76,6 +86,11 @@ enum DropItems {
                         DispatchQueue.main.async { texts[index] = words; group.leave() }
                     }
                 }
+            }
+            switch kind(of: provider) {
+            case .file(let type): file(type)
+            case .words(let url, let text): words(url, text)
+            case .fileAndWords(let type, let url, let text): file(type); words(url, text)
             case .none:
                 say("drop: an item offers nothing to take (\(provider.registeredTypeIdentifiers.joined(separator: ", ")))")
             }

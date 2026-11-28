@@ -227,30 +227,35 @@ final class DragOutMacTests: XCTestCase {
         XCTAssertEqual(promises.map { $0.delegate?.filePromiseProvider($0, fileNameForType: $0.fileType) }, ["Mount Fuji.jpg", "notes.pdf"])
     }
 
-    /// With files, the URL and the text are pasteboard items of their own, ahead of the promises (LLP 1094.000 D5).
-    func testTheItemsAreTheURLThenTheTextThenThePromises() throws {
+    /// Each file is a promise's item, and the node's URL and text are further
+    /// types of the first, after its promise (LLP 1094.000 D5).
+    func testTheItemsArePromisesWithTheURLAndTextOnTheFirst() throws {
         let p = presenter(["draggable": "true", "dataTransferFiles": "assets/apple/1016-thumb.jpg\napp:/data/notes.pdf",
                            "dataTransferUrl": "https://example.com/1016", "dataTransferText": "Mount Fuji"])
         let items = DragItemsMac.items(of: try XCTUnwrap(p.views[10]), in: nil)
-        XCTAssertEqual(items.count, 4, "the URL and the text, then one item a file")
-        guard items.count == 4 else { return }
-        let first = try XCTUnwrap(items[2].item as? NSFilePromiseProvider)
+        XCTAssertEqual(items.count, 2, "one item a file")
+        guard items.count == 2 else { return }
+        let first = try XCTUnwrap(items[0].item as? NSFilePromiseProvider)
         XCTAssertEqual(first.fileType, UTType.jpeg.identifier)
         XCTAssertEqual(first.delegate?.filePromiseProvider(first, fileNameForType: first.fileType), "1016-thumb.jpg")
-        XCTAssertFalse(first.writableTypes(for: .general).contains(.URL), "the promise alone")
-        let second = try XCTUnwrap(items[3].item as? NSFilePromiseProvider)
+        let second = try XCTUnwrap(items[1].item as? NSFilePromiseProvider)
         XCTAssertEqual(second.fileType, UTType.pdf.identifier)
-        let link = try XCTUnwrap(items[0].item as? NSPasteboardItem), words = try XCTUnwrap(items[1].item as? NSPasteboardItem)
-        XCTAssertEqual(link.string(forType: .URL), "https://example.com/1016")
-        XCTAssertNil(link.string(forType: .string))
-        XCTAssertEqual(words.string(forType: .string), "Mount Fuji")
-        XCTAssertNil(words.string(forType: .URL))
+        XCTAssertFalse(second.writableTypes(for: .general).contains(.URL), "a later file's promise alone")
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("exact-drag-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.writeObjects([first]), "the promise writes to a pasteboard")
         let promised = NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type")
         XCTAssertEqual(pasteboard.string(forType: promised), UTType.jpeg.identifier, "and promises the file: \(pasteboard.types ?? [])")
+        let item = try XCTUnwrap(pasteboard.pasteboardItems?.first)
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1, "one item")
+        XCTAssertEqual(item.string(forType: .URL), "https://example.com/1016")
+        XCTAssertEqual(item.string(forType: .string), "Mount Fuji")
+        let types = item.types
+        XCTAssertLessThan(try XCTUnwrap(types.firstIndex(of: promised)), try XCTUnwrap(types.firstIndex(of: .URL)), "the promise first")
+        XCTAssertLessThan(try XCTUnwrap(types.firstIndex(of: .URL)), try XCTUnwrap(types.firstIndex(of: .string)), "then the URL, then the text")
+        XCTAssertEqual(types.last, .init(NodeItem.type), "then Exact's type")
+        XCTAssertTrue(second.writableTypes(for: .general).contains(.init(NodeItem.type)), "on each file's item")
         XCTAssertEqual(items[0].draggingFrame.size, CGSize(width: 200, height: 120), "the node's own frame")
         XCTAssertNotNil(items[0].imageComponents?.first, "and its picture")
     }

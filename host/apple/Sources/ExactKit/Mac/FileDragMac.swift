@@ -203,8 +203,9 @@ enum FileDrag {
     /// What the drag drops, in its order (LLP 1094.001 D1): its files, a
     /// promise before a file URL as Apple's file-promise sample takes them,
     /// each promised file once received into a folder of its own that the
-    /// session holds; the plain text of each other item, joined by line
-    /// breaks; and the first link that is not a file. `done` runs on the main
+    /// session holds; the plain text of each other item and of an Exact
+    /// node's file item, joined by line breaks; and the first link that is
+    /// not a file. `done` runs on the main
     /// queue, before this returns when nothing is promised. AppKit lets a
     /// destination receive promised files only inside its drag callbacks, as
     /// `perform` calls this.
@@ -216,7 +217,7 @@ enum FileDrag {
             else if let url = item.item as? URL { found[index] = [url] }
         }
         var texts: [String] = [], link = ""
-        for (index, item) in (info.draggingPasteboard.pasteboardItems ?? []).enumerated() where found[index] == nil {
+        for (index, item) in (info.draggingPasteboard.pasteboardItems ?? []).enumerated() where found[index] == nil || item.types.contains(.init(NodeItem.type)) {
             if let text = item.string(forType: .string), !text.isEmpty { texts.append(text) }
             if link.isEmpty, let url = item.string(forType: .URL), URL(string: url).map({ !$0.isFileURL }) == true { link = url }
         }
