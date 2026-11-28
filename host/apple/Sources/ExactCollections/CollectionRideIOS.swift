@@ -44,7 +44,8 @@ extension CollectionHost {
             guard let view = presenter.views[row] ?? presenter.leaving[row]?.view, view.isDescendant(of: scroll) else { continue }
             let at = start(of: view, in: scroll, horizontal: horizontal) - offset
             guard let showed = entry.batchRows[row] else { mounted.append((view, at)); continue }
-            moves.append((at, showed - at))
+            // A row the batch mounted moves as one that showed: a kept row out of the port says nothing of the screen
+            if entry.batchShown.contains(row) { moves.append((at, showed - at)) }
             if abs(showed - at) > 0.5 { view.layer.add(Self.batchMotion(path, from: showed - at), forKey: key) }
         }
         for (view, at) in mounted {
@@ -53,22 +54,40 @@ extension CollectionHost {
         }
     }
 
-    /// Where each of a list's mounted rows, and each row still leaving it,
-    /// shows along its axis: its start in the scroll view less the offset.
-    func rowStarts(_ id: UInt32) -> [UInt32: CGFloat] {
-        guard let presenter, let entry = entries[id], let scroll = presenter.views[id]?.scroll else { return [:] }
+    /// Whether a row that showed in the port as the batch began is still in the list's scroll view, mounted or
+    /// leaving on its exit: the place a batch's rows ride from (`rideBatch`), as LLP 1010 §6.12 says.
+    func ridesFrom(_ entry: Entry, in id: UInt32) -> Bool {
+        guard let presenter, let scroll = presenter.views[id]?.scroll else { return false }
+        return entry.batchShown.contains { row in
+            (presenter.views[row] ?? presenter.leaving[row]?.view)?.isDescendant(of: scroll) == true
+        }
+    }
+
+    /// Where each of a list's mounted rows, and each row still leaving beside them, shows along its axis (its start
+    /// in the scroll view less the offset), and which of them show in its port (in a window, nothing from it up hidden
+    /// or clear, a positive extent overlapping the scroll view's bounds): one capture over one set of rows, so a row the batch may ride from is one whose place it
+    /// knows, never a view inside a row or a fixed item.
+    func rowsAtBegin(_ id: UInt32) -> (starts: [UInt32: CGFloat], shown: Set<UInt32>) {
+        guard let presenter, let entry = entries[id], let scroll = presenter.views[id]?.scroll else { return ([:], []) }
         let horizontal = entry.snapshot.horizontal, offset = horizontal ? scroll.contentOffset.x : scroll.contentOffset.y
-        var starts: [UInt32: CGFloat] = [:], parent: UIView?
+        let visible = scroll.bounds
+        var starts: [UInt32: CGFloat] = [:], shown = Set<UInt32>(), parent: UIView?
+        func take(_ row: UInt32, _ view: UIView) {
+            starts[row] = start(of: view, in: scroll, horizontal: horizontal) - offset
+            let frame = view.superview === scroll ? view.frame : view.convert(view.bounds, to: scroll)
+            let overlaps = horizontal ? frame.maxX > visible.minX && frame.minX < visible.maxX : frame.maxY > visible.minY && frame.minY < visible.maxY
+            // Shown only in a window, it and every view above it unhidden and not clear, as the port's own check reads
+            let drawn = view.window != nil && sequence(first: view, next: \.superview).allSatisfy { !$0.isHidden && $0.alpha > 0.01 }
+            if overlaps, (horizontal ? frame.width : frame.height) > 0, drawn { shown.insert(row) }
+        }
         for row in entry.snapshot.rows {
             guard let view = presenter.views[row.view] else { continue }
-            starts[row.view] = start(of: view, in: scroll, horizontal: horizontal) - offset
+            take(row.view, view)
             parent = view.superview
         }
-        // A row still leaving lies beside the mounted ones
-        for (row, leaving) in presenter.leaving where parent != nil && leaving.view.superview === parent {
-            starts[row] = start(of: leaving.view, in: scroll, horizontal: horizontal) - offset
-        }
-        return starts
+        // A row still leaving lies beside the mounted ones: one from an earlier batch counts while a mounted row does
+        for (row, leaving) in presenter.leaving where parent != nil && leaving.view.superview === parent { take(row, leaving.view) }
+        return (starts, shown)
     }
 
     /// A row's start in the scroll view along the list's axis, where its

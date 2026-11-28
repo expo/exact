@@ -48,12 +48,45 @@ final class CollectionRideIOSTests: XCTestCase {
     /// message fading): the rows before it come down over the gap with it, a
     /// row the port's move mounts above them comes down with them, and the
     /// row after it stays where it showed.
+    /// End to end on a compiled list (`list-first-edit.contract`): it settles on UIKit's own reports, and the first
+    /// edit after that, its first row growing, moves the row below on the batch spring; the list opened again does
+    /// the same once it settles anew.
+    func testTheFirstEditAfterAListSettlesMovesItsRows() throws {
+        let session = ExactApp.shared.makeSession(label: "list-first-edit")
+        let p = session.presenter
+        let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 500))
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 500)
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("LIST_FIRST_EDIT"), size: window.bounds.size).error)
+        func node(_ id: String) -> NodeView? { p.views.values.first { $0.props["testId"] == id } }
+        for opening in ["first", "again"] {
+            let list = try XCTUnwrap(node("rows"), opening).id
+            waitFor("the list settles on UIKit's reports (\(opening))", cap: 10,
+                    facts: { "snapshot \(String(describing: p.listHost.entries[list]?.snapshot))" }) {
+                p.listHost.entries[list]?.snapshot.live == true
+            }
+            let wrapper = try XCTUnwrap(p.listHost.entries[list]?.snapshot.rows.first { $0.index == 1 }.flatMap { p.views[$0.view] }, opening)
+            p.press(try XCTUnwrap(node("grow")).id)
+            waitFor("the row below the grown one rides (\(opening))", cap: 3) { self.ride(wrapper) != nil }
+            if opening == "first" {
+                p.press(try XCTUnwrap(node("reopen")).id)
+                waitFor("the list closes") { node("rows") == nil }
+                p.press(try XCTUnwrap(node("reopen")).id)
+                waitFor("the list opens again") { node("rows") != nil && node("rows")?.id != list }
+            }
+        }
+    }
+
     func testARemovalMovesItsRowsFromWhereTheyShowed() throws {
         let p = presenter()
         let scroll = try list(p)
         let leaving = try XCTUnwrap(p.views[12]), seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 49, "totalExtent": 1960, "rows": rows([8, 10, 14]),
-            "correction": ["scrollSequence": seq, "offset": 1660, "smooth": true]]]],
+            "correction": ["scrollSequence": seq, "offset": 1660, "smooth": true], "live": true]]],
             ["op": "exit", "id": 12],
             ["op": "create", "id": 8, "kind": "view"],
             ["op": "children", "id": 1, "ids": [8, 10, 14]],
@@ -70,6 +103,77 @@ final class CollectionRideIOSTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(ride(leaving)?.fromValue as? CGFloat), -40, accuracy: 0.5, "the leaving row comes down with it")
         XCTAssertEqual(try XCTUnwrap(ride(try XCTUnwrap(p.views[8]))?.fromValue as? CGFloat), -40, accuracy: 0.5, "and the row the move mounted above it")
         XCTAssertNil(ride(try XCTUnwrap(p.views[14])), "the row after it stays where it showed")
+    }
+
+    /// The same removal while the list is still opening (it has not shown its
+    /// settled first rows): the row still leaves with its exit, but the rows
+    /// take their places with no ride (LLP 1010 §6.12, "Only a live list").
+    func testARemovalBeforeTheListSettlesMovesNoRow() throws {
+        let p = presenter()
+        _ = try list(p)
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 49, "totalExtent": 1960, "rows": rows([8, 10, 14]),
+            "correction": ["scrollSequence": seq, "offset": 1660, "smooth": false]]]],
+            ["op": "exit", "id": 12],
+            ["op": "create", "id": 8, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [8, 10, 14]],
+            ["op": "frame", "id": 8, "x": 0.0, "y": 1840.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 14, "x": 0.0, "y": 1920.0, "w": 300.0, "h": 40.0],
+            ["op": "content", "id": 1, "w": 300.0, "h": 1960.0]]))
+        for id: UInt32 in [8, 10, 14] { XCTAssertNil(ride(try XCTUnwrap(p.views[id])), "row \(id) takes its place") }
+    }
+
+    /// A list a batch emptied, then refilled by a runner commit that rode
+    /// (its followed end moving smoothly to the new rows): the new rows
+    /// showed nowhere, so none rides, and the port keeps the platform's
+    /// smooth scroll rather than jumping (LLP 1010 §6.12).
+    func testARefilledListRidesNoRowAndKeepsItsSmoothMove() throws {
+        let p = presenter()
+        _ = try list(p)
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 0, "totalExtent": 0, "rows": rows([]),
+            "correction": ["scrollSequence": seq, "offset": 0, "smooth": false], "live": true]]],
+            ["op": "children", "id": 1, "ids": []],
+            ["op": "content", "id": 1, "w": 300.0, "h": 0.0]]))
+        let seq2 = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        var refilled = wireBatch([["op": "collections", "items": [["view": 1, "revision": 4, "scrollSequence": 0, "count": 15, "totalExtent": 600, "rows": rows([20, 22, 24]),
+            "correction": ["scrollSequence": seq2, "offset": 300, "smooth": true], "live": true]]],
+            ["op": "create", "id": 20, "kind": "view"], ["op": "create", "id": 22, "kind": "view"], ["op": "create", "id": 24, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [20, 22, 24]],
+            ["op": "frame", "id": 20, "x": 0.0, "y": 480.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 22, "x": 0.0, "y": 520.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 24, "x": 0.0, "y": 560.0, "w": 300.0, "h": 40.0],
+            ["op": "content", "id": 1, "w": 300.0, "h": 600.0]])
+        refilled.rides = [1]
+        p.apply(refilled)
+        for id: UInt32 in [20, 22, 24] { XCTAssertNil(ride(try XCTUnwrap(p.views[id])), "row \(id) showed nowhere before") }
+        XCTAssertTrue(p.listHost.animating.contains(1) || p.listHost.startOwed.contains(1), "the port moves by the platform's smooth scroll")
+    }
+
+    /// A batch that replaces every row the port showed rides no row and keeps its smooth move while the only row it
+    /// keeps is out of the port, or in it but hidden: neither says where the new rows showed (LLP 1010 §6.12).
+    func testAReplacementKeepingOnlyARowThatDidNotShowRidesNoRow() throws {
+        for (y, hidden) in [(100.0, false), (1900.0, true)] {
+            let p = presenter()
+            _ = try list(p)
+            p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 50, "totalExtent": 2000, "rows": rows([30, 10, 12, 14]), "correction": NSNull(), "live": true]]],
+                ["op": "create", "id": 30, "kind": "view"], ["op": "children", "id": 1, "ids": [30, 10, 12, 14]],
+                ["op": "frame", "id": 30, "x": 0.0, "y": y, "w": 300.0, "h": 40.0]]))
+            try XCTUnwrap(p.views[30]).isHidden = hidden
+            let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+            var replaced = wireBatch([["op": "collections", "items": [["view": 1, "revision": 4, "scrollSequence": 0, "count": 60, "totalExtent": 2400, "rows": rows([30, 40, 42, 44]),
+                "correction": ["scrollSequence": seq, "offset": 2100, "smooth": true], "live": true]]],
+                ["op": "create", "id": 40, "kind": "view"], ["op": "create", "id": 42, "kind": "view"], ["op": "create", "id": 44, "kind": "view"],
+                ["op": "children", "id": 1, "ids": [30, 40, 42, 44]],
+                ["op": "frame", "id": 40, "x": 0.0, "y": 2280.0, "w": 300.0, "h": 40.0],
+                ["op": "frame", "id": 42, "x": 0.0, "y": 2320.0, "w": 300.0, "h": 40.0],
+                ["op": "frame", "id": 44, "x": 0.0, "y": 2360.0, "w": 300.0, "h": 40.0],
+                ["op": "content", "id": 1, "w": 300.0, "h": 2400.0]])
+            replaced.rides = [1]
+            p.apply(replaced)
+            for id: UInt32 in [40, 42, 44] { XCTAssertNil(ride(try XCTUnwrap(p.views[id])), "row \(id) showed nowhere before (kept row at \(y), hidden \(hidden))") }
+            XCTAssertTrue(p.listHost.animating.contains(1) || p.listHost.startOwed.contains(1), "the port moves by the platform's smooth scroll (kept row at \(y), hidden \(hidden))")
+        }
     }
 
     /// A runner commit that grows the last row at a followed end (a receipt

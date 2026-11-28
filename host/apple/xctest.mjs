@@ -165,6 +165,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/live-accent.contract'), '-o', env[`${prefix}_LIVE_ACCENT_PLAN`] = resolve(dir, 'live-accent.plan')]);
   // HeaderSearchFieldIOSTests' route search over a scroller whose keyboard dismissal is unsaid.
   contract([resolve(root, 'host/apple/tests/fixtures/header-search-keys.contract'), '-o', env[`${prefix}_HEADER_SEARCH_KEYS_PLAN`] = resolve(dir, 'header-search-keys.plan')]);
+  // CollectionRideIOSTests' first edit after a list settles on UIKit's reports (LLP 1010 §6.12).
+  contract([resolve(root, 'host/apple/tests/fixtures/list-first-edit.contract'), '-o', env[`${prefix}_LIST_FIRST_EDIT_PLAN`] = resolve(dir, 'list-first-edit.plan')]);
   // HeldStateTests' own (a card that presses over a flat leaf), beside them.
   contract([resolve(root, 'host/apple/tests/fixtures/held-state.contract'), '-o', env[`${prefix}_HELD_STATE_PLAN`] = resolve(dir, 'held-state.plan')]);
   // ScrollTimelineTests': a scroll timeline's and a view timeline's consumers (LLP 1057.003 D5).

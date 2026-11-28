@@ -67,6 +67,22 @@ test('nested restoration keeps data below the lead and positions wholly inside f
   expect(result).toEqual([150, 850]);
 });
 
+// A list that opens at its end, whose fixed footer is taller than its port and the rows around it, mounts no data
+// row there: at rest at its end, nothing pending, it has opened.
+test('an end-start list whose footer fills its window opens at its end with no row mounted', async () => {
+  const result = await evaluate(`(() => {
+    const port=document.createElement('div');document.querySelector('main').append(port);
+    const own=rt.scope(()=>list.vl(port,()=>[1,2,3],i=>i(),()=>{}, {est:60,pw:[130],ph:[320],fixed:[()=>{},()=>{}]}));
+    const c=port.$list; c.index.fixed=[0,3000];
+    c.atEnd=true; c.mounted=[]; c.pending=false; c.animating=false; c.correction=null;
+    c.geometry={offset:c.index.maxOffset(320),port_main:320};
+    c.settleStart();
+    const opened=!c.atEnd;
+    rt.end(own);port.remove();return opened;
+  })()`);
+  expect(result).toBe(true);
+});
+
 test('initial follow measures fixed geometry before choosing an end anchor', async () => {
   const result = await evaluate(`(() => {
     const offsets=[];

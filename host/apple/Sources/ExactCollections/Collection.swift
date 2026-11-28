@@ -165,6 +165,9 @@ final class CollectionHost: ListHosting {
         /// the list's axis when the batch began, relative to the port: a
         /// batch that moves them rides from there (`rideBatch`).
         var batchRows: [UInt32: CGFloat] = [:]
+        /// Of those, the ones that showed in the port when the batch began: a batch rides only from one of them still
+        /// in the list (`ridesFrom`), and the rows it mounts move as the nearest of them does (`rideBatch`).
+        var batchShown: Set<UInt32> = []
         #endif
         /// What the platform covers of the port at its start and end, as the runner was last told.
         var covered: [Double] = [0, 0]
@@ -436,7 +439,7 @@ final class CollectionHost: ListHosting {
             for (view, entry) in entries {
                 entry.batchInsets = portInsets(view); entry.batchStart = batchOffset(view)
                 #if os(iOS) || os(tvOS)
-                entry.batchRows = rowStarts(view)
+                (entry.batchRows, entry.batchShown) = rowsAtBegin(view)
                 #endif
             }
         }
@@ -521,7 +524,10 @@ final class CollectionHost: ListHosting {
             guard let port = geometry(view) else { continue }
             // The rows move once, after the outermost batch has placed them all
             #if os(iOS) || os(tvOS)
-            if batchDepth == 1, removes(view, began: batchLeaving) || rideOwed.contains(view) { riding.insert(view) }
+            // (A row's exit rides only a list that has settled, as a commit's does, and either only from a row
+            // the batch began with shown that is still there, mounted or leaving: rows that all came new, or
+            // replaced every row, have no place to ride from. LLP 1010 §6.12.)
+            if batchDepth == 1, ridesFrom(entry, in: view), entry.snapshot.live && removes(view, began: batchLeaving) || rideOwed.contains(view) { riding.insert(view) }
             #endif
             let dimensions = [port.portCross, port.portMain, port.cross]
             let planned = entry.cursor.sequence, jumped = entry.cursor.jumpedAt
@@ -662,6 +668,8 @@ final class CollectionHost: ListHosting {
               sliceLimits[id] == nil, !refreshPins, !entry.owed, !entry.gesture,
               entry.travelled || !entry.snapshot.pending,
               !animating.contains(id), !ancestorMoving(id), !entry.records.changed,
+              // A changed reading owes a report: the landing of a smooth correction tells the runner the port is at rest
+              entry.lastReading == Reading(scrolling: readerScrolling(id), gesture: entry.gesture, animating: false),
               entry.records.unacknowledged.isEmpty, covered(id) == entry.covered else { return false }
         let focus = focusFound ?? focusedView()
         focusFound = focus
@@ -984,7 +992,8 @@ final class CollectionHost: ListHosting {
             // Cached geometry permits a hidden previous owner to release its
             // pin. Measurements below still come only from visible live rows.
             var reported = false
-            let visibleFacts = geometry(id)
+            // A list out of its window reports cached geometry, as a hidden one does (`geometry`)
+            let visibleFacts = presenter?.views[id]?.window == nil ? nil : geometry(id)
             if let entry = entries[id], var facts = visibleFacts ?? entry.lastFacts {
                 facts.focus = focusOwner == id ? focus : nil
                 facts.interaction = interactionOwner == id ? interaction : nil
@@ -1040,7 +1049,9 @@ final class CollectionHost: ListHosting {
                     == (facts.portMain, facts.portCross, facts.cross, facts.focus, facts.interaction) } ?? false
                 let glimpse = glimpsing.contains(id) && retireLimit == nil && limit != nil
                 let offMain = building?.view == id && same && retireLimit == nil && !glimpse ? building : nil
-                let reading = Reading(scrolling: readerScrolling(id), gesture: entry.gesture, animating: animating.contains(id))
+                // A report from cached geometry (the list hidden or out of its window) is not one of a port at rest: the runner settles and
+                // opens on none, and the first visible report, its reading changed, is sent
+                let reading = Reading(scrolling: readerScrolling(id), gesture: entry.gesture, animating: animating.contains(id) || visibleFacts == nil)
                 // What the bars cover goes to the runner with a report, so a change of it alone owes one
                 #if os(iOS) || os(tvOS)
                 let coveredMoved = covered(id) != entry.covered

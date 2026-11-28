@@ -524,11 +524,14 @@ class Collection {
     this.endTravel = velocity ? this.endTravel + 1 : 0;
     if (this.endTravel >= 2) this.atEnd = false;
   }
-  /** Opened: a report at the end that changed nothing (every mounted row
-   * measured, the extent as it was before them), nothing owed or corrected. */
-  settleStart(extent) {
+  /** Opened: a report that shows the port at rest at its end, its rows there (each displayed mounted row measured;
+   * one not displayed takes no room and is reported no size; none mounted passes, as fixed content taller than the
+   * window leaves no data row in it), no window fill pending, nothing owed or corrected. The report that
+   * measures the last row opens a list already at its end, as a short list is (start.rs `settle_start`). */
+  settleStart() {
     const g = this.geometry;
-    if (g && this.atEnd && (this.index.len || this.fixed) && !this.pending && !this.correction && Math.abs(this.index.total - extent) < 0.01 && this.mounted.every(m => this.index.measured(m.key))
+    if (g && g.port_main > 0 && this.atEnd && (this.index.len || this.fixed) && !this.pending && !this.animating && !this.correction
+      && this.mounted.every(m => m.undisplayed || this.index.measured(m.key))
       && this.index.maxOffset(g.port_main) - g.offset < END_SLACK) this.atEnd = false;
   }
   restore(a) {
@@ -916,7 +919,6 @@ class Collection {
     }
     const height = this.geometry ? this.geometry.port_main : f.port_main;
     this.leaveEndIfMoved(fill.velocity ?? 0);
-    const extent = this.index.total;
     // The rows this report measures for the first time, as `measure` takes them (mod.rs `first_measured`)
     const firstMeasured = changedWidth ? [] : measurements.flatMap(r => {
       const m = this.fixedSide(r.view) < 0 ? this.mounted[byView.get(r.view)] : undefined, key = m && this.index.order[m.position];
@@ -936,7 +938,7 @@ class Collection {
     if (doneNested) doneNested();
     // A nested request whose outer part was admitted: the inner list in its row begins the rest (into_view.rs `begin_inner`).
     if (landing && this.target?.inner) { const inner = this.target.inner; this.target.inner = null; inner(); }
-    this.settleStart(extent);
+    this.settleStart();
     const now = this.snapshot();
     now.scrollSequence = previous.scrollSequence;
     const changed = paddingChanged || JSON.stringify(previous) !== JSON.stringify(now);

@@ -256,8 +256,8 @@ pub(crate) struct Collection {
     /// What a retiring row may be rebound to another item under (LLP 1078):
     /// `None` when no row of this list can be.
     reuse: Option<Rc<reuse::Reuse>>,
-    /// It has shown its settled first rows (`live`): latched the first time it is asked once so.
-    live: std::cell::Cell<bool>,
+    /// It has shown its settled first rows (`live`), recorded by the report that confirmed them.
+    live: bool,
 }
 fn index_error(e: index::IndexError) -> InstanceError {
     InstanceError::Collection(e.to_string())
@@ -306,20 +306,72 @@ impl Collection {
     }
 
     /// @ref LLP 1010 §6.12 — whether the list has shown its settled first
-    /// rows: the host has reported where it shows them, no correction it
-    /// owes is outstanding (the start at a list's end included) and no row
-    /// in its window awaits a measurement. Opening, restoring and a new
-    /// incarnation are not live, and what changes rows then moves none.
-    /// Once live, it stays so.
+    /// rows, as an accepted report confirmed them (`note_settled`). Opening,
+    /// restoring and a new incarnation are not live, and what changes rows
+    /// then moves none. Once live, it stays so.
     pub(crate) fn live(&self) -> bool {
-        if !self.live.get()
-            && self.geometry.is_some()
-            && self.correction.is_none()
-            && !self.any_awaiting
+        self.live
+    }
+
+    /// After an accepted report: it confirmed the list's first rows settled
+    /// when the host showed a port at rest (not animating toward a
+    /// destination), nothing is pending, no correction is outstanding (the
+    /// start at a list's end or a restored place included; a correction a
+    /// measurement asked for is outstanding until a report takes it), a list
+    /// that opens at its end has opened there, and its rows are there, each
+    /// displayed mounted one measured (an undisplayed one takes no room), one
+    /// of them with a size in the port: a port of fixed content alone, or of
+    /// undisplayed rows, shows no row an edit could move.
+    pub(super) fn note_settled(&mut self) {
+        let shown = self.geometry.as_ref().is_some_and(|g| g.port_main > 0.0);
+        if self.live
+            || !shown
+            || self.animating
+            || self.at_end
+            || self.pending
+            || self.correction.is_some()
         {
-            self.live.set(true);
+            return;
         }
-        self.live.get()
+        if self.rows_measured() && self.shows_a_row() {
+            self.live = true;
+        }
+    }
+
+    /// Whether the list's rows are there: it has rows (an empty list's are yet
+    /// to come), some are mounted, and each displayed mounted row is measured
+    /// (an undisplayed one takes no room, and a host reports no size for it).
+    /// Whether the rows it holds are there: it holds data or fixed content,
+    /// and each displayed mounted row is measured. None mounted passes, as
+    /// fixed content taller than the window leaves no data row in it.
+    pub(super) fn rows_measured(&self) -> bool {
+        (self.index.len() > 0 || self.fixed.is_some())
+            && self
+                .mounted
+                .iter()
+                .all(|m| m.undisplayed || self.index.is_measured_at(m.position))
+    }
+
+    /// Whether the port shows a row: a displayed, measured mounted one whose
+    /// own extent, the gap after it left out, has a size and overlaps the port
+    /// the host last reported.
+    fn shows_a_row(&self) -> bool {
+        let Some(g) = &self.geometry else {
+            return false;
+        };
+        let offset = self.view_offset.unwrap_or(g.offset);
+        self.mounted.iter().any(|m| {
+            if m.undisplayed || !self.index.is_measured_at(m.position) {
+                return false;
+            }
+            let (Some(start), Some(height)) =
+                (self.index.prefix(m.position), self.index.height(m.position))
+            else {
+                return false;
+            };
+            let body = (height - self.index.item_gap()).max(0.0);
+            body > 0.0 && start < offset + g.port_main && start + body > offset
+        })
     }
 
     pub(super) fn follow_end(&mut self, enabled: bool) {
@@ -1078,6 +1130,7 @@ impl Collection {
                 // No request, or one that waits on: the snapshot stays as it was.
                 self.scrolling = fill.scrolling;
                 self.reveal_shown(u);
+                self.note_settled();
                 return Ok((false, edge));
             }
         }
@@ -1158,7 +1211,6 @@ impl Collection {
             .as_ref()
             .map_or(feedback.port_main, |g| g.port_main);
         self.leave_end_if_moved(fill.velocity);
-        let extent = self.index.total_height();
         let first_measured = if changed_width {
             Vec::new()
         } else {
@@ -1210,7 +1262,8 @@ impl Collection {
             self.begin_inner(u, frames)?;
         }
         self.reveal_shown(u);
-        self.settle_start(extent);
+        self.settle_start();
+        self.note_settled();
         let mut now = self.snapshot();
         // Receiving a newer sequence without changing rows/extent/correction is
         // a fact update, not a new frame (avoids post-layout feedback loops).

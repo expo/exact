@@ -4,10 +4,13 @@ use super::*;
 
 impl Collection {
     /// A host may travel inside measured coverage without asking the owner.
-    /// Pins across a gap do not extend that coverage (LLP 1171 D21).
+    /// Pins across a gap do not extend that coverage (LLP 1171 D21). Not
+    /// before the list is live: each report may be the one that first shows
+    /// a row in its port (`note_settled`, LLP 1010 §6.12).
     pub(super) fn built_window(&self) -> Option<CollectionWindow> {
         let g = self.geometry.as_ref()?;
-        if self.fixed.is_some()
+        if !self.live
+            || self.fixed.is_some()
             || self.restored_at.is_some()
             || self.at_end
             || self.follow_end
@@ -108,6 +111,7 @@ impl Collection {
         };
         self.scrolling = fill.scrolling;
         self.reveal_shown(u);
+        self.note_settled();
         Ok(Some(edge))
     }
 

@@ -318,6 +318,7 @@ impl Tree {
                 axis: c.axis,
                 parent: c.parent,
                 restored: c.restored,
+                live: c.live,
                 seeking: c.target.is_some() && !c.request_waits(),
                 waiting: c.request_waits(),
                 request: c.request,

@@ -1,0 +1,21 @@
+// CollectionRideIOSTests' first edit: a list that settles on UIKit's own
+// reports, whose first row grows on a press, and that opens again on another
+// (LLP 1010 §6.12)
+component App
+  state grown = false
+  state open = true
+  action grow
+    grown = not grown
+  action reopen
+    open = not open
+  view
+    column flex=1
+      button testId="grow" press=grow height=40
+        text "Grow"
+      button testId="reopen" press=reopen height=40
+        text "Reopen"
+      if open
+        list testId="rows" virtualized=true estimated-item-height=20 height=300 overflow-y="scroll"
+          for x in range(6) key=x
+            view testId=`row-${x}` height=(x == 0 and grown ? 48 : 24)
+              text `Row ${x}`

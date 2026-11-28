@@ -223,6 +223,8 @@ pub struct CollectionSnapshot {
     pub parent: Option<ViewId>,
     /// It started where a kept position said (LLP 1070 §4.2).
     pub restored: bool,
+    /// It has shown its settled first rows: a change to it may move them (LLP 1010 §6.12).
+    pub live: bool,
     /// A `scrollIntoView` is under way (LLP 1070.000): its corrections are
     /// authored moves, which a host applies whatever it has sampled since,
     /// until the reader's own input takes the port over.
@@ -469,6 +471,9 @@ pub fn snapshots_json(snapshots: &[CollectionSnapshot]) -> String {
         }
         if c.restored {
             out.push_str("\"restored\":true,");
+        }
+        if c.live {
+            out.push_str("\"live\":true,");
         }
         if c.seeking {
             out.push_str("\"seeking\":true,");

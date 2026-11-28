@@ -150,28 +150,24 @@ impl Collection {
             offset
         }
     }
-    /// The list opened: a report at the end that changed nothing — every
-    /// mounted row measured, and its measurements left the extent as it was
-    /// (`extent`, before them; a first report's are discarded), nothing owed
-    /// or corrected. Until then the window there is still
-    /// filling, and a host may clamp its port to rows it has laid out before
-    /// the runner measured them. From then on `scrollFollowEnd` decides.
-    pub(super) fn settle_start(&mut self, extent: f64) {
+    /// The list opened: a report that shows the port at rest at its end, its
+    /// rows there (`rows_measured`), nothing owed or corrected. Until then the
+    /// window there is still filling, and a host may clamp its port to rows it
+    /// has laid out before the runner measured them: a measurement that grows
+    /// the extent leaves the port short of the new end, or owes a correction
+    /// to it. The report that measures the last row opens a list whose port
+    /// is already at the end, as a short list's is, since none may follow it.
+    /// From then on `scrollFollowEnd` decides.
+    pub(super) fn settle_start(&mut self) {
         let Some(g) = &self.geometry else {
             return;
         };
-        let total = self.index.total_height();
-        // An empty list has not opened: its rows are yet to come.
         if self.at_end
-            && (self.index.len() > 0 || self.fixed.is_some())
+            && g.port_main > 0.0
             && !self.pending
+            && !self.animating
             && self.correction.is_none()
-            && (total - extent).abs() < 0.01
-            && self.mounted.iter().all(|m| {
-                self.index
-                    .key(m.position)
-                    .is_some_and(|k| self.index.is_measured(k))
-            })
+            && self.rows_measured()
             && self.index.max_offset(g.port_main) - g.offset < super::index::END_SLACK
         {
             self.at_end = false;
