@@ -50,7 +50,7 @@ import kotlin.math.roundToLong
 @OptIn(UnstableApi::class)
 class MediaPlayer(
     initialContext: Context,
-    private val claimPlayback: ((Player) -> AutoCloseable?)?,
+    private val claimPlayback: ((Player, () -> Unit) -> AutoCloseable?)?,
 ) : VideoPlayer {
     constructor(context: Context) : this(context, null)
 
@@ -123,7 +123,7 @@ class MediaPlayer(
     override val view: View get() = frame
     override val lendable: Boolean get() = controls == null && floating == null
     override val engaged: Boolean get() = floating != null || !projection.paused && !eligible()
-    override val backgroundPlayback: Boolean get() = playback != null && exo.playWhenReady && !projection.ended
+    override val backgroundPlayback: Boolean get() = playback != null && (audio || exo.playWhenReady) && !projection.ended
     override val controller: View? get() = controls
 
     init {
@@ -220,6 +220,7 @@ class MediaPlayer(
 
     /** A source loaded, or the record's prepared again where it was (D7's restoration). */
     private fun load(props: JSONObject, source: String, uri: String, from: MediaRecord.Resume?) {
+        closePlayback()
         src = source
         val restoring = from != null && from.src == source
         prepared = false; rendered = false; error = null; unavailable = null; pendingSeek = null; seekLanded = false
@@ -722,21 +723,38 @@ class MediaPlayer(
 
     private fun releaseFocus() { claim?.release(); claim = null }
 
+    // Match Media3's ten-minute foreground playback grace period for a paused session.
+    private val expirePlayback = Runnable {
+        closePlayback()
+        pushState()
+    }
+
     private fun syncPlayback() {
         val running = exo.playbackState == Player.STATE_BUFFERING || exo.playbackState == Player.STATE_READY
         val eligible = audio || exo.isPlaying && exo.currentTracks.isTypeSelected(C.TRACK_TYPE_AUDIO)
             && applied?.optString("audiovisualBackgroundPlaybackPolicy") == "continuesIfPossible"
-        if (claimPlayback == null || sink == null || !eligible || muted || volume <= 0f || !exo.playWhenReady || !running) {
+        if (claimPlayback == null || sink == null || !eligible || muted || volume <= 0f || !running) {
             closePlayback()
             return
         }
-        if (playback == null) playback = claimPlayback.invoke(exo)
+        if (!exo.playWhenReady) {
+            setWakeMode(C.WAKE_MODE_NONE)
+            if (playback != null && !main.hasCallbacks(expirePlayback)) main.postDelayed(expirePlayback, 600_000L)
+            return
+        }
+        main.removeCallbacks(expirePlayback)
+        if (playback == null) playback = claimPlayback.invoke(exo) {
+            pause(author = false)
+            closePlayback()
+            pushState()
+        }
         if (playback != null) setWakeMode(playbackWakeMode(exo.currentMediaItem?.localConfiguration?.uri))
     }
 
     private fun closePlayback() {
         val previous = playback ?: return
         playback = null
+        main.removeCallbacks(expirePlayback)
         previous.close()
         setWakeMode(C.WAKE_MODE_NONE)
     }

@@ -14,6 +14,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.ui.R as MediaResources
 import dev.exact.canvas.ForegroundServices
 
 /** The service takes the audible player as soon as playback starts, including while Android starts the service. */
@@ -34,6 +35,7 @@ class PlaybackService : MediaSessionService() {
                 service = this
                 refresh()
             }
+            PLAY -> session?.player?.play()
             PAUSE -> session?.player?.pause()
         }
         if (!promoted) stopSelf(startId)
@@ -41,7 +43,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun refresh() {
-        val player = claims.lastOrNull()?.player
+        val player = (claims.lastOrNull { it.player.playWhenReady } ?: claims.lastOrNull())?.player
         if (session != null && player != null) {
             if (session?.player !== player) session?.player = player
             return
@@ -80,26 +82,28 @@ class PlaybackService : MediaSessionService() {
     private fun notification(): Notification {
         val current = session
         val builder = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(androidx.media3.ui.R.drawable.exo_notification_small_icon)
+            .setSmallIcon(MediaResources.drawable.exo_notification_small_icon)
             .setContentTitle(current?.player?.mediaMetadata?.title ?: appName)
             .setCategory(Notification.CATEGORY_TRANSPORT)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
-            .setOngoing(true)
+            .setOngoing(current?.player?.playWhenReady == true)
         if (current != null) {
-            val pause = PendingIntent.getService(this, 0, Intent(this, PlaybackService::class.java).setAction(PAUSE),
+            val playing = current.player.playWhenReady
+            val icon = if (playing) MediaResources.drawable.exo_notification_pause else MediaResources.drawable.exo_notification_play
+            val label = if (playing) MediaResources.string.exo_controls_pause_description else MediaResources.string.exo_controls_play_description
+            val action = PendingIntent.getService(this, 0, Intent(this, PlaybackService::class.java).setAction(if (playing) PAUSE else PLAY),
                 PendingIntent.FLAG_IMMUTABLE)
             builder.setContentIntent(current.sessionActivity)
-                .addAction(Notification.Action.Builder(Icon.createWithResource(this, androidx.media3.ui.R.drawable.exo_notification_pause),
-                    getText(androidx.media3.ui.R.string.exo_controls_pause_description), pause).build())
+                .addAction(Notification.Action.Builder(Icon.createWithResource(this, icon), getText(label), action).build())
                 .setStyle(Notification.MediaStyle().setMediaSession(current.platformToken).setShowActionsInCompactView(0))
         }
         return builder.build()
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (!promoted) stopSelf()
+        if (claims.none { it.player.playWhenReady }) stopSelf()
     }
 
     private fun refused(error: Exception) {
@@ -138,6 +142,7 @@ class PlaybackService : MediaSessionService() {
 
     internal companion object {
         private const val START = "dev.exact.video.START_PLAYBACK"
+        private const val PLAY = "dev.exact.video.PLAY_PLAYBACK"
         private const val PAUSE = "dev.exact.video.PAUSE_PLAYBACK"
         private const val CHANNEL = "exact.playback"
         private const val NOTIFICATION = 0x45584303
@@ -145,8 +150,8 @@ class PlaybackService : MediaSessionService() {
         private var service: PlaybackService? = null
         private var starting = false
 
-        fun claim(context: Context, player: Player): Playback? {
-            val claim = Playback(player)
+        fun claim(context: Context, player: Player, lost: () -> Unit): Playback? {
+            val claim = Playback(player, lost)
             claims.add(claim)
             val live = service
             if (live == null && !starting) {
@@ -163,11 +168,18 @@ class PlaybackService : MediaSessionService() {
                     return null
                 }
             }
+            player.addListener(claim)
             live?.refresh()
             return claim
         }
 
+        fun playbackChanged(claim: Playback) {
+            if (claim.player.playWhenReady && claims.remove(claim)) claims.add(claim)
+            service?.refresh()
+        }
+
         fun end(claim: Playback) {
+            claim.player.removeListener(claim)
             if (!claims.remove(claim)) return
             // Switch the session before the reader can release this player.
             service?.refresh()
@@ -176,11 +188,12 @@ class PlaybackService : MediaSessionService() {
         private fun stopPlayers() {
             val lost = claims.toList()
             claims.clear()
-            for (claim in lost) claim.player.pause()
+            for (claim in lost) claim.lost()
         }
     }
 }
 
-internal class Playback(val player: Player) : AutoCloseable {
+internal class Playback(val player: Player, val lost: () -> Unit) : AutoCloseable, Player.Listener {
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = PlaybackService.playbackChanged(this)
     override fun close() = PlaybackService.end(this)
 }

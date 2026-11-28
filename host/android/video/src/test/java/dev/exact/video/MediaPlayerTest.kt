@@ -54,8 +54,37 @@ class MediaPlayerTest {
         assertEquals(C.WAKE_MODE_LOCAL, playbackWakeMode(Uri.parse("file:///radio.mp3")))
     }
 
+    @Test fun pausedAudioKeepsItsClaimUntilResumeOrSourceChange() {
+        var claims = 0
+        var closed = 0
+        lateinit var native: Player
+        val p = MediaPlayer(RuntimeEnvironment.getApplication()) { player, _ ->
+            native = player
+            claims++
+            AutoCloseable { closed++ }
+        }.also { made += it }
+        p.bind(Events())
+        val audio = props("audio" to true, "paused" to true)
+        p.update(audio, 0, 0, null)
+        assertEquals(0, claims)
+
+        p.update(props("audio" to true, "paused" to false), 0, 0, null)
+        native.pause()
+        assertTrue(p.snapshot()!!.paused)
+        assertTrue(p.backgroundPlayback)
+        assertEquals(0, closed)
+
+        native.play()
+        assertFalse(p.snapshot()!!.paused)
+        assertEquals(1, claims)
+        native.pause()
+        p.update(props("audio" to true, "paused" to true, "src" to "assets/b.mp4"), 0, 0, null)
+        assertFalse(p.backgroundPlayback)
+        assertEquals(1, closed)
+    }
+
     @Test fun backgroundPlaybackAudioLetsTheDisplaySleepByDefault() {
-        val playback = MediaPlayer(RuntimeEnvironment.getApplication()) { null }.also { made += it }
+        val playback = MediaPlayer(RuntimeEnvironment.getApplication()) { _, _ -> null }.also { made += it }
         val standard = player()
         for (p in listOf(playback, standard)) {
             val audio = props("audio" to true, "controls" to true)
