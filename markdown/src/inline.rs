@@ -48,6 +48,16 @@ struct Delim {
     close: bool,
 }
 
+impl Delim {
+    /// Whether the run `c` can close this one.
+    fn pairs(&self, c: &Delim) -> bool {
+        let thirds = (self.open && self.close || c.open && c.close)
+            && (self.total + c.total).is_multiple_of(3)
+            && !(self.total.is_multiple_of(3) && c.total.is_multiple_of(3));
+        self.ch == c.ch && self.open && c.close && !thirds
+    }
+}
+
 #[derive(Default)]
 struct AutolinkEnd {
     close: usize,
@@ -349,15 +359,16 @@ impl Scanner<'_> {
                 '[' => self.bracket(i, hi, false, depth),
                 // Past depth 0 is a link's label, where GFM links no bare URL.
                 'h' if depth == 0
-                    && (i == lo || self.ch(i - 1).is_whitespace() || self.ch(i - 1) == '(') =>
+                    && (i == lo
+                        || self.ch(i - 1).is_whitespace()
+                        || matches!(self.ch(i - 1), '(' | '*' | '_' | '~')) =>
                 {
-                    self.bare_url(i, hi)
+                    let opener = delims.last().filter(|d| d.start + d.len == i).copied();
+                    self.bare_url(i, lo, hi, opener)
                 }
                 '*' | '_' | '~' => {
                     let len = self.run(i, hi);
-                    if c != '~' || len == 2 {
-                        delims.push(self.delimiter(i, len, lo, hi));
-                    }
+                    delims.extend(self.delimiter(i, len, lo, hi));
                     Some(i + len)
                 }
                 _ => None,
@@ -443,7 +454,9 @@ impl Scanner<'_> {
         Some(close + 1)
     }
 
-    fn bare_url(&mut self, i: usize, hi: usize) -> Option<usize> {
+    /// The URL at `i`, up to white space or the closer of `opener`, the
+    /// delimiter run just before it.
+    fn bare_url(&mut self, i: usize, lo: usize, hi: usize, opener: Option<Delim>) -> Option<usize> {
         let tail = &self.source[self.pos(i)..];
         let scheme = if tail.starts_with("https://") {
             8
@@ -454,7 +467,14 @@ impl Scanner<'_> {
         };
         let mut j = i;
         while j < hi && !self.ch(j).is_whitespace() && !matches!(self.ch(j), '<' | '>') {
-            j += 1;
+            let mut len = 1;
+            if let Some(o) = opener.filter(|o| o.ch == self.ch(j)) {
+                len = self.run(j, hi);
+                if self.delimiter(j, len, lo, hi).is_some_and(|c| o.pairs(&c)) {
+                    break;
+                }
+            }
+            j += len;
         }
         let mut open = self.cs[i..j].iter().filter(|c| c.1 == '(').count();
         let mut shut = self.cs[i..j].iter().filter(|c| c.1 == ')').count();
@@ -574,8 +594,11 @@ impl Scanner<'_> {
         (close < hi).then_some(close)
     }
 
-    fn delimiter(&self, i: usize, len: usize, lo: usize, hi: usize) -> Delim {
+    fn delimiter(&self, i: usize, len: usize, lo: usize, hi: usize) -> Option<Delim> {
         let c = self.ch(i);
+        if c == '~' && len != 2 {
+            return None;
+        }
         let before = if i > lo { self.ch(i - 1) } else { ' ' };
         let after = if i + len < hi { self.ch(i + len) } else { ' ' };
         let left = !after.is_whitespace()
@@ -590,14 +613,14 @@ impl Scanner<'_> {
         } else {
             (left, right)
         };
-        Delim {
+        Some(Delim {
             ch: c,
             start: i,
             len,
             total: len,
             open,
             close,
-        }
+        })
     }
 
     /// CommonMark's delimiter algorithm: each closer takes its nearest opener.
@@ -627,10 +650,7 @@ impl Scanner<'_> {
                 let bottom = bottoms[shape(&d[ci])];
                 let found = (bottom..ci).rev().find(|&oi| {
                     let (o, c) = (&d[oi], &d[ci]);
-                    let thirds = (o.open && o.close || c.open && c.close)
-                        && (o.total + c.total) % 3 == 0
-                        && !(o.total % 3 == 0 && c.total % 3 == 0);
-                    o.ch == c.ch && o.open && o.len > 0 && !thirds
+                    o.len > 0 && o.pairs(c)
                 });
                 let Some(oi) = found else {
                     bottoms[shape(&d[ci])] = ci;
