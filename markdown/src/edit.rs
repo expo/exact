@@ -147,7 +147,9 @@ struct Prefix {
 }
 
 fn prefix(source: &str, line: &B) -> Prefix {
+    // A CRLF line reads as the styler reads it, without its `\r`.
     let text = &source[line.clone()];
+    let text = text.strip_suffix('\r').unwrap_or(text);
     let (quote, _, offset) = block::quote_prefix(text);
     let rest = &text[offset..];
     let base = line.start + offset;
@@ -408,11 +410,25 @@ fn code_block(source: &str, sel: B) -> Draft {
     });
     let mut reps: Vec<(B, String)> = fenced
         .map(|b| {
-            // A fence goes with its newline; the last line's goes with the one before.
+            // A fence goes with its newline, `\r\n` or `\n`; the last line's
+            // goes with the one before.
             if b.range.end < source.len() {
-                (b.range.start..b.range.end + 1, String::new())
+                let newline = if source[b.range.end..].starts_with("\r\n") {
+                    2
+                } else {
+                    1
+                };
+                (b.range.start..b.range.end + newline, String::new())
             } else {
-                (b.range.start.saturating_sub(1)..b.range.end, String::new())
+                let newline = if source[..b.range.start].ends_with("\r\n") {
+                    2
+                } else {
+                    1
+                };
+                (
+                    b.range.start.saturating_sub(newline)..b.range.end,
+                    String::new(),
+                )
             }
         })
         .collect();
@@ -729,9 +745,10 @@ fn newline(source: &str, mut sel: B) -> Draft {
         return plain("\n".to_string());
     }
     if source[p.content..line.end].trim().is_empty() {
-        // Return on an empty item ends the list.
+        // Return on an empty item ends the list; a CRLF line keeps its `\r`.
+        let end = line.end - usize::from(source[..line.end].ends_with('\r'));
         return Draft {
-            reps: vec![(line.start..line.end.max(sel.end), String::new())],
+            reps: vec![(line.start..end.max(sel.end), String::new())],
             selection: Some(line.start..line.start),
         };
     }

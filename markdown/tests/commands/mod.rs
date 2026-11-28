@@ -62,6 +62,34 @@ fn commands_take_the_whole_space_after_a_list_marker() {
 }
 
 #[test]
+fn commands_read_a_crlf_line_as_the_styler_does() {
+    for (before, command, after) in [
+        (
+            "1. one\r\n2.|\r\n3. x",
+            Command::Newline,
+            "1. one\r\n|\r\n3. x",
+        ),
+        ("- a\r\n-|\r\nb", Command::Newline, "- a\r\n|\r\nb"),
+        ("- [ ]|\r\nb", Command::ToggleTask, "- [x]|\r\nb"),
+        ("#|\r\nb", Command::Heading(1), "|\r\nb"),
+        ("```\r\nco|de\r\n```\r\nb", Command::CodeBlock, "co|de\r\nb"),
+        ("a\r\n```\r\nco|de\r\n```", Command::CodeBlock, "a\r\nco|de"),
+    ] {
+        assert_eq!(
+            run(before, command.clone()),
+            after,
+            "{before:?} {command:?}"
+        );
+        // The same as with LF line endings.
+        assert_eq!(
+            run(&before.replace("\r\n", "\n"), command.clone()),
+            after.replace("\r\n", "\n"),
+            "{before:?} {command:?}"
+        );
+    }
+}
+
+#[test]
 fn return_preserves_inline_constructs_across_block_breaks() {
     for (before, after) in [
         ("- **|Note:** details", "- \n- |**Note:** details"),
