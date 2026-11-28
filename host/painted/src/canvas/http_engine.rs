@@ -82,50 +82,39 @@ unsafe fn find(env: *mut JNIEnv, context: jobject) -> Option<Engine> {
     if local.is_null() {
         return None;
     }
+    // Each lookup returns at the first missing id: a failed one leaves
+    // `NoSuchMethodError` pending, and no JNI call may run under it.
     let static_method = |name: &CStr, signature: &CStr| {
-        ((**env).GetStaticMethodID.expect("jni"))(env, local, name.as_ptr(), signature.as_ptr())
+        let id = ((**env).GetStaticMethodID?)(env, local, name.as_ptr(), signature.as_ptr());
+        (!id.is_null()).then_some(id)
     };
     let method = |name: &CStr, signature: &CStr| {
-        ((**env).GetMethodID.expect("jni"))(env, local, name.as_ptr(), signature.as_ptr())
+        let id = ((**env).GetMethodID?)(env, local, name.as_ptr(), signature.as_ptr());
+        (!id.is_null()).then_some(id)
     };
     let field = |name: &CStr, signature: &CStr| {
-        ((**env).GetFieldID.expect("jni"))(env, local, name.as_ptr(), signature.as_ptr())
+        let id = ((**env).GetFieldID?)(env, local, name.as_ptr(), signature.as_ptr());
+        (!id.is_null()).then_some(id)
     };
-    let install = static_method(c"install", c"(Landroid/content/Context;)Z");
+    let install = static_method(c"install", c"(Landroid/content/Context;)Z")?;
     let engine = Engine {
         vm,
         class: std::ptr::null_mut(),
         start: static_method(
             c"start",
             c"(Ljava/lang/String;Ljava/lang/String;)Ldev/exact/canvas/ImageFetch;",
-        ),
-        head: method(c"head", c"(J)Z"),
-        read: method(c"read", c"([BIJ)I"),
-        cancel: method(c"cancel", c"()V"),
-        available: static_method(c"available", c"()Z"),
-        status: field(c"status", c"I"),
-        headers: field(c"headers", c"Ljava/lang/String;"),
-        failure: field(c"failure", c"Ljava/lang/String;"),
+        )?,
+        head: method(c"head", c"(J)Z")?,
+        read: method(c"read", c"([BIJ)I")?,
+        cancel: method(c"cancel", c"()V")?,
+        available: static_method(c"available", c"()Z")?,
+        status: field(c"status", c"I")?,
+        headers: field(c"headers", c"Ljava/lang/String;")?,
+        failure: field(c"failure", c"Ljava/lang/String;")?,
         ready: OnceLock::new(),
     };
-    let ids = [
-        engine.start,
-        engine.head,
-        engine.read,
-        engine.cancel,
-        engine.available,
-        install,
-    ];
-    if ids.iter().any(|id| id.is_null())
-        || [engine.status, engine.headers, engine.failure]
-            .iter()
-            .any(|id| id.is_null())
-        || ((**env).CallStaticBooleanMethodA?)(
-            env,
-            local,
-            install,
-            [jvalue { l: context }].as_ptr(),
-        ) == 0
+    if ((**env).CallStaticBooleanMethodA?)(env, local, install, [jvalue { l: context }].as_ptr())
+        == 0
     {
         return None;
     }
@@ -148,8 +137,27 @@ impl Engine {
     /// Run `f` with this thread's environment; a Java exception is cleared
     /// and fails the call.
     fn with<T>(&self, f: impl FnOnce(*mut JNIEnv) -> Result<T, String>) -> Result<T, HostError> {
-        // SAFETY: `vm` is the process's; an environment is used only on the
-        // thread it belongs to, and local references die with the frame.
+        let env = self.env()?;
+        // SAFETY: an environment is used only on the thread it belongs to,
+        // and local references die with the frame.
+        unsafe {
+            if ((**env).PushLocalFrame.expect("jni"))(env, 8) != JNI_OK {
+                ((**env).ExceptionClear.expect("jni"))(env);
+                return Err(HostError::Failed("out of JNI local references".into()));
+            }
+            let mut result = f(env);
+            if ((**env).ExceptionCheck.expect("jni"))(env) != 0 {
+                ((**env).ExceptionClear.expect("jni"))(env);
+                result = Err("the platform's HttpEngine threw".into());
+            }
+            ((**env).PopLocalFrame.expect("jni"))(env, std::ptr::null_mut());
+            result.map_err(HostError::Failed)
+        }
+    }
+
+    /// This thread's environment, attaching the thread if it is not.
+    fn env(&self) -> Result<*mut JNIEnv, HostError> {
+        // SAFETY: `vm` is the process's.
         unsafe {
             let vm = self.vm;
             let mut env: *mut JNIEnv = std::ptr::null_mut();
@@ -164,17 +172,7 @@ impl Engine {
                     attached.get_or_init(|| Attached(vm));
                 });
             }
-            if ((**env).PushLocalFrame.expect("jni"))(env, 8) != JNI_OK {
-                ((**env).ExceptionClear.expect("jni"))(env);
-                return Err(HostError::Failed("out of JNI local references".into()));
-            }
-            let mut result = f(env);
-            if ((**env).ExceptionCheck.expect("jni"))(env) != 0 {
-                ((**env).ExceptionClear.expect("jni"))(env);
-                result = Err("the platform's HttpEngine threw".into());
-            }
-            ((**env).PopLocalFrame.expect("jni"))(env, std::ptr::null_mut());
-            result.map_err(HostError::Failed)
+            Ok(env)
         }
     }
 
@@ -203,10 +201,15 @@ impl Drop for Fetch {
         let (object, chunk) = (self.object, self.chunk);
         let _ = self.engine.with(|env| unsafe {
             ((**env).CallVoidMethodA.expect("jni"))(env, object, self.engine.cancel, [].as_ptr());
-            ((**env).DeleteGlobalRef.expect("jni"))(env, object);
-            ((**env).DeleteGlobalRef.expect("jni"))(env, chunk);
             Ok(())
         });
+        // Outside `with`, so they go even when it cannot push a local frame.
+        if let Ok(env) = self.engine.env() {
+            unsafe {
+                ((**env).DeleteGlobalRef.expect("jni"))(env, object);
+                ((**env).DeleteGlobalRef.expect("jni"))(env, chunk);
+            }
+        }
     }
 }
 

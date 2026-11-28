@@ -652,9 +652,12 @@ impl Downloads {
                 // HttpEngine obeys Android's cleartext policy, which refuses `http:`
                 // at the reader's target SDK; the rustls sockets are not under it.
                 #[cfg(target_os = "android")]
-                let transport: &dyn Transport = match crate::canvas::http_engine::transport() {
-                    Some(engine) if url.scheme() == "https" => engine,
-                    _ => &*self.transport,
+                let transport: &dyn Transport = match (url.scheme() == "https")
+                    .then(crate::canvas::http_engine::transport)
+                    .flatten()
+                {
+                    Some(engine) => engine,
+                    None => &*self.transport,
                 };
                 #[cfg(not(target_os = "android"))]
                 let transport = &self.transport;
