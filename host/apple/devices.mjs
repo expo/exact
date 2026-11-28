@@ -493,7 +493,7 @@ export function simulator(pick = process.env.EXACT_SIM, options = {}) {
   const dev = chooseSimulator(pick, options);
   const retryBoot = options.cached && evictedBoots.delete(dev.udid);
   try {
-    const booted = bootSimulator(dev, retryBoot);
+    const booted = bootSimulator(dev, retryBoot, options);
     if (options.cached) dev.state = 'Booted';
     return { ...booted };
   } catch (error) {
@@ -580,21 +580,34 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   if (cached) { driveSimulators.set(key(pick), dev); driveSimulators.set(key(dev.udid), dev); }
   return dev;
 }
+/** How long `simctl bootstatus -b` may wait for a boot to finish. Under heavy load (2026-11-27) `simctl boot`
+ *  outlasted its own 120 s limit, so the wait that follows it is longer. */
+const BOOT_WAIT_MS = 600_000;
 /** `dev` booted and waited for; `bootedHere` when this call booted it, not when another process had just done so. */
-function bootSimulator(dev, retryBoot) {
+function bootSimulator(dev, retryBoot, { timeoutMs = 120_000 } = {}) {
   // Booted is a boot finished (Booting is its own state): only another waits, which costs a booted one 0.2–0.5 s.
   if (dev.state === 'Booted') return dev;
   chosenFrom = null;
-  const b = read('xcrun', ['simctl', 'boot', dev.udid], { timeout: 120_000 });
-  if (b.status !== 0 && !/current state: Booted/.test(b.stderr)) {
+  const b = read('xcrun', ['simctl', 'boot', dev.udid], { timeout: timeoutMs });
+  // Leave a boot that outlasted its limit to `bootstatus -b`, which boots a device that is not booted and waits for it
+  const timedOut = b.error?.code === 'ETIMEDOUT';
+  if (b.status !== 0 && !timedOut && !/current state: Booted/.test(b.stderr)) {
     const error = new Error('simctl boot: ' + (b.stderr || b.error?.message || 'failed'));
     if (retryBoot) error.retrySimulator = true;
     throw error;
   }
-  const s = read('xcrun', ['simctl', 'bootstatus', dev.udid, '-b'], { timeout: 120_000 });
+  const bootedHere = b.status === 0 || timedOut;
+  const s = read('xcrun', ['simctl', 'bootstatus', dev.udid, '-b'], { timeout: Math.max(timeoutMs, BOOT_WAIT_MS) });
   // A simulator this call booted is not left running when its boot does not finish.
-  if (s.status !== 0) { if (b.status === 0) read('xcrun', ['simctl', 'shutdown', dev.udid], { timeout: 15_000 }); throw new Error('simctl bootstatus: ' + (s.stderr || s.error?.message || 'failed')); }
-  return b.status === 0 ? { ...dev, bootedHere: true } : dev;
+  if (s.status !== 0) { if (bootedHere) read('xcrun', ['simctl', 'shutdown', dev.udid], { timeout: 15_000 }); throw bootstatusFailure(s.stderr || s.error?.message, timedOut, retryBoot); }
+  return bootedHere ? { ...dev, bootedHere: true } : dev;
+}
+/** A failed wait for a boot, saying that `simctl boot` had timed out before it when it had; such a boot is retried
+ *  as a failed `simctl boot` is. */
+function bootstatusFailure(reason, timedOut, retryBoot) {
+  const error = new Error('simctl bootstatus: ' + (reason || 'failed') + (timedOut ? ' (after `simctl boot` timed out, as it does when the Mac is short of memory or heavily loaded: free memory or wait for the load to fall, then run again)' : ''));
+  if (retryBoot && timedOut) error.retrySimulator = true;
+  return error;
 }
 
 function runCommandAsync(cmd, args, { timeoutMs = 120_000, signal } = {}) {
@@ -602,7 +615,7 @@ function runCommandAsync(cmd, args, { timeoutMs = 120_000, signal } = {}) {
   return new Promise((done) => {
     if (signal?.aborted) return done({ status: null, stdout: '', stderr: 'aborted' });
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '', finished = false;
+    let stdout = '', stderr = '', finished = false, timedOut = false;
     const settle = (result) => {
       if (finished) return;
       finished = true;
@@ -617,12 +630,12 @@ function runCommandAsync(cmd, args, { timeoutMs = 120_000, signal } = {}) {
     };
     const onAbort = () => kill('aborted', signal?.reason === 'exit');
     signal?.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => kill(`timed out after ${timeoutMs} ms`), timeoutMs);
+    const timer = setTimeout(() => { timedOut = true; kill(`timed out after ${timeoutMs} ms`); }, timeoutMs);
     timer.unref?.();
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
     child.on('error', (e) => settle({ status: null, stdout, stderr: e.message }));
-    child.on('close', (status) => settle({ status, stdout, stderr }));
+    child.on('close', (status) => settle({ status, stdout, stderr, timedOut }));
   });
 }
 
@@ -631,21 +644,22 @@ async function bootSimulatorAsync(dev, retryBoot, { timeoutMs = 120_000, onBootS
   chosenFrom = null;
   onBootStart?.();
   const b = await runCommandAsync('xcrun', ['simctl', 'boot', dev.udid], { timeoutMs, signal });
-  if (b.status !== 0 && !/current state: Booted/.test(b.stderr)) {
+  // Leave a boot that outlasted its limit to `bootstatus -b`, as [bootSimulator] does
+  if (b.status !== 0 && !b.timedOut && !/current state: Booted/.test(b.stderr)) {
     if (!signal?.aborted) onBootCleared?.();
     const error = new Error('simctl boot: ' + (b.stderr || 'failed'));
     if (retryBoot) error.retrySimulator = true;
     throw error;
   }
-  const bootedHere = b.status === 0;
+  const bootedHere = b.status === 0 || b.timedOut;
   if (bootedHere) onBooted?.(); else onBootCleared?.();
-  const s = await runCommandAsync('xcrun', ['simctl', 'bootstatus', dev.udid, '-b'], { timeoutMs, signal });
+  const s = await runCommandAsync('xcrun', ['simctl', 'bootstatus', dev.udid, '-b'], { timeoutMs: Math.max(timeoutMs, BOOT_WAIT_MS), signal });
   if (s.status !== 0) {
     if (bootedHere) {
       const down = read('xcrun', ['simctl', 'shutdown', dev.udid], { timeout: 15_000 });
       if (down.status === 0) onShutdown?.();
     }
-    throw new Error('simctl bootstatus: ' + (s.stderr || 'failed'));
+    throw bootstatusFailure(s.stderr, b.timedOut, retryBoot);
   }
   return bootedHere ? { ...dev, bootedHere: true } : dev;
 }

@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { decodePng, encodePng } from '../../scripts/png.mjs';
-import { chooseSimulator, crashReports, crashSummary, crashWatch, displayAsIs, forwardedEnv, phoneLaunch, installedAlready, simulator, simulatorTempDirectory, withDisplay, withMaterials, phoneBridge, phoneStartupFailure, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
+import { chooseSimulator, crashReports, crashSummary, crashWatch, displayAsIs, forwardedEnv, phoneLaunch, installedAlready, simulator, simulatorAsync, forgetSimulator, simulatorTempDirectory, withDisplay, withMaterials, phoneBridge, phoneStartupFailure, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
@@ -231,6 +231,38 @@ test('a simulator is chosen without booting it, and is the drive\'s own only whe
     expect(simulator(undefined).bootedHere).toBeUndefined();
   } finally {
     for (const k of ['PATH', 'DEVELOPER_DIR', 'SIM_BOOT']) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test('a boot past its limit is left to bootstatus, which boots the device and waits for it', async () => {
+  // A fake `xcrun simctl`: one shut-down iPhone; `boot` outlasts the limit, and `bootstatus` succeeds, or fails when SIM_STATUS says so.
+  const bin = mkdtempSync(resolve(tmpdir(), 'devices-boot-bin-'));
+  const saved = { PATH: process.env.PATH, DEVELOPER_DIR: process.env.DEVELOPER_DIR, SIM_STATUS: process.env.SIM_STATUS }, calls = resolve(bin, 'calls');
+  const list = JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ udid: 'U1', name: 'iPhone 17 Pro', state: 'Shutdown', deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' }] } });
+  const said = () => readFileSync(calls, 'utf8').trim().split('\n');
+  try {
+    writeFileSync(resolve(bin, 'list.json'), list);
+    writeFileSync(resolve(bin, 'xcrun'), `#!/bin/sh\necho "$2 $4" >> '${calls}'\ncase "$2" in\n  list) cat '${resolve(bin, 'list.json')}' ;;\n  boot) exec sleep 5 ;;\n  bootstatus) [ "$SIM_STATUS" = fail ] && { echo 'device failed to boot' >&2; exit 1; } ;;\nesac\nexit 0\n`);
+    chmodSync(resolve(bin, 'xcrun'), 0o755);
+    process.env.PATH = `${bin}:${saved.PATH}`;
+    process.env.DEVELOPER_DIR ??= '/Applications/Xcode.app/Contents/Developer';
+    expect(simulator(undefined, { timeoutMs: 200 }).bootedHere).toBe(true);
+    expect(said().slice(-2)).toEqual(['boot ', 'bootstatus -b']);
+    let owned = false;
+    expect((await simulatorAsync(undefined, { timeoutMs: 200, onBooted() { owned = true; } })).bootedHere).toBe(true);
+    expect(owned).toBe(true);
+    expect(said().slice(-2)).toEqual(['boot ', 'bootstatus -b']);
+    // A wait that fails after a timed-out boot says so, shuts down the simulator this call booted, and is retried as a failed boot is
+    process.env.SIM_STATUS = 'fail';
+    forgetSimulator('U1', { retryBoot: true });
+    let failure;
+    try { simulator(undefined, { timeoutMs: 200, cached: true }); } catch (e) { failure = e; }
+    expect(failure?.message).toMatch(/simctl bootstatus: device failed to boot\s+\(after `simctl boot` timed out/);
+    expect(failure?.retrySimulator).toBe(true);
+    expect(said().slice(-1)).toEqual(['shutdown']);
+  } finally {
+    for (const k of ['PATH', 'DEVELOPER_DIR', 'SIM_STATUS']) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
     rmSync(bin, { recursive: true, force: true });
   }
 });
