@@ -1,4 +1,5 @@
 // UIKit moves the scrollport; row construction follows outside its layout pass.
+// Run `bun bench/scroll-pump/run.mjs` when changing work scheduled during scrolling.
 // @ref LLP 1044.000 §6 S5; LLP 1010 §6 — visible-only rescue, bounded lead.
 #if os(iOS) || os(tvOS)
 import UIKit

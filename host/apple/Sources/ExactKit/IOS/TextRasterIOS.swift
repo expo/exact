@@ -1,5 +1,6 @@
 // UIKit paragraph layers consume pixels from the same workers and paint routine
 // as AppKit. Native views, inline links and accessibility keep their identities.
+// Run `bun bench/scroll-pump/run.mjs` when changing text prefetch during scrolling.
 // @ref LLP 1044.000 §6 S5
 #if os(iOS) || os(tvOS)
 import UIKit

@@ -1,4 +1,5 @@
 // One display link for the app's life (iOS, tvOS); its users come and go.
+// Run `bun bench/scroll-pump/run.mjs` when changing how the link is scheduled.
 // @ref LLP 1009 D4 (frames only while something moves); LLP 1061 D4 (rate).
 #if os(iOS) || os(tvOS)
 import UIKit

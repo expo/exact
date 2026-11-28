@@ -3,6 +3,7 @@
 // ones near each scrollport, not every paragraph of a long list: r24's inbox
 // keeps ~2,600 that are never rastered, and visiting each, twice a frame,
 // was most of its main thread while scrolling.
+// Run `bun bench/scroll-pump/run.mjs` when changing how the index serves prefetch.
 #if os(iOS) || os(tvOS)
 import UIKit
 
