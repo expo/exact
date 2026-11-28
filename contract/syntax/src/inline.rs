@@ -1126,7 +1126,8 @@ fn rename_nodes(
         .collect()
 }
 
-// Style and surface names are syntax; only their conditions and arguments are values.
+// Style and surface names are syntax; only their conditions and arguments are values. `DataTransfer(…)` has no
+// value of its own either: each argument is its own binding (LLP 1094.000 D1), so each is a value by itself.
 fn map_attr_value(a: &Attr, mut f: impl FnMut(&Expr) -> Expr) -> Expr {
     match (a.name.as_str(), &a.value) {
         ("class", Expr::Ternary(cond, yes, no, span)) => {
@@ -1134,6 +1135,13 @@ fn map_attr_value(a: &Attr, mut f: impl FnMut(&Expr) -> Expr) -> Expr {
         }
         ("surface", Expr::Call(name, args, span)) => {
             Expr::Call(name.clone(), args.iter().map(f).collect(), *span)
+        }
+        ("dataTransfer", Expr::Call(name, args, span)) => {
+            let args = args.iter().map(|arg| match arg {
+                Expr::NamedArg(n, value, at) => Expr::NamedArg(n.clone(), Box::new(f(value)), *at),
+                other => f(other),
+            });
+            Expr::Call(name.clone(), args.collect(), *span)
         }
         ("class" | "surface", e) => e.clone(),
         (_, e) => f(e),
