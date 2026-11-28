@@ -405,3 +405,68 @@ fn a_store_write_asks_a_store_reader_again_though_its_topic_waits_for_a_reply() 
         "the answer from before the write is let go"
     );
 }
+
+/// A live replacement that keeps the app's logic (a contract-only edit through the dev loop)
+/// carries a watching resource's answer into the new runner. The new runner must still ask the
+/// resource again when the module announces its topic, as the old one did.
+#[test]
+fn a_carried_answer_is_asked_again_when_its_topic_is_announced() {
+    let plan = contract::compile(SOURCE).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Source,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let host = {
+        let count = asked.clone();
+        Arc::new(move |_: Vec<u8>, reply: Reply| {
+            let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+            reply.send(Outcome::Response(Response {
+                status: 200,
+                headers: Vec::new(),
+                body: format!("{{\"n\":{n}}}").into_bytes(),
+            }));
+        })
+    };
+    r.native_slot().host(Some(host.clone()));
+    r.listen(Arc::new(|| {}));
+    r.data_ready().unwrap();
+    assert_eq!(run_native(&mut r), 1);
+    assert_eq!(r.resource("status"), status(1.0).as_ref());
+
+    // The edit changes only the view; the answer is carried, not asked for again.
+    let edited =
+        contract::compile(&SOURCE.replace("`status ${status.n}`", "`now ${status.n}`")).unwrap();
+    let mut next = Runner::boot_carrying(
+        edited,
+        Source,
+        Kernel::with_monospace(),
+        &r.carry(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    next.native_slot().host(Some(host));
+    next.listen(Arc::new(|| {}));
+    next.data_ready().unwrap();
+    assert_eq!(next.resource("status"), status(1.0).as_ref());
+    assert_eq!(
+        run_native(&mut next),
+        0,
+        "the carried answer is not asked for again"
+    );
+
+    // The module announces; the carried resource is asked again.
+    next.native_slot().changed("status");
+    next.apply_announced();
+    assert_eq!(
+        run_native(&mut next),
+        1,
+        "the announcement asks the carried resource again"
+    );
+    assert_eq!(next.resource("status"), status(2.0).as_ref());
+}

@@ -43,6 +43,9 @@ pub struct Carried {
     /// replacement that takes the answer shows it and asks again, opening
     /// the stream anew, since the old one ends with the runner that had it.
     pub streams: Vec<String>,
+    /// (Resource name, source name, topics): what each resource watches, so a carried answer is
+    /// asked again when its module announces a topic, as the answer it replaces was.
+    pub watched: Vec<(String, String, Vec<String>)>,
     /// (Resource name, source name) pairs whose answer depends on the store.
     pub store_readers: Vec<(String, String)>,
     /// (Resource name, source name) pairs whose answers are kept (LLP 1027
@@ -225,6 +228,18 @@ impl<D: super::DataSource> super::Runner<D> {
                     _ => None,
                 })
                 .collect(),
+            watched: (self.resource_rows())
+                .take(self.declared_resources().len())
+                .enumerate()
+                .filter(|(i, _)| !self.resources[*i].watching.is_empty())
+                .map(|(i, r)| {
+                    (
+                        self.plan.str(r.name).to_string(),
+                        self.plan.str(r.source).to_string(),
+                        self.resources[i].watching.clone(),
+                    )
+                })
+                .collect(),
             store_readers: self.declared_where(|i| self.resources[i].store_reader),
             keepers: self.declared_where(|i| {
                 self.resources[i].store_reader || super::kept::keeps_answers(&self.plan, i)
@@ -270,7 +285,7 @@ impl<D: super::DataSource> super::Runner<D> {
                     .iter()
                     .any(|(n, s)| n == name && s == source);
                 if is_clock && epoch_changed {
-                    return (true, None);
+                    return (true, None, Vec::new());
                 }
                 let state = c
                     .resources
@@ -290,11 +305,20 @@ impl<D: super::DataSource> super::Runner<D> {
                         slept: false,
                         origin: 0,
                     });
-                (is_clock, state)
+                // The topics the carried answer's source watched: nothing asks the source again
+                // to learn them, so they come with the answer.
+                let watching = (state.as_ref())
+                    .and_then(|_| c.watched.iter().find(|(n, s, _)| n == name && s == source))
+                    .map(|(_, _, topics)| topics.clone())
+                    .unwrap_or_default();
+                (is_clock, state, watching)
             })
             .collect();
-        for (row, (is_clock, state)) in self.resources.iter_mut().zip(carried_states) {
+        for (row, (is_clock, state, watching)) in self.resources.iter_mut().zip(carried_states) {
             row.clock_reader |= is_clock;
+            if state.is_some() {
+                row.watching = watching;
+            }
             row.state = state;
         }
     }

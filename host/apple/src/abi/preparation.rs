@@ -55,6 +55,7 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         resources,
         waiting,
         streams,
+        watched,
         store_readers,
         clock_readers,
         epoch_at_zero,
@@ -80,6 +81,7 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         && picked_count == &b.picked_count
         && keeps_answers == &b.keeps_answers
         && streams == &b.streams
+        && watched == &b.watched
         && store_readers == &b.store_readers
         && clock_readers == &b.clock_readers
         && epoch_at_zero.to_bits() == b.epoch_at_zero.to_bits()
