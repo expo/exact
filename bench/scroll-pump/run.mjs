@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
 const app = import.meta.dir;
@@ -45,10 +46,22 @@ const simctl = (argv, options) => command('xcrun', ['simctl', ...argv], options)
 const jsonFile = path => JSON.parse(readFileSync(path, 'utf8'));
 const save = (name, value) => writeFileSync(join(results, name), JSON.stringify(value, null, 2) + '\n');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const fixture = () => hash(Buffer.concat(['app.contract', 'app.ts', 'app.json'].map(name => readFileSync(join(app, name)))));
+const sourceFiles = ['app.contract', 'app.ts', 'app.json'];
+const fixture = (directory = app) => hash(Buffer.concat(sourceFiles.map(name => readFileSync(join(directory, name)))));
 const id = jsonFile(join(app, 'app.json')).id;
 const reusableName = `Exact Scroll Probe ${hash(app).slice(0, 10)}`;
 const reusableState = join(work, 'simulator.json');
+
+function stageSources() {
+  // An ancestor node_modules would mix the current checkout's packages into the historical build.
+  const stage = join(tmpdir(), `exact-scroll-pump-${hash(app).slice(0, 16)}`, 'scroll-pump');
+  mkdirSync(stage, { recursive: true, mode: 0o700 });
+  for (const name of sourceFiles) {
+    const bytes = readFileSync(join(app, name)), path = join(stage, name);
+    if (!existsSync(path) || !bytes.equals(readFileSync(path))) writeFileSync(path, bytes);
+  }
+  return stage;
+}
 
 function reusableDevice() {
   if (!existsSync(reusableState)) return;
@@ -96,7 +109,7 @@ function logged(bin, argv, { cwd = app, env = runEnv, timeout = 30_000, log }) {
   });
 }
 
-async function build(checkout, label, destination, inputs) {
+async function build(checkout, source, label, destination, inputs) {
   const phase = performance.now();
   console.log(`Building ${label}`);
   if (!existsSync(join(checkout, 'node_modules', '.bin', 'rolldown'))) {
@@ -109,7 +122,7 @@ async function build(checkout, label, destination, inputs) {
   const commit = revision(), changes = status();
   const log = join(results, `${label}-build.log`);
   await logged(process.execPath, ['host/apple/build.mjs', '--ios', '--no-install', '--extensions', 'none', '--json'], {
-    cwd: checkout, env: { ...runEnv, EXACT: checkout, EXACT2: checkout, EXACT_APP_DIR: app, EXACT_UPDATE_TRUST: 'development' },
+    cwd: checkout, env: { ...runEnv, EXACT: checkout, EXACT2: checkout, EXACT_APP_DIR: source, EXACT_UPDATE_TRUST: 'development' },
     timeout: 20 * 60_000, log,
   });
   const lines = readFileSync(log, 'utf8').split('\n');
@@ -117,7 +130,7 @@ async function build(checkout, label, destination, inputs) {
   assert(output, `Missing bundle from ${label} build. See ${log}`);
   const { path } = JSON.parse(output);
   assert(revision() === commit && status() === changes, `${label} checkout changed during the build`);
-  assert.equal(fixture(), inputs, `${label} fixture sources changed during the build`);
+  assert(fixture() === inputs && fixture(source) === inputs, `${label} fixture sources changed during the build`);
   const dir = mkdtempSync(join(work, 'build-'));
   const bundle = join(dir, 'Scroll Pump Probe.app');
   command('ditto', [path, bundle]);
@@ -135,7 +148,7 @@ async function build(checkout, label, destination, inputs) {
   return { bundle: join(destination, 'Scroll Pump Probe.app'), ...identity };
 }
 
-async function calibration(inputs) {
+async function calibration(source, inputs) {
   const sdk = command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-build-version']);
   const cached = join(work, `baseline-${hash(JSON.stringify([baselineCommit, inputs, sdk, process.arch])).slice(0, 16)}`);
   if (existsSync(cached)) {
@@ -151,7 +164,7 @@ async function calibration(inputs) {
   }
   assert.equal(command('git', ['rev-parse', 'HEAD'], { cwd: checkout }), baselineCommit, 'The calibration checkout moved');
   assert.equal(command('git', ['status', '--porcelain'], { cwd: checkout }), '', 'The calibration checkout has local edits');
-  return build(checkout, 'baseline', cached, inputs);
+  return build(checkout, source, 'baseline', cached, inputs);
 }
 
 const nearby = (a, b, tolerance = 1) => Math.abs(a - b) <= tolerance;
@@ -383,12 +396,13 @@ function reportFailure(error, phase) {
 }
 
 try {
-  const inputs = args.length ? null : fixture();
   const prebuilt = args.map((bundle, index) => identifyBundle(resolve(bundle), index ? 'candidate' : 'baseline'));
-  const controlReady = prebuilt.length ? Promise.resolve(prebuilt[0]) : calibration(inputs).then(control => identify(control, 'baseline'));
+  const source = prebuilt.length ? null : stageSources();
+  const inputs = source ? fixture(source) : null;
+  const controlReady = prebuilt.length ? Promise.resolve(prebuilt[0]) : calibration(source, inputs).then(control => identify(control, 'baseline'));
   // Both builds write to the fixture's output directory. Stage the control before rebuilding there.
   const candidateReady = prebuilt.length ? Promise.resolve(prebuilt[1]) : controlReady.then(async () =>
-    identify(await build(exact, 'candidate', join(results, 'candidate'), inputs), 'candidate'));
+    identify(await build(exact, source, 'candidate', join(results, 'candidate'), inputs), 'candidate'));
   const prepared = prepareSimulator();
   const observer = join(results, 'scroll-observer.dylib');
   const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
