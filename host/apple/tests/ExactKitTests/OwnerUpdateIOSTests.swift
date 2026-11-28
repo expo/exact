@@ -113,6 +113,84 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(moved[1], [], "the owner's root takes no padding from its cover")
     }
 
+    /// The session's update is the session view's in the document's space (LLP 1123 D2): its band is the safe area
+    /// where the document takes the whole view, as under the fixture's native container; its chain starts at the
+    /// controller holding the session view, the window's root a relation; the keyboard and the regions are where a
+    /// person sees them, the page scrolled or not, their margins scaled with the viewport; it reports no window map; and
+    /// the kernel takes it.
+    func testTheSessionsUpdateIsTheSessionViewsInTheDocument() throws {
+        let session = try fixture()
+        let view = try XCTUnwrap(sessionView), p = session.presenter
+        let edges = { (i: UIEdgeInsets) in OwnerUpdateWire.Edges(top: i.top, right: i.right, bottom: i.bottom, left: i.left) }
+        // A safe area with no two edges alike, whatever the window gives
+        let host = try XCTUnwrap(window?.rootViewController)
+        host.additionalSafeAreaInsets = UIEdgeInsets(top: 40, left: 12, bottom: 30, right: 8)
+        host.view.layoutIfNeeded()
+        view.layoutIfNeeded()
+        XCTAssertEqual(p.viewport.convert(p.viewport.bounds.inset(by: p.pageMargins), to: view), view.bounds, "the document takes the whole view")
+        let update = p.sessionUpdate(of: view)
+        XCTAssertGreaterThanOrEqual(view.safeAreaInsets.top, 40)
+        XCTAssertEqual(update.band, edges(view.safeAreaInsets))
+        XCTAssertEqual(update.chain.first?.target.id, TargetIds.id(of: host.view), "the hosting controller's view")
+        XCTAssertEqual(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.session }?.target.id, TargetIds.id(of: view))
+        // The page names no `interactive-widget`: UIKit's own behavior, sent as `resizes-content`
+        XCTAssertEqual(p.keyboardPolicy, "resizes-content")
+        XCTAssertEqual(update.keyboardPolicy, .resizesContent)
+        XCTAssertNotNil(update.configuration)
+        XCTAssertNil(session.runtime.ownerReports(session: update.encode()).error)
+        XCTAssertNil(update.windowMap)
+        // The conversion the keyboard and the regions take puts the viewport's visible origin at the document's, the
+        // page scrolled or not
+        for offset in [CGFloat(0), 30] {
+            p.viewport.contentOffset.y = offset
+            XCTAssertEqual(p.viewport.bounds.minY, offset, "the page scrolled")
+            let seen = p.documentRect(CGRect(origin: p.viewport.convert(p.viewport.bounds.origin, to: nil), size: CGSize(width: 10, height: 10)), from: nil)
+            XCTAssertEqual(seen.origin.x, -p.pageMargins.left, accuracy: 0.01)
+            XCTAssertEqual(seen.origin.y, -p.pageMargins.top, accuracy: 0.01)
+        }
+        p.viewport.contentOffset.y = 0
+        // A region's frame and margins scale with the viewport: under the agent's explicit size at half scale, twice
+        // the session view's points, its four margins unalike
+        let region = ReservedRegions.Region(id: 1, kind: 1, frame: CGRect(x: 40, y: 100, width: 60, height: 20),
+                                            margins: UIEdgeInsets(top: 2, left: 4, bottom: 6, right: 8), active: true)
+        XCTAssertEqual(p.documentRegion(region, of: view).margins, .init(top: 2, right: 8, bottom: 6, left: 4))
+        p.viewport.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        let scaled = p.documentRegion(region, of: view)
+        p.viewport.transform = .identity
+        XCTAssertEqual(scaled.frame.size, CGSize(width: 120, height: 40))
+        XCTAssertEqual(scaled.margins, .init(top: 4, right: 16, bottom: 12, left: 8))
+        // A controller between the window's root and the session view holds it: its view begins the chain
+        let child = UIViewController()
+        host.addChild(child)
+        host.view.addSubview(child.view)
+        child.didMove(toParent: host)
+        child.view.addSubview(view)
+        let held = p.sessionUpdate(of: view)
+        XCTAssertEqual(held.chain.first?.target.id, TargetIds.id(of: child.view))
+        XCTAssertEqual(held.chain.dropFirst().first?.target.id, TargetIds.id(of: host.view))
+        XCTAssertEqual(held.relations.first { $0.relation == OwnerUpdateIOS.Relation.root }?.target.id, TargetIds.id(of: host.view))
+        host.view.addSubview(view)
+        // A view out of a window with no controller: no keyboard, configuration or regions, no chain, and the session
+        // view still a relation
+        let alone = p.sessionUpdate(of: UIView())
+        XCTAssertEqual(alone.keyboard, .unreported)
+        XCTAssertNil(alone.configuration)
+        XCTAssertNil(alone.regions)
+        XCTAssertTrue(alone.chain.isEmpty)
+        XCTAssertEqual(alone.relations.map(\.relation), [OwnerUpdateIOS.Relation.session])
+    }
+
+    /// The band is how far the unsafe area reaches into the document: the safe area where the document takes the whole
+    /// view, none where it is the safe area, and what a scaled document's own space holds of it.
+    func testTheSessionsBandIsTheUnsafeAreaInTheDocument() {
+        let whole = CGRect(x: 0, y: 0, width: 400, height: 800), safe = whole.inset(by: UIEdgeInsets(top: 40, left: 12, bottom: 30, right: 8))
+        XCTAssertEqual(Presenter.band(document: whole, safe: safe), .init(top: 40, right: 8, bottom: 30, left: 12))
+        XCTAssertEqual(Presenter.band(document: safe, safe: safe), .zero)
+        // The agent's explicit size at half scale: the same safe area holds twice the document's points
+        let scaled = CGRect(x: 0, y: 0, width: 800, height: 1600), safeScaled = scaled.inset(by: UIEdgeInsets(top: 80, left: 24, bottom: 60, right: 16))
+        XCTAssertEqual(Presenter.band(document: scaled, safe: safeScaled), .init(top: 80, right: 16, bottom: 60, left: 24))
+    }
+
     func testTheKernelTakesAnEncodedUpdateAndRefusesATruncatedOne() throws {
         let session = try fixture()
         let (route, view) = try firstRoute(session)

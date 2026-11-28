@@ -151,29 +151,8 @@ package struct OwnerUpdateIOS: Equatable {
             update.contributions = ledger.entries
         }
         update.band = view.window == nil ? nil : view.safeAreaInsets
-        for c in sequence(first: controller, next: \.parent) {
-            var kinds: UInt8 = 0
-            if c is UINavigationController { kinds |= Kind.navigation }
-            if c is UITabBarController { kinds |= Kind.tab }
-            if c is UISplitViewController { kinds |= Kind.split }
-            if c.parent is UISplitViewController { kinds |= Kind.column }
-            let shown = c === controller ? view : c.viewIfLoaded
-            update.chain.append(ChainEntry(target: target(shown), kinds: kinds))
-        }
-        // A presented controller's chain ends at it, and its presenter is a relation: UIKit gives a
-        // contained controller its presented ancestor's presenter
-        let related: [(UInt8, UIView?)] = [
-            (Relation.presenter, controller.presentingViewController?.viewIfLoaded),
-            (Relation.session, session),
-            (Relation.root, view.window?.rootViewController?.viewIfLoaded),
-            (Relation.window, view.window),
-        ]
-        update.relations = related.compactMap { r, v in v.map { Related(relation: r, target: target($0)) } }
-        // The tab controller containing the owner, whose guide clears its tab bar or sidebar
+        (update.chain, update.relations) = targets(controller: controller, view: view, session: session)
         let tabs = sequence(first: controller, next: \.parent).lazy.compactMap { $0 as? UITabBarController }.first
-        if #available(iOS 26.0, *), let tabs {
-            update.relations.append(Related(relation: Relation.tabContent, target: target(tabs.contentLayoutGuide)))
-        }
         // Out of a window the guides were never laid out: no margins, as there is no band
         guard view.window != nil else { return update }
         let minimum = controller.systemMinimumLayoutMargins
@@ -216,15 +195,48 @@ package struct OwnerUpdateIOS: Equatable {
         return update
     }
 
+    /// The native chain from `controller` up, its own entry `view`, each with its kinds, and the relational targets
+    /// beside it (D9): its presenter, the session view, the window's root, the window and the guide of the tab
+    /// controller containing it, which clears its tab bar or sidebar. A presented controller's chain ends at it, and
+    /// its presenter is a relation: UIKit gives a contained controller its presented ancestor's presenter. With no
+    /// controller the chain is empty and the relations are the session view's and `view`'s window's; out of a window
+    /// each target is there with no insets or frame.
+    static func targets(controller: UIViewController?, view: UIView, session: UIView?) -> (chain: [ChainEntry], relations: [Related]) {
+        let ancestors = controller.map { Array(sequence(first: $0, next: \.parent)) } ?? []
+        var chain: [ChainEntry] = []
+        for c in ancestors {
+            var kinds: UInt8 = 0
+            if c is UINavigationController { kinds |= Kind.navigation }
+            if c is UITabBarController { kinds |= Kind.tab }
+            if c is UISplitViewController { kinds |= Kind.split }
+            if c.parent is UISplitViewController { kinds |= Kind.column }
+            let shown = c === controller ? view : c.viewIfLoaded
+            chain.append(ChainEntry(target: target(shown), kinds: kinds))
+        }
+        let related: [(UInt8, UIView?)] = [
+            (Relation.presenter, controller?.presentingViewController?.viewIfLoaded),
+            (Relation.session, session),
+            (Relation.root, view.window?.rootViewController?.viewIfLoaded),
+            (Relation.window, view.window),
+        ]
+        var relations = related.compactMap { r, v in v.map { Related(relation: r, target: target($0)) } }
+        if #available(iOS 26.0, *), let tabs = ancestors.lazy.compactMap({ $0 as? UITabBarController }).first {
+            relations.append(Related(relation: Relation.tabContent, target: target(tabs.contentLayoutGuide)))
+        }
+        return (chain, relations)
+    }
+
     /// The identity of `controller`'s configuration in `view`'s window, from the values UIKit gives it.
-    private static func configuration(of controller: UIViewController, view: UIView, tabs: UITabBarController?) -> UInt64? {
+    static func configuration(of controller: UIViewController, view: UIView, tabs: UITabBarController?) -> UInt64? {
         guard let window = view.window else { return nil }
         var hasher = Hasher()
-        let navigation = controller.navigationController
+        // A navigation controller holding the session view is its own navigation, its top child's item the title's
+        let navigation = controller as? UINavigationController ?? controller.navigationController
+        let item = ((controller as? UINavigationController)?.topViewController ?? controller).navigationItem
         hasher.combine(navigation?.isNavigationBarHidden)
         hasher.combine(navigation?.isToolbarHidden)
         hasher.combine(navigation?.navigationBar.prefersLargeTitles)
-        hasher.combine(controller.navigationItem.largeTitleDisplayMode.rawValue)
+        hasher.combine(item.largeTitleDisplayMode.rawValue)
         hasher.combine(tabs?.tabBar.isHidden)
         // iPadOS's floating tab bar hides through `isTabBarHidden` and leaves `tabBar.isHidden` as it was
         if #available(iOS 18, tvOS 18, *) { hasher.combine(tabs?.isTabBarHidden) }
