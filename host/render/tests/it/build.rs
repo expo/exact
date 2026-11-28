@@ -63,7 +63,7 @@ component App
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     let refusal = |route: &str| {
-        format!("route `{route}` is render=build, but its render drew randomness, and a page made at build would give every reader the same random values (LLP 1069.005 D2). Declare the route render=request, rendered for each request, or render=client, rendered in the browser")
+        format!("route `{route}` is render=build, but its render drew randomness or read the ambient clock, and a page made at build would bake a build-time value for every reader (LLP 1069.005 D2, LLP 1195.000 D2.4). Declare the route render=request, rendered for each request, or render=client, rendered in the browser")
     };
     let got: Vec<_> = lines
         .iter()
