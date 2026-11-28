@@ -136,6 +136,82 @@ final class GroupedReachIOSTests: GroupedListFixture {
     }
 
     /// `p`'s viewport in a window of `scene`, under a root view controller whose view is the owner's view here.
+    /// A plain list beside a side band (the folded iPhone Duo's strip): its cells end at the band's inner side and
+    /// their ground runs once across the band to the screen's edge, never past it; mounted by its frame with no batch
+    /// (`GroupedListHost.geometryChanged`), a list moved off the band loses the strips and one moved back regains them,
+    /// and one mounted out of the window regains them once it is in one.
+    func testAPlainListsGroundReachesAcrossTheBandOnceAndFollowsItsFrame() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a grouped list's side band is a scene window's safe area") }
+        let p = presenter(props: ["listStyle": "plain"]) { self.model("plain") }
+        let root = inScene(p, scene)
+        let band = root.view.safeAreaInsets
+        try XCTSkipIf(band.right < 1, "no right band on this device")
+        let box = CGRect(x: band.left, y: band.top, width: root.view.bounds.width - band.left - band.right, height: root.view.bounds.height - band.top - band.bottom)
+        p.apply(wireBatch([["op": "frame", "id": 1, "x": box.minX, "y": box.minY, "w": box.width, "h": box.height]]))
+        root.view.layoutIfNeeded()
+        let cell = try XCTUnwrap(try self.cell(p, 10) as? GroupedCell)
+        let ground = { cell.convert(cell.reachedBounds, to: root.view) }
+        XCTAssertEqual(cell.convert(cell.bounds, to: root.view).maxX, box.maxX, accuracy: 0.5, "the cell ends at the band's inner side")
+        XCTAssertEqual(ground().maxX, root.view.bounds.maxX, accuracy: 0.5, "its ground runs once across the band to the screen's edge")
+        // Its lines run on across the band, from UIKit's automatic trailing inset as the cell's edge
+        let line = try list(p).separator(UIListSeparatorConfiguration(listAppearance: .plain), at: IndexPath(item: 1, section: 0))
+        XCTAssertEqual(line.bottomSeparatorInsets.trailing, -band.right, accuracy: 0.5, "its line runs on across the band")
+        let node = try XCTUnwrap(p.views[1])
+        let move = { (width: CGFloat) in
+            node.frame = CGRect(x: box.minX, y: box.minY, width: width, height: box.height)
+            self.host(p).geometryChanged(1)
+            root.view.layoutIfNeeded()
+        }
+        move(box.width - 40)
+        XCTAssertEqual(cell.reachedBounds.maxX, cell.bounds.maxX, accuracy: 0.5, "a list off the band paints no strip there")
+        move(box.width)
+        XCTAssertEqual(ground().maxX, root.view.bounds.maxX, accuracy: 0.5, "back on the band, its ground reaches the edge again")
+        // Mounted out of the window, the list finds no band; put back with no batch, it finds the band again
+        p.viewport.removeFromSuperview()
+        move(box.width)
+        root.view.addSubview(p.viewport)
+        root.view.layoutIfNeeded()
+        let again = try XCTUnwrap(try self.cell(p, 10) as? GroupedCell)
+        XCTAssertEqual(again.convert(again.reachedBounds, to: root.view).maxX, root.view.bounds.maxX, accuracy: 0.5, "in the window again, its ground reaches the edge")
+        // Under an ancestor's perspective (CSS `perspective`), which can scale what it draws, no strip; without it, again
+        var perspective = CATransform3DIdentity
+        perspective.m34 = -1 / 500
+        root.view.layer.sublayerTransform = perspective
+        move(box.width)
+        let deep = try XCTUnwrap(try self.cell(p, 10) as? GroupedCell)
+        XCTAssertEqual(deep.reachedBounds.maxX, deep.bounds.maxX, accuracy: 0.5, "under a perspective, no strip")
+        root.view.layer.sublayerTransform = CATransform3DIdentity
+        move(box.width)
+        let flat = try XCTUnwrap(try self.cell(p, 10) as? GroupedCell)
+        XCTAssertEqual(flat.convert(flat.reachedBounds, to: root.view).maxX, root.view.bounds.maxX, accuracy: 0.5, "without it, the strip again")
+    }
+
+    /// An ancestor's mask counts for a list's side reach only where its coverage is known from the layer: an opaque
+    /// plain layer covers its frame; a gradient, a shape, a transform or a fill that is not opaque may hide the band.
+    func testAMaskCountsForTheSideReachOnlyByACoverageItsLayerShows() {
+        let frame = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let layer = { (make: () -> CALayer, fill: UIColor?) -> CALayer in
+            let mask = make()
+            mask.frame = frame
+            mask.backgroundColor = fill?.cgColor
+            return mask
+        }
+        XCTAssertEqual(GroupedListView.maskCoverage(layer({ CALayer() }, .black)), frame, "an opaque plain layer covers its frame")
+        XCTAssertNil(GroupedListView.maskCoverage(layer({ CAGradientLayer() }, .black)), "a gradient")
+        XCTAssertNil(GroupedListView.maskCoverage(layer({ CAShapeLayer() }, .black)), "a shape")
+        XCTAssertNil(GroupedListView.maskCoverage(layer({ CALayer() }, UIColor.black.withAlphaComponent(0.5))), "a fill not opaque")
+        XCTAssertNil(GroupedListView.maskCoverage(layer({ CALayer() }, nil)), "no fill")
+        let rounded = layer({ CALayer() }, .black)
+        rounded.cornerRadius = 8
+        XCTAssertNil(GroupedListView.maskCoverage(rounded), "rounded corners")
+        let faded = layer({ CALayer() }, .black)
+        faded.opacity = 0
+        XCTAssertNil(GroupedListView.maskCoverage(faded), "no opacity")
+        let turned = layer({ CALayer() }, .black)
+        turned.transform = CATransform3DMakeRotation(.pi / 4, 0, 0, 1)
+        XCTAssertNil(GroupedListView.maskCoverage(turned), "a transform, whose frame's corners it leaves clear")
+    }
+
     private func inScene(_ p: Presenter, _ scene: UIWindowScene) -> UIViewController {
         window.isHidden = true
         window = UIWindow(windowScene: scene)

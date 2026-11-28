@@ -228,8 +228,12 @@ extension GroupedListView {
 extension GroupedListView {
     #if os(iOS)
     /// How far past each side the list's edge meets the collection reaches,
-    /// a safe area there, where nothing between the list and the window
-    /// transforms or clips it away. The side safe area of the list's own
+    /// a safe area there, where nothing from the list to the window
+    /// transforms it or clips away the width of that side's band (by its
+    /// bounds, or a mask whose coverage is known by its frame; any other mask
+    /// gives no reach): the band, not the list, so a list that slides out of
+    /// view on its other side, as a pushed route's does, keeps its reach
+    /// while the band still shows. The side safe area of the list's own
     /// controller view, a route's or a sheet's, as UIKit gives it: Exact's
     /// layout keeps a route's content inside it (LLP 1123), where UIKit lays
     /// an inset-grouped list over the whole view and puts its cards 20 in,
@@ -251,16 +255,47 @@ extension GroupedListView {
             if abs(r.minX - band.maxX) < 0.5 { reach.left = band.width / 2; foldReach.left = reach.left }
         }
         guard reach.left > 0 || reach.right > 0 else { return reach }
-        let reached = r.inset(by: UIEdgeInsets(top: 0, left: -reach.left, bottom: 0, right: -reach.right))
-        var at: UIView? = owner.superview
+        let bands = (left: CGRect(x: r.minX - reach.left, y: r.minY, width: reach.left, height: r.height),
+                     right: CGRect(x: r.maxX, y: r.minY, width: reach.right, height: r.height))
+        // From the list itself, whose transform and mask (a `clip-path` on it) count as its ancestors' do, though not its
+        // bounds, which its collection reaches past
+        var at: UIView? = owner
         while let v = at, v !== window {
-            if !v.transform.isIdentity || v.clipsToBounds && !v.convert(v.bounds, to: window).insetBy(dx: -0.5, dy: -0.5).contains(reached) {
+            // Its layer's transform and the perspective it gives its sublayers (CSS `perspective`), not only the
+            // affine part `UIView.transform` reads
+            guard CATransform3DIsIdentity(v.layer.transform), CATransform3DIsIdentity(v.layer.sublayerTransform) else {
                 foldReach = (0, 0)
                 return (0, 0)
+            }
+            // What the ancestor shows of its subviews: its bounds where it clips, cut to its mask's frame where the mask
+            // is an opaque plain layer; any other mask (a gradient, a shape, drawn contents) may hide the band, so none
+            var shown: CGRect? = v.clipsToBounds && v !== owner ? v.bounds : nil
+            if let mask = v.layer.mask {
+                guard let covered = Self.maskCoverage(mask) else {
+                    foldReach = (0, 0)
+                    return (0, 0)
+                }
+                shown = (shown ?? covered).intersection(covered)
+            }
+            // Across only: a clip above or below the list leaves the rows it shows their reach
+            if let shown = shown.map({ v.convert($0, to: window).insetBy(dx: -0.5, dy: -0.5) }) {
+                let spans = { (band: CGRect) in shown.minX <= band.minX && shown.maxX >= band.maxX }
+                if reach.left > 0, !spans(bands.left) { (reach.left, foldReach.left) = (0, 0) }
+                if reach.right > 0, !spans(bands.right) { (reach.right, foldReach.right) = (0, 0) }
             }
             at = v.superview
         }
         return reach
+    }
+
+    /// The rectangle a mask shows all of, in its layer's superlayer: an untransformed, opaque, square-cornered, shown
+    /// plain layer's frame; nil where that cannot be told from the layer (a gradient, a shape, a transform, drawn
+    /// contents, sublayers, a mask of its own, rounded corners, any transparency).
+    static func maskCoverage(_ mask: CALayer) -> CGRect? {
+        guard !(mask is CAGradientLayer), !(mask is CAShapeLayer), CATransform3DIsIdentity(mask.transform), mask.contents == nil, mask.sublayers?.isEmpty ?? true,
+              mask.cornerRadius == 0, mask.opacity >= 1, !mask.isHidden, mask.mask == nil,
+              let fill = mask.backgroundColor, fill.alpha >= 1 else { return nil }
+        return mask.frame
     }
     #endif
 }

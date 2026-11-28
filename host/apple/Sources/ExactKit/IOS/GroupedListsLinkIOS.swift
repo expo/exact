@@ -135,6 +135,12 @@ package enum GroupedListsLink {
 /// node's context popover: a grouped list's cell, or a navigation bar's title.
 package protocol GroupedMenuSurface: AnyObject {
     var menuSource: NodeView? { get }
+    /// The outline its lift takes in place of its bounds' rounded rectangle: a plain list's cell whose ground runs on
+    /// past its frame (`GroupedCell.groundPath`); nil for none
+    var liftOutline: UIBezierPath? { get }
+}
+extension GroupedMenuSurface {
+    package var liftOutline: UIBezierPath? { nil }
 }
 
 /// A navigation bar's title that stands for its header's pressable group,

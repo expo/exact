@@ -628,6 +628,10 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         if shown === source, let lift = LiftTarget.clipLift(source) {
             parameters.visiblePath = lift.outline
             parameters.backgroundColor = lift.ground
+        } else if let outline = (shown as? GroupedMenuSurface)?.liftOutline {
+            // A standard row's cell whose ground runs on past its frame, which UIKit's preview stands in for while the
+            // press is held
+            parameters.visiblePath = outline
         } else {
             parameters.visiblePath = LiftTarget.rounded(shown)
             // UIKit's lifted copy leaves out the view's own layer fill (as a

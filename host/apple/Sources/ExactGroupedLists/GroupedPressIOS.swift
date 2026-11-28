@@ -37,7 +37,9 @@ extension GroupedCell {
                     shown.imageProperties.tintColorTransformer = nil
                 }
             }
-            cell.backgroundConfiguration = ground
+            // The row's background insets, which UIKit gave the cell's ground before this ran, on the ground it shows
+            if let insets = (cell as? GroupedCell)?.listInsets.background { ground.backgroundInsets = insets }
+            (cell as? GroupedCell)?.ground = ground
             cell.contentConfiguration = shown
             ActivePresentation.apply(style, to: cell.layer, down: down, origin: NodeView.resolveTransformOrigin(style, in: cell.bounds))
         }
@@ -73,8 +75,10 @@ extension GroupedListHost {
         for list in lists.values {
             // A row that paints its own press (a ground of its own) lifts whole
             guard let row = list.rows[node.id] else { continue }
-            guard list.sidebar, GroupedListView.pressIsCells(row, node), let cell = list.cell(node.id) as? UICollectionViewListCell else { return nil }
-            return LiftTarget.backgroundShape(of: cell, insets: (cell as? GroupedCell)?.listInsets.background)
+            guard GroupedListView.pressIsCells(row, node), let cell = list.cell(node.id) as? UICollectionViewListCell else { return nil }
+            if list.sidebar { return LiftTarget.backgroundShape(of: cell, insets: (cell as? GroupedCell)?.listInsets.background) }
+            // A plain list's row lifts with its ground across the side band, as UIKit's cell under the safe area does
+            return (cell as? GroupedCell)?.groundPath
         }
         #endif
         return nil

@@ -10,6 +10,32 @@ final class GroupedCell: UICollectionViewListCell {
     var listInsets: (margins: NSDirectionalEdgeInsets?, background: NSDirectionalEdgeInsets?) = (nil, nil) {
         didSet { if listInsets != oldValue { setNeedsUpdateConfiguration() } }
     }
+    /// How far a plain list's cell paints past its frame at its left and right, over the side safe area UIKit does not
+    /// give the list (`GroupedCollectionView.sideBand`): its pressed and selected ground goes there, as a plain list's
+    /// cell runs under the safe area UIKit gives it, while its content, its accessories and its touches stay where the
+    /// list lays them out (LLP 1123 D13, D15). UIKit draws a background configuration only inside the cell, a negative
+    /// inset included, so the ground past the frame is a strip of the cell's own at each side (`paintGroundReach`).
+    /// Interim, until the kernel's reach (stage 5) lays the collection across the band, as `GroupedListView.sideReach`
+    /// and `SideReachIOS.swift` are.
+    var sideReach: (left: CGFloat, right: CGFloat) = (0, 0) {
+        didSet { if sideReach != oldValue { paintGroundReach() } }
+    }
+    private var groundReach: (left: UIView?, right: UIView?) = (nil, nil)
+    /// The cell's background configuration, which Exact sets only through here so the strips past its frame follow it
+    /// (`sideReach`): UIKit gives no hook on `backgroundConfiguration`, and a configuration update handler sets it after
+    /// `updateConfiguration(using:)` returns. UIKit's own update of the ground for the state, where no handler sets it,
+    /// is in place as `updateConfiguration(using:)` runs, which paints the strips after it.
+    var ground: UIBackgroundConfiguration? {
+        get { backgroundConfiguration }
+        set {
+            backgroundConfiguration = newValue
+            paintGroundReach()
+        }
+    }
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        paintGroundReach()
+    }
     override func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)
         if let margins = listInsets.margins, var c = contentConfiguration as? UIListContentConfiguration, c.directionalLayoutMargins != margins {
@@ -18,13 +44,65 @@ final class GroupedCell: UICollectionViewListCell {
         }
         if let insets = listInsets.background, var b = backgroundConfiguration, b.backgroundInsets != insets {
             b.backgroundInsets = insets
-            backgroundConfiguration = b
+            ground = b
         }
+        paintGroundReach()
+    }
+    /// Continues the ground past the frame at each side the list's band reaches (`sideReach`) where the ground meets that
+    /// edge, with no inset there and square corners, in the color it resolves to now (clear at rest). A strip's color
+    /// changes with any animation the ground's change runs in; its frame is placed without one. A ground inset from that
+    /// edge stays inside the cell, measured from the cell's edge rather than the band's, until the kernel's reach lays
+    /// the cell across the band (LLP 1123 D13).
+    private func paintGroundReach() {
+        let ground = backgroundConfiguration
+        let color = ground.flatMap { $0.cornerRadius > 0 ? nil : $0.resolvedBackgroundColor(for: tintColor) }
+        let insets = ground?.backgroundInsets ?? .zero
+        let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let meets = (left: (rtl ? insets.trailing : insets.leading) <= 0, right: (rtl ? insets.leading : insets.trailing) <= 0)
+        groundReach.left = strip(groundReach.left, color: sideReach.left > 0 && meets.left ? color : nil)
+        groundReach.right = strip(groundReach.right, color: sideReach.right > 0 && meets.right ? color : nil)
+        UIView.performWithoutAnimation(layoutGroundReach)
+    }
+    private func strip(_ view: UIView?, color: UIColor?) -> UIView? {
+        guard let color else {
+            view?.removeFromSuperview()
+            return nil
+        }
+        let strip = view ?? UIView()
+        if view == nil {
+            strip.isUserInteractionEnabled = false
+            strip.accessibilityElementsHidden = true
+            insertSubview(strip, at: 0)
+        }
+        strip.backgroundColor = color
+        return strip
+    }
+    /// Where the cell's ground may show, in its own coordinates: its bounds and the strips past them (`sideReach`).
+    var reachedBounds: CGRect {
+        [groundReach.left, groundReach.right].compactMap { $0?.frame }.reduce(bounds) { $0.union($1) }
+    }
+    /// The outline a context menu lifts the row in while a strip shows a ground past the cell, as UIKit lifts a cell
+    /// that runs under the safe area: the cell's bounds and each strip with a color; nil while none has one.
+    var groundPath: UIBezierPath? {
+        let shown = [groundReach.left, groundReach.right].compactMap { $0 }
+            .filter { !$0.frame.isEmpty && ($0.backgroundColor?.resolvedColor(with: traitCollection).cgColor.alpha ?? 0) > 0 }
+        guard !shown.isEmpty else { return nil }
+        let path = UIBezierPath(rect: bounds)
+        for strip in shown { path.append(UIBezierPath(rect: strip.frame)) }
+        return path
+    }
+    private func layoutGroundReach() {
+        let insets = backgroundConfiguration?.backgroundInsets ?? .zero
+        // The ground's span down the cell, none where its insets meet or cross (a negative height would draw)
+        let top = max(0, insets.top), height = max(0, bounds.height - top - max(0, insets.bottom))
+        groundReach.left?.frame = CGRect(x: bounds.minX - sideReach.left, y: bounds.minY + top, width: sideReach.left, height: height)
+        groundReach.right?.frame = CGRect(x: bounds.maxX, y: bounds.minY + top, width: sideReach.right, height: height)
     }
     private var activeBounds = CGRect.null
     var refreshActiveOnLayout = false
     override func layoutSubviews() {
         super.layoutSubviews()
+        layoutGroundReach()
         #if os(iOS)
         updateGripActions()
         #endif
@@ -205,10 +283,10 @@ final class GroupedCell: UICollectionViewListCell {
         c.image = inked(FaceSymbol.image(pathSymbol, points: Self.pathPoints(traitCollection)))
         contentConfiguration = c
     }
-    /// The colour of its own its standard row's image is drawn in, nil for the cell's tint, which
+    /// The color of its own its standard row's image is drawn in, nil for the cell's tint, which
     /// UIKit draws a cell's image in and greys behind a sheet or an alert
     var imageInk: UIColor?
-    /// `image` drawn in `imageInk`, which UIKit draws as it is (`.alwaysOriginal`), dynamic colours
+    /// `image` drawn in `imageInk`, which UIKit draws as it is (`.alwaysOriginal`), dynamic colors
     /// per trait; else as it is, for the cell's tint
     func inked(_ image: UIImage?) -> UIImage? {
         imageInk.flatMap { ink in image?.withTintColor(ink, renderingMode: .alwaysOriginal) } ?? image
@@ -262,7 +340,9 @@ extension UICollectionViewListCell {
 #endif
 
 #if os(iOS)
-extension GroupedCell: GroupedMenuSurface {}
+extension GroupedCell: GroupedMenuSurface {
+    var liftOutline: UIBezierPath? { groundPath }
+}
 
 extension GroupedCell: InspectionOwned {
     /// A toggle row's element is its switch's: `tree --ax` joins it to the control.

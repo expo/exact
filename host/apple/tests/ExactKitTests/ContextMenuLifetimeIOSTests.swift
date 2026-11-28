@@ -71,6 +71,28 @@ final class ContextMenuLifetimeIOSTests: XCTestCase {
 
     private final class ProjectedCell: UIView, GroupedMenuSurface {
         var menuSource: NodeView?
+        var liftOutline: UIBezierPath?
+    }
+
+    /// A standard row's cell whose ground runs on past its frame (a plain list beside the folded iPhone Duo's strip)
+    /// lifts in that outline, the cell and its strip, as UIKit's preview stands in for it while the press is held.
+    func testAProjectedCellLiftsInItsOutline() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("the agent paints the popover (D4)") }
+        let p = presenter(kind: "view")
+        defer { p.menus.reset(); window.isHidden = true }
+        let cell = ProjectedCell(frame: CGRect(x: 0, y: 200, width: 300, height: 60))
+        p.viewport.addSubview(cell)
+        cell.menuSource = try XCTUnwrap(p.views[1])
+        let outline = UIBezierPath(rect: cell.bounds)
+        outline.append(UIBezierPath(rect: CGRect(x: 300, y: 0, width: 84, height: 60)))
+        cell.liftOutline = outline
+        p.menus.context.syncProjected(cell)
+        let interaction = try XCTUnwrap(cell.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let configuration = try XCTUnwrap(p.menus.context.contextMenuInteraction(interaction, configurationForMenuAtLocation: CGPoint(x: 10, y: 10)))
+        defer { p.menus.context.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil) }
+        let lifted = try XCTUnwrap(p.menus.context.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
+        XCTAssertTrue(lifted.view === cell, "the cell itself")
+        XCTAssertEqual(lifted.parameters.visiblePath?.cgPath, outline.cgPath, "the cell and its strip")
     }
 
     func testProjectedContextMenuFollowsThePresentationOwnerAndRetiresOnReuse() throws {

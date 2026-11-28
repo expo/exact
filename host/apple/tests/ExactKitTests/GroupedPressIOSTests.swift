@@ -242,6 +242,81 @@ final class GroupedPressIOSTests: GroupedListFixture {
         XCTAssertTrue(field.isFirstResponder, "the field stays first responder")
     }
 
+    /// A plain list's cell under a side safe area UIKit does not give the list (the folded iPhone Duo's strip) paints
+    /// its pressed ground across that band to the screen's edge, and nothing there at rest (LLP 1123 D13, D15).
+    func testAPlainCellPaintsItsPressedGroundAcrossTheSideBand() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a window draws only in a scene") }
+        window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 100)
+        window.backgroundColor = .white
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let cell = GroupedCell(frame: CGRect(x: 0, y: 0, width: 300, height: 60))
+        window.addSubview(cell)
+        defer { cell.removeFromSuperview() }
+        cell.sideReach = (0, 100)
+        // As a card-less row's press is drawn (`GroupedListView.configure`): UIKit's ground for the state, else none
+        cell.configurationUpdateHandler = { cell, state in
+            var ground = state.isHighlighted ? cell.defaultBackgroundConfiguration().updated(for: state) : .clear()
+            if let insets = (cell as? GroupedCell)?.listInsets.background { ground.backgroundInsets = insets }
+            (cell as? GroupedCell)?.ground = ground
+        }
+        // The color the window draws at (x, 30): 399 is the band's last pixel, 290 inside the cell
+        func color(_ x: CGFloat) throws -> [Int] {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            var rgba = [UInt8](repeating: 0, count: 4)
+            let context = try XCTUnwrap(CGContext(data: &rgba, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            let picture = try XCTUnwrap(image.cgImage)
+            context.draw(picture, in: CGRect(x: -x, y: -(CGFloat(picture.height) - 31), width: CGFloat(picture.width), height: CGFloat(picture.height)))
+            return rgba.prefix(3).map(Int.init)
+        }
+        // How far from white the band's last pixel is
+        func shade() throws -> Int { 255 - (try color(399)).min()! }
+        // Whether the band's last pixel is the cell's own ground, channel by channel
+        func continues() throws -> Bool { zip(try color(399), try color(290)).allSatisfy { abs($0 - $1) <= 2 } }
+        cell.layoutIfNeeded()
+        XCTAssertLessThan(try shade(), 4, "at rest the band shows what is behind")
+        cell.forcedPressed = true
+        waitFor("the pressed configuration", late: 1, cap: 2) { cell.configurationState.isHighlighted }
+        waitForMainQueue()
+        cell.layoutIfNeeded()
+        XCTAssertGreaterThan(try shade(), 8, "pressed, the cell's ground reaches across the band")
+        XCTAssertTrue(try continues(), "to the band's last pixel, in the cell's own color")
+        cell.listInsets = (nil, NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 12))
+        waitForMainQueue()
+        cell.layoutIfNeeded()
+        XCTAssertLessThan(try shade(), 4, "a ground inset from the cell's trailing edge does not meet it, so nothing continues it")
+        cell.listInsets = (nil, nil)
+        waitForMainQueue()
+        cell.layoutIfNeeded()
+        XCTAssertGreaterThan(try shade(), 8, "the ground meets the edge again")
+        XCTAssertTrue(try continues(), "in the cell's own color")
+        cell.sideReach = (0, 0)
+        waitForMainQueue()
+        cell.layoutIfNeeded()
+        XCTAssertLessThan(try shade(), 4, "with no band to reach, the ground stays in the cell")
+        // A row of a section with a ground of its own (`GroupedListView.configure`'s card): no handler, and UIKit
+        // updates the ground for the state itself
+        cell.forcedPressed = false
+        cell.configurationUpdateHandler = nil
+        cell.ground = cell.defaultBackgroundConfiguration()
+        cell.sideReach = (0, 100)
+        waitForMainQueue()
+        cell.layoutIfNeeded()
+        XCTAssertLessThan(try shade(), 4, "at rest the ground UIKit gives a plain row is the window's white")
+        cell.forcedPressed = true
+        waitFor("the pressed configuration", late: 1, cap: 2) { cell.configurationState.isHighlighted }
+        waitForMainQueue()
+        cell.layoutIfNeeded()
+        XCTAssertGreaterThan(try shade(), 8, "pressed, the ground UIKit updated for the state reaches across the band")
+        XCTAssertTrue(try continues(), "to the band's last pixel, in the cell's own color")
+    }
+
     func testHighlightedTranslationFollowsBoundsIncludingAnInitiallyEmptyCell() throws {
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
         window.makeKeyAndVisible()

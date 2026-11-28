@@ -105,15 +105,21 @@ extension GroupedListView {
         movement = host.presenter.reorders.nativeMovement(grip: handle, list: owner.id) { [weak self] in
             guard let self else { return }
             collection.abortMovement()
-            movingRow = nil
             movement = nil
-            DispatchQueue.main.async { [weak self] in
-                guard let self, host.lists[owner.id] === self else { return }
-                host.sync()
-            }
+            movementEnded()
         }
-        if movement == nil { movingRow = nil }
+        if movement == nil { movementEnded() }
         return movement != nil
+    }
+
+    /// The move over, or refused as it began: the host syncs on the next turn, out of UIKit's movement callbacks,
+    /// which mounts the list and so places it by what a batch changed while it moved.
+    private func movementEnded() {
+        movingRow = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self, host.lists[owner.id] === self else { return }
+            host.sync()
+        }
     }
 
     func collectionView(_ collectionView: UICollectionView, targetIndexPathForMoveOfItemFromOriginalIndexPath original: IndexPath,

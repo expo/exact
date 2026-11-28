@@ -68,7 +68,12 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
         safeIndicators.sync(self)
+        // Once Exact's own writes to a controller above settle (LLP 1123 D11), so the list reads the settled band
+        SafeAreaSteps.react(self) { [weak self] in self?.placementChanged() }
     }
+    /// UIKit changed the collection's safe area, or put it in a window, with no mount of the list: the list places it
+    /// by its reach again (`GroupedListView.placeReach`)
+    var placementChanged: () -> Void = {}
     /// An inset UIKit moves outside a layout of the list reaches the arrangement, as a plain scroller's does
     /// (`ScrollView.adjustedContentInsetDidChange`).
     override func adjustedContentInsetDidChange() {
@@ -121,7 +126,7 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window != nil { marginsChanged() }
+        if window != nil { marginsChanged(); placementChanged() }
     }
 
     weak var listNode: NodeView?

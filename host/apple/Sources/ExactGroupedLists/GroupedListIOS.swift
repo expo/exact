@@ -542,13 +542,15 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     /// How far the collection reaches past the list's box at its left and
     /// right: over the window's side safe area where the list's edge meets
     /// it, as a hand-built list spans the screen (iPhone landscape).
-    private(set) var reach: (left: CGFloat, right: CGFloat) = (0, 0)
+    var reach: (left: CGFloat, right: CGFloat) = (0, 0)
     /// CSS padding applied inside the sections, separate from UIKit's card margins.
     private(set) var horizontalPadding = UIEdgeInsets.zero
     /// Of `reach`, what is a fold's half band: UIKit counts it as safe area
     /// but sets no margin past it there, where a hand-built split view's
     /// card has its 20 (`section`).
     var foldReach: (left: CGFloat, right: CGFloat) = (0, 0)
+    /// The band the sections were last laid out by, UIKit's safe area aside, and the fold's half band (`placeReach`)
+    var placedBand: [CGFloat] = []
     /// Only the host-hidden bit: CSS display remains authoritative.
     private var hiddenRoots: [UInt32: (node: NodeView, hidden: Bool)] = [:]
     /// The list's padding and final footer space, independent of other insets.
@@ -591,6 +593,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         collection.setCollectionViewLayout(layout(), animated: false)
         collection.delegate = self
         collection.marginsChanged = { [weak self] in self?.host.tellSoon() }
+        // Not while UIKit moves a row: the move's end syncs the host, which mounts and so places the list
+        collection.placementChanged = { [weak self] in if let self, movingRow == nil { placeReach() } }
         collection.accessibilityIdentifier = owner.props["testId"]
         let cell = UICollectionView.CellRegistration<GroupedCell, UInt32> { [unowned self] cell, _, id in configure(cell, id) }
         let header = UICollectionView.SupplementaryRegistration<GroupedHeaderView>(elementKind: UICollectionView.elementKindSectionHeader) { [unowned self] view, _, path in
@@ -665,23 +669,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             c.footerMode = s?.footer == nil ? .none : .supplementary
             #if !os(tvOS)
             if !sidebarList { c.showsSeparators = s?.card ?? true }
-            // Where a row's author wrote the edge under it, a carried row
-            // shows that edge instead of UIKit's line (LLP 1084 D7), as a
-            // hand-built cell hides its separator. A standard cell draws no
-            // authored box, so UIKit's line stays beside one.
-            c.itemSeparatorHandler = { [weak self] path, separator in
-                var separator = separator
-                let rows = self?.section(at: path.section)?.rows ?? []
-                func owned(_ i: Int) -> Bool {
-                    guard i >= 0, i < rows.count else { return false }
-                    return rows[i].authoredEdge && rows[i].custom
-                        || rows[i].nextAuthoredTop && i + 1 < rows.count && rows[i + 1].custom
-                }
-                if owned(path.item) { separator.bottomSeparatorVisibility = .hidden }
-                if owned(path.item - 1) { separator.topSeparatorVisibility = .hidden }
-                if path.item + 1 < rows.count, rows[path.item].custom, let x = self?.lineStart(rows[path.item].view) { separator.bottomSeparatorInsets.leading = x }
-                return separator
-            }
+            c.itemSeparatorHandler = { [weak self] path, separator in self?.separator(separator, at: path) ?? separator }
             #endif
             #if os(iOS)
             // A row that names swipe actions swipes as a hand-built list's
@@ -884,16 +872,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // With the page's bands it reaches (LLP 1130 D3), and the side safe areas its edges meet, where UIKit insets
         // the cards by its own rule. Once the kernel gives the owner its reach (LLP 1123 D13), zero included, the frame
         // already lies over them and the list's own reach, a fold's half band among it, gives way to the kernel's
-        let fold = foldReach
-        if owner.reachGiven { reach = (owner.reach.left, owner.reach.right); foldReach = (0, 0) }
-        #if os(iOS)
-        if !owner.reachGiven { reach = sideReach() }
-        (collection as? GroupedCollectionView)?.sideSafeArea = reach
-        #endif
-        if foldReach != fold { collection.collectionViewLayout.invalidateLayout() }
-        var frame = owner.scrollFrame
-        if !owner.reachGiven { frame.origin.x -= reach.left; frame.size.width += reach.left + reach.right }
-        assign(collection, \.frame, frame)
+        placeReach()
         if looks { refreshLooks() }
         for cell in collection.visibleCells {
             guard let cell = cell as? GroupedCell, let id = cell.row else { continue }
@@ -1099,6 +1078,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         if cell.row != id { cell.restorePressPresentation() }
         cell.row = id
         cell.listInsets = GroupedCell.listInsets(of: host.presenter.views[id], rtl: direction == .forceRightToLeft)
+        cell.sideReach = plainReach
         cell.target = rows[id]?.target
         #if os(iOS)
         cell.toggle = nil // `accessories` gives a toggle row its switch
@@ -1114,15 +1094,15 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             cell.configurationUpdateHandler = nil
             var card = cell.defaultBackgroundConfiguration()
             if !authoredSidebar, let fill = ThemeRoles.color("secondary-grouped-background", in: host.presenter.root) { card.backgroundColor = fill }
-            cell.backgroundConfiguration = card
+            cell.ground = card
         } else {
             cell.configurationUpdateHandler = { [weak self] cell, state in
                 let highlights = row.pressable && !row.disabled && Self.pressIsCells(row, self?.host.presenter.views[id])
                 var ground = highlights && (state.isHighlighted || state.isSelected) ? cell.defaultBackgroundConfiguration().updated(for: state) : .clear()
                 if let insets = (cell as? GroupedCell)?.listInsets.background { ground.backgroundInsets = insets } // UIKit runs this after the cell gave them
-                cell.backgroundConfiguration = ground
+                (cell as? GroupedCell)?.ground = ground
             }
-            cell.backgroundConfiguration = .clear()
+            cell.ground = .clear()
         }
         if row.custom {
             cell.restorePressPresentation()
@@ -1452,8 +1432,10 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
 
     func collectionView(_ view: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt path: IndexPath) {
         guard let cell = cell as? GroupedCell, let id = source.itemIdentifier(for: path) else { return }
-        // UIKit may prepare a cell before a batch gives its carried row back.
-        // Displaying that prepared cell does not configure it again.
+        // UIKit may prepare a cell before a batch gives its carried row back,
+        // or before the band changes. Displaying that prepared cell does not
+        // configure it again.
+        cell.sideReach = plainReach
         carry(id, into: cell)
         interact(cell, id)
         if resized { host.presenter.requestProjectionSync() } // a line that moved too
