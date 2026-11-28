@@ -2,11 +2,11 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
-import { alternateIcons, appIconProblems, iconDigests, iconFile, opaque, pickIcon, placeRgba, pngAlpha, readPng, resize, webIconLinks, webThemeColors, WINDOWS_ICON_SIZES, windowsIconRes, writeTinted } from './app-icons.mjs';
+import { alternateIcons, appIconProblems, mediaArtworkProblems, iconDigests, iconFile, opaque, pickIcon, placeRgba, pngAlpha, readPng, resize, webIconLinks, webThemeColors, WINDOWS_ICON_SIZES, windowsIconRes, writeTinted } from './app-icons.mjs';
 import { decodePng, encodePng } from './png.mjs';
 import { validate } from './app.mjs';
 
@@ -19,6 +19,18 @@ const inDir = (body) => {
   done();
   return result;
 };
+test('the default media cover belongs to the bundled assets', () => inDir(dir => {
+  mkdirSync(resolve(dir, 'assets'));
+  writeFileSync(resolve(dir, 'assets', 'cover.png'), 'cover');
+  writeFileSync(resolve(dir, 'outside.png'), 'outside');
+  symlinkSync(resolve(dir, 'outside.png'), resolve(dir, 'assets', 'link.png'));
+  const problems = path => mediaArtworkProblems({ media_session: { default_artwork: path } }, dir);
+  assert.deepEqual(problems('assets/cover.png'), []);
+  for (const path of ['assets/missing.png', 'assets/link.png', 'assets/../outside.png', 'https://example.com/a.png']) {
+    assert.equal(problems(path).length, 1, path);
+  }
+}));
+
 /** A `width` × `height` image of one RGBA colour. */
 const image = (width, height, colour = [255, 255, 255, 255]) => ({ width, height, data: Uint8Array.from({ length: width * height * 4 }, (_, i) => colour[i % 4]) });
 const put = (dir, src, bytes) => { mkdirSync(resolve(dir, src, '..'), { recursive: true }); writeFileSync(resolve(dir, src), bytes); return resolve(dir, src); };
