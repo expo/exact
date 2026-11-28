@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { branchOf, mismatch, numbers, parseLink, plan, publishedBuild, sameBuild, sourceOf, withBuildNumber } from './share.mjs';
+import { branchOf, mismatch, numbers, parseLink, plan, publishedBuild, sameBuild, sourceOf, uploadArgs, withBuildNumber } from './share.mjs';
 
 const url = 'https://appdrop.app/d/k3m9x2p7qa';
 const record = { url, branch: 'main', source: 'a b', revision: 4 };
@@ -150,4 +150,9 @@ test('a share of an app with an update store and no keys is refused before it bu
   expect(unsignedStore({ deploy: { store: { ios: '0' } } })).toBeNull();
   expect(unsignedStore({ deploy: { signing: { keys: { k1: 'pub' } } } })).toBeNull();
   expect(unsignedStore({ deploy: { signing: { keys: {} } } })).not.toBeNull();
+});
+
+test('the upload names the build\'s version as the link\'s label, on an update and on a new link', () => {
+  expect(uploadArgs('a.ipa', { action: 'update', url }, '0.1.1')).toEqual(['a.ipa', '--update', url, '--label', '0.1.1', '--json']);
+  expect(uploadArgs('a.ipa', { action: 'create' }, '0.1.1')).toEqual(['a.ipa', '--label', '0.1.1', '--json']);
 });

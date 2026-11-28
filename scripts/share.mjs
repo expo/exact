@@ -20,8 +20,10 @@
 // number past `buildNumber` and the link's last build, which AppDrop shows in its
 // version fields; the share writes that number back to app.json, to be committed.
 // The upload is the appdrop CLI's (`npx appdrop`, or EXACT_APPDROP_CLI), run
-// outside any git checkout, so the link carries no branch label beside them. Its
-// update key stays in the CLI's own ~/.appdrop/drops.json and never reaches stdout.
+// outside any git checkout and labelled with the version the build carries, so
+// the link names that version beside the app's name, never a branch or commit.
+// Its update key stays in the CLI's own ~/.appdrop/drops.json and never reaches
+// stdout.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -106,6 +108,13 @@ export function numbers(manifest, published = 0) {
   return { version: manifest.version ?? null, build: Math.max(manifest.buildNumber ?? 0, published) + 1 };
 }
 
+/** The appdrop CLI's arguments for `ipa`: a new link, or an update of `step.url`, labelled with `version`, the
+ *  version the build carries, which AppDrop shows beside the app's name (its first 60 characters; the build's
+ *  own version goes up whole). A label stays until an upload names another, so every upload names it. */
+export function uploadArgs(ipa, step, version) {
+  return [ipa, ...(step.action === 'update' ? ['--update', step.url] : []), '--label', version, '--json'];
+}
+
 /** The link's last build number, from AppDrop's answer for it: its `version` (the build number a share gave it),
  *  or its revision for a link whose builds AppDrop numbered. */
 export function publishedBuild(drop) {
@@ -160,8 +169,9 @@ async function main(argv) {
   if (app.manifest.variant) return fail('share_variant', `share: variant ${app.manifest.variant.name}: a variant has no AppDrop link of its own (LLP 1030.008 §6); share the app without --variant or EXACT_VARIANT.`);
   const recordPath = resolve(app.dir, '.exact/appdrop.json');
   const record = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) : null;
-  // A build's version is the manifest's, else one the environment gives the build, else the build's default
-  const shown = app.manifest.version ?? process.env.EXACT_VERSION ?? '0.1.0';
+  // A build's version is the manifest's, else one the environment gives the build (an empty one is none), else the
+  // build's default; both builds and the link's label take this one value
+  const shown = app.manifest.version ?? (process.env.EXACT_VERSION || '0.1.0');
   const branch = branchOf(app.dir), source = sourceOf(app.dir, ROOT, record?.build);
   const same = (recorded, now) => (record.version ?? shown) === shown && sameBuild(app.dir, recorded, now, record.build);
   const step = plan(record, { branch, source, newLink, force, same });
@@ -185,7 +195,7 @@ async function main(argv) {
     revision = last.revision ?? 1;
     published = publishedBuild(last);
   }
-  const { version, build } = numbers(app.manifest, published);
+  const { build } = numbers(app.manifest, published);
 
   const ipa = resolve(app.dir, '.exact/share', `${app.name}.ipa`);
   rmSync(ipa, { force: true });
@@ -198,21 +208,21 @@ async function main(argv) {
   const streamed = app.manifest.deploy?.store?.ios !== '0';
   if (exactBuild.exactBuildReason()) {
     // Experimental: the same build on Exact Build (the app CLI said why): a release archive with the build number,
-    // version and update genesis build.mjs is given below (its version, when app.json names none, is EXACT_VERSION's).
+    // version and update genesis build.mjs is given below.
     try {
-      await exactBuild.buildIpa(app, ipa, { checkout: ROOT, say, options: { profile: 'release', buildNumber: String(build), ...(version ?? process.env.EXACT_VERSION ? { version: version ?? process.env.EXACT_VERSION } : {}), ...(streamed ? { updateGenesis: '1' } : {}) } });
+      await exactBuild.buildIpa(app, ipa, { checkout: ROOT, say, options: { profile: 'release', buildNumber: String(build), version: shown, ...(streamed ? { updateGenesis: '1' } : {}) } });
     } catch (error) { return fail(error.code ?? 'build_failed', error.message, error.url ? { url: error.url } : {}); }
   } else {
     const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), '--device', app.crate('apple'), '--archive', ipa, '--unsigned'], {
       cwd: ROOT, stdio: ['ignore', 2, 2],
-      env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_BUILD_NUMBER: String(build), ...(version ? { EXACT_VERSION: version } : {}), ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
+      env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_BUILD_NUMBER: String(build), EXACT_VERSION: shown, ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
     });
     if (built.status !== 0 || !existsSync(ipa)) return fail('build_failed', `share: the iPhone build failed (${built.error?.message ?? `exit ${built.status}`}); its errors are above.`);
   }
 
   say(step.action === 'create' ? 'share: uploading to a new AppDrop link' : `share: uploading to ${step.url}`);
-  // Run outside the app's checkout, whose branch the CLI would take as the link's label
-  const uploaded = spawnSync('npx', ['--yes', CLI, ipa, ...(step.action === 'update' ? ['--update', step.url] : []), '--json'], {
+  // Run outside the app's checkout, whose branch the CLI would take as the link's label without one
+  const uploaded = spawnSync('npx', ['--yes', CLI, ...uploadArgs(ipa, step, shown)], {
     cwd: tmpdir(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
   // The CLI prints a new link's update link, which holds its key: keep that line out.

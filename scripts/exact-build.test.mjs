@@ -73,11 +73,12 @@ test.skipIf(!Bun.which('npx') || !Bun.which('node'))('share signs in, builds on 
     symlinkSync('/bin/sh', resolve(bin, 'sh'));
     symlinkSync(Bun.which('npx'), resolve(bin, 'npx'));
     symlinkSync(Bun.which('node'), resolve(bin, 'node'));
-    // AppDrop's CLI, as a package npx runs from this directory (EXACT_APPDROP_CLI): it records the IPA's size.
+    // AppDrop's CLI, as a package npx runs from this directory (EXACT_APPDROP_CLI): it records the IPA's size and its
+    // other arguments.
     const appdrop = resolve(scratch, 'appdrop');
     mkdirSync(appdrop);
     writeFileSync(resolve(appdrop, 'package.json'), JSON.stringify({ name: 'appdrop-stand-in', version: '1.0.0', bin: { 'appdrop-stand-in': 'cli.js' } }));
-    writeFileSync(resolve(appdrop, 'cli.js'), `#!/usr/bin/env node\nconst fs = require('fs');\nfs.writeFileSync(${JSON.stringify(resolve(scratch, 'uploaded'))}, String(fs.statSync(process.argv[2]).size));\nconsole.log(JSON.stringify({ url: 'https://appdrop.app/d/abc123', revision: 1 }));\n`, { mode: 0o755 });
+    writeFileSync(resolve(appdrop, 'cli.js'), `#!/usr/bin/env node\nconst fs = require('fs');\nfs.writeFileSync(${JSON.stringify(resolve(scratch, 'uploaded'))}, String(fs.statSync(process.argv[2]).size));\nfs.writeFileSync(${JSON.stringify(resolve(scratch, 'uploaded-args'))}, JSON.stringify(process.argv.slice(3)));\nconsole.log(JSON.stringify({ url: 'https://appdrop.app/d/abc123', revision: 1 }));\n`, { mode: 0o755 });
     createApp(app);
     const manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8'));
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ ...manifest, deploy: { ...manifest.deploy, store: { ...manifest.deploy?.store, ios: '0' } } }, null, 2));
@@ -128,6 +129,8 @@ test.skipIf(!Bun.which('npx') || !Bun.which('node'))('share signs in, builds on 
     expect(Object.keys(builds[0].files)).toContain('shared/app.contract');
     expect(Object.keys(builds[0].files).some((path) => /^shared\/(\.exact|node_modules)\//.test(path))).toBe(false);
     expect(readFileSync(resolve(scratch, 'uploaded'), 'utf8').trim()).toBe(String(ipa.length));
+    // The link is labelled with the version the build carries, EXACT_VERSION's for an app.json that names none
+    expect(JSON.parse(readFileSync(resolve(scratch, 'uploaded-args'), 'utf8'))).toEqual(expect.arrayContaining(['--label', '9.7.1']));
     expect(JSON.parse(readFileSync(resolve(app, '.exact/exact-build.json'), 'utf8'))).toEqual({ url: server.url.origin, id: 'b1' });
 
     // The next build, a release one, names no base and sends only the blob the service lacks, the changed app.contract.
