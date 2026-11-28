@@ -26,6 +26,7 @@ fn hidden(source: &str, reveal: Option<Range>) -> Vec<String> {
 mod autolinks;
 mod code_spans;
 mod commands;
+mod headings;
 mod titles;
 use commands::run;
 
@@ -1474,24 +1475,4 @@ fn a_reader_is_spoken_as_its_pieces_draw_it() {
         exact_markdown::spoken(&drawn),
         "see Image attachment and Why ok"
     );
-}
-
-#[test]
-fn a_heading_takes_up_to_three_spaces_of_indent() {
-    // CommonMark 0.31.2 example 68; four spaces (example 69) would be indented code,
-    // which this dialect reads as a paragraph.
-    let source = " ### foo\n\n  ## foo\n\n   # foo\n\n    # foo";
-    let styled = style(source, None);
-    let kinds: Vec<_> = styled.paragraphs.iter().map(|p| p.kind.clone()).collect();
-    assert_eq!(
-        kinds,
-        [
-            ParagraphKind::Heading(3),
-            ParagraphKind::Heading(2),
-            ParagraphKind::Heading(1),
-            ParagraphKind::Body,
-        ]
-    );
-    assert_eq!(hidden(source, None), [" ### ", "  ## ", "   # "]);
-    assert_eq!(plain(source), "foo\n\nfoo\n\nfoo\n\n    # foo");
 }
