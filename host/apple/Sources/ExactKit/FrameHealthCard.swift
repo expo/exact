@@ -248,12 +248,12 @@ enum FrameHealthCardText {
             heldUp: source.screen && t.read > t.from ? heldUp(t) : "—")
     }
 
-    /// The share of a window's time the main thread was held up, rounded up so that any hold-up shows, less a billionth
-    /// so that an exact share such as 7.000000000000001 keeps its value. A spell counts in the read after it ends, which
-    /// can be in a later window than its start, so the share stops at 100%.
+    /// The share of a window's time the main thread was held up, in whole nanoseconds so that an exact share keeps its
+    /// value, rounded up so that any hold-up shows. A spell counts in the read after it ends, which can be in a later
+    /// window than its start, so the share stops at 100%.
     static func heldUp(_ t: FrameHealthCardReader.Window) -> String {
-        let share = min(100, Double(t.counts.heldUpNs) / 1e9 / (t.read - t.from) * 100)
-        return "\(Int((share - 1e-9).rounded(.up)))%"
+        let span = max(1, UInt64(((t.read - t.from) * 1e9).rounded()))
+        return "\(min(100, (t.counts.heldUpNs * 100 + span - 1) / span))%"
     }
 
     /// The median work time: its bin's upper bound, but never more than the exact maximum it cannot

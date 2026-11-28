@@ -74,12 +74,12 @@ enum FrameHealthCardFace {
         return lead.isEmpty ? 162 + D.width("0000", strong) : 136 + D.width(lead, body) + 3.6 + D.width("100%", strong)
     }
 
-    /// The width the line under the figures gives its label, `name` and its window, in tabular digits: as wide as the
-    /// windows below 1,000 seconds can name, "last 0.0s" or "last 000s", so the value after it stays put as the window's
-    /// span changes.
+    /// The width the line under the figures gives its label, `name` and its window, in tabular digits: as wide as a
+    /// window named in up to three digits can make it, "last 00.0s" or "last 000s", so the value after it stays put as
+    /// the window's span changes.
     static func labelWidth(_ label: String, name: String) -> CGFloat {
         typealias D = FrameHealthCardDrawing
-        return ([label] + ["0.0", "000"].map { "\(name) (last \($0)s)" }).map { D.width($0, digits) }.max() ?? 0
+        return ([label] + ["00.0", "000"].map { "\(name) (last \($0)s)" }).map { D.width($0, digits) }.max() ?? 0
     }
 
     /// Every region at a card width; sizes are points.

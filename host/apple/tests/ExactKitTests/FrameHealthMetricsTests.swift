@@ -1068,7 +1068,7 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertEqual({ let e = T.figures(t, rates: none, adaptiveSync: false); return [e.fps, e.frames, e.mainLongest, e.heldUp] }(), ["—", "—", "—", "—"])
         typealias F = FrameHealthCardFace
         XCTAssertLessThanOrEqual(F.secondFigure(lead: "held up") + 3.6 + FrameHealthCardDrawing.width("of the time", F.body), F.minimumWidth - 12, "the words fit")
-        XCTAssertEqual(Set(["5s", "2.5s", "12s", "100s"].map { F.labelWidth("Longest hold-up (last \($0))", name: "Longest hold-up") }).count, 1, "the value stays put")
+        XCTAssertEqual(Set(["5s", "2.5s", "10.0s", "100s"].map { F.labelWidth("Longest hold-up (last \($0))", name: "Longest hold-up") }).count, 1, "the value stays put")
         // The screen's work chart has a gridline at each whole refresh at the display's highest rate, the first dotted,
         // and draws no deadline
         let area = CGRect(x: 12, y: 206, width: 296, height: 200)
