@@ -474,6 +474,23 @@ fn return_in_formatted_items_preserves_text_formats_and_caret() {
 }
 
 #[test]
+fn a_command_on_a_range_in_a_list_marker_never_reverses_the_selection() {
+    // `setSelectionRange` keeps a range on the marker as given; a command
+    // keeps its start there rather than snapping it past its end.
+    for (source, from, to, command, after, selection) in [
+        ("- ab", 0, 1, "indent", "  - ab", (2, 3)),
+        ("- ab", 0, 1, "quote", "> - ab", (2, 3)),
+        ("- [ ] ab", 0, 2, "bold", "- [ ] ab", (0, 2)),
+    ] {
+        let mut p = Page::open(source);
+        p.e.set_selection(from, to);
+        p.tool(command);
+        assert_eq!(p.source(), after, "{source} {command}");
+        assert_eq!(p.e.selection(), selection, "{source} {command}");
+    }
+}
+
+#[test]
 fn return_and_code_beside_a_backtick_pad_the_span_and_undo_in_one_step() {
     // Return after a literal backtick: the left half's padding is hidden
     // syntax, and the caret starts the right half's text.

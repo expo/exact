@@ -844,7 +844,11 @@ impl Editor {
         let sim = self.simulate(&edit.reps, false);
         let change = self.commit(sim.result, edit.sel, false, Kind::Edit);
         let (s, e) = self.sel;
-        self.sel = (self.snap(s), if s == e { self.snap(e) } else { e });
+        // A range keeps its start where snapping would carry it past the end.
+        let start = Some(self.snap(s))
+            .filter(|&p| s == e || p <= e)
+            .unwrap_or(s);
+        self.sel = (start, if s == e { start } else { e });
         change
     }
 
