@@ -1047,28 +1047,28 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertEqual(T.clock(idle), "Exact's clock idle")
         XCTAssertEqual(T.clock(.init(running: true, rates: .init(requestedHz: 0, periodMs: 1000 / 60))), "Exact's clock at the default rate")
         XCTAssertEqual(T.clock(.init(running: true, rates: .init(requestedHz: 120, periodMs: 1000 / 60))), "Exact asks 120 FPS, limit 60")
-        XCTAssertEqual(T.rows(source).map(\.0).prefix(3), ["Frame rate", "Late frames", "Frames"], "the face gives late frames beside the rate")
+        XCTAssertEqual(T.rows(source).map(\.0).prefix(3), ["Frame rate", "Held up", "Late frames"], "the face gives the time held up beside the rate")
         XCTAssertFalse(T.rows(source).map(\.0).contains("Max frame time"))
-        XCTAssertEqual(T.rows(source).last?.0, "Main thread over 8.3ms")
+        XCTAssertEqual(T.rows(source).last?.0, "Longest hold-up")
         XCTAssertEqual(T.caption(none, source: source, varied: false), "Late: sent after UIKit's deadline")
-        // The screen's frames bound no frame time: its rate is its frames over the time a window covers, and the main
-        // thread's work stands in for pacing
+        // The screen's frames bound no frame time: the rate is frames over the time a window covers, the longest hold-up stands
+        // in for pacing, and held up is time past one refresh over that time, rounded up, at most all; a longer window names its span
         var t = FrameHealthCardReader.Window()
+        let screen = { T.figures(t, rates: none, adaptiveSync: false, source: source) }, pacing = { T.pacing(t, rates: none, adaptiveSync: false, source: source) }
+        XCTAssertTrue(pacing() == ("—", "") && screen().heldUp == "—", "nothing read yet")
         (t.from, t.read) = (10, 10.5)
-        XCTAssertEqual(T.pacing(t, rates: none, adaptiveSync: false, source: source).0, "Longest 0.0ms")
-        XCTAssertEqual(T.pacing(t, rates: none, adaptiveSync: false, source: source).1, "None over one refresh, 8.3ms")
-        XCTAssertEqual(T.figures(t, rates: none, adaptiveSync: false, source: source).fps, "—", "no frames, no rate")
-        t.counts.callbacks = 60; t.counts.worked = 60; t.counts.late = 3; t.counts.long = 2; t.mainLongest = 61.2
-        let screen = T.figures(t, rates: none, adaptiveSync: false, source: source)
-        XCTAssertEqual([screen.fps, screen.frames, screen.late, screen.mainLongest, screen.mainLong, screen.changes],
-            ["120 FPS", "60", "3", "61.2ms", "2", "—"])
-        XCTAssertEqual(T.pacing(t, rates: none, adaptiveSync: false, source: source).1, "2 over one refresh, 8.3ms")
-        // Over a window that covers more than its nominal span, the rate is over the span it covers, which it names
+        XCTAssertTrue(pacing() == ("0.0ms", "") && screen().fps == "—", "no frames, no rate")
+        t.counts.callbacks = 60; t.counts.worked = 60; t.counts.late = 3; t.mainLongest = 61.2
+        XCTAssertEqual([screen().fps, screen().frames, screen().late, screen().mainLongest, screen().changes], ["120 FPS", "60", "3", "61.2ms", "—"])
+        XCTAssertTrue(pacing() == ("61.2ms", ""))
+        XCTAssertEqual([UInt64(0), 1, 241_666_667, 600_000_000].map { t.counts.heldUpNs = $0; return screen().heldUp }, ["0%", "1%", "49%", "100%"], "any hold-up shows")
         t.from = 9.5
-        XCTAssertEqual(T.figures(t, rates: none, adaptiveSync: false, source: source).fps, "60 FPS")
+        XCTAssertEqual([screen().fps, screen().heldUp], ["60 FPS", "60%"])
         XCTAssertEqual(T.window(t, nominal: 0.5, source: source), "Last 1.0s")
-        let exact = T.figures(t, rates: none, adaptiveSync: false)
-        XCTAssertEqual([exact.fps, exact.frames, exact.mainLongest, exact.mainLong], ["—", "—", "—", "—"])
+        XCTAssertEqual({ let e = T.figures(t, rates: none, adaptiveSync: false); return [e.fps, e.frames, e.mainLongest, e.heldUp] }(), ["—", "—", "—", "—"])
+        typealias F = FrameHealthCardFace
+        XCTAssertLessThanOrEqual(F.secondFigure(lead: "held up") + 3.6 + FrameHealthCardDrawing.width("of the time", F.body), F.minimumWidth - 12, "the words fit")
+        XCTAssertEqual(Set(["5s", "2.5s", "12s"].map { F.labelWidth("Longest hold-up (last \($0))", name: "Longest hold-up") }).count, 1, "the value stays put")
         // The screen's work chart has a gridline at each whole refresh at the display's highest rate, the first dotted,
         // and draws no deadline
         let area = CGRect(x: 12, y: 206, width: 296, height: 200)
@@ -1143,10 +1143,10 @@ final class FrameHealthMetricsTests: XCTestCase {
         var taken = 0
         reader.sample(health, now: 1, force: true, main: { taken += 1; return (0.004, 0) })
         health.record(arrival: 1.1, target: 1.11, period: 0, finished: 1.105)
-        reader.sample(health, now: 1.6, force: true, main: { taken += 1; return (0.061, 2) })
+        reader.sample(health, now: 1.6, force: true, main: { taken += 1; return (0.061, 0.0525) })
         XCTAssertEqual(taken, 2, "each read takes the main thread's work, the baseline's too, so none carries over")
         XCTAssertEqual(reader.window(5).mainLongest, 61, accuracy: 1e-9)
-        XCTAssertEqual(reader.window(5).counts.long, 2)
+        XCTAssertEqual(reader.window(5).counts.heldUpNs, 52_500_000)
         // A paused card reads nothing; its first read after covers the paused span, from the last read before it
         health.record(arrival: 1.7, target: 1.71, period: 0, finished: 1.705)
         health.record(arrival: 3.7, target: 3.71, period: 0, finished: 3.705)
@@ -1307,7 +1307,7 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertFalse(both.contains(CGPoint(x: end + 0.5, y: long.maxY)))
         // A compact card's last line, at its bottom left
         let compact = try XCTUnwrap(FrameHealthCardFace.Layout(width: width, compact: true, corners: (12, 12, 12, 54)).bottomOutline)
-        let pacing = D.box("None over one refresh, 16.7ms", x: 12, y: 154, FrameHealthCardFace.digits, .left)
+        let pacing = D.box("597 frames at 8.3ms, 3 at 25.0ms", x: 12, y: 154, FrameHealthCardFace.digits, .left)
         XCTAssertGreaterThan(D.fit(pacing, .left, limit: width - 24, within: compact).x, 12)
         // Drawn, the charts' labels leave no ink within a point of the card's edge: in a 54-point corner, where "now"
         // is cut without the outline, and with the frame-rate chart expanded, its 0 in a 62-point corner

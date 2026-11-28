@@ -16,8 +16,8 @@ final class FrameHealthScreen {
     struct MainThread {
         /// Seconds: the longest spell
         var longest = 0.0
-        /// The spells longer than one refresh at the display's highest rate, which would delay a frame at that rate
-        var long: UInt32 = 0
+        /// Seconds: how far spells ran past one refresh at the display's highest rate, which holds up a frame due then
+        var heldUp = 0.0
     }
 
     /// The frames, each with its work, the main thread's time from when its update was scheduled until its last Core
@@ -214,7 +214,7 @@ final class FrameHealthScreen {
         guard start > 0 else { return }
         main.longest = max(main.longest, length)
         guard length > refresh else { return }
-        main.long = main.long == .max ? .max : main.long + 1
+        main.heldUp += length - refresh
         chart?.busy(start: now - length, end: now, budget: refresh)
     }
 }

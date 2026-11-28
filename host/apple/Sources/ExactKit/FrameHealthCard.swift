@@ -65,20 +65,20 @@ final class FrameHealthCardReader {
     }
 
     /// Counts a window adds from its samples. Thirty seconds of them fit 32 bits, which keeps the
-    /// card within its memory budget (LLP 1079.000 §5.2); only the time observed needs 64.
+    /// card within its memory budget (LLP 1079.000 §5.2); only times need 64.
     struct Counts {
         var activeNs: UInt64 = 0
+        /// Where the card measures the screen, the main thread's time past one refresh at the display's highest rate
+        var heldUpNs: UInt64 = 0
         var frames: UInt32 = 0, callbacks: UInt32 = 0, held: UInt32 = 0, changes: UInt32 = 0, epochs: UInt32 = 0
         var unclassified: UInt32 = 0, outOfOrder: UInt32 = 0, skipped: UInt32 = 0
         var requested: UInt32 = 0, missed: UInt32 = 0, restricted: UInt32 = 0, worked: UInt32 = 0, late: UInt32 = 0
-        /// The main thread's spells of work longer than one refresh at the display's highest rate
-        var long: UInt32 = 0
         var fps: Double? { activeNs == 0 ? nil : Double(frames) * 1e9 / Double(activeNs) }
         mutating func add(_ c: Counts) {
-            activeNs += c.activeNs; frames += c.frames; callbacks += c.callbacks; held += c.held; changes += c.changes
+            activeNs += c.activeNs; heldUpNs += c.heldUpNs
+            frames += c.frames; callbacks += c.callbacks; held += c.held; changes += c.changes
             epochs += c.epochs; unclassified += c.unclassified; outOfOrder += c.outOfOrder; skipped += c.skipped
             requested += c.requested; missed += c.missed; restricted += c.restricted; worked += c.worked; late += c.late
-            long += c.long
         }
     }
 
@@ -107,12 +107,12 @@ final class FrameHealthCardReader {
     func reset() { samples.removeAll(keepingCapacity: true); previous = nil; overdue = 0; stale = false }
 
     /// Read the collector once at least half a second has passed, and with it what `main` takes: the main thread's
-    /// longest spell of work and its long spells since the last read, in seconds. The first read after a reset is
+    /// longest spell of work and its time held up since the last read, in seconds. The first read after a reset is
     /// only a baseline, and its maxima cover time the card did not watch. A new generation discards
     /// the samples at once, without waiting for the half second.
     @discardableResult
     func sample(_ health: FrameHealth, now: Double = CACurrentMediaTime(), force: Bool = false,
-                main: (() -> (longest: Double, long: UInt32))? = nil) -> Bool {
+                main: (() -> (longest: Double, heldUp: Double))? = nil) -> Bool {
         guard health.enabled else { return false }
         if let previous, previous.snapshot.generation != health.snapshot().generation { reset() }
         if let last = samples.last, !force, now - last.read < 0.5 { return false }
@@ -136,7 +136,7 @@ final class FrameHealthCardReader {
         s.longest = Double(maxima.longest_ns) / 1e6
         s.slowest = Double(maxima.slowest_ns) / 1e6
         s.budget = Double(maxima.budget_ns) / 1e6
-        if let work { (s.mainLongest, s.counts.long) = (work.longest * 1000, work.long) }
+        if let work { (s.mainLongest, s.counts.heldUpNs) = (work.longest * 1000, UInt64((work.heldUp * 1e9).rounded())) }
         // A saturated bin stops counting while its population goes on, so its deltas are not a distribution
         s.valid = b.histogram_overflows == a.histogram_overflows
         var index = 0
@@ -218,12 +218,12 @@ enum FrameHealthCardText {
             return [("Frame rate", \.fps), ("Missed frames", \.missed), ("Work time, median", \.median), ("Max work time", \.maxWork),
                 ("Late frames", \.late), ("Late by, median", \.lateBy), ("Max frame time", \.maxFrame), ("Pacing changes", \.changes)]
         }
-        return [("Frame rate", \.fps), ("Late frames", \.late), ("Frames", \.frames), ("Late by, median", \.lateBy),
-            ("Work time, median", \.median), ("Max work time", \.maxWork), ("Main thread, longest", \.mainLongest),
-            ("Main thread over \(ms(source.refreshMs))", \.mainLong)]
+        return [("Frame rate", \.fps), ("Held up", \.heldUp), ("Late frames", \.late), ("Frames", \.frames),
+            ("Late by, median", \.lateBy), ("Work time, median", \.median), ("Max work time", \.maxWork),
+            ("Longest hold-up", \.mainLongest)]
     }
 
-    struct Figures { var fps, missed, median, maxWork, late, lateBy, maxFrame, changes, frames, mainLongest, mainLong: String }
+    struct Figures { var fps, missed, median, maxWork, late, lateBy, maxFrame, changes, frames, mainLongest, heldUp: String }
 
     /// The figures for one window. `count` abbreviates large counts on the card; the shared text gives them in full.
     static func figures(_ t: FrameHealthCardReader.Window, rates: Rates, adaptiveSync: Bool, source: Source = .exact,
@@ -245,7 +245,14 @@ enum FrameHealthCardText {
             changes: c.frames > 0 && !adaptiveSync && !source.screen ? count(UInt64(c.changes)) : "—",
             frames: source.screen && t.read > 0 ? count(UInt64(c.callbacks)) : "—",
             mainLongest: source.screen && t.read > 0 ? duration(t.mainLongest, .nearest) : "—",
-            mainLong: source.screen && t.read > 0 ? count(UInt64(c.long)) : "—")
+            heldUp: source.screen && t.read > t.from ? heldUp(t) : "—")
+    }
+
+    /// The share of a window's time the main thread was held up, rounded up so that any hold-up shows. A spell counts
+    /// in the read after it ends, which can be in a later window than its start, so the share stops at 100%.
+    static func heldUp(_ t: FrameHealthCardReader.Window) -> String {
+        let share = min(100, Double(t.counts.heldUpNs) / 1e9 / (t.read - t.from) * 100)
+        return "\(Int(share.rounded(.up)))%"
     }
 
     /// The median work time: its bin's upper bound, but never more than the exact maximum it cannot
@@ -269,10 +276,11 @@ enum FrameHealthCardText {
 
     /// Pacing over a window: a verdict, then the counts behind it. Counts, not rounded shares, so a
     /// rare long frame never reads as 0%. Refresh counts are in each frame's own schedule, so a
-    /// window whose schedule changed gives them without a rate or a time.
+    /// window whose schedule changed gives them without a rate or a time. Where the face measures the screen, whose
+    /// frames have no frame times, the line gives the longest hold-up: the main thread's longest spell of work.
     static func pacing(_ t: FrameHealthCardReader.Window, rates: Rates, adaptiveSync: Bool, source: Source = .exact,
                        count: (UInt64) -> String = abbreviated) -> (String, String) {
-        guard !source.screen else { return mainThread(t, source: source, count: count) }
+        guard !source.screen else { return (t.read > 0 ? duration(t.mainLongest, .nearest) : "—", "") }
         guard t.frames > 0 else { return ("No frames", "") }
         guard t.valid else { return ("—", "") }
         // On a VRR display no one refresh period holds, so frame times are a distribution
@@ -307,15 +315,6 @@ enum FrameHealthCardText {
         let range = low == high ? time(low) : high == 31 ? "\(time(low)) or more"
             : changed ? "\(low + 1) to \(time(high))" : "\(time(low)) to \(time(high))"
         return (changed ? verdict : "Uneven", "\(first), \(count(others)) at \(range)")
-    }
-
-    /// Where the face measures the screen, its line under the figures: the main thread's longest spell of work over a
-    /// window, then how many spells were longer than one refresh at the display's highest rate, which would hold up a
-    /// frame due then.
-    static func mainThread(_ t: FrameHealthCardReader.Window, source: Source, count: (UInt64) -> String = abbreviated) -> (String, String) {
-        guard t.read > 0 else { return ("—", "") }
-        let long = UInt64(t.counts.long), over = "over one refresh, \(ms(source.refreshMs))"
-        return ("Longest " + duration(t.mainLongest, .nearest), long == 0 ? "None " + over : "\(count(long)) " + over)
     }
 
     /// The deadline is one scheduled refresh after each frame starts; `varied` says the schedule
@@ -406,9 +405,9 @@ enum FrameHealthCardText {
             + "evidence for the other two."
         let span = window(assessed.window(5), nominal: 5).lowercased()
         let legend = source.screen
-            ? "Work time is how long the main thread spent making a frame, not counting waits. \"Main thread, longest\" is the "
-                + "longest stretch the main thread worked without a break, and \"Main thread over \(ms(source.refreshMs))\" counts "
-                + "stretches longer than one refresh, which are long enough to delay a frame."
+            ? "Work time is how long the main thread spent making a frame, not counting waits. \"Held up\" is the share of the "
+                + "time the main thread kept working past one refresh (\(ms(source.refreshMs))), which delays any frame due then. "
+                + "\"Longest hold-up\" is the longest stretch it worked without a break."
             : "Frame rate doesn't count idle time. Work time is how long a frame took to make. Frame time is the time from one "
                 + "frame to the next. A missed frame is one that was requested but not made in time. Pacing changes count how "
                 + "often the gap between frames changed by a refresh or more."
@@ -489,11 +488,12 @@ enum FrameHealthCardText {
         ("Frame rate (FPS)", "Frames of this app per second over the last 0.5s and the last 5s, or the time each window actually covers. Each frame is one UI update, Exact's or UIKit's, such as a step of a scroll; with nothing changing there are none. Core Animation's own animations run outside the app and make no frames of its."),
         ("Exact's clock", "What Exact's own frame clock does beside these frames: idle, at the default rate, or at the rate it asks for, with any system limit. Details gives its frames."),
         ("Displays", "Fixed refresh redraws the screen at one rate. Adaptive refresh, which ProMotion uses, has the system choose the rate from a set to suit the content; frames still land on the display's refreshes."),
+        ("Held up", "How much of each window's time the main thread kept working past one refresh at the display's highest rate, 8.3ms at 120 Hz: a frame due then waits for it, whether or not anything moves. Each spell of work counts its time past one refresh, and the share is rounded up to a whole percent, so any hold-up shows. A low frame rate with nothing held up is not the main thread's doing: less changed, or the system chose a lower rate. The card's own work is not counted."),
+        ("Longest hold-up", "The main thread's longest spell of work without waiting over the last 5s, which holds up a frame where it is longer than one refresh. The work chart plots each such spell against that refresh."),
         ("Late frames", "Frames whose last Core Animation commit, as the card sees it just after, came after UIKit's completion deadline, which UIKit says delays their presentation: commit hitches, in Apple's words. Seen just after, a commit that ended just before the deadline can count as late, and an update whose commit the card does not see is timed to its end. Hitches the render server causes are not seen from the app."),
         ("Work time", "The main thread's time in a frame's update, from its start until its last Core Animation commit as the card sees it, less any wait between. The work chart has a gridline at each whole refresh at the display's highest rate, 8.3ms, 16.7ms, 25ms and 33.3ms at 120 Hz, the first dotted: to keep that rate, a frame's work must stay under one refresh, though UIKit's deadline for each frame comes later, as the render server draws it after. The card records work time in 0.5ms steps below 24ms, and the table rounds the median up to its step."),
         ("Late by", "How far past UIKit's deadline the card saw the median late frame's last commit."),
-        ("Main thread", "The main thread's longest spell of work without waiting, and the spells longer than one refresh at the display's highest rate, which would hold up a frame due then, whether or not anything moves. The work chart plots each long spell against that refresh. The card's own work is not counted."),
-        ("No frame times", "The card does not give the time between frames: it observes updates without asking for any, and cannot tell a refresh the app had nothing to draw for, such as between two taps, from one it missed. Frames held up by work show as the main thread's long spells."),
+        ("No frame times", "The card does not give the time between frames: it observes updates without asking for any, and cannot tell a refresh the app had nothing to draw for, such as between two taps, from one it missed. Frames held up by work show as time held up."),
         ("Not measured", "When a picture actually appeared on screen, compositor and GPU time, Core Animation's own animations and input latency. The card's own changes go out with the app's frames, or in transactions of its own that take no update; dragging the card makes frames of the app's."),
     ]
 
@@ -546,8 +546,8 @@ struct FrameHealthCardPresentation {
     typealias T = FrameHealthCardText
     var status = FrameHealthCardFace.Status.idle
     var request = ("No rate requested", ""), display = ""
-    /// Each window's name, frame rate and the face's second figure, and that figure's word
-    var rows = [("Last 0.5s", "—", "—"), ("Last 5s", "—", "—")], unit = "missed"
+    /// Each window's name, frame rate and the face's second figure, and the words before and after that figure
+    var rows = [("Last 0.5s", "—", "—"), ("Last 5s", "—", "—")], lead = "", unit = "missed"
     var pacing = ("—", ""), pacingName = "Pacing", pacingWindow = "last 5s"
     var input: FrameHealthCardDrawing.Input?
     var columns: [String] = [], table: [(String, [String])] = [], caption = ""
@@ -573,9 +573,9 @@ struct FrameHealthCardPresentation {
             let figures = T.figures(t, rates: rates, adaptiveSync: display.adaptiveSync, source: source)
             return (T.window(t, nominal: nominal, source: source), String(figures.fps.prefix { $0 != " " }), figures[keyPath: second.1])
         }
-        unit = second.0 == "Late frames" ? "late" : "missed"
+        (lead, unit) = source.screen ? ("held up", "of the time") : ("", "missed")
         pacing = T.pacing(five, rates: rates, adaptiveSync: display.adaptiveSync, source: source)
-        (pacingName, pacingWindow) = (source.screen ? "Main thread" : "Pacing", T.window(five, nominal: 5, source: source).lowercased())
+        (pacingName, pacingWindow) = (source.screen ? "Longest hold-up" : "Pacing", T.window(five, nominal: 5, source: source).lowercased())
         // The screen's frames answer to no rate of Exact's: the charts' scales come from the display alone
         input = .init(reader: reader, rates: source.screen ? T.Rates(requestedHz: 0, periodMs: 0) : rates, displayMaximumHz: display.maximumHz,
             screen: source.screen)
@@ -589,8 +589,9 @@ struct FrameHealthCardPresentation {
         rateSummary = "Frame rate over the last 30 seconds: \(self.rows[0].1) FPS in the newest sample, \(self.rows[1].1) over the \(pacingWindow), \(request)."
         timeSummary = source.screen
             ? "Work over the last 30 seconds, each frame's and the main thread's long spells, against whole refreshes at the display's highest rate. "
-                + "Over the \(pacingWindow), the slowest frame's work was \(figures[0].maxWork), the main thread's longest spell "
-                + "\(figures[0].mainLongest), with \(figures[0].mainLong) over one refresh, and \(figures[0].late) frames were late."
+                + "Over the \(pacingWindow), the slowest frame's work was \(figures[0].maxWork), the longest hold-up "
+                + "\(figures[0].mainLongest), the main thread was held up \(figures[0].heldUp) of the time, and \(figures[0].late) "
+                + "frames were late."
             : "Frame time over the last 30 seconds. \([pacing.0, pacing.1].filter { !$0.isEmpty }.joined(separator: ", ")). "
                 + "Over the \(pacingWindow), the longest frame time was \(figures[0].maxFrame), the slowest work \(figures[0].maxWork), "
                 + "and \(figures[0].late) frames were late. " + caption + "."
@@ -598,7 +599,7 @@ struct FrameHealthCardPresentation {
 
     /// Carry the figures into the face, keeping its own interaction state.
     func apply(to state: inout FrameHealthCardFace.State) {
-        state.status = status; state.request = request; state.display = display; state.rows = rows; state.unit = unit
+        state.status = status; state.request = request; state.display = display; state.rows = rows; state.lead = lead; state.unit = unit
         state.pacing = pacing; state.pacingName = pacingName; state.pacingWindow = pacingWindow
     }
 }

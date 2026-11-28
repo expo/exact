@@ -6961,9 +6961,10 @@ report.
 
 `perf frames health` exposes the metrics. `state.frameHealthUI` contains only the
 card's visibility and window-local bounds, marked as host controls outside app nodes.
-On iOS 18 and later the card's face shows every UI update of the app on its screen and
-the main thread's work, which it measures only while it shows; `perf frames` reports
-Exact's own frames (LLP 1079.000 §7.4).
+On iOS 18 and later the card's face shows every UI update of the app on its screen, how
+much of each window's time the main thread was held up past one refresh, and its longest
+hold-up, which it measures only while it shows; `perf frames` reports Exact's own frames
+(LLP 1079.000 §7.4).
 Embedders opt in by passing a host view as `DevMenu.install`'s `frameHealthContainer`.
 
 `app.json` may set `"frame_health": { "mode": "off" }` or `"core"`. Without a mode, a

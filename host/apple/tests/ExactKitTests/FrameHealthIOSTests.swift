@@ -613,7 +613,7 @@ final class FrameHealthIOSTests: XCTestCase {
         // The card measures the screen while it shows, so it is live from the start
         XCTAssertEqual(overlay.card.state.status, .live)
         XCTAssertEqual(overlay.card.state.request.0, "This app's frames")
-        XCTAssertEqual(overlay.card.state.unit, "late")
+        XCTAssertEqual([overlay.card.state.lead, overlay.card.state.unit], ["held up", "of the time"])
 
         let elements = overlay.card.accessibilityElements?.compactMap { $0 as? UIAccessibilityElement } ?? []
         XCTAssertEqual(elements.first?.accessibilityLabel, "Close frame health", "Close comes first, in its corner")
@@ -1139,13 +1139,13 @@ final class FrameHealthIOSTests: XCTestCase {
         screen.wait(at: t + 0.08)
         var spell = screen.takeMainThread()
         XCTAssertEqual(spell.longest, 0.06, accuracy: 1e-9)
-        XCTAssertEqual(spell.long, 1)
+        XCTAssertEqual(spell.heldUp, 0.06 - screen.refresh, accuracy: 1e-9, "its time past one refresh holds up a frame due then")
         screen.wake(at: t + 0.1)
         screen.card(took: 0.03)
         screen.wait(at: t + 0.13)
         spell = screen.takeMainThread()
         XCTAssertEqual(spell.longest, 0, accuracy: 1e-9)
-        XCTAssertEqual(spell.long, 0)
+        XCTAssertEqual(spell.heldUp, 0)
         // Scrolling, each update is a frame with its work, and the frames of the last half second give the rate; a frame
         // of the screen's bounds no frame time
         scroll.setContentOffset(CGPoint(x: 0, y: 3000), animated: true)
@@ -1164,7 +1164,7 @@ final class FrameHealthIOSTests: XCTestCase {
         run(0.6)
         let main = screen.takeMainThread()
         XCTAssertGreaterThanOrEqual(main.longest, 0.06)
-        XCTAssertGreaterThanOrEqual(main.long, 1)
+        XCTAssertGreaterThanOrEqual(main.heldUp, 0.06 - screen.refresh)
         XCTAssertTrue(chart.columns.contains { $0.work >= 60 }, "the stall is the work chart's")
         // Stopped, it observes nothing
         screen.stop()

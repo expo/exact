@@ -36,11 +36,11 @@ enum FrameHealthCardFace {
         var status = Status.idle
         var request = ("No rate requested", "")
         var display = ""
-        /// Two rows, each a window's name, frame rate in whole frames per second, and missed frames, or late ones where
-        /// the card measures the screen, which `unit` names
-        var rows = [("Last 0.5s", "—", "—"), ("Last 5s", "—", "—")], unit = "missed"
+        /// Two rows, each a window's name, frame rate in whole frames per second, and missed frames or, where the card
+        /// measures the screen, the share of the time it was held up; `lead` and `unit` are the words before and after it
+        var rows = [("Last 0.5s", "—", "—"), ("Last 5s", "—", "—")], lead = "", unit = "missed"
         var pacing = ("—", "")
-        /// What the line under the figures gives, pacing or, where the card measures the screen, the main thread's work,
+        /// What the line under the figures gives, pacing or, where the card measures the screen, the longest hold-up,
         /// and the window it covers: "last 5s", or the span it actually covers
         var pacingName = "Pacing", pacingWindow = "last 5s"
         var table = false
@@ -66,6 +66,20 @@ enum FrameHealthCardFace {
     static let digits = FrameHealthCardDrawing.tabular(body)
     static let strong = FrameHealthCardDrawing.tabular(FrameHealthCardDrawing.semibold(12))
     package static let title = FrameHealthCardDrawing.semibold(15)
+
+    /// The right edge of a row's second figure, from 136 points: a count in a column as wide as "0000", or a percentage
+    /// after its leading word in one as wide as "100%".
+    static func secondFigure(lead: String) -> CGFloat {
+        typealias D = FrameHealthCardDrawing
+        return lead.isEmpty ? 136 + D.width("0000", strong) : 136 + D.width(lead, body) + 3.6 + D.width("100%", strong)
+    }
+
+    /// The width the line under the figures gives its label, `name` and its window, in tabular digits: as wide as the
+    /// window can name, "last 0.0s" or "last 00s", so the value after it stays put as the window's span changes.
+    static func labelWidth(_ label: String, name: String) -> CGFloat {
+        typealias D = FrameHealthCardDrawing
+        return ([label] + ["0.0", "00"].map { "\(name) (last \($0)s)" }).map { D.width($0, digits) }.max() ?? 0
+    }
 
     /// Every region at a card width; sizes are points.
     struct Layout {
@@ -301,14 +315,15 @@ enum FrameHealthCardFace {
         guard !state.showsDetails else { return }
         if bands.contains(.figures) {
             // One row per window, digits right-aligned in reserved tabular columns so nothing moves
-            let digits = D.width("000", strong), count = D.width("0000", strong)
+            let digits = D.width("000", strong), second = Self.secondFigure(lead: state.lead)
             for (index, row) in state.rows.enumerated() {
                 let y = 94 + CGFloat(index) * 18
                 D.text(ctx, row.0, x: 12, y: y, body, p.secondary, .left)
                 D.text(ctx, row.1, x: 78 + digits, y: y, strong, p.label, .right)
                 D.text(ctx, "FPS", x: 78 + digits + 3.6, y: y, body, p.label, .left)
-                D.text(ctx, row.2, x: 162 + count, y: y, strong, p.label, .right)
-                D.text(ctx, state.unit, x: 162 + count + 3.6, y: y, body, p.label, .left)
+                D.text(ctx, state.lead, x: 136, y: y, body, p.label, .left)
+                D.text(ctx, row.2, x: second, y: y, strong, p.label, .right)
+                D.text(ctx, state.unit, x: second + 3.6, y: y, body, p.label, .left)
             }
             separator(ctx, y: 125, width: width, p)
         }
@@ -316,8 +331,8 @@ enum FrameHealthCardFace {
             // A compact card ends with these lines, whose starts move in together where a bottom corner rounds
             let outline = layout.bottomOutline, area = layout.pacingArea
             let x = outline.map { D.fit(D.box(state.pacing.1, x: 12, y: 154, Self.digits, .left), .left, limit: area.width, within: $0).x } ?? 12
-            let label = "\(state.pacingName) (\(state.pacingWindow))", verdict = x + D.width(label, body) + 3.6
-            D.text(ctx, label, x: x, y: 138, body, p.secondary, .left)
+            let label = "\(state.pacingName) (\(state.pacingWindow))", verdict = x + Self.labelWidth(label, name: state.pacingName) + 3.6
+            D.text(ctx, label, x: x, y: 138, Self.digits, p.secondary, .left)
             D.text(ctx, state.pacing.0, x: verdict, y: 138, strong, p.label, .left, limit: area.maxX - verdict, within: outline)
             D.text(ctx, state.pacing.1, x: x, y: 154, Self.digits, p.label, .left, limit: area.maxX - x, within: outline)
         }

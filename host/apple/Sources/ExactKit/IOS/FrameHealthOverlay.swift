@@ -273,7 +273,7 @@ final class FrameHealthOverlay: UIView {
         if let screen, screen.running {
             read = screenReader.sample(screen.health, now: now, force: force, main: {
                 let main = screen.takeMainThread()
-                return (main.longest, main.long)
+                return (main.longest, main.heldUp)
             }) || read
         }
         return read
@@ -848,7 +848,7 @@ final class FrameHealthCardView: UIView {
         case .header:
             return "\(common) \(s.status) \(d(s.pressed)) \(d(s.hovered)) \(corners.topLeft) \(corners.topRight) \(minimized ? "\(s.minimizedText) \(bottom)" : "")"
         case .context: return "\(common) \(s.request) \(s.display) \(d(s.pressed)) \(d(s.hovered))"
-        case .figures: return "\(common) \(s.rows) \(s.unit)"
+        case .figures: return "\(common) \(s.rows) \(s.lead) \(s.unit)"
         case .pacing: return "\(common) \(s.pacing) \(s.pacingName) \(s.pacingWindow) \(compact ? bottom : "")"
         case .toolbar: return "\(common) \(s.table) \(d(s.pressed)) \(d(s.hovered))"
         case .charts:
@@ -1015,7 +1015,8 @@ final class FrameHealthCardView: UIView {
                 label = [state.request.0, state.request.1, state.display].filter { !$0.isEmpty }.joined(separator: ", ")
             case .figures:
                 frame = CGRect(x: 0, y: 80, width: l.width, height: 45)
-                label = state.rows.map { "\($0.0): \($0.1) FPS, \($0.2) \(state.unit)" }.joined(separator: ". ")
+                label = state.rows.map { "\($0.0): \($0.1) FPS, " + [state.lead, $0.2, state.unit].filter { !$0.isEmpty }.joined(separator: " ") }
+                    .joined(separator: ". ")
             case .pacing:
                 frame = l.pacingArea
                 label = "\(state.pacingName), \(state.pacingWindow): " + [state.pacing.0, state.pacing.1].filter { !$0.isEmpty }.joined(separator: ", ")
