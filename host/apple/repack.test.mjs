@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { bindingChanges, copyBakedEntryTrees, packagedKinds, repack, repackedBuild, unrebuiltEntry, versionsOf } from './repack.mjs';
+import { bindingChanges, copyBakedEntryTrees, packagedKinds, purposeOf, repack, repackedBuild, unrebuiltEntry, versionsOf } from './repack.mjs';
 import { frameworkInfo, plistFile } from './assets.mjs';
 import { EXTENSION_KINDS } from './extensions.mjs';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,6 +27,9 @@ test('a new version or build number repacks, and frameworks take the one they ar
   const info = plistFile(frameworkInfo('ExactWidgetReload', app, 'iPhoneOS', { CFBundleVersion: '57', CFBundleShortVersionString: '2.3.4' }));
   expect(versionsOf(info)).toEqual({ CFBundleVersion: '57', CFBundleShortVersionString: '2.3.4' });
   expect(versionsOf('<dict></dict>')).toEqual({ CFBundleVersion: null, CFBundleShortVersionString: null });
+  // A simulator build made to run is stamped for agent attach, and its repack keeps the stamp; a device archive has none.
+  expect(purposeOf('<dict><key>ExactBuildKind</key><string>debug</string><key>ExactBuildPurpose</key><string>local-development</string></dict>')).toBe('local-development');
+  expect(purposeOf('<dict><key>ExactBuildKind</key><string>debug</string></dict>')).toBeNull();
 });
 
 test('what the binary was built to provide still refuses a repack, by name', () => {
@@ -92,11 +95,18 @@ test('a development archive is a repack base, and repack runs, only with EXACT_E
   try {
     delete process.env.EXACT_EXPERIMENTAL;
     expect(repackBase(archive)).toBe(false);
+    expect(repackBase({ ...archive, device: false, ipa: null, developmentArchive: false })).toBe(false);
     expect(reservedPlan('/plan', repackBase(archive))).toBe('/plan');
     await expect(repack(['--base', 'b.ipa', '--archive', 'o.ipa', 'app'])).rejects.toThrow('repack refused: repack is experimental: set EXACT_EXPERIMENTAL=1');
     process.env.EXACT_EXPERIMENTAL = '1';
     expect(repackBase(archive)).toBe(true);
     for (const other of [{ tv: true }, { device: false }, { ipa: null }, { developmentArchive: false }, { ios: false }]) expect(repackBase({ ...archive, ...other })).toBe(false);
+    // An iOS simulator development build is one too (repack --simulator), but not an Apple TV simulator's, nor a
+    // simulator build packaged as a distributed archive.
+    const simulator = { ios: true, tv: false, device: false, ipa: null, developmentArchive: false };
+    expect(repackBase(simulator)).toBe(true);
+    for (const other of [{ tv: true }, { distribution: true }]) expect(repackBase({ ...simulator, ...other })).toBe(false);
+    expect(repackBase(simulator, { EXACT_EXPERIMENTAL: '1', EXACT_UPDATE_TRUST: 'production' })).toBe(false);
     // A distributed build, or one that bakes production trust, is never a base.
     expect(repackBase({ ...archive, distribution: true })).toBe(false);
     expect(repackBase(archive, { EXACT_EXPERIMENTAL: '1', EXACT_UPDATE_TRUST: 'production' })).toBe(false);
@@ -253,5 +263,55 @@ test.skipIf(process.platform !== 'darwin')('a non-widget TypeScript app repacks 
     const bundle2 = resolve(outDir2, 'Payload', readdirSync(resolve(outDir2, 'Payload'))[0]);
     expect(readFileSync(resolve(bundle2, 'typescript/app.hbc')).equals(newHbc)).toBe(true);
     expect(spawnSync('codesign', ['--verify', '--strict', bundle2]).status).toBe(0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 3_600_000);
+
+// A simulator development build (`build.mjs --ios`, as Payload/<App>.app) repacks with --simulator: the new bake in the
+// base's executable, its linked simulator entitlements kept, ad hoc signed without entitlements; a device repack of it,
+// and a simulator repack whose entitlements the link no longer matches, are refused.
+test.skipIf(process.platform !== 'darwin')('a simulator build repacks onto a simulator base with --simulator', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { readdirSync, readFileSync } = await import('node:fs');
+  const { createApp } = await import('../../game/new.mjs');
+  const { readLinkedSections } = await import('./sections.mjs');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-repack-sim-'));
+  try {
+    const app = resolve(dir, 'simmed');
+    createApp(app, { with: ['ios'] });
+    (await import('../../scripts/app-shells.mjs')).ensureShells(app);
+    const env = { ...process.env, EXACT_EXPERIMENTAL: '1', EXACT_APP_DIR: app, EXACT_FEEDBACK: '0', EXACT_SHOW_SIMULATOR: '0' };
+    const run = (script, args) => spawnSync(process.execPath, [resolve(root, script), ...args], { cwd: root, env, encoding: 'utf8', timeout: 1_800_000 });
+    const built = run('host/apple/build.mjs', ['--ios', '--no-install', '--json', app]);
+    expect(built.status, built.stderr.slice(-4000)).toBe(0);
+    const baseBundle = JSON.parse(built.stdout.trim().split('\n').at(-1)).path, base = resolve(dir, 'base.ipa');
+    const stage = resolve(dir, 'stage');
+    mkdirSync(resolve(stage, 'Payload'), { recursive: true });
+    expect(spawnSync('cp', ['-a', baseBundle, resolve(stage, 'Payload/')]).status).toBe(0);
+    expect(spawnSync('zip', ['-1', '-qry', base, 'Payload'], { cwd: stage }).status).toBe(0);
+    const executable = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(readFileSync(resolve(baseBundle, 'Info.plist'), 'utf8'))[1];
+    const linked = (bundle) => readLinkedSections(resolve(bundle, executable), { entitlements: '__entitlements' }).entitlements.toString('utf8');
+    const baseEntitlements = linked(baseBundle), baseHbc = readFileSync(resolve(baseBundle, 'typescript/app.hbc'));
+    writeFileSync(resolve(app, 'app.ts'), readFileSync(resolve(app, 'app.ts'), 'utf8').replace('Hello from ', 'Repacked from '));
+    const out = resolve(dir, 'repacked.ipa');
+    expect(run('host/apple/repack.mjs', ['--base', base, '--archive', resolve(dir, 'device.ipa'), app]).stderr).toContain('repack refused: the Contract changed what the binary provides (compat.json target)');
+    const repacked = run('host/apple/repack.mjs', ['--base', base, '--archive', out, '--simulator', app]);
+    expect(repacked.status, repacked.stderr.slice(-4000)).toBe(0);
+    expect(repacked.stdout).toContain('repacked from the base');
+    const outDir = resolve(dir, 'out');
+    expect(spawnSync('unzip', ['-q', out, '-d', outDir]).status).toBe(0);
+    const bundle = resolve(outDir, 'Payload', readdirSync(resolve(outDir, 'Payload'))[0]);
+    expect(readFileSync(resolve(bundle, 'typescript/app.hbc')).equals(baseHbc)).toBe(false);
+    const plist = JSON.parse(spawnSync('plutil', ['-convert', 'json', '-o', '-', resolve(bundle, 'Info.plist')], { encoding: 'utf8' }).stdout);
+    expect(plist).toMatchObject({ CFBundleSupportedPlatforms: ['iPhoneSimulator'], DTPlatformName: 'iphonesimulator' });
+    expect(linked(bundle)).toBe(baseEntitlements);
+    expect(JSON.parse(readLinkedSections(resolve(bundle, executable)).compat.toString('utf8')).target).toBe(JSON.parse(readLinkedSections(resolve(baseBundle, executable)).compat.toString('utf8')).target);
+    expect(spawnSync('codesign', ['--verify', '--strict', bundle]).status).toBe(0);
+    // Another app id: the base's linked entitlements are another app's, so its executable cannot be this one's.
+    const manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8')), id = manifest.app.id;
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({ ...manifest, app: { ...manifest.app, id: `${id}.other` } }, null, 2));
+    writeFileSync(resolve(app, 'app.ts'), readFileSync(resolve(app, 'app.ts'), 'utf8').replaceAll(`'${id}'`, `'${id}.other'`));
+    const other = run('host/apple/repack.mjs', ['--base', base, '--archive', resolve(dir, 'other.ipa'), '--simulator', app]);
+    expect(other.status).toBe(3);
+    expect(other.stderr).toContain('repack refused: the app\'s simulator entitlements changed');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 3_600_000);

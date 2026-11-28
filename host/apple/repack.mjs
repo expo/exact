@@ -1,7 +1,13 @@
 // Experimental (EXACT_EXPERIMENTAL=1; host/apple/toolchain.mjs): a development device archive from a previous one's native
 // build, which a development archive made with the same switch can be:
 //
-//   EXACT_EXPERIMENTAL=1 bun host/apple/repack.mjs --base <base.ipa> --archive <out.ipa> [--extensions <kinds>] <app>
+//   EXACT_EXPERIMENTAL=1 bun host/apple/repack.mjs --base <base.ipa> --archive <out.ipa> [--extensions <kinds>] [--simulator] <app>
+//
+// With --simulator, an iOS simulator development build instead, from a previous one's (`build.mjs --ios`), each as an
+// archive of the bundle in an IPA's layout (Payload/<App>.app). The simulator reads its entitlements from the
+// executable's __TEXT,__entitlements section, which the link wrote: it refuses a base whose section is not the one this
+// app's full build links, and signs the bundle ad hoc without entitlements, as assembleIOS does for a simulator. An app
+// with widgets or Live Activities builds in full there.
 //
 // The caller has established that nothing native changed since the base build: the same checkout, toolchain and flags.
 // This bakes the app (the Contract and TypeScript into the plan, compat.json and module bytecode, with no Cargo and no
@@ -37,7 +43,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appleArtifacts, appClip, COMPATIBLE_SDK, compiledTargets, designCompatible, distributionKeys, entitlements, infoPlist, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees } from './build.mjs';
+import { appleArtifacts, appClip, COMPATIBLE_SDK, compiledTargets, designCompatible, distributionKeys, entitlements, infoPlist, iosTarget, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees } from './build.mjs';
 import { modulePlist } from './plist.mjs';
 import { awaitBuildOutput, bakedBackendOrigin, bakeOutput, bakeWatchEnv, developmentBuildEnv, appleExecutableName, gpuModules, HOST_DEV, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { HOST_MACOS, withHostDeployment } from '../../scripts/filesystem.mjs';
@@ -55,7 +61,9 @@ import { listAssets } from '../web/serve.mjs';
 import { thinTextures } from '../../scripts/texture-families.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const TARGET = 'aarch64-apple-ios', SDK_NAME = 'iphoneos';
+/** What a repack makes: an iPhone development archive, or (--simulator) an iOS simulator development build. */
+const DEVICE = { device: true, target: 'aarch64-apple-ios', sdk: 'iphoneos', platform: 'iPhoneOS', destination: 'ios' };
+const SIMULATOR = { device: false, target: iosTarget, sdk: 'iphonesimulator', platform: 'iPhoneSimulator', destination: 'ios-simulator' };
 export class RepackRefused extends Error { constructor(why) { super(`repack refused: ${why}`); } }
 const refuse = (why) => { throw new RepackRefused(why); };
 const tool = (cmd, args, opts = {}) => {
@@ -115,6 +123,9 @@ export const bindingChanges = (baseCompat, compat) => {
 /** A base's version and build number, from its Info.plist (XML as plistFile writes it), as frameworkInfo takes them. */
 export const versionsOf = (plist) => Object.fromEntries(['CFBundleVersion', 'CFBundleShortVersionString'].map(key => [key, new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(plist)?.[1] ?? null]));
 
+/** A base's ExactBuildPurpose (buildinfo.mjs: `local-development` on a simulator build made to run), which a repack keeps. */
+export const purposeOf = (plist) => /<key>ExactBuildPurpose<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1] ?? null;
+
 /** Whether a base's full build stamped it as an archive (Info.plist's ExactBuildKind, XML as plistFile writes it):
  * a repack's kind is its base's, so it is the kind a full build of the same upload gets. */
 export const archivedBase = (plist) => /<key>ExactBuildKind<\/key>\s*<string>archive<\/string>/.test(plist);
@@ -156,7 +167,8 @@ export async function repack(args) {
   const at = (flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : null;
   const baseIpa = at('--base'), ipa = at('--archive') && resolve(process.cwd(), at('--archive'));
   const appArg = args.find((a, i) => !a.startsWith('--') && !['--base', '--archive', '--extensions'].includes(args[i - 1]));
-  if (!baseIpa || !ipa || !appArg) throw new Error('usage: repack.mjs --base <base.ipa> --archive <out.ipa> [--extensions kinds] <app>');
+  if (!baseIpa || !ipa || !appArg) throw new Error('usage: repack.mjs --base <base.ipa> --archive <out.ipa> [--extensions kinds] [--simulator] <app>');
+  const made = args.includes('--simulator') ? SIMULATOR : DEVICE, TARGET = made.target, SDK_NAME = made.sdk;
   const started = Date.now(), times = {}, mark = (name) => { times[name] = (Date.now() - started) / 1000; };
   const app = resolveApp(appArg);
   // The extensions this build packages, as build.mjs takes them (--extensions): a widget left out is no widget here.
@@ -172,6 +184,7 @@ export async function repack(args) {
   if (app.hasGpu || gpuModules(app.manifest).length) refuse('a GPU crate is part of the bundle\'s native build');
   if (existsSync(resolve(app.dir, 'data/Cargo.toml'))) refuse('an app with a Rust data crate bakes with its own compiled code');
   if (existsSync(resolve(app.dir, 'library')) || app.manifest.library) refuse('a package framework builds in full');
+  if (!made.device && widgets) refuse('a simulator build with widgets or Live Activities builds in full');
 
   // The app's build claim, as build.mjs holds it: the one writer of its bake directory (bakeOutside) until this is done.
   const release = awaitBuildOutput(app, appleArtifacts(app).lock, () => console.error(`waiting for the Apple build of ${app.name} already running`));
@@ -203,7 +216,7 @@ export async function repack(args) {
     mark('unzip');
     const apps = readdirSync(resolve(work, 'Payload')).filter(name => name.endsWith('.app'));
     if (apps.length !== 1) refuse('the base IPA does not hold exactly one app');
-    const paths = appleArtifacts(app, { destination: 'ios', composition: compat.inputs.store?.L === '0' ? 'embedded' : 'updating', trust: 'development' });
+    const paths = appleArtifacts(app, { destination: made.destination, composition: compat.inputs.store?.L === '0' ? 'embedded' : 'updating', trust: 'development' });
     // NFD and iOS's flat-bundle name, as the Apple build names the executable and CFBundleExecutable (scripts/app.mjs
     // appleExecutableName(app, true), expo/exact#467: " App" after a name the bundle root reserves): an
     // app named with an accent ("Caf\u00e9") otherwise looks up and writes an NFC name the base bundle never had.
@@ -232,6 +245,18 @@ export async function repack(args) {
     const basePlist = readFileSync(resolve(base, 'Info.plist'), 'utf8');
     const differs = widgets && widgetBaseRefusal({ app: app.id, digest: widgetsDigest(app, [...packaged]) }, { app: baseCompat.inputs?.app, digest: baseReceipt.build.widgets, alarm: basePlist.includes('<key>ExactAlarmCountdown</key>') });
     if (differs) refuse(differs);
+    const appleReach = modulePlist(app, compat.reach, 'ios', graph.extensions, graph.contractSources);
+    mark('reach');
+    // The entitlements, as the full build writes them: a simulator's are linked into the executable (build.mjs
+    // entitledArgs), so the base's must already be this app's; a device archive's are its signature's, written here.
+    const entitled = made.device ? entitlements({ ...app, id: app.id, widgetTV: false, widgetHost: false }, undefined, false, appleReach, { simulator: false, prefix: undefined, allows: [], distributed: false })
+      : entitlements({ ...app, id: app.id, widgetTV: false, widgetHost: false }, null, true, appleReach, { simulator: true, distributed: false });
+    if (!made.device) {
+      let linked;
+      try { linked = readLinkedSections(baseExecutable, { entitlements: '__entitlements' }).entitlements.toString('utf8'); }
+      catch (error) { refuse(`the base's executable has no linked simulator entitlements (${error.message})`); }
+      if (linked !== entitled) refuse('the app\'s simulator entitlements changed (its id or grants), which the executable links');
+    }
     const kept = widgets ? new Set([...NATIVE_ENTRIES, 'PlugIns']) : NATIVE_ENTRIES;
     const unknown = unrebuiltEntry(readdirSync(base), baseName, kept);
     if (unknown) refuse(`the base bundle holds ${unknown}, which repack does not rebuild`);
@@ -256,8 +281,8 @@ export async function repack(args) {
       // names the file: it is every app's, and is kept as it is. An app with widgets' ExactCore is written below.
       if (entry.endsWith('.dylib') || (widgets && entry === 'ExactCore.framework')) continue;
       const framework = resolve(bundle, 'Frameworks', entry), name = basename(entry, '.framework'), plist = resolve(framework, 'Info.plist');
-      if (!entry.endsWith('.framework') || !existsSync(plist) || readFileSync(plist, 'utf8') !== plistFile(frameworkInfo(name, { ...app, id: baseId }, 'iPhoneOS', baseVersions))) refuse(`the base's ${entry} is not one repack can rename`);
-      writeFileSync(plist, plistFile(frameworkInfo(name, app, 'iPhoneOS', versions)));
+      if (!entry.endsWith('.framework') || !existsSync(plist) || readFileSync(plist, 'utf8') !== plistFile(frameworkInfo(name, { ...app, id: baseId }, made.platform, baseVersions))) refuse(`the base's ${entry} is not one repack can rename`);
+      writeFileSync(plist, plistFile(frameworkInfo(name, app, made.platform, versions)));
       tool('codesign', ['--force', '--sign', '-', '--timestamp=none', framework], { stdio: 'ignore' });
     }
     mark('copy');
@@ -269,13 +294,11 @@ export async function repack(args) {
     const fitted = JSON.parse(readLinkedSections(sections).compat.toString('utf8'));
     if (fitted.id !== compat.id || fitted.inputs?.app !== app.id) throw new Error('the fitted executable does not name this bake');
     mark('sections');
-    const appleReach = modulePlist(app, compat.reach, 'ios', graph.extensions, graph.contractSources);
-    mark('reach');
     // Keys the native build computed and repack cannot: the module roster's first-frame modules (none on Linux).
     // (Converting the plist is a process of its own: only when the key is there at all.)
     const baseInfo = readFileSync(resolve(base, 'Info.plist')).includes('ExactFirstFrameModules') ? JSON.parse(tool('plutil', ['-convert', 'json', '-o', '-', resolve(base, 'Info.plist')]).stdout) : {};
     const rosterKeys = baseInfo.ExactFirstFrameModules ? { ExactFirstFrameModules: baseInfo.ExactFirstFrameModules } : {};
-    writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, true, { development: null, distributed: false, reach: appleReach, tv: false }));
+    writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, made.device, { development: null, distributed: false, reach: appleReach, tv: false }));
     mark('plist1');
     copyAppleStaticTrees(app.dir, bundle, [['assets', 'assets'], ['deck', 'deck']]);
     thinTextures(bundle, compat.inputs.textureFamily);
@@ -300,14 +323,14 @@ export async function repack(args) {
     // Icons drawn from the same inputs as the base's are the base's (development archives record what theirs were made
     // from, bundle.mjs): taken from the base bundle with the Info.plist keys they gave, else drawn again.
     mark('swiftc');
-    const assetsKey = appleAssetsKey(app, { platform: 'ios', device: true, catalog: false, stamp: swiftc, ...bakedAssetInputs(graph) });
+    const assetsKey = appleAssetsKey(app, { platform: 'ios', device: made.device, catalog: false, stamp: swiftc, ...bakedAssetInputs(graph) });
     let assetKeys;
     if (baseReceipt.build.assets?.key === assetsKey && baseReceipt.build.assets.keys) {
       for (const entry of readdirSync(base)) if (entry === 'Assets.car' || /^AppIcon.*\.png$/.test(entry)) cpSync(resolve(base, entry), resolve(bundle, entry));
       assetKeys = baseReceipt.build.assets.keys;
-    } else assetKeys = iosAssets(app, bundle, true, { tv: false, catalog: false, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc }, ...bakedAssetInputs(graph) });
+    } else assetKeys = iosAssets(app, bundle, made.device, { tv: false, catalog: false, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc }, ...bakedAssetInputs(graph) });
     mark('assets');
-    const stampSdk = { sdk: SDK_NAME, sdkVersion: designCompatible(app, 'ios') ? COMPATIBLE_SDK.ios : null };
+    const stampSdk = { sdk: SDK_NAME, sdkVersion: designCompatible(app, 'ios') ? COMPATIBLE_SDK.ios : null, purpose: purposeOf(basePlist) };
     // The toolchain and store keys (distributionKeys: DT*, UIRequiredDeviceCapabilities, orientations, versions) are in
     // a development archive only where this SDK's full build writes them (bundle.mjs: every archive, or only a
     // production one, as SDKs differ): as the base, which that full build made, has them.
@@ -316,14 +339,14 @@ export async function repack(args) {
     // distributed (bundle.mjs), `archive` where it stamps every one.
     const stamped = basePlist.includes('<key>DTSDKName</key>');
     const stamp = { ...rosterKeys, ...(stamped ? distributionKeys(SDK_NAME) : {}), ...buildInfo(app, { root, archive: archivedBase(basePlist), production: false, ...stampSdk }) };
-    writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, true, { development: null, distributed: false, reach: appleReach, icon: assetKeys, distribution: stamp, tv: false }));
+    writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, made.device, { development: null, distributed: false, reach: appleReach, icon: assetKeys, distribution: stamp, tv: false }));
     // What assembleIOS adds after it for an app with widgets, in its order (plutil -insert, as it writes them).
     const infoPath = resolve(bundle, 'Info.plist');
     if (widgets) tool('plutil', ['-insert', 'ExactWidgetGeneration', '-string', createHash('sha256').update(JSON.stringify([compat.id, graph.artifacts])).digest('hex'), infoPath]);
     writeUsageStrings(appleReach, bundle);
     mark('plist');
     const ent = resolve(work, 'entitlements.plist');
-    writeFileSync(ent, entitlements({ ...app, id: app.id, widgetTV: false, widgetHost: false }, undefined, false, appleReach, { simulator: false, prefix: undefined, allows: [], distributed: false }));
+    writeFileSync(ent, entitled);
     if (widgets) {
       const group = JSON.parse(tool('plutil', ['-convert', 'json', '-o', '-', ent]).stdout)['keychain-access-groups'][0];
       tool('plutil', ['-insert', 'ExactKeychainAccessGroup', '-string', group, infoPath]);
@@ -353,10 +376,10 @@ export async function repack(args) {
     const whole = 'linkedPlan' in (baseReceipt.build ?? {}) || Array.isArray(baseReceipt.build?.binary?.inputs);
     const build = repackedBuild(baseReceipt.build, baked, app, { compat, graph, assets: { key: assetsKey, keys: assetKeys, stamp: swiftc } });
     mark('entitlements');
-    const written = receipt(app, { compatibilityId: compat.id, build, composition: baseReceipt.composition, platform: 'ios', target: TARGET, sdk, identity: '-', profile: null, entitlements: readFileSync(ent, 'utf8'), gpu: null, development: null, repackedFrom: baseCompat.id });
+    const written = receipt(app, { compatibilityId: compat.id, build, composition: baseReceipt.composition, platform: made.destination, target: TARGET, sdk, identity: '-', profile: null, entitlements: readFileSync(ent, 'utf8'), gpu: null, development: null, repackedFrom: baseCompat.id });
     writeFileSync(resolve(bundle, 'receipt.json'), whole ? written : shippedReceipt(written));
     mark('receipt');
-    tool('codesign', ['--force', '--sign', '-', '--timestamp=none', '--entitlements', ent, bundle], { stdio: 'ignore' });
+    tool('codesign', ['--force', '--sign', '-', '--timestamp=none', ...(made.device ? ['--entitlements', ent] : []), bundle], { stdio: 'ignore' });
     mark('sign');
     const payload = resolve(work, 'out', 'Payload');
     mkdirSync(payload, { recursive: true }); renameSync(bundle, resolve(payload, name));

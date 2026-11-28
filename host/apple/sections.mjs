@@ -66,17 +66,17 @@ export function textSections(bytes) {
   return sections;
 }
 
-/** Each linked section's current bytes. */
-export function readLinkedSections(executable) {
+/** Each linked section's current bytes, or those of other __TEXT sections named as `sections` names them. */
+export function readLinkedSections(executable, sections = LINKED_SECTIONS) {
   // The load commands, then each section's bytes: never the whole (tens of megabytes) executable.
   const fd = openSync(executable, 'r');
   try {
     const head = Buffer.alloc(32); readSync(fd, head, 0, 32, 0);
     if (head.readUInt32LE(0) !== MH_MAGIC_64) throw new Error(`${executable} is not a thin 64-bit Mach-O`);
     const commands = Buffer.alloc(32 + head.readUInt32LE(20)); readSync(fd, commands, 0, commands.length, 0);
-    const sections = textSections(commands), out = {};
-    for (const [kind, name] of Object.entries(LINKED_SECTIONS)) {
-      const s = sections.find(item => item.name === name);
+    const found = textSections(commands), out = {};
+    for (const [kind, name] of Object.entries(sections)) {
+      const s = found.find(item => item.name === name);
       if (!s) throw new Error(`${executable} has no __TEXT,${name}`);
       out[kind] = Buffer.alloc(s.size); readSync(fd, out[kind], 0, s.size, s.offset);
     }
