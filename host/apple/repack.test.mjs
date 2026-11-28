@@ -274,7 +274,8 @@ test.skipIf(process.platform !== 'darwin')('a non-widget TypeScript app repacks 
 // with room and fitted to their size; a repack writes the app's own, so another app's base (a template) gives this id.
 test.skipIf(process.platform !== 'darwin')('a simulator build repacks onto a simulator base with --simulator', async () => {
   const { spawnSync } = await import('node:child_process');
-  const { readdirSync, readFileSync } = await import('node:fs');
+  const { cpSync, readdirSync, readFileSync } = await import('node:fs');
+  const { basename } = await import('node:path');
   const { createApp } = await import('../../game/new.mjs');
   const { readLinkedSections } = await import('./sections.mjs');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-repack-sim-'));
@@ -321,8 +322,61 @@ test.skipIf(process.platform !== 'darwin')('a simulator build repacks onto a sim
     const otherDir = resolve(dir, 'other');
     expect(spawnSync('unzip', ['-q', resolve(dir, 'other.ipa'), '-d', otherDir]).status).toBe(0);
     const otherBundle = resolve(otherDir, 'Payload', readdirSync(resolve(otherDir, 'Payload'))[0]);
-    expect(linked(otherBundle)).toContain(`SIMULATORX.${id}.other</string>`);
-    expect(linked(otherBundle)).not.toContain(`SIMULATORX.${id}</string>`);
+    // The whole identity is the other app's: its application identifier and every keychain group, the bare id's too.
+    writeFileSync(resolve(dir, 'other-entitlements.plist'), linked(otherBundle));
+    const granted = JSON.parse(spawnSync('plutil', ['-convert', 'json', '-o', '-', resolve(dir, 'other-entitlements.plist')], { encoding: 'utf8' }).stdout);
+    expect(granted['application-identifier']).toBe(`SIMULATORX.${id}.other`);
+    expect(granted['keychain-access-groups']).toEqual([`SIMULATORX.${id}.other`, `${id}.other`]);
+    expect(linked(otherBundle)).not.toContain(`>${id}<`);
     expect(spawnSync('codesign', ['--verify', '--strict', otherBundle]).status).toBe(0);
+    // The sample host (build.mjs --host: ExactHostIOS.app, <id>.host) holds the app's plan, and is not the app.
+    const hostStage = resolve(dir, 'host-stage'), host = resolve(dir, 'host.ipa');
+    mkdirSync(resolve(hostStage, 'Payload'), { recursive: true });
+    expect(spawnSync('cp', ['-a', otherBundle, resolve(hostStage, 'Payload/')]).status).toBe(0);
+    expect(spawnSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', `${id}.other.host`, resolve(hostStage, 'Payload', basename(otherBundle), 'Info.plist')]).status).toBe(0);
+    expect(spawnSync('zip', ['-1', '-qry', host, 'Payload'], { cwd: hostStage }).status).toBe(0);
+    const hosted = run('host/apple/repack.mjs', ['--base', host, '--archive', resolve(dir, 'hosted.ipa'), '--simulator', app]);
+    expect([hosted.status, hosted.stderr]).toEqual([3, expect.stringContaining(`the base bundle is ${id}.other.host, not the app its plan names`)]);
+    // Repacked in place (the base is the archive): the archive is the repack, and the base is not lost on the way.
+    const inPlace = resolve(dir, 'in-place.ipa');
+    cpSync(resolve(dir, 'other.ipa'), inPlace);
+    const again = run('host/apple/repack.mjs', ['--base', inPlace, '--archive', inPlace, '--simulator', app]);
+    expect(again.status, again.stderr.slice(-4000)).toBe(0);
+    expect(spawnSync('unzip', ['-tq', inPlace]).status).toBe(0);
+    expect(readdirSync(dir).filter(name => name.startsWith('in-place.ipa.'))).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 3_600_000);
+
+// A package that takes a host event its grant signs (@fixture/invites: cloudkit-share, under device.cloudkit): the full
+// build writes CKSharingSupported and ExactHostEvents into Info.plist, and a repack writes them as it does.
+test.skipIf(process.platform !== 'darwin')('a repack writes the host events a signed grant lets a package take, as the full build does', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { cpSync, readdirSync } = await import('node:fs');
+  const root = resolve(import.meta.dir, '../..'), fixture = resolve(root, 'packages/fixtures/invites'), dir = mkdtempSync(resolve(tmpdir(), 'exact-repack-events-'));
+  try {
+    const app = resolve(dir, 'invitesfixture');
+    const env = { ...process.env, EXACT_EXPERIMENTAL: '1', EXACT_APP_DIR: app, EXACT_FEEDBACK: '0', EXACT_SHOW_SIMULATOR: '0', HERMES_LEAN_SYS_OFFLINE: '1' };
+    const run = (args, cwd = root) => spawnSync(process.execPath, args, { cwd, env, encoding: 'utf8', timeout: 1_800_000 });
+    expect(run([resolve(root, 'scripts/exact.mjs'), 'new', app, '--with', 'ios']).status).toBe(0);
+    for (const f of ['app.contract', 'app.ts']) cpSync(resolve(fixture, 'test/fixture', f), resolve(app, f));
+    rmSync(resolve(app, 'app.test.contract'), { force: true });
+    writeFileSync(resolve(app, 'app.ts'), readFileSync(resolve(app, 'app.ts'), 'utf8').replace('__GRANTS__', 'device.cloudkit'));
+    const manifest = JSON.parse(readFileSync(resolve(app, 'package.json'), 'utf8'));
+    writeFileSync(resolve(app, 'package.json'), JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, '@fixture/invites': `file:${fixture}` } }, null, 2));
+    expect(run(['install'], app).status).toBe(0);
+    (await import('../../scripts/app-shells.mjs')).ensureShells(app);
+    const built = run([resolve(root, 'host/apple/build.mjs'), '--ios', '--no-install', '--json', app]);
+    expect(built.status, built.stderr.slice(-4000)).toBe(0);
+    const baseBundle = JSON.parse(built.stdout.trim().split('\n').at(-1)).path, stage = resolve(dir, 'stage'), base = resolve(dir, 'base.ipa');
+    mkdirSync(resolve(stage, 'Payload'), { recursive: true });
+    expect(spawnSync('cp', ['-a', baseBundle, resolve(stage, 'Payload/')]).status).toBe(0);
+    expect(spawnSync('zip', ['-1', '-qry', base, 'Payload'], { cwd: stage }).status).toBe(0);
+    const repacked = run([resolve(root, 'host/apple/repack.mjs'), '--base', base, '--archive', resolve(dir, 'out.ipa'), '--simulator', app]);
+    expect(repacked.status, repacked.stderr.slice(-4000)).toBe(0);
+    expect(spawnSync('unzip', ['-q', resolve(dir, 'out.ipa'), '-d', resolve(dir, 'out')]).status).toBe(0);
+    const plist = (bundle) => JSON.parse(spawnSync('plutil', ['-convert', 'json', '-o', '-', resolve(bundle, 'Info.plist')], { encoding: 'utf8' }).stdout);
+    const events = ({ CKSharingSupported, ExactHostEvents }) => ({ CKSharingSupported, ExactHostEvents });
+    expect(events(plist(baseBundle))).toEqual({ CKSharingSupported: true, ExactHostEvents: ['cloudkit-share'] });
+    expect(events(plist(resolve(dir, 'out/Payload', readdirSync(resolve(dir, 'out/Payload'))[0])))).toEqual(events(plist(baseBundle)));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 3_600_000);
