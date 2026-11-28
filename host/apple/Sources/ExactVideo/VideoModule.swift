@@ -294,7 +294,10 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
         }
         // @ref LLP 1100 D11
         props["dynamicRangeLimit"] = owner.style["dynamic_range_limit"]?.string ?? "no-limit"
-        for name in ["src", "poster", "mediaArtwork"] {
+        if props["mediaTitle"] != nil, let cover = Bundle.main.object(forInfoDictionaryKey: "ExactDefaultMediaArtwork") as? String {
+            props["mediaDefaultArtwork"] = cover
+        }
+        for name in ["src", "poster", "mediaArtwork", "mediaDefaultArtwork"] {
             if let source = props[name], !source.isEmpty {
                 let url: URL?
                 if let hit = resolved[name], hit.source == source { url = hit.url } else {

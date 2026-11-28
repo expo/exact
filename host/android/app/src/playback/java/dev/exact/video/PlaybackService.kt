@@ -20,6 +20,10 @@ import dev.exact.canvas.ForegroundServices
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
     private val notifications get() = getSystemService(NotificationManager::class.java)
+    private val smallIcon by lazy {
+        resources.getIdentifier("exact_notification", "drawable", packageName).takeIf { it != 0 }
+            ?: androidx.media3.ui.R.drawable.exo_notification_small_icon
+    }
     private val appName by lazy { applicationInfo.loadLabel(packageManager).toString() }
     private var session: MediaSession? = null
     private var promoted = false
@@ -80,7 +84,7 @@ class PlaybackService : MediaSessionService() {
     private fun notification(): Notification {
         val current = session
         val builder = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(androidx.media3.ui.R.drawable.exo_notification_small_icon)
+            .setSmallIcon(smallIcon)
             .setContentTitle(current?.player?.mediaMetadata?.title ?: appName)
             .setCategory(Notification.CATEGORY_TRANSPORT)
             .setVisibility(Notification.VISIBILITY_PUBLIC)

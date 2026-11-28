@@ -13,7 +13,7 @@ import { packageActivityArm } from './activities.mjs';
 import { assertArchiveFrameworks, bakedAssetInputs, copyNativeResources, iosAssets, wrapFramework } from './assets.mjs';
 import { controlWidgetsSource, offeredControls } from './controls.mjs';
 import { appleFaces, intentsSource, pressesTools } from './intents.mjs';
-import { alarmKeys, backgroundKeys, declaredOrigin, nfcKeys, startLocation, storeKeys, updateActivation } from './plist.mjs';
+import { alarmKeys, backgroundKeys, mediaPlistKeys, declaredOrigin, nfcKeys, startLocation, storeKeys, updateActivation } from './plist.mjs';
 import { associatedDomains, entitlementValue, grantEntitlements, grantEntitlementValues, merchantEntitlement, signInEntitlement } from './presence.mjs';
 import { writeEmbedPrivacyManifest, writePrivacyManifest } from './privacy.mjs';
 import { activityEntries, copyWidgetFonts, hasEntries, platformWidgetEntries, widgetAppKeys, widgetBundleSource, widgetGroup, widgetReload, widgetSwiftSources } from './widgets.mjs';
@@ -146,7 +146,7 @@ export function embedEntitlements({ app, reach, hasWidgets, ios, claimedDomains 
 export function embedInfoPlist({ app, reach, usageKeys, rosterKeys = {}, launchParts = [], alarm = null, hasWidgets = false, generation = null, ios = true }) {
   const dict = { ...usageKeys(reach), ...rosterKeys };
   if (app.manifest.moduleConfig) dict.ExactModuleConfig = app.manifest.moduleConfig;
-  if (app.manifest.audio_session) dict.ExactAudioSession = app.manifest.audio_session;
+  Object.assign(dict, mediaPlistKeys(app.manifest, ios));
   if (launchParts.length) dict.ExactLaunchParts = launchParts;
   if (ios) {
     Object.assign(dict, backgroundKeys(app.manifest.host?.ios ?? {}, reach, app.id, false), nfcKeys(app.manifest.host?.ios ?? {}, false), startLocation(app), declaredOrigin(app), updateActivation(app), storeKeys(app, 'ios'), alarmKeys(alarm, false));

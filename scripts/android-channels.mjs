@@ -75,7 +75,14 @@ export function googleServices(dir, id, path) {
  * `default_notification_icon`). `activities` is the bake's `reach.androidActivities`, each `{ kind, android }`. */
 export function androidNotificationResources(manifest, dir, res, { channels, locales, base, firebase = null, activities = null }) {
   rmSync(res, { recursive: true, force: true });
-  if (!Array.isArray(channels)) return null;
+  const usesChannels = Array.isArray(channels);
+  if (!usesChannels && manifest.audio_session !== 'playback') return null;
+  const icon = notificationIcon(manifest, dir);
+  if (icon) for (const [density, image] of Object.entries(icon)) {
+    mkdirSync(resolve(res, `drawable-${density}`), { recursive: true });
+    writeFileSync(resolve(res, `drawable-${density}`, 'exact_notification.png'), encodePng(image));
+  }
+  if (!usesChannels) return null;
   const write = (path, text) => { mkdirSync(dirname(resolve(res, path)), { recursive: true }); writeFileSync(resolve(res, path), text); };
   const strings = new Map();
   const items = channels.map((c) => {
@@ -102,12 +109,7 @@ export function androidNotificationResources(manifest, dir, res, { channels, loc
   if (Array.isArray(activities) && activities.length) write('raw/exact_activities.json', `${JSON.stringify(activities)}\n`);
   if (firebase) write('values/exact_google_services.xml', `<resources>\n${Object.entries(firebase)
     .map(([name, text]) => `    <string name="${name}" translatable="false">${resourceText(text)}</string>\n`).join('')}</resources>\n`);
-  const icon = notificationIcon(manifest, dir);
-  if (icon) for (const [density, image] of Object.entries(icon)) {
-    mkdirSync(resolve(res, `drawable-${density}`), { recursive: true });
-    writeFileSync(resolve(res, `drawable-${density}`, 'exact_notification.png'), encodePng(image));
-  }
-  else write('drawable/exact_notification.xml', '<inset xmlns:android="http://schemas.android.com/apk/res/android" android:drawable="@android:drawable/ic_popup_reminder" />\n');
+  if (!icon) write('drawable/exact_notification.xml', '<inset xmlns:android="http://schemas.android.com/apk/res/android" android:drawable="@android:drawable/ic_popup_reminder" />\n');
   return { icon: !!icon };
 }
 

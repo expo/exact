@@ -44,7 +44,7 @@ export { rebuildArgs };
 import { appleConfig, composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain, swiftRoot } from './compose.mjs';
 import { associatedDomains, clipEntitlements, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
-import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys, withVendorKeys } from './plist.mjs';
+import { alternativeNames, backgroundKeys, mediaPlistKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys, withVendorKeys } from './plist.mjs';
 import { compileFixtures, packageViewFixture, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
 import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
@@ -421,7 +421,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
   if (ios.queriesSchemes?.length) dict.LSApplicationQueriesSchemes = ios.queriesSchemes;
   if (!tv && !clip) Object.assign(dict, alternativeNames(ios));
   // @ref LLP 1096 D8 — the audio session's category, which ExactKit's one owner reads.
-  if (app.manifest.audio_session) dict.ExactAudioSession = app.manifest.audio_session;
+  Object.assign(dict, mediaPlistKeys(app.manifest, !tv));
   // The manifest's `file_handlers`, as on the Mac, opened in place from
   // Files ("Open in", LLP 1069.010 slice 4), and the non-system types they
   // name (Markdown) imported so Files can match them.

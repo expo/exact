@@ -1343,6 +1343,17 @@
         }
       }
     },
+    "media_session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_artwork": {
+          "type": "string",
+          "pattern": "^assets/.+",
+          "description": "Bundled image used by the iOS and Android media card when item artwork is missing or fails to load."
+        }
+      }
+    },
     "audio_session": {
       "type": "string",
       "enum": ["ambient", "playback", "playback-mix"],

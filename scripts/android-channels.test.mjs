@@ -69,6 +69,9 @@ test('the small icon is the monochrome glyph trimmed into 22 of 24 dp per densit
   // 88 px wide (22 of 24 dp), 44 tall, centred: columns 4 to 91, rows 26 to 69.
   assert.deepEqual([pixel(icon, 3, 48)[3], pixel(icon, 4, 48), pixel(icon, 48, 25)[3], pixel(icon, 48, 26)], [0, [255, 255, 255, 255], 0, [255, 255, 255, 255]]);
   assert.ok(pixel(icon, 90, 48)[3] < 255 && pixel(icon, 90, 48)[3] > 0);
+  assert.equal(androidNotificationResources({ ...manifest, audio_session: 'playback' }, dir, res, {}), null);
+  assert.ok(files(res).includes('drawable-xxxhdpi/exact_notification.png'));
+  assert.ok(!files(res).includes('xml/exact_channels.xml'));
 }));
 
 test("google-services.json's client for the app becomes Firebase's string resources, the configured path first (LLP 1133.004.000 D6)", () => inDir((dir) => {
