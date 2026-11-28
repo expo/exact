@@ -168,6 +168,29 @@ fn repeated_keyframes_at_one_offset_end_on_the_last() {
     close(at(&merged, 1.0, Property::Opacity), 0.9);
 }
 
+/// A step easing outside the active interval takes the limit from the side
+/// the animation comes from (CSS Easing 1 §3.2's before flag, set by Web
+/// Animations 1 in the before phase going forwards and in the after phase
+/// going backwards), as WPT's `effect-value-step-easing-reversed-direction`
+/// and `transformed-progress` hold browsers to.
+#[test]
+fn a_step_easing_holds_its_lower_step_while_filling_from_below() {
+    let k = "from{opacity:0}to{opacity:1}";
+    // Filling backwards through the delay: the first step has not jumped.
+    let delayed = anim("a 1s steps(2, jump-start) 1s backwards", k);
+    close(at(&delayed, 0.5, Property::Opacity), 0.0);
+    close(at(&delayed, 1.0, Property::Opacity), 0.5);
+    // Filling forwards after a reversed run ends at 0, below its first jump.
+    let reversed = anim("a 1s steps(1, start) reverse both", k);
+    close(at(&reversed, 0.5, Property::Opacity), 1.0);
+    close(at(&reversed, 1.5, Property::Opacity), 0.0);
+    let alternate = anim("a 1s steps(2, jump-both) 2 alternate forwards", k);
+    close(at(&alternate, 3.0, Property::Opacity), 0.0);
+    // Going the other way the flag is unset, so the upper limit holds.
+    let ahead = anim("a 1s steps(1, end) reverse backwards 1s", k);
+    close(at(&ahead, 0.5, Property::Opacity), 1.0);
+}
+
 #[test]
 fn zero_duration_jumps_to_the_end_with_forwards_fill() {
     let k = "from{opacity:0}to{opacity:1}";
