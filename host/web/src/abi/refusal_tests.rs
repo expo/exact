@@ -287,3 +287,38 @@ fn generation_and_epoch_continue_across_plan_replacement_and_fresh_boot() {
         previous = runner.kernel().epoch();
     }
 }
+
+// A person's act is the same event to the decoder's checks (LLP 1123 D6): an
+// invalid one is refused before the clock moves.
+invalid_event!(
+    invalid_marked_height_release,
+    15 | exact_runner::Event::ACT_KIND,
+    "invalid height release"
+);
+
+/// The marked form of a plain change is a change, not an unknown kind (LLP 1123 D6).
+#[test]
+fn a_marked_change_is_a_change() {
+    let mut bridge = running();
+    let len = bridge.input_write(b"x");
+    let n = bridge.dispatch(0, 1 | exact_runner::Event::ACT_KIND, len, 500.);
+    let out = output(&bridge, n);
+    let error = out["error"].as_str().unwrap_or("");
+    assert!(!error.contains("unknown event kind"), "{out}");
+}
+
+/// The web host's own check reads a marked typed event as the same event: a
+/// marked height release out of range is refused before the clock moves.
+#[test]
+fn the_hosts_check_refuses_a_marked_typed_event_before_the_clock_moves() {
+    let mut bridge = running();
+    let before = bridge.host.as_ref().unwrap().runner().now_ms();
+    let release = exact_runner::Event::HeightRelease {
+        height: 1e40,
+        velocity: 0.,
+    };
+    let host = bridge.host.as_mut().unwrap();
+    let batch = host.dispatch_at(0, exact_runner::Event::Act(Box::new(release)), 5000.);
+    assert!(batch.contains("invalid height release"), "{batch}");
+    assert_eq!(bridge.host.as_ref().unwrap().runner().now_ms(), before);
+}

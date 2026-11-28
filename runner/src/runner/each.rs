@@ -163,6 +163,7 @@ impl<D: DataSource> Runner<D> {
             force.push(i);
         } else if again {
             self.resources[i].stale = true;
+            self.note_boot_ask(i);
         }
         Some(super::ResourceState {
             inspection_generation: 0,

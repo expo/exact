@@ -945,6 +945,7 @@ impl<D: DataSource> Bridge<D> {
     /// bytes, UTF-8).
     /// Event kinds and payloads are declared in `include/exact.h`.
     pub fn dispatch(&mut self, view: u32, kind: u32, len: usize, now_ms: f64) -> u32 {
+        let (kind, act) = Event::unmark_kind(kind);
         let payload =
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
         if kind == 64 {
@@ -1047,10 +1048,11 @@ impl<D: DataSource> Bridge<D> {
                 };
                 event
             }
+            Event::ACT_END_KIND if act && len == 0 => Event::ActEnd,
             _ => return self.refuse(&format!("unknown event kind {kind}")),
         };
         let out = match self.host.as_mut() {
-            Some(h) => h.dispatch_at(view, event, now_ms),
+            Some(h) => h.dispatch_at(view, event.acted(act), now_ms),
             None => not_booted(),
         };
         self.emit(out)

@@ -107,6 +107,7 @@ impl<D: DataSource> Runner<D> {
         }
         self.commit_router(change);
         self.retire_holds();
+        self.note_receipt(&receipt);
         Ok(receipt)
     }
 }

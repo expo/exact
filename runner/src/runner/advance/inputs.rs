@@ -17,6 +17,9 @@ pub(super) struct Held {
 
 enum Input {
     Event(ViewId, Event, Option<Box<dyn FnOnce(bool) + Send>>),
+    /// A person's act ended (`Event::ActEnd`), in order behind the act's own events. It
+    /// commits nothing, which its receipt callback is told when it runs.
+    Complete(Option<Box<dyn FnOnce(bool) + Send>>),
     Forward(ViewId),
     ReorderTarget(exact_kernel::NodeKey, bool),
 }
@@ -25,7 +28,7 @@ impl<D: DataSource> Runner<D> {
     /// [`Runner::dispatch_at`]'s input, held until the work due by `now_ms`
     /// has run.
     pub(super) fn hold_event(&mut self, view: ViewId, event: Event, now_ms: f64) -> Advanced {
-        self.hold_input(Input::Event(view, event, None), now_ms)
+        self.hold_input(Input::of(view, event, None), now_ms)
     }
 
     /// Dispatch as [`Runner::dispatch_at`], reporting whether this event committed its
@@ -39,7 +42,7 @@ impl<D: DataSource> Runner<D> {
         now_ms: f64,
         committed: impl FnOnce(bool) + Send + 'static,
     ) -> Advanced {
-        self.hold_input(Input::Event(view, event, Some(Box::new(committed))), now_ms)
+        self.hold_input(Input::of(view, event, Some(Box::new(committed))), now_ms)
     }
 
     /// [`Runner::host_forward_at`]'s input, likewise.
@@ -126,6 +129,13 @@ impl<D: DataSource> Runner<D> {
                     }
                     result.map(Some)
                 }
+                Input::Complete(committed) => {
+                    self.renew_geometry();
+                    if let Some(committed) = committed {
+                        committed(false);
+                    }
+                    Ok(None)
+                }
                 Input::Forward(root) => self.host_forward(root),
                 Input::ReorderTarget(list, on) => {
                     let view = self.kernel.node_by_key(list).map(|n| n.id);
@@ -144,5 +154,15 @@ impl<D: DataSource> Runner<D> {
         }
         a.now_ms = self.now_ms;
         a
+    }
+}
+
+impl Input {
+    /// A host's event, or the end of a person's act, marked or not, which commits nothing.
+    fn of(view: ViewId, event: Event, committed: Option<Box<dyn FnOnce(bool) + Send>>) -> Input {
+        match event.bare() {
+            Event::ActEnd => Input::Complete(committed),
+            _ => Input::Event(view, event, committed),
+        }
     }
 }

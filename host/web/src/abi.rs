@@ -544,6 +544,7 @@ impl<D: DataSource> Bridge<D> {
     /// 42 a text field's `input`, `change` and `select` with its selection
     /// (x2apps codeedit #2); 48 is replacement input with that selection payload.
     pub fn dispatch(&mut self, view: u32, kind: u32, len: usize, now_ms: f64) -> u32 {
+        let (kind, act) = Event::unmark_kind(kind);
         let payload =
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
         let event = match kind {
@@ -630,10 +631,13 @@ impl<D: DataSource> Bridge<D> {
                     Event::Input(on)
                 }
             }
+            1 => Event::Change(payload.into()),
+            Event::ACT_END_KIND if act && len == 0 => Event::ActEnd,
+            _ if act => return self.refuse(&format!("unknown event kind {kind}")),
             _ => Event::Change(payload.into()),
         };
         let out = match self.host.as_mut() {
-            Some(h) => h.dispatch_at(view, event, now_ms),
+            Some(h) => h.dispatch_at(view, event.acted(act), now_ms),
             None => "{\"ops\":[],\"timers\":false,\"error\":\"not booted\"}".to_string(),
         };
         self.emit(out)

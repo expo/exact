@@ -100,6 +100,7 @@ impl<D: DataSource> Runner<D> {
         target: Target,
         source: &str,
         args: &[Value],
+        cause: provenance::Cause,
     ) -> Option<u64> {
         let m = target.mutation()?;
         if self.mutation_row(m).refreshes.len == 0 {
@@ -111,7 +112,7 @@ impl<D: DataSource> Runner<D> {
         self.writes.records.push(WriteRecord {
             id,
             mutation: m,
-            cause: self.cause(),
+            cause,
             send: match target {
                 Target::Sent(_, n) => n,
                 _ => 0,

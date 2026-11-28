@@ -527,6 +527,9 @@ impl<D: DataSource> Runner<D> {
                     if !p.ask_again.context {
                         self.log(super::lines::asked_again(p.ticket, &name, false));
                     }
+                    if p.ask_again.untraced {
+                        self.note_untraced_ask(i);
+                    }
                     self.force_refresh(i);
                 }
                 self.resources[i].state = Some(ResourceState {
@@ -601,6 +604,7 @@ impl<D: DataSource> Runner<D> {
             .filter(|n| n.target == previous.target)
         {
             next.ask_again.refresh |= previous.ask_again.refresh;
+            next.ask_again.untraced |= previous.ask_again.untraced;
             next.ask_again.context |=
                 previous.ask_again.context && next.stream.is_none() && !next.upload;
             next.module_again = next.module_again.or(previous.module_again);

@@ -242,3 +242,22 @@ fn poison_discards_a_delivery_continuation_not_yet_handed_out() {
     r.poison();
     assert_eq!(*discarded.lock().unwrap(), [55]);
 }
+
+/// A package's report is its own event (LLP 1123 D6): it has no lineage,
+/// though the named action that asked carries it, whichever target the
+/// package names.
+#[test]
+fn a_report_has_no_lineage() {
+    for by in [
+        Reporter::Answer(Target::Mutation(0)),
+        Reporter::Answer(Target::Mutation(1)),
+        Reporter::None,
+    ] {
+        let (mut r, _) = runner(by);
+        r.act("go", vec![]).unwrap();
+        let out = reports(&mut r);
+        assert_eq!(out.len(), 1, "{out:?}");
+        let authority = &r.module_work.tickets[&out[0].ticket].1;
+        assert!(!authority.cause.independent(), "{by:?}");
+    }
+}

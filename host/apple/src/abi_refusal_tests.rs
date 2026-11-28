@@ -148,7 +148,7 @@ fn invalid_reorder_keeps_state() {
 
 #[test]
 fn unknown_event_keeps_state() {
-    dispatch_refusal(u32::MAX, "", "unknown event kind");
+    dispatch_refusal(0x7FFF_FFFF, "", "unknown event kind");
 }
 
 #[test]

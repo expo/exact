@@ -214,6 +214,8 @@ impl<D: DataSource> Runner<D> {
                 self.data_cause().fresh(id)
             }
         }
+        // A package's report is its own event: no lineage (LLP 1123 D6).
+        .untraced()
     }
 
     /// Request `p` is let go by the commit being made: one with effects is
@@ -396,6 +398,8 @@ impl<D: DataSource> Runner<D> {
     /// turn's writes standing: they were in the store before its checkpoint.
     fn module_commit(&mut self, wrote: bool) -> Result<CommitReceipt, RunnerError> {
         let mut now = Vec::new();
+        // A turn with no lineage asks its readers again with none (LLP 1123 D6).
+        let untraced = !self.cause().independent();
         if wrote {
             let revision = self.store.revision();
             // An upload is asked once for its arguments (LLP 1016.000 D10).
@@ -411,6 +415,7 @@ impl<D: DataSource> Runner<D> {
                         && !p.held
                     {
                         p.ask_again.refresh = true;
+                        p.ask_again.untraced |= untraced;
                         p.module_again = Some(revision);
                         again.push(p.ticket);
                     }

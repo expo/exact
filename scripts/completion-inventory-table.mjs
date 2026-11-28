@@ -33,7 +33,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/timers.rs", "CanvasHost::background"],
   ]),
   group("UI facts", ["subscription"], "current session, viewport, page or rendered geometry", "UI-owned",
-    "runner/src/runner/viewport.rs and page.rs settle facts of the live session, and geometry_facts.rs answers the geometry facts from its layout, counting their answers and a chain's commits; these entries carry no app/account operation identity. painted presenter/zoom.rs sync_zoom retains zoom state only for matching live node keys; settle_zoom reconciles authored values with the current gesture.", [
+    "runner/src/runner/viewport.rs and page.rs settle facts of the live session, and geometry_facts.rs answers the geometry facts from its layout, counting their answers, a chain's commits and the corrections a marked session's budget has left; these entries carry no app/account operation identity. painted presenter/zoom.rs sync_zoom retains zoom state only for matching live node keys; settle_zoom reconciles authored values with the current gesture.", [
     ["apple:host/apple/src/abi/exports.rs",
       "exact_control_text_changed exact_insets exact_orientation_applied exact_resize exact_scrolled exact_segments exact_set_button_measure exact_set_console " +
       "exact_set_control_text exact_set_display_scale exact_set_fonts exact_set_inline_boxes exact_set_text_geometry exact_set_lines exact_set_measure exact_set_mode " +
@@ -95,7 +95,7 @@ export const classifications = [
     ["runner:runner/src/runner/page.rs", "Runner::page Runner::reads_page_field Runner::set_page"],
     ["runner:runner/src/runner/resize.rs", "Runner::resize_delivered Runner::resize_due Runner::resize_settled"],
     ["runner:runner/src/native_geometry.rs", "chain geometry is_geometry page_geometry project query templates unsettled"],
-    ["runner:runner/src/runner/geometry_facts.rs", "Runner::count_page_layout#page_layouts:1 Runner::deliver_geometry#chain:1"],
+    ["runner:runner/src/runner/geometry_facts.rs", "Runner::count_page_layout#page_layouts:1 Runner::deliver_budgeted#left:1 Runner::deliver_geometry#chain:1 Runner::mark_inputs"],
     ["runner:runner/src/runner/root_font.rs", "Runner::display_scale Runner::host_root_font_size Runner::root_font_size Runner::set_bold_text Runner::set_display_scale Runner::set_root_font_size"],
     ["runner:runner/src/runner/shown.rs", "Runner::place_blocks Runner::top_layer Runner::top_layer_backdrop Runner::top_layer_frames"],
     ["runner:runner/src/runner/surface_colors.rs", "Runner::refresh_surface_colors"],
@@ -112,7 +112,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/zoom.rs", "Presenter::set_shell_taps Presenter::settle_zoom Presenter::sync_zoom"],
   ]),
   group("UI input", ["one-shot"], "current mounted view, action binding or interaction", "UI-owned",
-    "runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied. runner/advance.rs dispatch_at and advance/inputs.rs dispatch_at_with_receipt deliver input at the host clock after due timers. painted presenter/zoom.rs targets live zoomable nodes for pinch, wheel and double tap; canvas/scroll.rs and jni_scroll.rs forward shell gestures. contact.rs press_lifted validates the live activation target.", [
+    "runner/src/runner/event.rs dispatches through a mounted view, and event/binding.rs through its retained action binding; no independent operation identity is supplied. runner/advance.rs dispatch_at and advance/inputs.rs dispatch_at_with_receipt deliver input at the host clock after due timers. painted presenter/zoom.rs targets live zoomable nodes for pinch, wheel and double tap; canvas/scroll.rs and jni_scroll.rs forward shell gestures. contact.rs press_lifted validates the live activation target.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_dispatch"],
     ["painted:host/painted/src/canvas/access.rs", "CanvasHost::access CanvasHost::access_act CanvasHost::access_custom_action CanvasHost::access_off"],
     ["painted:host/painted/src/canvas/field.rs", "CanvasHost::field_action CanvasHost::field_composing CanvasHost::field_edited CanvasHost::field_focused CanvasHost::field_input CanvasHost::field_scrolled CanvasHost::field_selected"],
@@ -208,7 +208,7 @@ export const classifications = [
     ["painted:host/painted/src/surfaces.rs", "Surfaces::sync"],
     ["painted:host/painted/src/transform_binding.rs", "Host::dispatch_transform_held"],
     ["runner:runner/src/runner/commit.rs", "Runner::act"],
-    ["runner:runner/src/runner/event.rs", "Runner::capture_action_binding Runner::dispatch Runner::dispatch_bound Runner::validate_action_binding"],
+    ["runner:runner/src/runner/event.rs", "Runner::dispatch"], ["runner:runner/src/runner/event/binding.rs", "Runner::capture_action_binding Runner::dispatch_bound Runner::validate_action_binding"],
     ["runner:runner/src/runner/event/focus.rs", "Runner::focus_bubble"],
     ["runner:runner/src/runner/faults.rs", "Runner::fault_dispatch"],
     ["web:host/web/src/abi.rs", "exact_dispatch"],
@@ -1219,7 +1219,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/still.rs", "Presenter::still"],
   ]),
   group("UI input", ["one-shot"], "current mounted view, action binding or interaction", "UI-owned",
-    "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied. contact.rs feedback_contains checks the live node's tracking shape for contact_press, pointer_moved feedback and pointer_lift activation.", [
+    "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/event.rs dispatches through a mounted view, and event/binding.rs through its retained action binding; no independent operation identity is supplied. contact.rs feedback_contains checks the live node's tracking shape for contact_press, pointer_moved feedback and pointer_lift activation.", [
     ["painted:host/painted/src/presenter/access.rs",
       "Presenter::access_bar_info Presenter::access_bottom Presenter::access_control Presenter::access_emit " +
       "Presenter::access_key Presenter::access_top Presenter::access_top_bar Presenter::bar_node_aria_hidden"],

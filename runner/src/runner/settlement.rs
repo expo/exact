@@ -612,7 +612,6 @@ impl<D: DataSource> Runner<D> {
                         pending_res[i] = upload;
                         self.resources[i].failed_args = None;
                         awaiting[i] = false;
-                        self.forget_deferred(i);
                         if let Some(waiting) = &mut self.resources[i].waiting {
                             waiting.slept = true;
                         }
@@ -624,6 +623,7 @@ impl<D: DataSource> Runner<D> {
                         let paged = (want.as_ref())
                             .filter(|_| states[i].is_none())
                             .and_then(|w| self.seed_member(i, &w.args, &mut Vec::new()));
+                        self.forget_deferred(i);
                         let state = match states[i].take().or(paged) {
                             Some(s) => s.sleeping(),
                             None => {
