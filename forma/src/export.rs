@@ -183,14 +183,14 @@ fn in_range(w: &Wide) -> bool {
 
 /// A colour as 2025.10's object, and whether it lost anything: its own
 /// space where DTCG has it and its components fit, else Oklab, its
-/// lightness clipped past 1 (an HDR colour).
+/// lightness clipped past 1 (an HDR colour) or below 0 (below black).
 fn colour_json(h: Half) -> (Value, bool) {
     let hex = h.clip()[..7].to_string();
     let mut w = rendered(h);
     let mut lossy = false;
     if !in_range(&w) {
         let [l, a, b] = exact_color::linear_to_oklab(w.linear_srgb());
-        lossy = l > 1.0;
+        lossy = !(0.0..=1.0).contains(&l);
         w = Wide {
             space: Space::Oklab,
             c: [l.clamp(0.0, 1.0), a, b],

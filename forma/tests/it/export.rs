@@ -564,6 +564,30 @@ fn an_unchanged_lossy_side_keeps_the_design_value() {
     assert_eq!(value, "light-dark(#ff0000, color(srgb-linear 2 2 2))");
 }
 
+/// A colour below black (a relative colour taken past 0, a component a
+/// little negative) is outside Oklab's lightness too: clipped, it exports
+/// marked lossy like an HDR one, and the export is not refused.
+#[test]
+fn a_colour_below_black_exports_lossy() {
+    for value in [
+        "color(srgb-linear 0 0 -0.001)",
+        "rgb(from black r g calc(b - 1))",
+    ] {
+        let src = format!("forma t\n\ntheme\n  t = {value}\n");
+        let folding = check(&src, &vocab()).unwrap();
+        let text = dtcg(&folding, &vocab()).unwrap_or_else(|e| panic!("{value}: {e:?}"));
+        let doc: Value = serde_json::from_str(&text).unwrap();
+        let t = &doc["modifiers"]["mode"]["contexts"]["light"][0]["t"];
+        assert_eq!(t["$value"]["colorSpace"], "oklab", "{value}: {t}");
+        assert!(
+            t["$extensions"]["exact"]["lossy"].is_string(),
+            "{value}: {t}"
+        );
+        let import = reimport(&text, std::slice::from_ref(&text), &src, &vocab()).unwrap();
+        assert!(import.ops.is_empty(), "{value}: {import:?}");
+    }
+}
+
 /// Each operation as its `when` and value.
 fn lines(import: &exact_forma::import::Import) -> Vec<(Vec<(String, String)>, String)> {
     import
