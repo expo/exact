@@ -95,6 +95,14 @@ package protocol OwnDragSource: AnyObject {
 }
 #endif
 
+/// The app-defined type Exact registers last on each file's drag item, after
+/// the file and the node's link and text (LLP 1094.000 D4, D5), as Apple's
+/// samples add their own types: an Exact drop of an item that carries it, in
+/// this app or another, reads the item's every form (LLP 1094.001 D3, D4).
+package enum NodeItem {
+    package static let type = "dev.exact.node-item"
+}
+
 /// A drag a node of the app began, as the app's own drop side meets it
 /// (LLP 1094.000 D16): the source's `dragstart` goes before the drop side's
 /// first event of the drag, and its `dragend` after the drop side's last,

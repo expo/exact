@@ -2757,8 +2757,16 @@ to 255 bytes of UTF-8 with no control character, none of
 `< > : " / \ | ? *`, no space at either end, no dot at the end, and not a
 name Windows keeps for a device (`CON`, `NUL`, `COM1`, …); a bound name it
 refuses is journaled, and the file keeps its own. `draggable` and
-`dataTransfer` each need the other. A file the app opens as a database is not
-one to drag: on Apple and Android the host opens and closes the file as a
+`dataTransfer` each need the other. On iOS, iPadOS and the Mac each file is
+one item of the drag, and the `url` and `text` are further forms of the first
+file's item, or the one item of a node with no file. A drag's count is its
+items, so the app sets it by what each node carries: a card with a picture and
+a caption is one item, and a collection with a file for each member one item
+per member; the system shows the count, and Exact adds none. A receiver takes
+the form it reads, so one that takes the picture leaves its caption, and an
+Exact app's `drop` takes all three. On iOS a first file that is itself text
+keeps the `url` and `text` on an item of their own (LLP 1094.000 D4, D5). A
+file the app opens as a database is not one to drag: on Apple and Android the host opens and closes the file as a
 destination asks for it, which drops SQLite's locks on it
 ([How To Corrupt An SQLite Database File, §2.2](https://sqlite.org/howtocorrupt.html#_posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)),
 so drag a copy made with `storage.fs` while the database is closed, or an

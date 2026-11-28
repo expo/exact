@@ -486,6 +486,50 @@ final class FileDragMacTests: XCTestCase {
         XCTAssertEqual(log, "enter;drop:Japan\nMount Fuji|https://example.com/fuji|0;")
     }
 
+    /// An Exact node's file item, its file with its link and title and
+    /// `NodeItem.type` (LLP 1094.000 D5), drops all three; the same item
+    /// without that type drops its file alone (LLP 1094.001 D3).
+    func testAnExactNodesFileItemDropsItsFileLinkAndText() throws {
+        _ = NSApplication.shared
+        let source = """
+        component App
+          state log = ""
+          action dropped(e: DragEvent)
+            log = `${log}drop:${e.text}|${e.url}|${e.files.length};`
+          view
+            column testId="column" width="100%" height="100%" drop=dropped
+
+        """
+        for exact in [true, false] {
+            let session = ExactApp.shared.makeSession()
+            defer { session.destroy() }
+            let view = ExactView(session: session)
+            window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let mount = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+            window.contentView = mount
+            view.frame = mount.bounds; mount.addSubview(view)
+            XCTAssertNil(session.boot(plan: try compile(source), size: CGSize(width: 400, height: 300)).error)
+            window.layoutIfNeeded()
+            let column = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "column" })
+            let board = NSPasteboard(name: .init("exact-test-\(UUID().uuidString)"))
+            board.clearContents()
+            let item = NSPasteboardItem()
+            item.setString(file.absoluteString, forType: .fileURL)
+            item.setString("https://example.com/fuji", forType: .URL)
+            item.setString("Mount Fuji", forType: .string)
+            if exact { item.setData(Data(), forType: .init(NodeItem.type)) }
+            board.writeObjects([item])
+            let info = DraggingInfo(board: board, location: column.convert(NSPoint(x: column.bounds.midX, y: column.bounds.midY), to: nil), window: window, operations: .copy)
+            XCTAssertEqual(column.draggingEntered(info), .copy)
+            XCTAssertTrue(column.performDragOperation(info), "the column took the drop")
+            column.draggingEnded(info)
+            let state = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any])
+            let log = try XCTUnwrap((state["slots"] as? [String: Any])?["log"] as? String)
+            XCTAssertEqual(log, exact ? "drop:Mount Fuji|https://example.com/fuji|1;" : "drop:||1;")
+        }
+    }
+
     private func compile(_ source: String) throws -> Data {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

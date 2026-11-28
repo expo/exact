@@ -28,11 +28,13 @@ enum DragItems {
     }
 
     /// One item per file, its type read from its own extension and its
-    /// suggested name the one it is offered under, then `url` and `text` each an item of its own: a
-    /// destination usually takes one of an item's representations, so on a
-    /// file's item they would be hidden behind it. With no file one item carries
-    /// `url` and then `text`, since a provider lists its higher-fidelity
-    /// types first (Document: `NSItemProvider.h`).
+    /// suggested name the one it is offered under, and `NodeItem.type` last.
+    /// The node's `url` and then `text` are further forms of the first file's
+    /// item, or the one item when it carries no file, since a provider lists
+    /// its higher-fidelity types first (Document: `NSItemProvider.h`). A first
+    /// file that is itself text stays alone, and they are an item of their
+    /// own, so a destination that reads text takes the file or the caption
+    /// by item, never one for the other (LLP 1094.000 D4).
     /// An empty `url` or `text` is none, as `tree` reads it, and so is a
     /// `url` Foundation cannot read (`URL(string:)`), which the sources
     /// journal as it arrives.
@@ -52,17 +54,10 @@ enum DragItems {
             return provider
         }
         let words = ([url.map { $0 as NSURL }, text.map { $0 as NSString }] as [NSItemProviderWriting?]).compactMap { $0 }
-        if providers.isEmpty, !words.isEmpty {
-            let provider = NSItemProvider()
-            words.forEach { provider.registerObject($0, visibility: .all) }
-            providers = [provider]
-        } else {
-            providers += words.map { word in
-                let provider = NSItemProvider()
-                provider.registerObject(word, visibility: .all)
-                return provider
-            }
-        }
+        let lead = providers.first.flatMap { first in first.registeredTypeIdentifiers.first.flatMap(UTType.init).map { $0.conforms(to: .text) } == true ? nil : first }
+        if lead == nil, !words.isEmpty { providers.append(NSItemProvider()) }
+        words.forEach { (lead ?? providers.last)?.registerObject($0, visibility: .all) }
+        providers.prefix(files.count).forEach { $0.registerDataRepresentation(forTypeIdentifier: NodeItem.type, visibility: .all) { done in done(Data(), nil); return nil } }
         let lifted = Lifted(node)
         return providers.map { provider in
             let item = UIDragItem(itemProvider: provider)
