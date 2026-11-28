@@ -255,10 +255,15 @@ function measure() {
     const d = p.map.inverse().transformPoint({ x: e.at.x - p.at.x, y: e.at.y - p.at.y });
     return [d.x + parent.scrollLeft, d.y + parent.scrollTop, e.w, e.h];
   };
-  // A displacement `[dx, dy]` in `parent`'s points, in the points a translate on `el` moves it by: through the linear
-  // maps of the boxes between them, which a box moved under a scaled one within `parent` has
+  // The linear map from `parent`'s points to the points a translate on `el` moves it by: the maps of the boxes between
+  // them, which a box moved under a scaled one within `parent` has
+  measured.linear = (el, parent) => {
+    const e = of(el), p = of(parent);
+    return e.above.inverse().multiply(p.above.multiply(linear(p.own)));
+  };
+  // A displacement `[dx, dy]` in `parent`'s points, in the points a translate on `el` moves it by
   measured.carry = (el, parent, [dx, dy]) => {
-    const e = of(el), p = of(parent), v = e.above.inverse().multiply(p.above.multiply(linear(p.own))).transformPoint({ x: dx, y: dy });
+    const v = measured.linear(el, parent).transformPoint({ x: dx, y: dy });
     return Number.isFinite(v.x) && Number.isFinite(v.y) ? [v.x, v.y] : [dx, dy];
   };
   return measured;
@@ -518,6 +523,25 @@ function createPresence(root) {
     m.animation.finished.then(ended, ended);
   }
 
+  // Rewrite the moves under way of `el` through the change of the map from the box it is measured in to its translate
+  // points, `was` before a batch and `now` after it, so that each goes on showing the box where it did in that box: a
+  // batch that moves the box under a scaled or turned one, or scales or turns one between, changes it
+  function remap(el, was, now) {
+    const f = flips.get(el), back = was.inverse();
+    // (A map with no inverse, under a box scaled to nothing, says nothing of where the moves showed the box)
+    if (!f || ![back.a, back.b, back.c, back.d, now.a, now.b, now.c, now.d].every(Number.isFinite)) return;
+    const change = now.multiply(back);
+    if ([change.a - 1, change.b, change.c, change.d - 1].every(x => Math.abs(x) < 1e-9)) return;
+    for (const o of f.moves) {
+      const v = change.transformPoint({ x: o.d[0], y: o.d[1] });
+      o.d = [v.x, v.y, o.d[2], o.d[3]];
+      o.frames = [{ translate: `${v.x}px ${v.y}px` }, { translate: '0px 0px' }];
+      o.animation.effect.setKeyframes(o.frames);
+      // (A stand-in part plays nothing until a surface takes it, `move`)
+      if (f.surface) o.stand.effect.setKeyframes(o.frames);
+    }
+  }
+
   // The element's surface made anew, from its style now, the moves under way moving their stand-in parts onto it and
   // keeping their clocks: at a move that changes its size, and when what it clips changes
   function resurface(el, f, measured) {
@@ -584,7 +608,8 @@ function createPresence(root) {
         for (const el of new Set([...tracked, ...gains])) {
           // (A hidden element has no box to move from, though its computed size stays what was written)
           const parent = el && measuredIn(el), at = el && el.getClientRects().length ? moving(el, place(el, parent)) : null;
-          if (at) first.set(el, [at, parent]);
+          // (and, while it moves, the map its moves are in)
+          if (at) first.set(el, [at, parent, flips.has(el) ? place.linear(el, parent) : null]);
         }
       }
       // The batch's leaving views, each read before any exit takes one out of flow
@@ -768,18 +793,22 @@ function createPresence(root) {
         if (sf && (clips !== sf.clips || (clips || cs.clipPath !== 'none') !== !!sf.shape)) reclip.set(el, sf);
         else if (sf?.unclip) unclip(sf.unclip, el);
       }
-      const place = measure(), moves = [];
-      for (const [el, [was, parent]] of first) {
+      const place = measure(), moves = [], remaps = [];
+      for (const [el, [was, parent, map]] of first) {
         if (!tracked.has(el)) continue;
         // Measured again in the box it was measured in; one the batch takes out of that box, or that box out of being one,
         // is in other coordinates, and its moves end there
         if (!parent?.contains(el) || getComputedStyle(parent).display === 'contents') { stop(el); continue; }
         const at = el.isConnected && el.getClientRects().length ? moving(el, place(el, parent)) : null;
+        if (at && map) remaps.push([el, map, place.linear(el, parent)]);
         if (at && at.some((x, i) => Math.abs(x - was[i]) >= 0.01)) {
           const [dx, dy, dw, dh] = at.map((x, i) => was[i] - x);
           moves.push([el, [...place.carry(el, parent, [dx, dy]), dw, dh]]);
         }
       }
+      // The moves under way rewritten once every box is measured, so that none is read through a rewritten one, and
+      // before the new moves, an easing's restart reading what they had left
+      for (const [el, was, now] of remaps) remap(el, was, now);
       for (const [el, d] of moves) move(el, d, measure());
       for (const [el, sf] of reclip) { const f = flips.get(el); if (f?.surface === sf) resurface(el, f, measure()); }
       first = new Map();

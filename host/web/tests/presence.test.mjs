@@ -397,7 +397,7 @@ check('a box inside a moving box moves with it though a box that is none lies be
   expect((await offset())[0]).toBe(10);
 });
 
-check('a box moved within the box it is measured in keeps its moves, and one whose measuring box ceases to be ends them', async () => {
+check('a box moved within the box it is measured in keeps its moves where they show it, and one whose measuring box ceases to be ends them', async () => {
   const box = 'position:absolute;left:0;top:0;width:20px;height:20px;background:red;--exact-layout-transition:1000 0 linear';
   const width = () => evaluate('surface()?.getBoundingClientRect().width ?? document.getElementById("box").getBoundingClientRect().width');
   // Moved halfway through its resize from one `display: contents` wrapper to another in the card it is measured in,
@@ -416,6 +416,36 @@ check('a box moved within the box it is measured in keeps its moves, and one who
   expect(await left()).toBe(0);
   await evaluate('seek(1000)');
   expect(await left()).toBe(50);
+  // Halfway through a move when it goes under that box, it goes on from where it is shown, the move under way now in the
+  // scaled box's points, and ends where it is laid out there; a child that moves with it, which declares the row too,
+  // starts no move of its own
+  const kid = 'position:absolute;left:5px;top:5px;width:5px;height:5px;--exact-layout-transition:1000 0 linear';
+  await fixture(`<div id="card" style="position:relative;width:200px;height:100px"><div id="box" style="${box}"><div id="kid" style="${kid}"></div></div><div id="wrap" style="${scaled}"></div></div>`);
+  await style(box.replace('left:0', 'left:80px'), 'box');
+  await evaluate('seek(500)');
+  expect(await left()).toBe(40);
+  await evaluate(`batch({ops:[{op:'children',id:'wrap',ids:['box']}]}); seek(500, 500)`);
+  expect(await left()).toBe(40);
+  expect(await evaluate('document.getElementById("kid").getAnimations().filter(a => a.id === "exact-layout-move").length')).toBe(0);
+  await evaluate('seek(1500)');
+  expect(await left()).toBe(210);
+  // Moved under a box scaled twice that leaves its place in the card as it was, it starts no move, and the move under
+  // way plays on in the scaled box's points from where it showed the box, its stand-in's with it
+  const under = scaled.replace('left:50px', 'left:-80px'), standLeft = () => evaluate(`Math.round(surface().getBoundingClientRect().left - document.getElementById('card').getBoundingClientRect().left)`);
+  await fixture(`<div id="card" style="position:relative;width:200px;height:100px"><div id="box" style="${box}"></div><div id="wrap" style="${under}"></div></div>`);
+  await style(box.replace('left:0', 'left:80px').replace('width:20px', 'width:100px'), 'box');
+  await evaluate('seek(500)');
+  expect([await left(), await standLeft()]).toEqual([40, 40]);
+  await evaluate(`batch({ops:[{op:'children',id:'wrap',ids:['box']}]}); seek(500, 500)`);
+  expect([await left(), await standLeft()]).toEqual([40, 40]);
+  await evaluate('seek(750)');
+  expect([await left(), await standLeft()]).toEqual([60, 60]);
+  // Halfway through a move when a batch removes it with the box it is measured in, it is not measured, and nothing throws
+  await fixture(`<div id="card" style="position:relative;width:200px;height:100px"><div id="wrap" style="position:relative;width:100px;height:50px"><div id="box" style="${box}"></div></div></div>`);
+  await style(box.replace('left:0', 'left:80px'), 'box');
+  await evaluate('seek(500)');
+  await evaluate(`batch({ops:[{op:'children',id:'card',ids:[]}]})`);
+  expect(await evaluate('document.getElementById("wrap")')).toBe(null);
   // Its measuring box made none (`display: contents`) halfway through a move, the move ends
   await fixture(`<div id="card" style="position:relative;width:200px;height:100px"><div id="wrap" style="position:relative;width:100px;height:50px"><div id="box" style="${box}"></div></div></div>`);
   await style(box.replace('left:0', 'left:80px'), 'box');
