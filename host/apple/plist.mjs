@@ -6,6 +6,13 @@ import { resolve } from 'node:path';
 import { grantLines } from '../../scripts/grant-advice.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 
+export function mediaPlistKeys(manifest, ios) {
+  const keys = {};
+  if (manifest.audio_session) keys.ExactAudioSession = manifest.audio_session;
+  if (ios && manifest.media_session?.default_artwork) keys.ExactDefaultMediaArtwork = manifest.media_session.default_artwork;
+  return keys;
+}
+
 // Python's standard plistlib handles Apple's XML and binary encodings on a Linux builder.
 const PLIST_TOOL = String.raw`
 import base64, datetime, json, pathlib, plistlib, re, sys
@@ -349,7 +356,7 @@ export function appleMetadataOwners() {
     [['ios'], ['com.apple.developer.nfc.readersession.felica.systemcodes']],
     [['ios'], ['UIBackgroundModes']],
     [['ios', 'macos'], ['ExactModuleConfig']],
-    [['ios'], ['ExactAudioSession']],
+    [['ios'], ['ExactAudioSession', 'ExactDefaultMediaArtwork']],
     [['ios', 'macos'], ['CFBundleDocumentTypes', 'UTExportedTypeDeclarations']],
     [['ios'], ['LSSupportsOpeningDocumentsInPlace', 'UTImportedTypeDeclarations']],
     [['ios', 'macos'], ['ExactProtocolHandlers', 'CFBundleURLTypes']],

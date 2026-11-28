@@ -569,7 +569,7 @@ export function readManifest(dir, name) {
       : /^host\.ios\.associatedDomains: expected array, got boolean$/.test(p) ? REMOVED_DOMAINS[parsed.host.ios.associatedDomains]
       : appleMetadataProblem(p)).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed), vendorPlistProblems(parsed));
   if (Array.isArray(parsed.host?.android?.permissions)) problems.push(...permissionProblems(parsed.host.android.permissions, dir));
-  if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...linkProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir), ...variantProblems(parsed, dir));
+  if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...linkProblems(parsed), ...appIconProblems(parsed, dir), ...mediaArtworkProblems(parsed, dir), ...launchImageProblems(parsed, dir), ...variantProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
   const manifest = resolveVariant({ host: {}, deploy: {}, ...parsed }, selectedVariant(dir)); // the selected variant's identity (LLP 1030.008 D2)
@@ -582,7 +582,7 @@ import { DOCUMENT_UTIS, ownDocumentType, documentTypeProblems, canonicalizeDocum
 import { launchModules, moduleDirectory, moduleRoster } from './launch-modules.mjs';
 export { moduleDirectory } from './launch-modules.mjs';
 import { webManifestAtBase, webCspProblems, webHeadProblems } from './web-head.mjs';
-import { appIconProblems, publishedIcons } from './app-icons.mjs';
+import { appIconProblems, mediaArtworkProblems, publishedIcons } from './app-icons.mjs';
 import { claimVariant, resolveVariant, selectedVariant, variantProblems } from './variants.mjs';
 import { REMOVED_DOMAINS, appleLinkDomains, androidLinkFilters, linkProblems, protocolHandlerProblems, isWebScheme, rawAppleDomains } from './links.mjs';
 export { DOCUMENT_UTIS, isWebScheme, ownDocumentType };

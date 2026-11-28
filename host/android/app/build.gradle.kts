@@ -84,6 +84,7 @@ android {
         }
         versionName = providers.environmentVariable("EXACT_VERSION").orElse("0.1.0").get()
         ndk { abiFilters += providers.gradleProperty("abis").orElse("arm64-v8a").get().split(',') }
+        manifestPlaceholders["defaultMediaArtwork"] = (manifest["media_session"] as? Map<*, *>)?.get("default_artwork") as? String ?: ""
         manifestPlaceholders["audioSession"] = manifest["audio_session"] as String? ?: "ambient"
         manifestPlaceholders["appName"] = providers.gradleProperty("appName").get()
         manifestPlaceholders["videoPictureInPicture"] = providers.gradleProperty("videoPictureInPicture").orNull == "1"

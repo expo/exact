@@ -111,6 +111,12 @@ class MediaPlayer(
     private var pendingSeek: Double? = null
     private var seekLanded = false
     private var claim: AudioClaim? = null
+    private val defaultArtwork: Uri? by lazy {
+        context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
+            .metaData?.getString("dev.exact.defaultMediaArtwork")?.takeIf { it.startsWith("assets/") }
+            ?.let { Uri.Builder().scheme("asset").path("/app/$it").build() }
+    }
+
     private val focusType: String? = audioSession(context).takeIf { it == "playback" }
     private var playback: AutoCloseable? = null
     private var wakeMode = C.WAKE_MODE_NONE
@@ -239,7 +245,9 @@ class MediaPlayer(
             fail("src-not-supported")
             return
         }
-        exo.setMediaItem(MediaItem.fromUri(uri), if (restoring) from.positionMs else 0L)
+        val item = MediaItem.Builder().setUri(uri)
+        defaultArtwork?.let { item.setMediaMetadata(MediaMetadata.Builder().setArtworkUri(it).build()) }
+        exo.setMediaItem(item.build(), if (restoring) from.positionMs else 0L)
         exo.setPlaybackParameters(PlaybackParameters(speed, if (pitchPreserved) 1f else speed))
         if (restoring && from.ended) projection.end()
         if (props.optString("preload") != "none" || (restoring && !from.paused)) prepare()
@@ -375,7 +383,7 @@ class MediaPlayer(
     private fun mediaMetadata(props: JSONObject): MediaMetadata {
         fun field(key: String) = props.optString(key).takeUnless { props.isNull(key) || it.isEmpty() }
         return MediaMetadata.Builder().setTitle(field("mediaTitle")).setArtist(field("mediaArtist"))
-            .setAlbumTitle(field("mediaAlbum")).setArtworkUri(field("mediaArtwork")?.let(Uri::parse)).build()
+            .setAlbumTitle(field("mediaAlbum")).setArtworkUri(field("mediaArtwork")?.let(Uri::parse) ?: defaultArtwork).build()
     }
 
     override fun hidden() = full.leave()

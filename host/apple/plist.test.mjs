@@ -17,6 +17,12 @@ const impl = (plistKeys) => [{ extension: 'purchases', plistKeys }];
 const flat = (plist) => plist.replace(/>\s+</g, '><');
 const KEY = /<key>SKIncludeConsumableInAppPurchaseHistory<\/key><true\/>/;
 
+test('the iOS playback cover names the bundled asset', () => {
+  const app = { id: 'dev.exact.radio', displayName: 'Radio', name: 'radio', manifest: { media_session: { default_artwork: 'assets/cover.png' } } };
+  assert.match(flat(infoPlist(app)), /<key>ExactDefaultMediaArtwork<\/key><string>assets\/cover.png<\/string>/);
+  assert.doesNotMatch(flat(macInfoPlist(app)), /ExactDefaultMediaArtwork/);
+});
+
 test('Bluetooth usage is localized on Apple and its background mode is iOS only', () => {
   const app = { id: 'dev.exact.strap', displayName: 'Strap', name: 'strap', manifest: {} };
   const reach = { base: 'en', locales: ['en', 'fr'], usage: {

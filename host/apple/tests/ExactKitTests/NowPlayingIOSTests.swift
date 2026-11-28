@@ -109,6 +109,25 @@ final class NowPlayingIOSTests: XCTestCase {
         np.left(p)
     }
 
+    func testBundledCoverForMissingAndBrokenItemArtwork() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        let png = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGPg8psARAwQCgAXVgOh2GaWcQAAAABJRU5ErkJggg=="))
+        try png.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let p = claimant("Station", "audio", extra: ["mediaDefaultArtwork": file.absoluteString])
+        np.joined(p)
+        defer { np.left(p) }
+        for source in ["", "assets/missing.png"] {
+            p.sessionProps["mediaArtwork"] = source
+            p.sessionProps["mediaArtworkURL"] = source.isEmpty ? "" : file.appendingPathExtension("missing").absoluteString
+            np.updated(p)
+            let published = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                self.center[MPMediaItemPropertyArtwork] != nil
+            }, object: nil)
+            wait(for: [published], timeout: 5)
+        }
+    }
+
     /// Two claimants play in one commit (LLP 1098 D5). The episode is earlier
     /// in the document and its `timeControlStatus` callback arrives last; the
     /// later claimant still owns Now Playing.

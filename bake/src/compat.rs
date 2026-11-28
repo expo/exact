@@ -814,6 +814,11 @@ pub(crate) fn compatibility_with_trust(
         "store": { "L": store, "acceptedKinds": if binary_only { vec![] } else { kinds } },
         "app": manifest.id,
     });
+    if matches!(platform, "ios" | "android") {
+        if let Some(cover) = manifest.json.pointer("/media_session/default_artwork") {
+            inputs["capabilities"]["defaultMediaArtwork"] = cover.clone();
+        }
+    }
     if platform == "android" {
         if let Some(schemes) = manifest.json.pointer("/open_url/schemes") {
             inputs["capabilities"]["openUrlSchemes"] = schemes.clone();

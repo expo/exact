@@ -56,7 +56,7 @@ final class NowPlaying {
     /// of plain videos leaves AVKit's Now Playing alone.
     private var published = false
     private var targets: [Any] = []
-    private var artwork: (source: String, image: MPMediaItemArtwork?, error: String?, generation: Int) = ("", nil, nil, 0)
+    private var artwork: (source: String, resolved: String, fallback: String, image: MPMediaItemArtwork?, error: String?, generation: Int) = ("", "", "", nil, nil, 0)
     /// What was built for the owner, published or not: `state`'s readback.
     private(set) var info: [String: Any]?
     private(set) var enabled: [String] = []
@@ -116,7 +116,7 @@ final class NowPlaying {
         owner = next
         guard let p = next else { clear(); return }
         let props = p.sessionProps, publish = props["exactPublish"] != "false"
-        loadArtwork(props["mediaArtwork"] ?? "", resolved: props["mediaArtworkURL"] ?? "")
+        loadArtwork(props["mediaArtwork"] ?? "", resolved: props["mediaArtworkURL"] ?? "", fallback: props["mediaDefaultArtwork"] ?? "")
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: props["mediaTitle"] ?? "",
             MPMediaItemPropertyArtist: props["mediaArtist"] ?? "",
@@ -153,7 +153,7 @@ final class NowPlaying {
         #if os(macOS)
         playbackState = "stopped"
         #endif
-        artwork = ("", nil, nil, artwork.generation + 1)
+        artwork = ("", "", "", nil, nil, artwork.generation + 1)
         guard published else { return }
         published = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -222,25 +222,33 @@ final class NowPlaying {
     /// Its own loader and generation (the poster's drops a failure without a
     /// word): a resolved URL loads, a newer source cancels the load in
     /// flight, and an unresolved or failed one sets `artworkError` (D7).
-    private func loadArtwork(_ source: String, resolved: String) {
-        guard source != artwork.source else { return }
-        artwork = (source, nil, nil, artwork.generation + 1)
-        guard !source.isEmpty else { return }
-        guard let url = URL(string: resolved), !resolved.isEmpty else {
+    private func loadArtwork(_ source: String, resolved: String, fallback: String) {
+        guard artwork.source != source || artwork.resolved != resolved || artwork.fallback != fallback else { return }
+        artwork = (source, resolved, fallback, nil, nil, artwork.generation + 1)
+        let primary = resolved.isEmpty ? nil : URL(string: resolved)
+        let bundled = fallback.isEmpty ? nil : URL(string: fallback)
+        if !source.isEmpty && primary == nil {
             artwork.error = source.hasPrefix("app:/") ? "an app:/ artwork is not published until the media element takes an app:/ source (LLP 1098 §7)" : "the artwork's source did not resolve"
-            return
         }
-        let token = artwork.generation
+        guard let url = primary ?? bundled else { return }
+        fetchArtwork(url, fallback: primary != nil && primary != bundled ? bundled : nil, generation: artwork.generation)
+    }
+
+    private func fetchArtwork(_ url: URL, fallback: URL?, generation: Int) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let data = try? Data(contentsOf: url)
             DispatchQueue.main.async {
-                guard let self, self.artwork.generation == token else { return }
+                guard let self, self.artwork.generation == generation else { return }
                 #if os(macOS)
                 let image = data.flatMap(NSImage.init(data:))
                 #else
                 let image = data.flatMap(UIImage.init(data:))
                 #endif
-                guard let image else { self.artwork.error = "the artwork did not load"; return }
+                guard let image else {
+                    if self.artwork.error == nil { self.artwork.error = "the artwork did not load" }
+                    if let fallback { self.fetchArtwork(fallback, fallback: nil, generation: generation) }
+                    return
+                }
                 self.artwork.image = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                 self.refresh()
             }

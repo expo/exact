@@ -1,9 +1,10 @@
 // App icons (LLP 1163): the manifest's `icons` and `color_scheme_dark.icons`,
 // what each file is, which file a host's slot takes, and the web's head.
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { decodePng, encodePng, shrink } from './png.mjs';
+import { within } from './paths.mjs';
 import { schemeColours } from './scheme-colours.mjs';
 
 const TYPES = { png: 'image/png', svg: 'image/svg+xml', ico: 'image/x-icon' };
@@ -69,6 +70,17 @@ function readFacts(path) {
  * own, and a dark entry is `any` only; the same of each alternate (`alternateProblems`). */
 export function appIconProblems(manifest, dir) {
   return [...iconListProblems(manifest, dir), ...alternateProblems(manifest, dir)];
+}
+
+export function mediaArtworkProblems(manifest, dir) {
+  const cover = manifest.media_session?.default_artwork;
+  if (!cover) return [];
+  const file = resolve(dir, cover);
+  if (!cover.startsWith('assets/') || cover.split('/').some(part => !part || part === '.' || part === '..') ||
+      !existsSync(file) || !statSync(file).isFile() || !within(resolve(realpathSync(dir), 'assets'), realpathSync(file))) {
+    return ['media_session.default_artwork must name a bundled file under assets/'];
+  }
+  return [];
 }
 
 /** The name Apple gives an Icon Composer project: its directory's stem. */

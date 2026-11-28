@@ -5364,6 +5364,10 @@ recently started playing, across every session of a process on Apple.
 | Android | the system playback session follows audible `audio` with `audio_session: "playback"`; Contract metadata and custom actions stay in `state.mediaSession` |
 | Linux, Windows | none: the record only (`published: "none"`, no `play` or `pause`) |
 
+In `app.json`, `"media_session": { "default_artwork": "assets/cover.png" }` supplies a bundled
+cover for iOS and Android when an item has no artwork or its image cannot be loaded.
+Android playback notifications use the app's `icons` entry with `purpose: "monochrome"` for their small icon.
+
 On iOS the lock screen and Control Center show only a non-mixable playback
 session, and audio stops at the lock without the `audio` background mode, so
 an app whose plan claims the media session states both in `app.json`, or
