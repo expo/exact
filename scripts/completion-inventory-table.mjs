@@ -614,17 +614,6 @@ export const classifications = [
     "runner/src/runner/picker.rs defines the requesting view and change payload; device.rs retires its held picker with that node.", [
     ["runner:runner/src/runner/picker.rs", "Runner::hold_picker Runner::hold_picker_view Runner::picked_path Runner::picker"],
   ]),
-  group("picture results", ["one-shot"], "pending picture request, module/source identity and current presentation consumers", "UI-owned",
-    "host/painted/src/presenter/pictures.rs matches picture answers to pending picture requests; presenter/images.rs delivers image loads to current consumers. These outcomes are not durable app operations.", [
-    ["apple:host/apple/src/abi/exports.rs", "exact_picture"],
-    ["painted:host/painted/src/canvas/jni.rs",
-      "Java_dev_exact_canvas_Native_copyImage Java_dev_exact_canvas_Native_copyImageToBuffer Java_dev_exact_canvas_Native_hardwarePictures " +
-      "Java_dev_exact_canvas_Native_imageBuffer Java_dev_exact_canvas_Native_pendingPictures"],
-    ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_picture Java_dev_exact_canvas_Native_pictureChanged"],
-    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::picture_answer CanvasHost::picture_changed"],
-    ["painted:host/painted/src/presenter/images.rs", "Presenter::deliver_image_loads Presenter::finish_boot_images Presenter::pictures_need_paint Presenter::poll_images Presenter::settle_pictures Presenter::wait_images"],
-    ["painted:host/painted/src/presenter/pictures.rs", "Presenter::bind_pictures Presenter::picture_answered Presenter::picture_changed"],
-  ]),
   group("presence", ["one-shot"], "outstanding presence call and secret generation", "UI-owned",
     "runner/src/runner/presence_secrets.rs drops a check whose call was let go. The authentication continuation is session-owned even though the keystore value is durable.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_presence"],

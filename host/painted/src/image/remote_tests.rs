@@ -232,6 +232,7 @@ fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
         AtomicUsize::new(0),
         AtomicUsize::new(0),
     );
+    let varies = AtomicUsize::new(0);
     let refreshed = png(4, 3, [40, 50, 60, 255]);
     let newer = refreshed.clone();
     let origin = serve(move |path, headers| match path {
@@ -272,6 +273,17 @@ fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
             "Cache-Control: max-age=3600\r\n".into(),
             refreshed.clone(),
         ),
+        // Refreshed, it may not be kept: the stored one goes too.
+        "/window-vary.png" if varies.fetch_add(1, Ordering::SeqCst) > 0 => Answer::Headed(
+            200,
+            "Cache-Control: max-age=3600\r\nVary: *\r\n".into(),
+            refreshed.clone(),
+        ),
+        "/window-vary.png" => Answer::Headed(
+            200,
+            "Cache-Control: max-age=0, stale-while-revalidate=3600\r\n".into(),
+            body.clone(),
+        ),
         "/window.png" => Answer::Headed(
             200,
             "Cache-Control: max-age=0, stale-while-revalidate=3600\r\n".into(),
@@ -302,13 +314,22 @@ fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
         format!("{origin}/later-moved.png"),
     );
     let slow = format!("{origin}/slow.png");
+    let window_vary = format!("{origin}/window-vary.png");
     let first = launch();
     let moved = format!("{origin}/moved.png");
     let moved_for_good = format!("{origin}/moved-for-good.png");
     for url in [&moved, &moved_for_good] {
         assert_eq!(bytes(&fetched(&first, url).unwrap()), picture);
     }
-    for url in [&fresh, &stale, &window, &retagged, &later, &slow] {
+    for url in [
+        &fresh,
+        &stale,
+        &window,
+        &window_vary,
+        &retagged,
+        &later,
+        &slow,
+    ] {
         assert_eq!(bytes(&fetched(&first, url).unwrap()), picture);
         // Stored once the load has settled.
         let started = Instant::now();
@@ -352,6 +373,15 @@ fn a_relaunch_shows_a_fresh_picture_from_the_disk_and_validates_a_stale_one() {
         assert_eq!(bytes(&fetched(&second, url).unwrap()), newer);
     }
     assert_eq!(second.fetches.load(Ordering::Relaxed), 6);
+    assert_eq!(bytes(&fetched(&second, &window_vary).unwrap()), picture);
+    let started = Instant::now();
+    while disk::Disk::new(dir.clone(), disk::DISK_BYTES)
+        .get(&window_vary)
+        .is_some()
+    {
+        assert!(started.elapsed() < SETTLED, "{window_vary} is gone");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

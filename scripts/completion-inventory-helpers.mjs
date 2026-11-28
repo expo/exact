@@ -285,5 +285,16 @@ export function helperClassifications(group) {
     ["painted:host/painted/src/canvas/surface.rs", "CanvasHost::surface_wake_fd"],
     ["painted:host/painted/src/surfaces/wake.rs", "Presenter::surface_wake_fd"],
   ]),
+  group("picture results", ["one-shot"], "pending picture request, module/source identity and current presentation consumers", "UI-owned",
+    "host/painted/src/presenter/pictures.rs matches picture answers to pending picture requests; presenter/images.rs delivers image loads to current consumers. These outcomes are not durable app operations.", [
+    ["apple:host/apple/src/abi/exports.rs", "exact_picture"],
+    ["painted:host/painted/src/canvas/jni.rs",
+      "Java_dev_exact_canvas_Native_copyImage Java_dev_exact_canvas_Native_copyImageToBuffer Java_dev_exact_canvas_Native_hardwarePictures " +
+      "Java_dev_exact_canvas_Native_imageBuffer Java_dev_exact_canvas_Native_pendingPictures"],
+    ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_picture Java_dev_exact_canvas_Native_pictureChanged"],
+    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::picture_answer CanvasHost::picture_changed"],
+    ["painted:host/painted/src/presenter/images.rs", "Presenter::deliver_image_loads Presenter::finish_boot_images Presenter::pictures_need_paint Presenter::poll_images Presenter::settle_pictures Presenter::wait_images"],
+    ["painted:host/painted/src/presenter/pictures.rs", "Presenter::bind_pictures Presenter::picture_answered Presenter::picture_changed"],
+  ]),
   ];
 }

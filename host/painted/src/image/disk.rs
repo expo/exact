@@ -33,7 +33,7 @@ const KEPT: [&str; 7] = [
     "vary",
 ];
 
-const VERSION: &str = "exact-image-cache 1";
+const VERSION: &str = "exact-image-cache 2";
 /// The longest head read back; a longer one is never written.
 const MAX_HEAD: usize = 16 << 10;
 

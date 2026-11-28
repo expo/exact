@@ -683,8 +683,11 @@ impl Downloads {
                 (entry.head).refreshed(response.headers.entries(), &sent, received, delay);
             if let Some(head) = refreshed {
                 if let Ok(body) = spooled(&mut entry) {
+                    drop(entry);
                     if head.selects(&sent) {
                         *then = Some(Then::Store(key, head));
+                    } else if let Some(disk) = self.disk() {
+                        disk.remove(&key);
                     }
                     return Ok(body);
                 }
@@ -696,10 +699,13 @@ impl Downloads {
                 disk.remove(&key);
             }
         };
-        if response.status == 200 && direct {
+        if response.status == 200 {
+            // One that may not be kept takes the stored one with it.
             let head = disk::Head::of(response.headers.entries(), &sent, received, delay);
-            if head.selects(&sent) {
+            if direct && head.selects(&sent) {
                 *then = Some(Then::Store(key, head));
+            } else if let Some(disk) = self.disk() {
+                disk.remove(&key);
             }
         }
         // A status that is not 2xx is the failure of a body that is not an
