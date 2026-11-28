@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { ENTITLEMENTS_SECTION, fitEntitlements, fitLinkedSections, occurrencesOutsideLinked, readLinkedSections, reserveEntitlements, reserveLinkedPlan, reservedSize, textSections } from './sections.mjs';
@@ -119,4 +120,18 @@ test('a simulator\'s entitlements are linked padded to their room, then fitted, 
   let error; try { fitEntitlements(exe, Buffer.alloc(65)); } catch (e) { error = e; }
   expect(error.code).toBe('EXACT_SECTION_ROOM');
   expect(occurrencesOutsideLinked(exe, 'com.example.app')).toBe(0);
+});
+
+// A real link: a hidden function whose assembler name is the base app id is a local symbol dladdr names at run time,
+// and counts; the debug map's paths that name it (an object under a directory named for it) do not.
+test.skipIf(process.platform !== 'darwin')('a linked local symbol named for the base app id counts; its debug map\'s paths do not', () => {
+  const id = 'com.example.base', dir = resolve(temp(), id);
+  mkdirSync(dir);
+  const build = (hidden) => {
+    writeFileSync(resolve(dir, 'a.c'), hidden ? `__attribute__((visibility("hidden"))) int f(void) __asm__("_${id}");\nint f(void) { return 1; }\nint main(void) { return f(); }\n` : 'int main(void) { return 0; }\n');
+    for (const args of [['-g', '-c', 'a.c', '-o', 'a.o'], ['a.o', '-o', 'App']]) expect(spawnSync('xcrun', ['clang', ...args], { cwd: dir }).status).toBe(0);
+    return occurrencesOutsideLinked(resolve(dir, 'App'), id);
+  };
+  expect(build(false)).toBe(0);
+  expect(build(true)).toBeGreaterThanOrEqual(1);
 });
