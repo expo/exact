@@ -248,6 +248,12 @@ impl Easing {
 
     /// Output progress at `input` (clamped to `[0, 1]`).
     pub fn progress(&self, input: f64) -> f64 {
+        self.progress_from(input, false)
+    }
+
+    /// [`Easing::progress`] with CSS Easing 1 §3.2's before flag: when set, a
+    /// step easing at one of its jumps takes the step below it.
+    pub fn progress_from(&self, input: f64, before: bool) -> f64 {
         let x = input.clamp(0.0, 1.0);
         match self {
             Easing::Linear => x,
@@ -256,7 +262,7 @@ impl Easing {
             Easing::EaseOut => bezier(0.0, 0.0, 0.58, 1.0, x),
             Easing::EaseInOut => bezier(0.42, 0.0, 0.58, 1.0, x),
             Easing::CubicBezier { x1, y1, x2, y2 } => bezier(*x1, *y1, *x2, *y2, x),
-            Easing::Steps { count, position } => steps(*count, *position, x),
+            Easing::Steps { count, position } => steps(*count, *position, x, before),
             Easing::PiecewiseLinear(stops) => piecewise(stops, x),
         }
     }
@@ -327,12 +333,15 @@ fn solve_bezier_t(x1: f64, x2: f64, x: f64) -> f64 {
     t
 }
 
-/// CSS Easing §2.3.2, the step-easing output procedure (before flag unset).
-fn steps(count: u16, position: StepPosition, x: f64) -> f64 {
+/// CSS Easing §2.3.2, the step-easing output procedure.
+fn steps(count: u16, position: StepPosition, x: f64, before: bool) -> f64 {
     let count = count as f64;
     let mut current = (x * count).floor();
     if matches!(position, StepPosition::JumpStart | StepPosition::JumpBoth) {
         current += 1.0;
+    }
+    if before && (x * count) % 1.0 == 0.0 {
+        current -= 1.0;
     }
     if current < 0.0 {
         current = 0.0;

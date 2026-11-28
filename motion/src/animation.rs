@@ -506,6 +506,13 @@ impl Animation {
     /// The directed progress at local time `t`, or `None` when the animation
     /// has no effect then (outside its active interval without a fill).
     pub fn directed_progress(&self, t: f64) -> Option<f64> {
+        self.directed(t).map(|(p, _)| p)
+    }
+
+    /// [`Animation::directed_progress`], and CSS Easing 1 §3.2's before flag:
+    /// set in the before phase going forwards and in the after phase going
+    /// backwards (Web Animations 1, "calculating the transformed progress").
+    fn directed(&self, t: f64) -> Option<(f64, bool)> {
         // An unresolved local time (NaN) is the idle phase: no effect (Web
         // Animations 1, animation effect phases).
         if t.is_nan() {
@@ -559,7 +566,12 @@ impl Animation {
             Direction::Alternate => !odd,
             Direction::AlternateReverse => odd,
         };
-        Some(if forwards { simple } else { 1.0 - simple })
+        let before = match phase {
+            Phase::Before => forwards,
+            Phase::Active => false,
+            Phase::After => !forwards,
+        };
+        Some((if forwards { simple } else { 1.0 - simple }, before))
     }
 
     /// One property's animated value at local time `t` over `underlying` (the
@@ -586,13 +598,26 @@ impl Animation {
         {
             return None;
         }
-        let p = self.directed_progress(t)?;
-        Some(self.value_at(p, property, underlying, dark))
+        let (p, before) = self.directed(t)?;
+        Some(self.value_from(p, before, property, underlying, dark))
     }
 
     /// The keyframe effect at directed progress `p` for one property, a
     /// `light-dark()` colour under `dark`.
     pub fn value_at(&self, p: f64, property: Property, underlying: Value, dark: bool) -> Value {
+        self.value_from(p, false, property, underlying, dark)
+    }
+
+    /// [`Animation::value_at`], the interval's easing taking `before` as CSS
+    /// Easing 1 §3.2's before flag.
+    fn value_from(
+        &self,
+        p: f64,
+        before: bool,
+        property: Property,
+        underlying: Value,
+        dark: bool,
+    ) -> Value {
         let track = self
             .keyframes
             .track(property, underlying, dark, &self.easing);
@@ -629,7 +654,7 @@ impl Animation {
             };
         }
         let local = (p - a.0) / span;
-        let eased = a.1.progress(local);
+        let eased = a.1.progress_from(local, before);
         if property == Property::Rotate {
             crate::rotation::interpolate(a.2, b.2, eased)
         } else {
