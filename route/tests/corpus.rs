@@ -868,3 +868,61 @@ fn structural_prefix_ancestors_use_positional_url_segments() {
         Some("A7")
     );
 }
+
+/// A partial overlap the checks allow ("literal before parameter") must not
+/// let a deep link's ancestor take a location that names the earlier route:
+/// every entry's url matches back to its own screen and parameters.
+#[test]
+fn a_deep_link_never_synthesizes_an_ancestor_another_route_names() {
+    let route = |name: &str, pattern: &str, parent| Route {
+        name: name.into(),
+        pattern: pattern.into(),
+        parent,
+        tab: false,
+        notfound: false,
+    };
+    let table = Table {
+        routes: vec![
+            route("home", "/", None),
+            route("new", "/item/new", Some(0)),
+            route("item", "/item/:item", Some(0)),
+            route("edit", "/item/:item/edit", Some(2)),
+        ],
+    };
+    table.check().expect("a literal before a parameter checks");
+    for d in table.chain("/item/new/edit") {
+        assert_eq!(
+            table.matches(&d.url),
+            Some(Match {
+                name: d.name.clone(),
+                params: d.params.clone()
+            }),
+            "{} at {}",
+            d.name,
+            d.url
+        );
+    }
+    assert_eq!(
+        table
+            .chain("/item/7/edit")
+            .iter()
+            .map(|d| d.url.as_str())
+            .collect::<Vec<_>>(),
+        ["/", "/item/7", "/item/7/edit"]
+    );
+
+    // The runner refuses a router value whose entries do not round trip.
+    let mut runner = exact_runner::Runner::boot(
+        runner_plan::plan(&table),
+        NoData,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/item/new/edit",
+    )
+    .unwrap();
+    runner
+        .act("back", vec![])
+        .expect("Back from a deep link's leaf");
+    let r = runner.carry().router.unwrap().1;
+    assert_eq!(top(&r).map(|e| e.name.as_str()), Some("home"));
+}

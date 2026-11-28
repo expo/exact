@@ -720,3 +720,23 @@ component App
     rmSync(dir, { recursive: true, force: true });
   }
 }, 180_000);
+
+test('JS router leaves out a deep link ancestor an earlier route names (exact-route chain)', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-router-overlap-'));
+  try {
+    stageRuntime(dir, ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js', 'rows.js', 'router.js', 'route-pattern.js', 'schedule.js', 'document.js']);
+    const router = await import(resolve(dir, 'router.js'));
+    router.routes([
+      ['home', '/', null, false, false],
+      ['new', '/item/new', 0, false, false],
+      ['item', '/item/:item', 0, false, false],
+      ['edit', '/item/:item/edit', 2, false, false],
+    ]);
+    const launched = router.launch('/item/new/edit', []);
+    expect(launched[1][0][1].map(e => [e[1], e[2]])).toEqual([['home', '/'], ['edit', '/item/new/edit']]);
+    expect(router.validRouter(launched)).toBe(true);
+    expect(router.launch('/item/7/edit', [])[1][0][1].map(e => e[2])).toEqual(['/', '/item/7', '/item/7/edit']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

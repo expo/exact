@@ -288,6 +288,8 @@ impl Table {
     /// The declared root-to-leaf chain without ids, or empty on no match.
     /// Only the leaf carries the incoming query. Notfound belongs to the first
     /// tab and carries the unmatched location verbatim in canonical form.
+    /// An ancestor whose formatted location an earlier route matches is left
+    /// out, so every entry's url matches back to its own screen.
     pub fn chain(&self, location: &str) -> Vec<Destination> {
         let url = canonical(location);
         let Some((index, params)) = self.match_index(&url) else {
@@ -324,7 +326,7 @@ impl Table {
         let url_parts = segments(url.split('?').next().unwrap_or(&url));
         indices
             .into_iter()
-            .map(|i| {
+            .filter_map(|i| {
                 let route = &self.routes[i];
                 let anc_canonical = canonical(&route.pattern);
                 let anc_segs = segments(&anc_canonical);
@@ -350,14 +352,24 @@ impl Table {
                     url.clone()
                 } else {
                     let refs: Vec<&str> = values.iter().map(String::as_str).collect();
-                    canonical(&self.path(&route.name, &refs).unwrap_or_default())
+                    let entry_url = canonical(&self.path(&route.name, &refs).unwrap_or_default());
+                    // An earlier route that overlaps this ancestor in part
+                    // (`/item/new` before `/item/:item`) names its location,
+                    // so the ancestor has none of its own and is left out.
+                    if self
+                        .match_pattern_index(&entry_url)
+                        .is_none_or(|(m, _)| m != i)
+                    {
+                        return None;
+                    }
+                    entry_url
                 };
-                Destination {
+                Some(Destination {
                     name: route.name.clone(),
                     url: entry_url,
                     tab: tab.clone(),
                     params: own,
-                }
+                })
             })
             .collect()
     }

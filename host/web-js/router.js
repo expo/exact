@@ -55,8 +55,10 @@ function chain(location) {
       own[Names.indexOf(n)] = v;
       values.push(v);
     }
-    return { name: r.name, url: i === index ? url : canonical(path(r, values)), tab: Routes[root].name, params: own };
-  });
+    const at = i === index ? url : canonical(path(r, values));
+    // An ancestor whose location an earlier, partly overlapping route names is left out (exact-route `chain`).
+    return i === index || matchPattern(Routes, at) === i ? { name: r.name, url: at, tab: Routes[root].name, params: own } : null;
+  }).filter(d => d);
 }
 const entry = (id, d, fragment = "") => [id, d.name, d.url, d.tab, d.params, fragment];
 function refuse(r, why) { say(`router: ${why}`); return r; }
