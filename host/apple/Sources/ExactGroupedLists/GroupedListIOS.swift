@@ -7,10 +7,9 @@
 // views are carried into their cell, and every batch sees that hierarchy.
 import ExactKit
 
-/// The grouped lists capability (LLP 1047.001 D4): an app's composition
-/// links this module only when its plan has a grouped list, and installs it
-/// before any session is made. On macOS a grouped list is its authored
-/// nodes, and installing it does nothing.
+/// The grouped lists capability (LLP 1047.001 D4): an app's composition links this module only when its plan has a
+/// grouped list, and installs it before any session is made. On macOS a grouped list is its authored nodes, and
+/// installing it does nothing.
 public enum ExactGroupedLists {
     public static func install() {
         #if os(iOS) || os(tvOS)

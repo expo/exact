@@ -1,15 +1,12 @@
-// The GPU module's page side (host code, LLP 1009 D2/D4): injected by glue.js
-// after the first painted frame, only when the page has a canvas. It fetches
-// the app's GPU wasm (wgpu on the browser's WebGPU, wasm-bindgen glue) and
-// runs each canvas's surface: bind on new inputs, render while dirty or
-// wanted, resize from the element's box and devicePixelRatio.
+// The GPU module's page side (host code, LLP 1009 D2/D4): injected by glue.js after the first painted frame, only when
+// the page has a canvas. It fetches the app's GPU wasm (wgpu on the browser's WebGPU, wasm-bindgen glue) and runs each
+// canvas's surface: bind on new inputs, render while dirty or wanted, resize from the element's box and
+// devicePixelRatio.
 //
-// One artifact per instance (LLP 1009 D6): with no query this is the app's
-// one module, `gpu.js`, and it is `exact.gpu`. An app with declared modules
-// loads gpu-modules.js instead, which imports this file once per artifact as
-// `gpu-glue.js?artifact=<stem>` — a URL is one module instance, so each
-// artifact keeps its own device, surfaces, recovery and frame loop — and each
-// instance registers with that router rather than taking `exact.gpu`.
+// One artifact per instance (LLP 1009 D6): with no query this is the app's one module, `gpu.js`, and it is `exact.gpu`.
+// An app with declared modules loads gpu-modules.js instead, which imports this file once per artifact as
+// `gpu-glue.js?artifact=<stem>` — a URL is one module instance, so each artifact keeps its own device, surfaces,
+// recovery and frame loop — and each instance registers with that router rather than taking `exact.gpu`.
 import { pacer } from "./pace.js";
 import { assetDelivery } from "./gpu-assets.js";
 import { inertAncestor } from "./navigation.js";
@@ -208,9 +205,8 @@ function size(el, r = el.getBoundingClientRect()) {
   return { w: Math.max(r.width, 1), h: Math.max(r.height, 1), s: devicePixelRatio || 1 };
 }
 
-// exact.now() follows each batch `at` marker while surface commits are applied.
-// The surfaces' clock: the page's in agent mode (LLP 1012: the driver owns
-// time, and a picture is a function of it), else the frame's.
+// exact.now() follows each batch `at` marker while surface commits are applied. The surfaces' clock: the page's in
+// agent mode (LLP 1012: the driver owns time, and a picture is a function of it), else the frame's.
 const clockFor = (frameNow) => exact.now?.() ?? frameNow;
 
 let hidden = document.hidden;
@@ -320,9 +316,8 @@ function recoverDevice() {
   recovering = true;
   const module = gpu, gen = moduleGen, entries = [...surfaces.values()].filter(e => e.id && !e.terminal);
   recoveringDevice = (async () => {
-    // Reconfigure the existing HTML canvas nodes on the replacement device:
-    // GPUCanvasContext.configure() accepts a new device on the same context,
-    // keeping DOM identity, focus, listeners, and observers intact.
+    // Reconfigure the existing HTML canvas nodes on the replacement device: GPUCanvasContext.configure() accepts a new
+    // device on the same context, keeping DOM identity, focus, listeners, and observers intact.
     const outcome = JSON.parse(await module.gpu_recover(new Uint32Array(entries.map(e => e.id)), entries.map(e => e.el)));
     if (gpu !== module || moduleGen !== gen) return;
     if (outcome.status === "healthy" || outcome.status === "recovered") {
@@ -372,10 +367,9 @@ function recoverDevice() {
   })().catch(error => {
     if (gpu !== module || moduleGen !== gen) return;
     const message = String(error);
-    // An adapter cannot appear during this page's recovery episode. Retrying
-    // requestAdapter after it has said none exists only churns Chromium's
-    // failed WebGPU presentation path and can starve the renderer itself.
-    // Other device-loss failures retain the bounded exponential retry.
+    // An adapter cannot appear during this page's recovery episode. Retrying requestAdapter after it has said none
+    // exists only churns Chromium's failed WebGPU presentation path and can starve the renderer itself. Other
+    // device-loss failures retain the bounded exponential retry.
     const noAdapter = error?.code === "no-adapter";
     recoveryNeedsCleanFrame = false;
     recoveryFailures = noAdapter ? RECOVERY_LIMIT : recoveryFailures + 1;
@@ -778,11 +772,9 @@ function listen(entry) {
   mutations.observe(el, {subtree:true, childList:true, attributes:true, attributeFilter:["data-action"]});
   const fallsThrough = (event) => event.target === el || event.target === entry.el;
   const point = (event) => { const r = el.getBoundingClientRect(); return { x: event.clientX - r.left, y: event.clientY - r.top }; };
-  // A canvas marked data-pointer-lock="true" (mouse look) captures the mouse on a
-  // press. Locked, a pointer event's motion is the device's (movementX/Y), so the
-  // world's deltas never stop at the canvas or screen edge though the position
-  // stays put; unlocked it is the position's change, as on every other host. A
-  // down or up carries none.
+  // A canvas marked data-pointer-lock="true" (mouse look) captures the mouse on a press. Locked, a pointer event's
+  // motion is the device's (movementX/Y), so the world's deltas never stop at the canvas or screen edge though the
+  // position stays put; unlocked it is the position's change, as on every other host. A down or up carries none.
   const modifiers = (event) => ({ shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey });
   const lockable = () => (el.dataset.pointerLock ?? entry.el.dataset?.pointerLock) === "true";
   const last = new Map(); // each pointer's last point on the canvas
@@ -1247,10 +1239,9 @@ const api = {
   },
   // Dev only; callers serialize versions. Agent pages never receive automatic swaps.
   swap(version) { return exact.mutate(() => swap(version)); },
-  /// A shader's text (LLP 1030 D8) — the dev loop's edit, or the first
-  /// registration: validated, its interface checked against the module's;
-  /// every surface renders again through the new pipeline. False, with the
-  /// reason on the console, when the module refuses it.
+  /// A shader's text (LLP 1030 D8) — the dev loop's edit, or the first registration: validated, its interface checked
+  /// against the module's; every surface renders again through the new pipeline. False, with the reason on the console,
+  /// when the module refuses it.
   shader(name, text) {
     if (!loaded) return false;
     const ok = gpu.gpu_shader(name, text);
