@@ -980,13 +980,16 @@ entries within the choice of a row of the other kind (LLP 1126.005 D2):
   {"name": "book", "type": "entity", "title": "Book", "entity": "book"}]}}]
 ```
 
-Each entry of the inner kind names the parent entries it belongs to with
-`ContentDescription.within`: `none` for every parent, `some([])` for none, or
-the parents' ids, one or several:
+The call that publishes the inner kind names each entry's parents with its
+`within` option, by the entry's id and the parents' ids, one or several. An
+entry the option does not name belongs to every parent, and one with an empty
+list to none. A call that leaves the option out publishes as before:
 
 ```
 setContentIndex(kind="book", entries=lib.books.map(b => ContentDescription(id=b.id, kind=none, title=b.title,
-  description=some(b.author), category=none, icons=none, url=`/book/${b.id}`, apple=none, within=some([b.status]))))
+  description=some(b.author), category=none, icons=none, url=`/book/${b.id}`, apple=none)),
+  within=lib.books.map(b => ContentParents(id=b.id, within=[b.status])))
+addContentIndexEntry(description=entry, within=["reading"])
 ```
 
 In a widget with both rows, the Book row's list and its search have only the
@@ -999,15 +1002,18 @@ The relation is the kind's, so every widget that offers both kinds gets it. The
 parent row comes first, and a widget has at most one row of the parent kind;
 the build refuses otherwise, and refuses a `within` that names an undeclared
 kind or makes a cycle. `setContentIndex` and `addContentIndexEntry` refuse a
-`within` with an empty id (`TypeError`); they do not check that the parent ids
-exist, since the parent kind may be published later. On Apple the inner kind's
+`within` with an empty id, and one for an entry the call does not publish
+(`TypeError`), on every host; they do not check that the parent ids exist,
+since the parent kind may be published later. `contentIndexEntries` answers
+the entries without their parents. On Apple the inner kind's
 query reads the parent row through
 [`IntentParameterDependency`](https://developer.apple.com/documentation/appintents/intentparameterdependency).
 A tool parameter of the inner kind lists every entry.
 
 Edit Widget on iOS and macOS offers the entries. watchOS and Android offer none:
 the field is `none` there, and a widget whose parameters are all entities has no
-choices on those hosts. Android keeps `within` in its mirror and does not use it.
+choices on those hosts, so its refresh should show something with nothing
+chosen. Android keeps `within` in its mirror and does not use it.
 
 A configured widget's refresh receives the configuration too, as its second
 argument: a record with one field per parameter, in the order the injected shape
@@ -1038,29 +1044,46 @@ component Trains
 `kind` is a literal that names a widget of `app.json` with a `configuration`,
 and `placements` holds the shape that widget's component, or one it uses,
 injects as `snapshot_configuration`; the build refuses anything else, in any
-source file of the app. Each record has the
-values the refresh receives, entity rows included, after the rule for a row
-within another. WidgetKit lists placements with the same choices once, so there
-is one record for each different configuration, not for each widget. `ready` is
-false while the app does not know the placed set: treat it as unknown and keep
-what the app did before.
+source file of the app. An app reads each of its kinds with a resource of its
+own, each with that kind's shape. Each record has the values the refresh
+receives, entity rows included, after the rule for a row within another.
+WidgetKit lists placements with the same choices once, so there is one record
+for each different configuration, not for each widget. `ready` is false while
+the app does not know the placed set: treat it as unknown and keep what the
+app did before.
 
-On iOS and macOS, the widget extension records the placements of a kind after
-each timeline it makes, from WidgetKit's
+On iOS and macOS, the widget extension records the placements of a kind before
+it returns each timeline, from WidgetKit's
 [`getCurrentConfigurations`](https://developer.apple.com/documentation/widgetkit/widgetcenter/getcurrentconfigurations(_:))
 and [`widgetConfigurationIntent(of:)`](https://developer.apple.com/documentation/widgetkit/widgetinfo/widgetconfigurationintent(of:)),
-and pings the app. The app reads the record when it becomes active and on that
-ping, which a suspended app does not receive. Before it answers, it asks
-WidgetKit how many configurations of the kind are placed: none answers an empty
-list, and a count that differs from the record answers `ready: false` and
-reloads that kind's timelines, so the extension records it again. A removed
-widget runs no timeline, and WidgetKit keeps listing it, and the configuration
-an Edit Widget sheet replaced, for up to about a minute (seen on iOS 27.2). So
-while the app is active it asks again every 30 seconds until two minutes after
-it became active or the record changed. Until then the answer can still hold a
-removed configuration, and after a mismatch it stays `ready: false` until
-WidgetKit runs the reloaded timeline, which it may delay by a minute. Other
-hosts have no implementation, and the resource keeps its `else`.
+and pings the app. It waits at most 250 ms for WidgetKit. The app reads the
+record when it becomes active and on that ping, which a suspended app does not
+receive, and asks WidgetKit how many configurations of the kind are placed.
+With none, it answers an empty list. Otherwise `ready` is true only when the
+record:
+
+- was written for the parameters the kind has in this build, so an update that
+  changes them does not answer an old record;
+- is complete: WidgetKit answered the extension, and every placement it listed
+  was read;
+- has the count WidgetKit gives the app; and
+- waits for no configuration. A timeline is made for a configuration that is
+  placed, so when WidgetKit's list lacks the one a timeline was made for, the
+  list is old, as it is right after Edit Widget. The record waits until
+  WidgetKit lists it, for at most two minutes.
+
+When one of these fails the app answers `ready: false`, reloads the kind's
+timelines so the extension records again, and while it is active asks again
+every 30 seconds, reloading again while the same record stays, until two
+minutes after it became active, the record changed or the answer became
+unknown. A removed widget runs no timeline, and WidgetKit keeps listing it, and
+the configuration an Edit Widget sheet replaced, for up to about a minute (seen
+on iOS 27.2), to the app and the extension alike. So for that long a ready
+answer can still hold a configuration that is gone; it does not go without one
+that is placed once the extension has made that widget's timeline. After a
+mismatch the answer stays `ready: false` until WidgetKit runs the reloaded
+timeline, which it may delay by a minute. Other hosts have no implementation,
+and the resource keeps its `else`.
 
 The configuration, labels included, is generated Swift and so a binary
 compatibility input; Live Activities have none. Keep kind, parameter and value
