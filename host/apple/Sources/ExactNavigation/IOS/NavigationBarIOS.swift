@@ -106,8 +106,10 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     var paintsPlaceholder = false
     /// The field's `value` the bar last showed: one that differs is the app's write.
     var value: String?
-    /// The field's text is drawn in its own colour or the design's FieldText; its fill is the design's Field, not UIKit's capsule.
-    var paintsInk = false, paintsGround = false
+    /// The search bar's fields whose text Exact drew in the field's own colour or the design's FieldText, and those it
+    /// filled with the design's Field over UIKit's capsule: each is reset once the colour goes unsaid, since the search
+    /// bar can show again a field it showed before (the folded iPhone Duo's collapsed one).
+    private let inked = NSHashTable<UITextField>.weakObjects(), grounded = NSHashTable<UITextField>.weakObjects()
     /// The scope bar's tabs, and the segment last chosen or set (LLP 1134 D3).
     var scopeTabs: [UInt32] = [], scopeIDs: [String?] = [], scopeSettled: Int?
     weak var scopeList: NodeView?
@@ -122,26 +124,76 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         // The field's own tint is its node's accent: its text, placeholder and caret in the tint resolve by it
         text.tintColor = field.ownAccent
         // Any `backgroundColor`, nil too, replaces UIKit's capsule (iOS 26, measured): written only where a design names a Field, cleared (unfilled) only where one was.
-        if let ground = field.fieldGroundColor { text.backgroundColor = ground; paintsGround = true }
-        else if paintsGround { text.backgroundColor = nil; paintsGround = false }
+        if let ground = field.fieldGroundColor { text.backgroundColor = ground; grounded.add(text) }
+        else { for painted in grounded.allObjects { painted.backgroundColor = nil }; grounded.removeAllObjects() }
         if field.showsOwnTextColor || ThemeRoles.color("FieldText", in: field) != nil {
             text.textColor = field.fieldInk
-            paintsInk = true
-        } else if paintsInk {
-            text.textColor = .label
-            paintsInk = false
+            inked.add(text)
+        } else {
+            for painted in inked.allObjects { painted.textColor = .label }
+            inked.removeAllObjects()
         }
         #endif
     }
     weak var field: NodeView? {
         didSet {
-            if oldValue !== field { oldValue?.headerField = nil; acceptingDismissal = false }
+            if oldValue !== field {
+                oldValue?.headerSearchBar = nil
+                acceptingDismissal = false
+                #if os(iOS)
+                // The field set up for the authored one before pastes through it no longer
+                if let followed, (followed.pasteDelegate as AnyObject?) === oldValue { followed.pasteDelegate = nil }
+                #endif
+                followed = nil
+            }
             #if os(iOS)
-            field?.headerField = controller.searchBar.searchTextField
+            // The authored field's stand-in is the search bar's field as it reads each time (`NodeView.headerField`)
+            field?.headerSearchBar = controller.searchBar
             field?.applyFieldDirection()
-            controller.searchBar.searchTextField.pasteDelegate = field
+            followField()
             #endif
         }
+    }
+    /// The search bar's field last set up (`followField`).
+    private weak var followed: UITextField?
+    /// Sets up the search bar's field as UIKit has it now, once for each field: the search bar takes a new one as its
+    /// search opens in the toolbar on the folded iPhone Duo, and UIKit carries this text delegate to it but not the
+    /// authored field's direction, paste delegate, ink or name.
+    func followField() {
+        #if os(iOS)
+        let text = controller.searchBar.searchTextField
+        guard let field, followed !== text else { return }
+        followed = text
+        field.applyFieldDirection()
+        text.pasteDelegate = field
+        ink()
+        dress(fresh: true)
+        #endif
+    }
+    /// Writes what the authored field says of the search bar's field: its placeholder, its test id and its name.
+    /// `fresh` writes the placeholder even where the authored one is unchanged, for a field UIKit made since.
+    func dress(fresh: Bool = false) {
+        #if os(iOS)
+        guard let field, let presenter = host?.presenter else { return }
+        let bar = controller.searchBar, text = bar.searchTextField
+        let placeholder = field.props["placeholder"] ?? ""
+        // Unsaid, the placeholder is the search field's own, which UIKit
+        // draws darker than an ordinary field's `placeholderText`; an
+        // authored `::placeholder` colour or theme role wins (LLP 1104 D3).
+        if field.placeholderColor != nil || ThemeRoles.color("placeholder", in: presenter.root) != nil {
+            field.applyPlaceholder(text)
+            paintsPlaceholder = true
+        } else if fresh || paintsPlaceholder || bar.placeholder != placeholder {
+            paintsPlaceholder = false
+            text.attributedPlaceholder = nil
+            bar.placeholder = placeholder
+        }
+        // The field itself, which XCUITest finds as a search field and a
+        // person types in, carries the test id (LLP 1116 D2).
+        if text.accessibilityIdentifier != field.props["testId"] { text.accessibilityIdentifier = field.props["testId"] }
+        // Its name is the field's `aria-label`, as an `input`'s is; with none, UIKit's (the placeholder).
+        if text.accessibilityLabel != field.props["accessibilityLabel"] { text.accessibilityLabel = field.props["accessibilityLabel"] }
+        #endif
     }
     private weak var textDelegate: UITextFieldDelegate?
     private var editingCompletion: (value: String, finish: () -> Void)?
@@ -179,12 +231,14 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     }
     func willPresentSearchController(_ search: UISearchController) {
         acceptingDismissal = false
+        followField()
     }
     func willDismissSearchController(_ search: UISearchController) {
         // A disappearing route keeps its query; closing search accepts UIKit's reset
         acceptingDismissal = editingCompletion == nil && host?.changing == false && host?.presenter.modalHost.inTransition == false
     }
     func didDismissSearchController(_ search: UISearchController) {
+        followField()
         let accepts = acceptingDismissal
         acceptingDismissal = false
         if accepts {
@@ -229,6 +283,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         textDelegate?.responds(to: selector) == true ? textDelegate : nil
     }
     func searchBarTextDidBeginEditing(_ bar: UISearchBar) {
+        followField()
         host?.presenter.searchEditingChanged()
         guard let field else { return }
         host?.presenter.fieldSelections.focused(field)
@@ -264,7 +319,8 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         if editingCompletion == nil {
             editingCompletion = (editor.text ?? "", completion)
             controller.isActive = false
-            controller.searchBar.endEditing(true)
+            // The field that edits, which on the folded iPhone Duo is out of the search bar's views
+            editor.endEditing(true)
         }
         return true
     }
@@ -1040,18 +1096,7 @@ extension NavigationHost {
         if !builtTabs.isEmpty { followSearchTab() }
         search.scope(c.scoped)
         let bar = search.controller.searchBar
-        let placeholder = field.props["placeholder"] ?? ""
-        // Unsaid, the placeholder is the search field's own, which UIKit
-        // draws darker than an ordinary field's `placeholderText`; an
-        // authored `::placeholder` colour or theme role wins (LLP 1104 D3).
-        if field.placeholderColor != nil || ThemeRoles.color("placeholder", in: presenter.root) != nil {
-            field.applyPlaceholder(bar.searchTextField)
-            search.paintsPlaceholder = true
-        } else if search.paintsPlaceholder || bar.placeholder != placeholder {
-            search.paintsPlaceholder = false
-            bar.searchTextField.attributedPlaceholder = nil
-            bar.placeholder = placeholder
-        }
+        search.dress()
         search.ink()
         // The Contract's value wins, as an input's does (`writeValue`): a
         // value the app wrote since the last sync is shown even while the
@@ -1069,11 +1114,6 @@ extension NavigationHost {
         // value lands mid-dismissal), so it waits for the dismissal's end.
         search.item = c.navigationItem
         if !searching(c) { search.applyHiding() }
-        // The field itself, which XCUITest finds as a search field and a
-        // person types in, carries the test id (LLP 1116 D2).
-        if bar.searchTextField.accessibilityIdentifier != field.props["testId"] { bar.searchTextField.accessibilityIdentifier = field.props["testId"] }
-        // Its name is the field's `aria-label`, as an `input`'s is; with none, UIKit's (the placeholder).
-        if bar.searchTextField.accessibilityLabel != field.props["accessibilityLabel"] { bar.searchTextField.accessibilityLabel = field.props["accessibilityLabel"] }
         #endif
     }
 

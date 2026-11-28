@@ -583,9 +583,12 @@ final class NavigationBarIOSTests: XCTestCase {
         let route = try XCTUnwrap(nav.topViewController as? RouteController)
         let header = try node(session, "header-home")
         let search = try XCTUnwrap(route.navigationItem.searchController)
+        let authored = try XCTUnwrap(route.search?.field)
         search.isActive = true
         XCTAssertTrue(search.searchBar.searchTextField.becomeFirstResponder())
         until("native search is presented") { search.isActive && !search.isBeingPresented }
+        let retired: UITextField = search.searchBar.searchTextField
+        XCTAssertTrue((retired.pasteDelegate as AnyObject?) === authored, "the field that edits pastes through the authored one")
         p.apply(wireBatch([["op": "style", "id": Int(header.id), "style": ["appearance": "none", "written": ["appearance"]]]]))
         until("native search is retired") { !search.isActive && search.presentingViewController == nil }
         XCTAssertFalse(search.searchBar.searchTextField.isFirstResponder)
@@ -594,6 +597,7 @@ final class NavigationBarIOSTests: XCTestCase {
         XCTAssertNil(route.navigationItem.titleView)
         XCTAssertTrue(nav.isNavigationBarHidden)
         XCTAssertFalse(header.isHidden)
+        XCTAssertFalse((retired.pasteDelegate as AnyObject?) === authored, "the retired field pastes through the authored one no longer")
         p.apply(wireBatch([["op": "style", "id": Int(header.id), "style": ["appearance": "auto", "written": ["appearance"]]]]))
         XCTAssertNotNil(route.navigationItem.searchController)
         XCTAssertFalse(nav.isNavigationBarHidden)

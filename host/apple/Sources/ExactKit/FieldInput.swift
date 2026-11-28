@@ -23,14 +23,18 @@ extension NodeView: UITextPasteDelegate {
     // UIKit resolves item providers asynchronously. Intercept the final string,
     // when its native paste range is known, rather than the earlier paste: call.
     package func textPasteConfigurationSupporting(_ supporting: UITextPasteConfigurationSupporting, performPasteOf text: NSAttributedString, to range: UITextRange) -> UITextRange {
+        // Only from the editor that stands for this field now: a paste UIKit resolves after the field moved to another
+        // (a bar's search retired or set up again) is not this field's, nor one whose `beforeinput` moved it
         guard let editor = supporting as? UITextInput, let fields = presenter?.fieldSelections else { return range }
+        let stands = { [weak self] in editor === self?.selectionField || editor === self?.textArea }
+        guard stands() else { return range }
         let replaced = NSRange(location: editor.offset(from: editor.beginningOfDocument, to: range.start), length: editor.offset(from: range.start, to: range.end))
         guard !disabled, !inert, props["editable"] != "false" else { return range }
         let replacement = props["type"]?.lowercased() == "number" && editor.markedTextRange == nil
             ? NumberStepping.insertion(text.string, in: fieldText, range: replaced) : text.string
         guard !replacement.isEmpty, TextInputLimit.allows(fieldText, range: replaced, replacement: replacement, props: props) else { return range }
         fields.withIntent(self, "insertFromPaste") {
-            fields.nativeEdit(self, replacement: replacement, marked: editor.markedTextRange != nil) {
+            fields.nativeEdit(self, replacement: replacement, marked: editor.markedTextRange != nil, stands: stands) {
                 editor.replace(range, withText: replacement)
             }
         }
@@ -68,7 +72,9 @@ extension FieldSelections {
         }
     }
 
-    func shouldEdit(_ node: NodeView, range: NSRange, replacement: String, marked: Bool) -> Bool {
+    /// `stands`: whether the native editor the edit came from still stands for the field, asked again after a
+    /// `beforeinput` handler ran.
+    func shouldEdit(_ node: NodeView, range: NSRange, replacement: String, marked: Bool, stands: () -> Bool = { true }) -> Bool {
         guard Self.tracks(node), !editing.contains(node.id), !replacing.contains(node.id), !Self.applying(node) else { return true }
         let value = node.fieldText, selection = current(node)
         let ime = marked || composing.contains(node.id)
@@ -84,9 +90,10 @@ extension FieldSelections {
         let prevented = presenter.defaultPrevented && edit.cancelable
         presenter.defaultPrevented = outer
         guard !prevented else { return false }
-        // The handler's batch may have removed the field or written its value;
-        // the edit then no longer applies. Without a handler nothing ran.
-        if heard, presenter.views[node.id] !== node || !ime && node.fieldText != value { return false }
+        // The handler's batch may have removed the field, written its value or
+        // moved it to another editor; the edit then no longer applies. Without
+        // a handler nothing ran.
+        if heard, presenter.views[node.id] !== node || !ime && node.fieldText != value || !stands() { return false }
         inputDetails[node.id] = edit
         return true
     }
@@ -99,9 +106,9 @@ extension FieldSelections {
 
     // UIKeyInput and marked-text entry points need not ask UIKit's delegate.
     // A delegate called inside the same operation must not ask a second time.
-    func nativeEdit(_ node: NodeView?, replacement: String, marked: Bool, _ perform: () -> Void) {
+    func nativeEdit(_ node: NodeView?, replacement: String, marked: Bool, stands: () -> Bool = { true }, _ perform: () -> Void) {
         guard let node, Self.tracks(node), !editing.contains(node.id), !Self.applying(node) else { return perform() }
-        guard shouldEdit(node, range: current(node).range, replacement: replacement, marked: marked) else { return }
+        guard shouldEdit(node, range: current(node).range, replacement: replacement, marked: marked, stands: stands) else { return }
         editing.insert(node.id)
         defer { editing.remove(node.id) }
         perform()

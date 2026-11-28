@@ -14,7 +14,7 @@ component HeaderSearchKeys
         column navigationKey=`${e.id}` navigationScroll="list" testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
           header
             text "Chats" role="heading" aria-level=1
-            input type="search" value=query input=search placeholder="Search" testId="search"
+            input type="search" value=query input=search placeholder="Find a chat" aria-label="Search chats" testId="search"
           scroll id="list" testId="list" flex=1 min-height=0
             for i in range(60) key=i
               text `Row ${i}` padding=16 border-bottom="1px solid -exact-separator"
