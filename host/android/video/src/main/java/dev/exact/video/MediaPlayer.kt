@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.MutableContextWrapper
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Handler
@@ -26,6 +27,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.VideoSize
 import androidx.media3.common.text.CueGroup
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -33,6 +35,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerControlView
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
+import com.google.common.util.concurrent.ListenableFuture
 import dev.exact.canvas.AudioClaim
 import dev.exact.canvas.AudioFocus
 import dev.exact.canvas.MediaRecord
@@ -50,9 +53,11 @@ import kotlin.math.roundToLong
 @OptIn(UnstableApi::class)
 class MediaPlayer(
     initialContext: Context,
+    private val artworkLoader: BitmapLoader?,
     private val claimPlayback: ((Player) -> AutoCloseable?)?,
 ) : VideoPlayer {
-    constructor(context: Context) : this(context, null)
+    constructor(context: Context, claimPlayback: ((Player) -> AutoCloseable?)?) : this(context, null, claimPlayback)
+    constructor(context: Context) : this(context, null, null)
 
     private val context = MutableContextWrapper(initialContext)
     private var detached = false
@@ -138,6 +143,7 @@ class MediaPlayer(
     override fun bind(sink: MediaSink) {
         // A borrowed player carries nothing of the node before (D1), and reports nothing of it to this one.
         this.sink = null
+        artworkRequest = null
         if (full.on) {
             full.leave(notify = false)
             controls?.let { it.player = exo } ?: exo.setVideoTextureView(texture)
@@ -197,11 +203,7 @@ class MediaPlayer(
             load(props, source, props.optString("uri"), from.takeIf { restoring })
             if (!restoring) since = null
         } else if (changed(before!!, props, "volume") || changed(before, props, "muted")) projection.event("volumechange")
-        val item = exo.currentMediaItem
-        if (item != null && !audio) {
-            val metadata = mediaMetadata(props)
-            if (item.mediaMetadata != metadata) exo.replaceMediaItem(exo.currentMediaItemIndex, item.buildUpon().setMediaMetadata(metadata).build())
-        }
+        updateMetadata(props)
         assigned(since, props)
         // `fastSeek` seeks exactly, as on every host (LLP 1042 §3).
         val fast = props.optString("seek")
@@ -220,6 +222,7 @@ class MediaPlayer(
 
     /** A source loaded, or the record's prepared again where it was (D7's restoration). */
     private fun load(props: JSONObject, source: String, uri: String, from: MediaRecord.Resume?) {
+        artworkRequest = null
         src = source
         val restoring = from != null && from.src == source
         prepared = false; rendered = false; error = null; unavailable = null; pendingSeek = null; seekLanded = false
@@ -372,8 +375,34 @@ class MediaPlayer(
         }
     }
 
+    private var artworkRequest: ListenableFuture<Bitmap>? = null
+
+    private fun updateMetadata(props: JSONObject) {
+        val item = exo.currentMediaItem ?: return
+        val metadata = mediaMetadata(props)
+        if (item.mediaMetadata != metadata) {
+            exo.replaceMediaItem(exo.currentMediaItemIndex, item.buildUpon().setMediaMetadata(metadata).build())
+        }
+    }
+
+    private fun loadedArtwork(source: String?): String? {
+        val loader = artworkLoader ?: return source
+        val request = source?.let { loader.loadBitmap(Uri.parse(it)) }
+        if (request !== artworkRequest) {
+            artworkRequest = request
+            if (request != null && !request.isDone) request.addListener({
+                if (request === artworkRequest && !released) applied?.let(::updateMetadata)
+            }, context.mainExecutor)
+        }
+        // Publish the title immediately. Media3 can then read the new URI from the same warm cache.
+        return source?.takeIf { request != null && request.isDone && runCatching { request.get() }.isSuccess }
+    }
+
     private fun mediaMetadata(props: JSONObject): MediaMetadata {
-        fun field(key: String) = props.optString(key).takeUnless { props.isNull(key) || it.isEmpty() }
+        fun field(key: String): String? {
+            val text = props.optString(key).takeUnless { props.isNull(key) || it.isEmpty() }
+            return if (key == "mediaArtwork") loadedArtwork(text) else text
+        }
         return MediaMetadata.Builder().setTitle(field("mediaTitle")).setArtist(field("mediaArtist"))
             .setAlbumTitle(field("mediaAlbum")).setArtworkUri(field("mediaArtwork")?.let(Uri::parse)).build()
     }

@@ -533,6 +533,7 @@ dependencies {
     implementation(project(":canvas"))
     if (video) implementation(project(":video"))
     if (backgroundPlayback) {
+        implementation(libs.media3.datasource)
         implementation(libs.media3.session)
         implementation(libs.media3.ui)
     }
