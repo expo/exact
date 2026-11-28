@@ -5,6 +5,9 @@ use super::*;
 pub(super) struct AskAgain {
     pub(super) context: bool,
     pub(super) refresh: bool,
+    /// An announcement or a package's report asked for it: the ask has no
+    /// lineage (LLP 1123 D6).
+    pub(super) untraced: bool,
 }
 
 #[derive(Clone, Default)]

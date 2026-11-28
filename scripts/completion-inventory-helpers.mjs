@@ -112,12 +112,13 @@ export function helperClassifications(group) {
     ["runner:runner/src/request.rs", "Request::wake"],
   ]),
   group("UI input", ["one-shot"], "current mounted view, action binding or interaction", "UI-owned",
-    "The named public runner-crate source is the UI input API or its value/admission helper. runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied.", [
+    "The named public runner-crate source is the UI input API or its value/admission helper. runner/src/runner/event.rs dispatches through a mounted view, and event/binding.rs through its retained action binding; no independent operation identity is supplied.", [
     ["runner:runner/src/runner/host_kinds.rs", "Event::scroll_payload"],
     ["runner:runner/src/runner/event.rs",
-      "ActionBinding::retained_utf8_bytes Event::checked_payload Event::focus_payload Event::height_release_payload Event::key Event::pan_payload " +
+      "Event::acted Event::bare Event::checked_payload Event::focus_payload Event::height_release_payload Event::key Event::pan_payload " +
       "Event::pan_release_payload Event::press Event::pressed Event::record Event::transform_geometry_payload Event::transform_release_payload " +
-      "KeyModifiers::held KeyModifiers::split"],
+      "Event::unacted Event::unmark_kind KeyModifiers::held KeyModifiers::split"],
+    ["runner:runner/src/runner/event/binding.rs", "ActionBinding::retained_utf8_bytes"],
     ["runner:runner/src/runner/event/frame_navigation.rs", "FrameNavigation::parse FrameNavigation::value other"],
     ["runner:runner/src/runner/event/keyboard.rs", "KeyboardEvent::chord KeyboardEvent::parse KeyboardEvent::value"],
     ["runner:runner/src/runner/field.rs", "Event::edit_payload Event::field_payload FieldSelection::at_end FieldSelection::caret FieldSelection::clamped FieldSelection::parse FieldSelection::through_rewrite SelectionDirection::name SelectionDirection::of utf16_len"],

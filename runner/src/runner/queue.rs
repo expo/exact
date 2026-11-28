@@ -161,7 +161,7 @@ impl<D: DataSource> Runner<D> {
         source: &str,
         args: &[Value],
     ) -> Result<(), RunnerError> {
-        let cause = self.cause();
+        let mut cause = self.cause();
         // Only the application data source can opt in, and an unasked
         // tail must belong to the same foreground cause. A queue with
         // `then` owes one action per reply (LLP 1092 D4).
@@ -210,10 +210,16 @@ impl<D: DataSource> Runner<D> {
                 mutation: self.mutation_name(m).to_string(),
             });
         }
+        // The merged send, and the write it shows in, keep lineage only where
+        // both sends had it (LLP 1123 D6).
+        if let Some(tail) = replacement.as_ref().and(self.queues.waiting[m].back()) {
+            cause = cause.lineage_with(tail.cause);
+        }
         let write = self.accept_write(
             Target::Mutation(m),
             source,
             replacement.as_deref().unwrap_or(args),
+            cause,
         );
         if replacement.is_some() {
             let tail = self.queues.waiting[m]

@@ -1,6 +1,6 @@
 use super::*;
 use exact_kernel::{Kernel, NodeType};
-use exact_plan::{asm::Asm, builder::PlanBuilder, SlotsId, Stdlib, TypesId};
+use exact_plan::{asm::Asm, builder::PlanBuilder, SlotsId, Stdlib, TypeKind, TypesId};
 
 struct NoData;
 impl DataSource for NoData {

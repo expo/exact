@@ -657,6 +657,10 @@ uint32_t exact_share_land(ExactRuntime rt);
  * 66 = swipe (no payload; the platform's discrete swipe in the node's
  *      `swipe-flick` direction, LLP 1057.001 §8).
  * any other kind is refused with an error batch.
+ * A kind with its high bit set (0x80000000) is that kind's event, marked as a
+ * person's act: a host sets the bit only where only a person can begin the
+ * event. That kind's bit with 0x7FFFFFFF (0xFFFFFFFF, no payload, any view)
+ * ends such an act once its work has landed (LLP 1123 D6).
  * Format lists are space-separated command tokens. Link keeps the remaining bytes.
  * A change's text, key's name, or guest message is the payload in the input
  * buffer's first len bytes. */

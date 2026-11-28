@@ -6,13 +6,16 @@
 //!
 //! **A cause is a value** ([`Cause`]): an origin (D12), the invocation it is
 //! part of, its set of causes (D16 item 6) and whether that invocation is a
-//! call. Each primitive that schedules work captures the cause of the commit
+//! call, with lineage that is not authority: whether every contributor traces
+//! to the boot, a named action or a person's act the host marked (LLP 1123
+//! D6). Each primitive that schedules work captures the cause of the commit
 //! scheduling it and installs it when the work runs ([`Runner::as_cause`]);
 //! there is no default. A commit with none installed is refused what the
 //! least privileged origin is refused and holds no grant: it never reads as
-//! the app's. Boot, the host's delivery of the person's act in the app's own
-//! UI and its report of what the person sees while the page shows start an
-//! `app` cause ([`Cause::person`]).
+//! the app's. Boot ([`Cause::boot`]), the host's delivery of the person's act
+//! in the app's own UI and its report of what the person sees while the page
+//! shows start an `app` cause ([`Cause::person`]; [`Cause::person_act`] for an
+//! act the host marked).
 //!
 //! **Provenance is permanent; grants end with the invocation** (D7a). Work
 //! keeps its origin's restrictions for its whole life. An invocation's
@@ -31,7 +34,7 @@
 
 use super::{CommitReceipt, DataSource, Event, Runner, RunnerError, Target};
 use exact_plan::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Who a call comes from (LLP 1133.002 D12), least privileged first. It has
 /// no default: a cause is always someone's (LLP 1133.023 D7a).
@@ -100,7 +103,8 @@ impl Origins {
     /// A booting runner's: boot is the app's.
     pub(in crate::runner) fn booting() -> Origins {
         Origins {
-            current: Some(Cause::person()),
+            current: Some(Cause::boot()),
+            booting: true,
             ..Default::default()
         }
     }
@@ -108,6 +112,7 @@ impl Origins {
     /// Boot is done: work after it brings its own cause.
     pub(in crate::runner) fn booted(&mut self) {
         self.current = None;
+        self.booting = false;
     }
 }
 
@@ -138,7 +143,7 @@ impl PartialEq<CallOrigin> for Folded<'_> {
 /// invocation), several combine only through [`Runner::join_causes`], and
 /// its origin is the one they fold: no other code can write an origin,
 /// a flag or a contributor, or copy one cause's onto another.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub struct Cause {
     origin: CallOrigin,
     /// The invocation whose grants it holds while that invocation is live;
@@ -161,13 +166,71 @@ pub struct Cause {
     data: bool,
     /// Every contributor began at an activation-triggering input in the app.
     input: bool,
+    /// Lineage, not authority: every contributor traces to the boot, a named
+    /// action or a person's act the host marked (LLP 1123 D6's budget of
+    /// geometry corrections). Equality and admission ignore it.
+    independent: bool,
 }
 
+/// Causes compare by authority: lineage is not part of it (LLP 1133.023
+/// D7a), so a send's replacement, a shortcut's installer and the app's own
+/// cause read alike whatever lineage each carries.
+impl PartialEq for Cause {
+    fn eq(&self, other: &Cause) -> bool {
+        let Cause {
+            origin,
+            id,
+            causes,
+            call,
+            background_action,
+            owner,
+            data,
+            input,
+            independent: _,
+        } = *self;
+        (
+            origin,
+            id,
+            causes,
+            call,
+            background_action,
+            owner,
+            data,
+            input,
+        ) == (
+            other.origin,
+            other.id,
+            other.causes,
+            other.call,
+            other.background_action,
+            other.owner,
+            other.data,
+            other.input,
+        )
+    }
+}
+
+impl Eq for Cause {}
+
 impl Cause {
-    /// The app's: boot, or the person's act in the app's own UI or on the
-    /// platform's UI for the app.
+    /// The app's: the person's act in the app's own UI or on the platform's
+    /// UI for the app, with no lineage.
     pub(in crate::runner) const fn person() -> Cause {
         Cause::begin(CallOrigin::App, 0, false)
+    }
+
+    /// The boot's: the app's, with the boot's lineage (LLP 1123 D6).
+    pub(in crate::runner) const fn boot() -> Cause {
+        Cause {
+            independent: true,
+            ..Cause::person()
+        }
+    }
+
+    /// A person's act the host marked where only a person can begin it, or
+    /// a named action: the app's, with that act's lineage (LLP 1123 D6).
+    pub(in crate::runner) const fn person_act() -> Cause {
+        Cause::boot()
     }
 
     /// The device's: an event a package emits. Work with no cause installed
@@ -275,6 +338,7 @@ impl Cause {
             owner: id,
             data: false,
             input: false,
+            independent: false,
         }
     }
 
@@ -297,6 +361,30 @@ impl Cause {
     /// Whether `origin` is its only contributor's.
     pub(in crate::runner) fn only(self, origin: CallOrigin) -> bool {
         self.causes == Causes(Causes::bit(origin))
+    }
+
+    /// Whether every contributor traces to the boot, a named action or a
+    /// person's marked act (LLP 1123 D6).
+    pub(in crate::runner) fn independent(self) -> bool {
+        self.independent
+    }
+
+    /// This cause without lineage: work the runner cannot trace to an
+    /// identified input, as a package's report (LLP 1123 D6).
+    pub(in crate::runner) fn untraced(self) -> Cause {
+        Cause {
+            independent: false,
+            ..self
+        }
+    }
+
+    /// This cause with the lineage of both it and `other`: a send that
+    /// replaces another keeps lineage only where both had it.
+    pub(in crate::runner) fn lineage_with(self, other: Cause) -> Cause {
+        Cause {
+            independent: self.independent && other.independent,
+            ..self
+        }
     }
 
     pub(in crate::runner) fn input_started(self) -> bool {
@@ -402,6 +490,24 @@ pub(in crate::runner) struct Origins {
     /// When the last activation-triggering input, or activation the host
     /// raised, arrived, on the session's clock ([`Runner::user_activation`]).
     activated: Option<f64>,
+    /// The boot is being made.
+    booting: bool,
+    /// The resources whose stand-in the boot showed, leaving their ask to the
+    /// data source's activation without recording one: until one records an
+    /// ask, that activation asks it with the boot's lineage
+    /// ([`Runner::ready_cause`]). Lineage only; `asked` holds the authority.
+    boot_asked: BTreeSet<usize>,
+    /// The resources whose next ask an announcement or a package's report
+    /// asked for, behind a request in flight: that ask has no lineage of its
+    /// own, whichever commit makes it (LLP 1123 D6).
+    untraced: BTreeSet<usize>,
+    /// The resources the commit being made asked: once it stands, their
+    /// asks are recorded, and neither set above holds them any longer. One
+    /// decision covers every request and wait of one ask.
+    asked_in_commit: BTreeSet<usize>,
+    /// The data source's activation is being made, and whether a peer's
+    /// change to the store came with it.
+    activating: Option<bool>,
 }
 
 /// How long a person's input stands as user activation, in ms. HTML leaves
@@ -439,6 +545,8 @@ pub(in crate::runner) struct OriginsSaved {
     deferred: BTreeMap<usize, (Cause, Vec<Value>)>,
     thens: BTreeMap<usize, Cause>,
     let_go: usize,
+    boot_asked: BTreeSet<usize>,
+    untraced: BTreeSet<usize>,
 }
 
 /// Every origin, least privileged first.
@@ -643,6 +751,8 @@ impl<D: DataSource> Runner<D> {
             deferred: o.deferred.clone(),
             thens: o.thens.clone(),
             let_go: o.let_go.len(),
+            boot_asked: o.boot_asked.clone(),
+            untraced: o.untraced.clone(),
         }
     }
 
@@ -654,6 +764,8 @@ impl<D: DataSource> Runner<D> {
         o.deferred = saved.deferred;
         o.thens = saved.thens;
         o.let_go.truncate(saved.let_go);
+        o.boot_asked = saved.boot_asked;
+        o.untraced = saved.untraced;
     }
 
     /// The invocations superseded by commits that stood: each ends so.
@@ -685,8 +797,27 @@ impl<D: DataSource> Runner<D> {
                         .unwrap()
                         .unowned();
                 }
+                // The data source's activation re-asks a resource with the
+                // lineage of that resource's own asks that waited, not its
+                // commit's, which has none; with no ask on record, a stand-in
+                // the boot showed keeps the boot's; a peer's change to the
+                // store leaves none.
+                if let (true, Some(peer)) = (o.reasking, o.activating) {
+                    let own = (asked.iter().chain(waiting.iter())).map(|c| c.independent);
+                    let traced = match asked.is_some() || waiting.is_some() {
+                        true => own.fold(true, |a, b| a && b),
+                        false => o.boot_asked.contains(&i),
+                    };
+                    cause.independent = traced && !peer;
+                }
             }
             cause.input = false;
+            // A commit with no cause of its own (a report's, a delivery's, a
+            // topic's announcement) clears the lineage of what it asks
+            // (LLP 1133.023 D7a).
+            if o.current.is_none() || o.untraced.contains(&i) {
+                cause.independent = false;
+            }
         }
         cause
     }
@@ -711,6 +842,7 @@ impl<D: DataSource> Runner<D> {
             background_action: a.background_action || b.background_action,
             data: a.data || b.data,
             input: a.input && b.input,
+            independent: a.independent && b.independent,
             owner: if a.owner == b.owner { a.owner } else { 0 },
             ..least
         }
@@ -735,10 +867,14 @@ impl<D: DataSource> Runner<D> {
     /// work that waited for the data source and shows in it. That is each
     /// send made before it (`unsent`), each optimistic write, which only the
     /// data source can lay over an answer so this commit first shows, each
-    /// resource it asks again by the ask that waited, else its last (boot's
-    /// own asks, at a placeholder or a checkpoint's answer, and a reader whose
-    /// gate never opened, record none and are the app's), and a peer's change
-    /// to the store, which is no one's.
+    /// resource it asks again by the ask that waited, else its last, else the
+    /// app's, and a peer's change to the store, which is no one's.
+    ///
+    /// The commit itself has no lineage: its own work mixes what synchronous
+    /// answers open with what the clock or state changes bring, none of
+    /// which it can trace, so that work spends. Each resource it asks again
+    /// keeps the lineage of its own asks that waited ([`Runner::cause_for`]),
+    /// and each send its own.
     pub(in crate::runner) fn ready_cause(&self, stale: &[usize], store_changed: bool) -> Cause {
         let sends = self.unsent.iter().map(|u| u.3);
         let writes = self.writes.records.iter().map(|w| w.cause);
@@ -749,9 +885,67 @@ impl<D: DataSource> Runner<D> {
                 .unwrap_or(Cause::person())
         });
         let peer = store_changed.then(Cause::none);
-        (sends.chain(writes).chain(asks).chain(peer))
+        let joined = (sends.chain(writes).chain(asks).chain(peer))
             .reduce(|a, b| self.join_causes(a, b))
-            .unwrap_or(Cause::none())
+            .unwrap_or(Cause::none());
+        joined.untraced()
+    }
+
+    /// Run `f`, the data source's activation under `cause`, with a peer's
+    /// change to the store when `peer`.
+    pub(in crate::runner) fn as_activation<T>(
+        &mut self,
+        cause: Cause,
+        peer: bool,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let before = self.origins.activating.replace(peer);
+        let out = self.as_cause(cause, f);
+        self.origins.activating = before;
+        out
+    }
+
+    /// The data source's first activation asked nothing: no resource keeps
+    /// the boot's lineage by having been answered at the boot.
+    pub(in crate::runner) fn boot_asks_activated(&mut self) {
+        self.origins.boot_asked.clear();
+    }
+
+    /// The boot shows a stand-in for resource `i` (a kept module's answer, a
+    /// page's seed) and leaves its ask to the data source's activation
+    /// without recording one: that ask keeps the boot's lineage.
+    pub(in crate::runner) fn note_boot_ask(&mut self, i: usize) {
+        if self.origins.booting {
+            self.origins.boot_asked.insert(i);
+        }
+    }
+
+    /// A commit begins: it has asked nothing yet.
+    pub(in crate::runner) fn begin_asks(&mut self) {
+        self.origins.asked_in_commit.clear();
+    }
+
+    /// The commit being made stood, or not: what it asked has its own
+    /// record now. A refused one's tables are restored with its checkpoint.
+    pub(in crate::runner) fn conclude_asks(&mut self, stood: bool) {
+        let o = &mut self.origins;
+        let asked = std::mem::take(&mut o.asked_in_commit);
+        if stood {
+            o.untraced.retain(|i| !asked.contains(i));
+            o.boot_asked.retain(|i| !asked.contains(i));
+        }
+    }
+
+    /// Resource `i` is to be asked again for an announcement or a package's
+    /// report, by whichever commit lands the request in flight: that ask has
+    /// no lineage.
+    pub(in crate::runner) fn note_untraced_ask(&mut self, i: usize) {
+        self.origins.untraced.insert(i);
+    }
+
+    /// The commit being made asked resource `i`.
+    fn asked_now(&mut self, i: usize) {
+        self.origins.asked_in_commit.insert(i);
     }
 
     /// Run `f` as the device's re-ask of its readers (D12).
@@ -773,11 +967,21 @@ impl<D: DataSource> Runner<D> {
             _ => now,
         };
         self.origins.deferred.insert(i, (cause, args.to_vec()));
+        self.asked_now(i);
     }
 
-    /// Resource `i`'s gate closed: no ask of it waits.
+    /// Resource `i`'s gate closed: no ask of it waits, and it keeps no
+    /// boot lineage and no untraced re-ask.
     pub(in crate::runner) fn forget_deferred(&mut self, i: usize) {
         self.origins.deferred.remove(&i);
+        self.origins.boot_asked.remove(&i);
+        self.origins.untraced.remove(&i);
+    }
+
+    /// Resource `i`'s owed re-ask is given up: no later ask inherits its
+    /// want of lineage.
+    pub(in crate::runner) fn forget_untraced(&mut self, i: usize) {
+        self.origins.untraced.remove(&i);
     }
 
     /// Resource `i` was asked, however it answered: its readers' cause is
@@ -785,6 +989,7 @@ impl<D: DataSource> Runner<D> {
     pub(in crate::runner) fn note_ask(&mut self, i: usize) {
         let cause = self.cause_for(Target::Resource(i)).unowned();
         self.origins.asked.insert(i, cause);
+        self.asked_now(i);
     }
 
     /// Resource `i` answered at once: no ask of it waits.
@@ -818,6 +1023,7 @@ impl<D: DataSource> Runner<D> {
         if let Target::Resource(i) = target {
             o.deferred.remove(&i);
             o.asked.insert(i, cause.unowned());
+            self.asked_now(i);
         }
     }
 
@@ -836,9 +1042,11 @@ impl<D: DataSource> Runner<D> {
             .reduce(|a, b| self.join_causes(a, b));
         // Its invocation ranks it, but the call is not its own: it owns
         // nothing.
+        // Untraced, it has no lineage (LLP 1123 D6).
         Cause {
             owner: 0,
             data: true,
+            independent: false,
             ..folded.unwrap_or(Cause::none())
         }
     }
@@ -885,6 +1093,8 @@ impl<D: DataSource> Runner<D> {
         let o = &mut self.origins;
         o.asked.remove(&i);
         o.deferred.remove(&i);
+        o.boot_asked.remove(&i);
+        o.untraced.remove(&i);
         self.forget_refused_row(i);
         self.forget_module_row(i);
     }
@@ -893,6 +1103,10 @@ impl<D: DataSource> Runner<D> {
 #[cfg(test)]
 #[path = "cause_tests.rs"]
 mod cause_tests;
+
+#[cfg(test)]
+#[path = "lineage_tests.rs"]
+mod lineage_tests;
 
 #[cfg(test)]
 mod tests {

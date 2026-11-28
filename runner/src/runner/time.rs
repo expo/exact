@@ -460,6 +460,7 @@ impl<D: DataSource> Runner<D> {
                     && p.refusal.is_none()
             }) {
                 in_flight = true;
+                p.ask_again.untraced = true;
                 if !p.ask_again.refresh {
                     p.ask_again.refresh = true;
                     log.get_or_insert(p.ticket);

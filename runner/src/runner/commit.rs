@@ -78,6 +78,9 @@ impl<D: DataSource> Runner<D> {
 
     /// [`Self::checkpoint`] of a commit already started.
     fn started_checkpoint(&mut self) -> Checkpoint {
+        // Nothing applied or asked before this commit is its own.
+        self.begin_geometry();
+        self.begin_asks();
         self.derives_evaluated = 0;
         self.copied_at_checkpoint = self.store.copied_bytes();
         let store = self.store.checkpoint();
@@ -140,6 +143,8 @@ impl<D: DataSource> Runner<D> {
     ) {
         let refused = result.is_err();
         self.conclude_router(refused);
+        self.conclude_geometry(!refused);
+        self.conclude_asks(!refused);
         match result {
             Ok(_) => {
                 self.send_undo.truncate(c.send_undo);
@@ -281,8 +286,14 @@ impl<D: DataSource> Runner<D> {
     /// Run an action by name with `args` as the person's act — what a test
     /// or an agent does.
     pub fn act(&mut self, name: &str, args: Vec<Value>) -> Result<CommitReceipt, RunnerError> {
-        let person = super::provenance::Cause::person();
-        self.as_cause(person, |r| r.act_named(name, args))
+        // A named action is an identified input (LLP 1123 D6).
+        let person = super::provenance::Cause::person_act();
+        let receipt = self.as_cause(person, |r| r.act_named(name, args));
+        // An action that ran is an identified input; a name that names none is not.
+        if receipt.is_ok() {
+            self.renew_geometry();
+        }
+        receipt
     }
 
     /// [`Self::act`] under the cause installed.
@@ -578,7 +589,7 @@ impl<D: DataSource> Runner<D> {
                 }
                 continue;
             }
-            let write = self.accept_write(target, source, sargs);
+            let write = self.accept_write(target, source, sargs, self.cause());
             if early {
                 if let Err(e) = self.check_send_arguments(m, sargs) {
                     self.discard_later(&later);
@@ -1037,6 +1048,7 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn ask_at_launch(&mut self, r: usize) {
         if !self.source_ready(self.plan.str(self.resource_row(r).source)) {
             self.resources[r].stale = true;
+            self.note_boot_ask(r);
         } else if !self.refresh_next.contains(&r) {
             self.launch.push(r);
             self.refresh_next.push(r);

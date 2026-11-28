@@ -4,6 +4,8 @@ use exact_plan::{TypeKind, Value};
 use exact_runner::{Answer, DataError, Store};
 use std::sync::{Arc, Mutex};
 
+#[path = "abi_act_tests.rs"]
+mod act;
 #[path = "abi_entry_tests.rs"]
 mod entries;
 #[path = "abi_held_tests.rs"]
@@ -1185,7 +1187,7 @@ fn dispatch_names_every_kind_and_refuses_unknown_ones() {
         assert!(out.contains("invalid focus event"), "{out}");
         assert_eq!(slots(&bridge), hello);
     }
-    for kind in [45, 99, u32::MAX] {
+    for kind in [45, 99, 0x7FFF_FFFF] {
         let len = bridge.input_write(b"typed");
         let n = bridge.dispatch(view, kind, len, 0.);
         let out = std::str::from_utf8(bridge.output_bytes(n as usize)).unwrap();

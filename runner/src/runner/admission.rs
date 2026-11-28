@@ -92,6 +92,7 @@ impl<D: DataSource> Runner<D> {
             self.resources[i].failed_why = Some(failure);
             self.resources[i].awaiting = false;
             self.refresh_next.retain(|r| *r != i);
+            self.forget_untraced(i);
             // An older ask still in flight would answer over the failure
             self.forget_ticket(Target::Resource(i));
         }
@@ -383,6 +384,9 @@ impl<D: DataSource> Runner<D> {
                 // Unless a watched topic changed while it was in flight: the
                 // answer may differ now, so it is asked once more, forced
                 // (LLP 1016.002 D4).
+                if ask_again.untraced {
+                    self.note_untraced_ask(i);
+                }
                 if ask_again.context {
                     self.resources[i].landing_read = true;
                 } else if ask_again.refresh {
@@ -438,6 +442,9 @@ impl<D: DataSource> Runner<D> {
             &self.target_name(target),
             true,
         ));
+        if again.untraced {
+            self.note_untraced_ask(i);
+        }
         match self.commit_asks(vec![i], "a kept read", Some((i, again.refresh))) {
             Ok(next) => Ok(super::owned::merged(landed, next)),
             // Even publication of the follow-up's failure can be refused. Its

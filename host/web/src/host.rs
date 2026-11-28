@@ -461,10 +461,13 @@ impl<D: DataSource> Host<D> {
     /// reported in the batch's `error`, and the page is untouched (as the
     /// kernel was).
     pub fn dispatch_at(&mut self, view: ViewId, event: Event, now_ms: f64) -> String {
-        if self.drag.is_some_and(|drag| !(drag.valid_event)(&event)) {
+        if self
+            .drag
+            .is_some_and(|drag| !(drag.valid_event)(event.bare()))
+        {
             return self.finish(Batch::new(), Some("invalid transform event"));
         }
-        if let Event::HeightRelease { height, velocity } = &event {
+        if let Event::HeightRelease { height, velocity } = event.bare() {
             if !height.is_finite()
                 || !(0.0..=f32::MAX as f64).contains(height)
                 || !velocity.is_finite()
